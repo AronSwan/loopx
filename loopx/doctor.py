@@ -6,13 +6,13 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .command_invocation import resolve_command_path
 from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
     PROMOTION_READINESS_RUNTIME_INDEX,
@@ -71,11 +71,33 @@ class GitRevisionRelation(str, Enum):
     UNKNOWN = "unknown"
 
 
+def _powershell_literal(value: str | Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def local_install_command(repo_root: Path) -> str:
+    if os.name == "nt":
+        return (
+            "pwsh -NoLogo -NoProfile -File "
+            f"{_powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
+            f"-Python {_powershell_literal(sys.executable)}"
+        )
+    return str(repo_root / "scripts" / "install-local.sh")
+
+
 def no_clone_upgrade_command(
     source_ref: Any = None,
     *,
     doctor_agent_type: str | None = None,
 ) -> str:
+    if os.name == "nt":
+        repo_root = Path(__file__).resolve().parents[1]
+        doctor_agent_arg = (
+            f" --agent-type {_powershell_literal(doctor_agent_type)}"
+            if doctor_agent_type
+            else ""
+        )
+        return f"{local_install_command(repo_root)}\nloopx doctor{doctor_agent_arg}"
     ref = str(source_ref or "").strip()
     installer = f"curl -fsSL {NO_CLONE_INSTALL_URL}"
     doctor_agent_arg = (
@@ -112,11 +134,6 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
     return None
 
 
-def resolve_command_path(name: str) -> Path | None:
-    path_text = shutil.which(name)
-    return Path(path_text).expanduser() if path_text else None
-
-
 def current_script_invocation_path() -> Path | None:
     """Return the active LoopX wrapper when doctor was invoked by absolute path."""
     if not sys.argv or not sys.argv[0]:
@@ -137,8 +154,13 @@ def is_release_snapshot(root: Path | None) -> bool:
     return bool(root and "releases" in root.parts)
 
 
-def command_root_summary(command_path: Path | None, command_realpath: Path | None) -> dict[str, Any]:
-    root = command_release_root(command_realpath)
+def command_root_summary(
+    command_path: Path | None,
+    command_realpath: Path | None,
+    *,
+    release_root: Path | None = None,
+) -> dict[str, Any]:
+    root = release_root or command_release_root(command_realpath)
     return {
         "command": str(command_path) if command_path else None,
         "realpath": str(command_realpath) if command_realpath else None,
@@ -765,9 +787,18 @@ def collect_doctor(
     module_path = Path(__file__).resolve()
     package_dir = module_path.parent
     repo_root = package_dir.parent
-    install_script = repo_root / "scripts" / "install-local.sh"
-    wrapper_script = repo_root / "scripts" / "loopx"
-    release_root = command_release_root(command_realpath)
+    install_script = repo_root / "scripts" / (
+        "install-windows.ps1" if os.name == "nt" else "install-local.sh"
+    )
+    wrapper_script = repo_root / "scripts" / (
+        "loopx.ps1" if os.name == "nt" else "loopx"
+    )
+    active_release_root_text = os.environ.get("LOOPX_RELEASE_ROOT")
+    release_root = (
+        Path(active_release_root_text).expanduser().resolve()
+        if active_release_root_text
+        else command_release_root(command_realpath)
+    )
     canary_root = command_release_root(canary_realpath)
     release_manifest = load_release_manifest(release_root)
     comparison_source = None
@@ -787,7 +818,11 @@ def collect_doctor(
         for skill_name in project_scoped_skill_ids
         if (skills_root / skill_name).exists()
     ]
-    default_release = command_root_summary(command_path, command_realpath)
+    default_release = command_root_summary(
+        command_path,
+        command_realpath,
+        release_root=release_root,
+    )
     default_release["release_manifest_available"] = release_manifest.get("available")
     default_release["release_manifest_path"] = release_manifest.get("path")
     release_manifest_body = (
@@ -1097,7 +1132,7 @@ def collect_doctor(
         "checks": checks,
         "fix": (
             "Set `LOOPX_SKILLS_DIR=<PROJECT_WORKSPACE>/.agents/skills` and rerun "
-            f"`{repo_root / 'scripts' / 'install-local.sh'}`; then rerun doctor "
+            f"`{local_install_command(repo_root)}`; then rerun doctor "
             "with the same environment. Filesystem readback proves materialization; "
             "the host must still report its runtime loaded-skill readback."
             if canonical_agent_type == "ark-managed-agent"
@@ -1108,9 +1143,15 @@ def collect_doctor(
             if canonical_agent_type
             and agent_type_uses_host_managed_skills(canonical_agent_type)
             else (
-                f"Run `{repo_root / 'scripts' / 'install-local.sh'}` and start a new shell, "
-                f"or export PATH=\"{local_bin}:$PATH\". For no-clone repair, run "
-                f"`curl -fsSL {NO_CLONE_INSTALL_URL} | bash`."
+                f"Run `{local_install_command(repo_root)}` and start a new shell. "
+                + (
+                    f"Ensure `{local_bin}` is on the Windows user PATH."
+                    if os.name == "nt"
+                    else (
+                        f"Or export PATH=\"{local_bin}:$PATH\". For no-clone repair, run "
+                        f"`curl -fsSL {NO_CLONE_INSTALL_URL} | bash`."
+                    )
+                )
             )
         ),
     }
