@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 import subprocess
 from pathlib import Path
 
@@ -165,10 +166,14 @@ def test_main_channel_upgrade_command_preserves_source_ref(tmp_path: Path) -> No
     )
 
     command = str(freshness["no_clone_upgrade_command"])
-    assert (
-        "curl -fsSL https://raw.githubusercontent.com/huangruiteng/loopx/main/"
-        "scripts/install-from-github.sh | env LOOPX_REF=main bash"
-    ) in command
+    if os.name == "nt":
+        assert "pwsh -NoLogo -NoProfile -File" in command
+        assert "install-windows.ps1" in command
+    else:
+        assert (
+            "curl -fsSL https://raw.githubusercontent.com/huangruiteng/loopx/main/"
+            "scripts/install-from-github.sh | env LOOPX_REF=main bash"
+        ) in command
     assert freshness["upgrade_command"] == command
 
 
@@ -186,7 +191,10 @@ def test_stable_channel_upgrade_command_keeps_public_default(tmp_path: Path) -> 
 
     command = str(freshness["no_clone_upgrade_command"])
     assert "LOOPX_REF=" not in command
-    assert "scripts/install-from-github.sh | bash" in command
+    if os.name == "nt":
+        assert "install-windows.ps1" in command
+    else:
+        assert "scripts/install-from-github.sh | bash" in command
     assert freshness["upgrade_command"] == command
 
 
@@ -228,9 +236,12 @@ def test_other_agent_freshness_does_not_require_codex_skill_directory(
     assert freshness["requires_upgrade"] is False
     assert freshness["installed_skills_required"] is False
     assert freshness["doctor_after_upgrade"] == "loopx doctor --agent-type other-agent"
-    assert str(freshness["upgrade_command"]).endswith(
-        "loopx doctor --agent-type other-agent"
+    expected_suffix = (
+        "loopx doctor --agent-type 'other-agent'"
+        if os.name == "nt"
+        else "loopx doctor --agent-type other-agent"
     )
+    assert str(freshness["upgrade_command"]).endswith(expected_suffix)
 
 
 def test_trusted_release_ref_matches_manifest_repository(tmp_path: Path) -> None:
