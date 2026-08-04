@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from loopx import windows_install
+from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES
 
 
 def _run_loopx(
@@ -181,6 +182,82 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     assert quota.returncode == 0, quota.stderr
     quota_payload = json.loads(quota.stdout)
     assert quota_payload["should_run"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
+def test_windows_installer_preserves_externally_managed_skills(tmp_path: Path) -> None:
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 is not installed")
+    repo_root = Path(__file__).resolve().parents[1]
+    install_root = tmp_path / "share" / "loopx"
+    bin_dir = tmp_path / "bin"
+    home = tmp_path / "home"
+    codex_skills = home / ".codex" / "skills"
+    agents_skills = home / ".agents" / "skills"
+    for skill_id in REQUIRED_INSTALLED_SKILL_PHRASES:
+        shutil.copytree(repo_root / "skills" / skill_id, agents_skills / skill_id)
+
+    env = dict(os.environ)
+    env.update(
+        {
+            "CODEX_HOME": str(home / ".codex"),
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    install = subprocess.run(
+        [
+            pwsh,
+            "-NoLogo",
+            "-NoProfile",
+            "-File",
+            str(repo_root / "scripts" / "install-windows.ps1"),
+            "-Python",
+            sys.executable,
+            "-InstallRoot",
+            str(install_root),
+            "-BinDir",
+            str(bin_dir),
+            "-SkillsDir",
+            str(codex_skills),
+            "-SkipSkills",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=180,
+    )
+
+    assert install.returncode == 0, install.stderr
+    installed = json.loads(install.stdout)
+    assert installed["installed_skill_ids"] == []
+    assert not codex_skills.exists()
+
+    launch_env = dict(env)
+    launch_env["LOOPX_CURRENT_RELEASE_FILE"] = installed["pointer"]
+    doctor = _run_loopx(
+        pwsh=pwsh,
+        launcher=bin_dir / "loopx.ps1",
+        args=["--format", "json", "doctor", "--deep"],
+        env=launch_env,
+    )
+
+    assert doctor.returncode == 0, doctor.stderr
+    payload = json.loads(doctor.stdout)
+    assert payload["skill_delivery"]["status"] == "ready"
+    assert payload["skill_delivery"]["owner"] == "external_skill_manager"
+    assert payload["install_freshness"]["externally_managed_skills"] is True
+    assert "-SkipSkills" in payload["install_freshness"]["upgrade_command"]
+    assert payload["release_candidate"]["ok"] is True
+    assert all(
+        Path(skill["path"]).is_relative_to(agents_skills)
+        for skill in payload["skills"].values()
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")

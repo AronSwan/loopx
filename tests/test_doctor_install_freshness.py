@@ -7,8 +7,10 @@ from pathlib import Path
 
 from loopx import __version__
 from loopx.doctor import (
+    REQUIRED_INSTALLED_SKILL_PHRASES,
     build_install_freshness,
     git_revision_relation,
+    installed_skill_summary,
     trusted_release_ref_for_root,
 )
 
@@ -28,6 +30,13 @@ def _commit(root: Path, text: str) -> str:
     _git(root, "add", "fixture.txt")
     _git(root, "commit", "-m", text)
     return _git(root, "rev-parse", "HEAD")
+
+
+def _write_required_skills(root: Path) -> None:
+    for skill_name, phrases in REQUIRED_INSTALLED_SKILL_PHRASES.items():
+        skill_path = root / skill_name / "SKILL.md"
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text("\n".join(phrases) + "\n", encoding="utf-8")
 
 
 def _freshness(
@@ -242,6 +251,51 @@ def test_other_agent_freshness_does_not_require_codex_skill_directory(
         else "loopx doctor --agent-type other-agent"
     )
     assert str(freshness["upgrade_command"]).endswith(expected_suffix)
+
+
+def test_external_agents_skill_root_is_accepted_without_copying(tmp_path: Path) -> None:
+    codex_skills = tmp_path / ".codex" / "skills"
+    agents_skills = tmp_path / ".agents" / "skills"
+    _write_required_skills(agents_skills)
+
+    skills = installed_skill_summary((codex_skills, agents_skills))
+    freshness = build_install_freshness(
+        command_path=tmp_path / "loopx",
+        release_root=None,
+        repo_root=tmp_path,
+        skills=skills,
+    )
+
+    assert all(skill["exists"] for skill in skills.values())
+    assert all(skill["required_phrases"] for skill in skills.values())
+    assert all(skill["managed_externally"] for skill in skills.values())
+    assert all(skill["route_count"] == 1 for skill in skills.values())
+    assert freshness["status"] == "live_checkout"
+    assert freshness["externally_managed_skills"] is True
+    expected_skip = "-SkipSkills" if os.name == "nt" else "LOOPX_INSTALL_SKILL=0"
+    assert expected_skip in str(freshness["upgrade_command"])
+    assert expected_skip in str(freshness["contributor_upgrade_command"])
+
+
+def test_duplicate_skill_routes_fail_closed(tmp_path: Path) -> None:
+    codex_skills = tmp_path / ".codex" / "skills"
+    agents_skills = tmp_path / ".agents" / "skills"
+    _write_required_skills(codex_skills)
+    _write_required_skills(agents_skills)
+
+    skills = installed_skill_summary((codex_skills, agents_skills))
+    freshness = build_install_freshness(
+        command_path=tmp_path / "loopx",
+        release_root=None,
+        repo_root=tmp_path,
+        skills=skills,
+    )
+
+    assert all(skill["route_conflict"] for skill in skills.values())
+    assert all(skill["route_count"] == 2 for skill in skills.values())
+    assert all(not skill["required_phrases"] for skill in skills.values())
+    assert freshness["status"] == "repair_recommended"
+    assert freshness["externally_managed_skills"] is False
 
 
 def test_trusted_release_ref_matches_manifest_repository(tmp_path: Path) -> None:
