@@ -36,6 +36,7 @@ def scheduler_command_binding_for_agent_type(
         "codex-cli": SchedulerRuntimeProfile.CODEX_CLI_VISIBLE,
         "codex-ide-plugin": SchedulerRuntimeProfile.CODEX_CLI_VISIBLE,
         "claude-code": SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE,
+        "kunluncode": SchedulerRuntimeProfile.KUNLUNCODE_VISIBLE,
         "opencode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)
     if runtime_profile is not None:
@@ -54,6 +55,7 @@ SUPPORTED_AGENT_TYPES = [
     "codex-ide-plugin",
     "codex-cli",
     "claude-code",
+    "kunluncode",
     "opencode",
     "manual",
     "other-agent",
@@ -130,6 +132,18 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "host_loop": "native /loop gated by LoopX",
         "entry": "/loopx <task> then /loop",
         "accepted_inputs": ["claude-code", "claude_code", "claude code", "cc"],
+    },
+    "kunluncode": {
+        "display_name": "KunlunCode",
+        "host_loop": "bounded LoopX MCP worker segment",
+        "entry": "loopx-kunluncode add <task> then loopx-kunluncode run",
+        "accepted_inputs": [
+            "kunluncode",
+            "kunlun-code",
+            "kunlun_code",
+            "kunlun code",
+            "kunlun",
+        ],
     },
     "opencode": {
         "display_name": "OpenCode",
@@ -596,6 +610,41 @@ def _claude_code_activation(commands: dict[str, str], cli_bin: str) -> dict[str,
     }
 
 
+def _kunluncode_activation(commands: dict[str, str]) -> dict[str, Any]:
+    return {
+        "host_surface": "kunluncode_bounded_worker",
+        "entry_command_hint": (
+            "loopx-kunluncode add <task> then loopx-kunluncode run"
+        ),
+        "activation_method": "bind_project_mcp_then_run_bounded_segment",
+        "activation_input_command": commands["heartbeat_prompt_json"],
+        "setup_command": (
+            "loopx-kunluncode connect --project . --goal-id <goal-id> "
+            "--agent-id <registered-agent-id>"
+        ),
+        "host_mutation": {
+            "owner": "KunlunCode user MCP configuration",
+            "host_command": "loopx-kunluncode run --project .",
+            "cli_can_mutate_directly": True,
+            "managed_mcp_server": "loopx-kunluncode",
+            "missing_host_tool_gate": (
+                "KunlunCode or its managed LoopX MCP server is unavailable; run "
+                "the connect command and mcp test before claiming activation."
+            ),
+        },
+        "activation_steps": [
+            "Connect the project goal to a dedicated registered KunlunCode agent.",
+            "Read back the managed MCP tools with `kunluncode mcp test loopx-kunluncode`.",
+            "Add one bounded todo, then run one `loopx-kunluncode run` segment.",
+            "Repeat only while the bound lane remains runnable.",
+        ],
+        "success_criteria": [
+            "KunlunCode resolves its own project binding and registered agent identity.",
+            "The real MCP round trip claims and completes a todo without using Claude state.",
+        ],
+    }
+
+
 def _opencode_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
     return {
         "host_surface": "opencode_visible_goal_mode",
@@ -705,6 +754,8 @@ def build_host_loop_activation_packet(
         surface = _codex_cli_activation(commands)
     elif canonical == "claude-code":
         surface = _claude_code_activation(commands, cli_bin)
+    elif canonical == "kunluncode":
+        surface = _kunluncode_activation(commands)
     elif canonical == "opencode":
         surface = _opencode_activation(commands, cli_bin)
     else:
