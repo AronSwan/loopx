@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -57,6 +58,7 @@ def main() -> int:
         "codex-cli",
         "claude-code",
         "opencode",
+        "traex-cli",
         "manual",
         "other-agent",
     } <= agent_types
@@ -75,6 +77,8 @@ def main() -> int:
     assert agent_type_for_host_surface("codex-cli-tui") == "codex-cli"
     assert agent_type_for_host_surface("opencode") == "opencode"
     assert agent_type_for_host_surface("ark-managed-agent") == "ark-managed-agent"
+    assert agent_type_for_host_surface("traex-cli") == "traex-cli"
+    assert agent_type_for_host_surface("traex") == "traex-cli"
 
     codex_app = build_host_loop_activation_packet(agent_type="codex-app", goal_id="demo")
     codex_app_ssh = build_host_loop_activation_packet(
@@ -89,6 +93,7 @@ def main() -> int:
         agent_type="ark-managed-agent",
         goal_id="demo",
     )
+    traex_cli = build_host_loop_activation_packet(agent_type="traex-cli", goal_id="demo")
     assert codex_app["activation_method"] == "create_or_update_codex_app_automation", codex_app
     assert codex_app_ssh["activation_method"] == "set_visible_goal", codex_app_ssh
     assert codex_app_ssh["host_surface"] == "codex_app_ssh_visible_goal_mode", codex_app_ssh
@@ -116,6 +121,32 @@ def main() -> int:
     assert "--runtime-profile generic_cli" in opencode["commands"]["heartbeat_prompt"], opencode
     assert ark_managed_agent["activation_method"] == "submit_goal_once", ark_managed_agent
     assert ark_managed_agent["host_surface"] == "ark_managed_agent_goal_mode", ark_managed_agent
+    assert traex_cli["activation_method"] == "set_visible_goal", traex_cli
+    assert traex_cli["host_surface"] == "traex_visible_goal_mode", traex_cli
+    assert traex_cli["host_mutation"]["host_command"] == "/goal <task_body>", traex_cli
+    assert traex_cli["host_mutation"]["requires_host_feature_flag"] == (
+        "[features] goals = true in ~/.trae/traecli.toml"
+    ), traex_cli
+    assert "--runtime-profile generic_cli" in traex_cli["commands"]["heartbeat_prompt"], traex_cli
+    assert all(
+        "--visible-goal-host traex-cli" in traex_cli["commands"][key]
+        for key in (
+            "heartbeat_prompt",
+            "heartbeat_prompt_json",
+            "visible_goal_prompt_json",
+        )
+    ), traex_cli
+    assert traex_cli["commands"]["heartbeat_prompt_json"] == (
+        traex_cli["commands"]["visible_goal_prompt_json"]
+    ), traex_cli
+    assert traex_cli["activation_input_command"] == (
+        traex_cli["commands"]["visible_goal_prompt_json"]
+    ), traex_cli
+    assert "automation_update" not in str(traex_cli), traex_cli
+    assert re.search(
+        r"(?<![a-z0-9_/])/loop(?![a-z0-9_-])",
+        str(traex_cli).lower(),
+    ) is None, traex_cli
     gated_activation = build_host_loop_activation_packet(
         agent_type="codex-app",
         goal_id="multi-agent-demo",
@@ -250,11 +281,17 @@ def main() -> int:
             for choice in gate["choices"]
             if choice["agent_id"] == "codex-product-capability"
         )
-        assert "--agent-id codex-product-capability" in selected_choice["heartbeat_prompt_json"]
-        assert "--agent-scope" in selected_choice["heartbeat_prompt_json"]
+        assert "--agent-id codex-product-capability" in (
+            selected_choice["activation_input_command"]
+        )
+        assert "--agent-scope" in selected_choice["activation_input_command"]
+        assert selected_choice["heartbeat_prompt_json"] == (
+            selected_choice["activation_input_command"]
+        )
+        assert selected_choice["heartbeat_prompt"]
 
         choice_run = subprocess.run(
-            shlex.split(selected_choice["heartbeat_prompt_json"]),
+            shlex.split(selected_choice["activation_input_command"]),
             cwd=REPO_ROOT,
             env={**os.environ, "HOME": str(home)},
             check=True,

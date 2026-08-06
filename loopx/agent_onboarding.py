@@ -240,6 +240,7 @@ def _bootstrap_pack_command(
         "codex-cli": "codex-cli-tui",
         "claude-code": "claude-code",
         "opencode": "opencode",
+        "traex-cli": "traex-cli",
         "ark-managed-agent": "ark-managed-agent",
         "manual": "shell",
         "other-agent": "other-agent",
@@ -276,6 +277,8 @@ def _start_instruction(agent_type: str) -> str:
         return "Run `/loopx <task>` to arm LoopX, then run native `/loop`."
     if agent_type == "opencode":
         return "Run `/loopx <task>`; after todo writeback, call `loopx_goal_activate` with the generated heartbeat task body."
+    if agent_type == "traex-cli":
+        return "Use `$loopx <task>` or select the LoopX skill from `/skills`; after todos are written, set `/goal <task_body>` in the visible TraeX TUI (enable `[features] goals = true` first if goal mode is off)."
     if agent_type == "ark-managed-agent":
         return (
             "Use `$loopx <task>` as the ordinary task entry; after its todo "
@@ -600,7 +603,7 @@ def render_agent_onboarding_markdown(payload: dict[str, Any]) -> str:
             if isinstance(choice, dict):
                 lines.append(
                     f"- takeover `{choice.get('agent_id')}`: "
-                    f"`{choice.get('heartbeat_prompt_json')}`"
+                    f"`{choice.get('activation_input_command')}`"
                 )
     lines.extend(
         [
