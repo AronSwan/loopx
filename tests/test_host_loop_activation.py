@@ -320,7 +320,7 @@ def test_opencode_activation_uses_bridge_tool_and_generic_cli_quota() -> None:
     assert "--runtime-profile generic_cli" in packet["commands"]["heartbeat_prompt"]
 
 
-def test_kunluncode_activation_uses_dedicated_mcp_worker_and_runtime_profile() -> None:
+def test_kunluncode_activation_uses_native_goal_controller_and_runtime_profile() -> None:
     packet = build_host_loop_activation_packet(
         agent_type="kunluncode",
         goal_id="fixture-goal",
@@ -328,10 +328,23 @@ def test_kunluncode_activation_uses_dedicated_mcp_worker_and_runtime_profile() -
         registered_agents=["kunlun-fixture"],
     )
 
-    assert packet["host_surface"] == "kunluncode_bounded_worker"
-    assert packet["activation_method"] == "bind_project_mcp_then_run_bounded_segment"
+    assert packet["host_surface"] == "kunluncode_native_goal_controller"
+    assert packet["activation_method"] == "bind_project_then_run_native_goal"
     assert packet["host_mutation"]["managed_mcp_server"] == "loopx-kunluncode"
+    assert packet["host_mutation"]["host_command"] == "loopx-kunluncode run --project ."
     assert "loopx-kunluncode connect" in packet["setup_command"]
+    assert any(
+        "model does not type `/goal-pro`" in step
+        for step in packet["activation_steps"]
+    )
+    assert any(
+        "independent verification" in criterion
+        for criterion in packet["success_criteria"]
+    )
+    assert any(
+        "lifecycle CLI writes" in criterion
+        for criterion in packet["success_criteria"]
+    )
     assert "--runtime-profile kunluncode" in packet["commands"]["heartbeat_prompt"]
 
 
