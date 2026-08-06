@@ -1,4 +1,5 @@
 """Install, bind, inspect, and run the LoopX KunlunCode adapter."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,12 +14,20 @@ from typing import Any
 
 from loopx.goal_mode_context import registered_agent_ids
 from loopx.kunluncode_goal_mode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
+from loopx.kunluncode_goal_mode.app_server import build_app_server_command
 from loopx.kunluncode_goal_mode.context import goal_context, write_binding
+from loopx.kunluncode_goal_mode.runtime import (
+    compact_runtime_state,
+    read_runtime_state,
+    run_native_goal,
+)
 
 
 MCP_REQUIREMENT = "mcp==1.27.2"
 MCP_SCRIPT = Path(__file__).with_name("server.py").resolve()
-DEFAULT_MCP_VENV = Path.home() / ".local" / "share" / "loopx" / "kunluncode-mcp" / ".venv"
+DEFAULT_MCP_VENV = (
+    Path.home() / ".local" / "share" / "loopx" / "kunluncode-mcp" / ".venv"
+)
 
 
 def _run(
@@ -86,7 +95,9 @@ def provision_mcp_python(*, dry_run: bool = False) -> str:
     if not venv_python.is_file():
         created = _run([uv, "venv", "--python", sys.executable, str(DEFAULT_MCP_VENV)])
         if created.returncode != 0:
-            raise RuntimeError("uv venv failed: " + (created.stdout + created.stderr)[-800:])
+            raise RuntimeError(
+                "uv venv failed: " + (created.stdout + created.stderr)[-800:]
+            )
     installed = _run(
         [
             uv,
@@ -101,7 +112,9 @@ def provision_mcp_python(*, dry_run: bool = False) -> str:
         timeout=300,
     )
     if installed.returncode != 0 or not _compatible_python(venv_python):
-        raise RuntimeError("uv pip install failed: " + (installed.stdout + installed.stderr)[-1200:])
+        raise RuntimeError(
+            "uv pip install failed: " + (installed.stdout + installed.stderr)[-1200:]
+        )
     return str(venv_python)
 
 
@@ -121,9 +134,9 @@ def _is_managed_server(entry: dict[str, Any]) -> bool:
     return (
         entry.get("name") == MCP_SERVER_NAME
         and len(args) == 1
-        and str(args[0]).replace("\\", "/").endswith(
-            "/loopx/kunluncode_goal_mode/server.py"
-        )
+        and str(args[0])
+        .replace("\\", "/")
+        .endswith("/loopx/kunluncode_goal_mode/server.py")
     )
 
 
@@ -143,7 +156,11 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
             f"{selected_python} must import LoopX and mcp==1.27.2; use uv to sync the adapter environment"
         )
     existing = next(
-        (item for item in _configured_mcp_servers(kunluncode) if item.get("name") == MCP_SERVER_NAME),
+        (
+            item
+            for item in _configured_mcp_servers(kunluncode)
+            if item.get("name") == MCP_SERVER_NAME
+        ),
         None,
     )
     if existing and not _is_managed_server(existing) and not replace:
@@ -169,7 +186,10 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
         ]
     )
     if added.returncode != 0:
-        raise RuntimeError("KunlunCode MCP registration failed: " + (added.stdout + added.stderr)[-800:])
+        raise RuntimeError(
+            "KunlunCode MCP registration failed: "
+            + (added.stdout + added.stderr)[-800:]
+        )
     return selected_python
 
 
@@ -178,13 +198,19 @@ def uninstall_mcp(*, dry_run: bool) -> bool:
     if not kunluncode:
         raise RuntimeError("kunluncode is not on PATH")
     existing = next(
-        (item for item in _configured_mcp_servers(kunluncode) if item.get("name") == MCP_SERVER_NAME),
+        (
+            item
+            for item in _configured_mcp_servers(kunluncode)
+            if item.get("name") == MCP_SERVER_NAME
+        ),
         None,
     )
     if existing is None:
         return False
     if not _is_managed_server(existing):
-        raise RuntimeError(f"refusing to remove user-owned MCP server {MCP_SERVER_NAME!r}")
+        raise RuntimeError(
+            f"refusing to remove user-owned MCP server {MCP_SERVER_NAME!r}"
+        )
     if not dry_run:
         removed = _run([kunluncode, "mcp", "remove", MCP_SERVER_NAME])
         if removed.returncode != 0:
@@ -201,7 +227,9 @@ def _registry_path(project: Path) -> Path:
 def _annotate_registry(registry: Path, *, goal_id: str, agent_id: str) -> None:
     payload = json.loads(registry.read_text(encoding="utf-8"))
     goals = payload.get("goals") or []
-    if not any(str(goal.get("id") or "") == goal_id for goal in goals if isinstance(goal, dict)):
+    if not any(
+        str(goal.get("id") or "") == goal_id for goal in goals if isinstance(goal, dict)
+    ):
         raise RuntimeError(f"goal {goal_id!r} is not registered in {registry}")
     backends = payload.setdefault("agent_backends", [])
     if "kunluncode" not in backends:
@@ -236,7 +264,9 @@ def _bootstrap_if_needed(
     if registry.is_file():
         return registry
     if not objective:
-        raise RuntimeError("project has no LoopX registry; --objective is required for first connect")
+        raise RuntimeError(
+            "project has no LoopX registry; --objective is required for first connect"
+        )
     command = [
         *_loopx_prefix(),
         "bootstrap",
@@ -255,7 +285,9 @@ def _bootstrap_if_needed(
         return registry
     result = _run(command, cwd=project)
     if result.returncode != 0:
-        raise RuntimeError("LoopX bootstrap failed: " + (result.stdout + result.stderr)[-1200:])
+        raise RuntimeError(
+            "LoopX bootstrap failed: " + (result.stdout + result.stderr)[-1200:]
+        )
     return registry
 
 
@@ -299,7 +331,10 @@ def connect_project(
             cwd=project,
         )
         if configured.returncode != 0:
-            raise RuntimeError("LoopX agent registration failed: " + (configured.stdout + configured.stderr)[-1200:])
+            raise RuntimeError(
+                "LoopX agent registration failed: "
+                + (configured.stdout + configured.stderr)[-1200:]
+            )
         _annotate_registry(registry, goal_id=goal_id, agent_id=agent_id)
     selected_python = None
     if not skip_mcp:
@@ -315,13 +350,17 @@ def connect_project(
         "mcp_server": None if skip_mcp else MCP_SERVER_NAME,
         "mcp_python": selected_python,
         "global_mcp_registration": not skip_mcp,
+        "native_app_server": True,
+        "default_run_mode": "goal-pro",
     }
 
 
 def add_todo(project: Path, text: str) -> dict[str, Any]:
     context = goal_context(project)
     if context is None:
-        raise RuntimeError("KunlunCode is not bound; run loopx-kunluncode connect first")
+        raise RuntimeError(
+            "KunlunCode is not bound; run loopx-kunluncode connect first"
+        )
     result = _run(
         [
             *_loopx_prefix(),
@@ -339,13 +378,13 @@ def add_todo(project: Path, text: str) -> dict[str, Any]:
             text,
             "--claimed-by",
             context["agent_id"],
-            "--agent-id",
-            context["agent_id"],
         ],
         cwd=project,
     )
     if result.returncode != 0:
-        raise RuntimeError("todo add failed: " + (result.stdout + result.stderr)[-1000:])
+        raise RuntimeError(
+            "todo add failed: " + (result.stdout + result.stderr)[-1000:]
+        )
     return json.loads(result.stdout)
 
 
@@ -371,13 +410,67 @@ def run_worker(
     max_duration_secs: int,
     json_output: bool,
     dry_run: bool,
+    mode: str = "goal-pro",
+    controller_timeout_secs: int = 3600,
+    token_budget: int | None = None,
 ) -> int:
     context = goal_context(project)
     if context is None:
-        raise RuntimeError("KunlunCode is not bound; run loopx-kunluncode connect first")
+        raise RuntimeError(
+            "KunlunCode is not bound; run loopx-kunluncode connect first"
+        )
     kunluncode = shutil.which("kunluncode")
     if not kunluncode:
         raise RuntimeError("kunluncode is not on PATH")
+    if mode != "headless":
+        if dry_run:
+            command = build_app_server_command(
+                kunluncode,
+                project=project,
+                permission_mode=permission_mode,
+                max_duration_secs=max_duration_secs,
+            )
+            payload = {
+                "ok": True,
+                "dry_run": True,
+                "mode": mode,
+                "command": command,
+                "side_effects": "none",
+            }
+            print(
+                json.dumps(payload, indent=2)
+                if json_output
+                else " ".join(command) + " <native-goal-controller>"
+            )
+            return 0
+        payload = run_native_goal(
+            project,
+            context,
+            mode=mode,
+            permission_mode=permission_mode,
+            max_duration_secs=max_duration_secs,
+            controller_timeout_secs=controller_timeout_secs,
+            token_budget=token_budget,
+            kunluncode_bin=kunluncode,
+        )
+        if json_output:
+            print(json.dumps(payload, indent=2))
+        elif payload.get("status") == "skipped":
+            print(
+                "KunlunCode native Goal skipped: "
+                + str(payload.get("reason") or "not due")
+            )
+        else:
+            runtime = (
+                payload.get("runtime")
+                if isinstance(payload.get("runtime"), dict)
+                else {}
+            )
+            print(
+                f"KunlunCode {mode} committed for todo {runtime.get('todo_id')}; "
+                "native verification and LoopX writeback completed."
+            )
+        return 0
     command = [
         kunluncode,
         "--cwd",
@@ -408,7 +501,9 @@ def run_worker(
 def status(project: Path) -> dict[str, Any]:
     context = goal_context(project)
     if context is None:
-        raise RuntimeError("KunlunCode is not bound; run loopx-kunluncode connect first")
+        raise RuntimeError(
+            "KunlunCode is not bound; run loopx-kunluncode connect first"
+        )
     result = _run(
         [
             *_loopx_prefix(),
@@ -424,19 +519,29 @@ def status(project: Path) -> dict[str, Any]:
             context["agent_id"],
             "--runtime-profile",
             "kunluncode",
+            "--available-capability",
+            "shell",
+            "--available-capability",
+            "filesystem_write",
         ],
         cwd=project,
     )
     if result.returncode != 0:
         raise RuntimeError("status failed: " + (result.stdout + result.stderr)[-1000:])
-    return json.loads(result.stdout)
+    payload = json.loads(result.stdout)
+    payload["kunluncode_native_goal"] = compact_runtime_state(
+        read_runtime_state(project.resolve())
+    )
+    return payload
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="loopx-kunluncode")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    connect = subparsers.add_parser("connect", help="Bind one project goal and install the MCP server.")
+    connect = subparsers.add_parser(
+        "connect", help="Bind one project goal and install the MCP server."
+    )
     connect.add_argument("--project", default=".")
     connect.add_argument("--goal-id", required=True)
     connect.add_argument("--agent-id", default=DEFAULT_AGENT_ID)
@@ -446,30 +551,61 @@ def _parser() -> argparse.ArgumentParser:
     connect.add_argument("--replace", action="store_true")
     connect.add_argument("--dry-run", action="store_true")
 
-    install = subparsers.add_parser("install", help="Install the global KunlunCode MCP entry.")
+    install = subparsers.add_parser(
+        "install", help="Install the global KunlunCode MCP entry."
+    )
     install.add_argument("--python")
     install.add_argument("--replace", action="store_true")
     install.add_argument("--dry-run", action="store_true")
 
-    uninstall = subparsers.add_parser("uninstall", help="Remove only the managed KunlunCode MCP entry.")
+    uninstall = subparsers.add_parser(
+        "uninstall", help="Remove only the managed KunlunCode MCP entry."
+    )
     uninstall.add_argument("--dry-run", action="store_true")
 
-    add = subparsers.add_parser("add", help="Add and assign one todo to the bound KunlunCode agent.")
+    add = subparsers.add_parser(
+        "add", help="Add and assign one todo to the bound KunlunCode agent."
+    )
     add.add_argument("text", nargs="+")
     add.add_argument("--project", default=".")
 
-    run = subparsers.add_parser("run", help="Run one bounded KunlunCode worker segment.")
+    run = subparsers.add_parser(
+        "run",
+        help="Run a recoverable native KunlunCode Goal (Goal Pro by default).",
+    )
     run.add_argument("--project", default=".")
+    run.add_argument(
+        "--mode",
+        choices=["goal-pro", "goal", "headless"],
+        default="goal-pro",
+        help=(
+            "goal-pro uses strict independent verification; goal uses native Arrangement; "
+            "headless preserves the legacy one-turn MCP worker"
+        ),
+    )
     run.add_argument(
         "--permission-mode",
         choices=["ask", "auto", "accept-edits", "dont-ask", "bypass", "yolo"],
-        default="ask",
+        default="auto",
     )
     run.add_argument("--max-duration-secs", type=int, default=600)
+    run.add_argument(
+        "--controller-timeout-secs",
+        type=int,
+        default=3600,
+        help="Overall wait budget across native Goal auto-continuations.",
+    )
+    run.add_argument(
+        "--token-budget",
+        type=int,
+        help="Optional positive KunlunCode native Goal token budget.",
+    )
     run.add_argument("--json", action="store_true")
     run.add_argument("--dry-run", action="store_true")
 
-    status_parser = subparsers.add_parser("status", help="Read the bound KunlunCode lane status.")
+    status_parser = subparsers.add_parser(
+        "status", help="Read the bound KunlunCode lane status."
+    )
     status_parser.add_argument("--project", default=".")
     return parser
 
@@ -494,14 +630,30 @@ def main(argv: list[str] | None = None) -> int:
             selected = install_mcp(
                 python=args.python, dry_run=args.dry_run, replace=args.replace
             )
-            print(json.dumps({"ok": True, "mcp_server": MCP_SERVER_NAME, "python": selected, "dry_run": args.dry_run}, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "mcp_server": MCP_SERVER_NAME,
+                        "python": selected,
+                        "dry_run": args.dry_run,
+                    },
+                    indent=2,
+                )
+            )
             return 0
         if args.command == "uninstall":
             removed = uninstall_mcp(dry_run=args.dry_run)
-            print(json.dumps({"ok": True, "removed": removed, "dry_run": args.dry_run}, indent=2))
+            print(
+                json.dumps(
+                    {"ok": True, "removed": removed, "dry_run": args.dry_run}, indent=2
+                )
+            )
             return 0
         if args.command == "add":
-            print(json.dumps(add_todo(Path(args.project), " ".join(args.text)), indent=2))
+            print(
+                json.dumps(add_todo(Path(args.project), " ".join(args.text)), indent=2)
+            )
             return 0
         if args.command == "run":
             return run_worker(
@@ -510,11 +662,19 @@ def main(argv: list[str] | None = None) -> int:
                 max_duration_secs=args.max_duration_secs,
                 json_output=args.json,
                 dry_run=args.dry_run,
+                mode=args.mode,
+                controller_timeout_secs=args.controller_timeout_secs,
+                token_budget=args.token_budget,
             )
         if args.command == "status":
             print(json.dumps(status(Path(args.project)), indent=2))
             return 0
-    except (OSError, RuntimeError, json.JSONDecodeError, importlib.metadata.PackageNotFoundError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        json.JSONDecodeError,
+        importlib.metadata.PackageNotFoundError,
+    ) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2), file=sys.stderr)
         return 1
     return 2

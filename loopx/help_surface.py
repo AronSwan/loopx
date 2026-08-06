@@ -105,8 +105,11 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Opt into `--with-goal-bridge`, then use `loopx_goal_activate` to bind the quota-gated bridge.",
             },
             {
-                "command": "KunlunCode MCP adapter",
-                "purpose": "Run `loopx-kunluncode connect`, verify the managed MCP entry, then launch one bounded worker turn.",
+                "command": "KunlunCode native Goal controller",
+                "purpose": (
+                    "Run `loopx-kunluncode connect`, verify the managed MCP entry, then let "
+                    "`loopx-kunluncode run` create or resume a verifier-gated native Goal Pro."
+                ),
             },
             {
                 "command": "Other agent or shell",

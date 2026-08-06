@@ -135,7 +135,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     },
     "kunluncode": {
         "display_name": "KunlunCode",
-        "host_loop": "bounded LoopX MCP worker segment",
+        "host_loop": "recoverable native Goal Pro controlled by LoopX",
         "entry": "loopx-kunluncode add <task> then loopx-kunluncode run",
         "accepted_inputs": [
             "kunluncode",
@@ -612,11 +612,11 @@ def _claude_code_activation(commands: dict[str, str], cli_bin: str) -> dict[str,
 
 def _kunluncode_activation(commands: dict[str, str]) -> dict[str, Any]:
     return {
-        "host_surface": "kunluncode_bounded_worker",
+        "host_surface": "kunluncode_native_goal_controller",
         "entry_command_hint": (
             "loopx-kunluncode add <task> then loopx-kunluncode run"
         ),
-        "activation_method": "bind_project_mcp_then_run_bounded_segment",
+        "activation_method": "bind_project_then_run_native_goal",
         "activation_input_command": commands["heartbeat_prompt_json"],
         "setup_command": (
             "loopx-kunluncode connect --project . --goal-id <goal-id> "
@@ -635,12 +635,15 @@ def _kunluncode_activation(commands: dict[str, str]) -> dict[str, Any]:
         "activation_steps": [
             "Connect the project goal to a dedicated registered KunlunCode agent.",
             "Read back the managed MCP tools with `kunluncode mcp test loopx-kunluncode`.",
-            "Add one bounded todo, then run one `loopx-kunluncode run` segment.",
-            "Repeat only while the bound lane remains runnable.",
+            "Add one bounded todo, then invoke or schedule `loopx-kunluncode run`.",
+            "The outer controller creates or resumes native Goal Pro through app-server; the model does not type `/goal-pro`.",
+            "Accept LoopX completion and quota writeback only after KunlunCode reports verifier-backed terminal success.",
         ],
         "success_criteria": [
             "KunlunCode resolves its own project binding and registered agent identity.",
-            "The real MCP round trip claims and completes a todo without using Claude state.",
+            "The native strict goal auto-continues and preserves its thread across controller restarts.",
+            "Model-visible MCP tools and same-goal lifecycle CLI writes cannot bypass outer-controller writeback ownership.",
+            "The outer controller records delivery, completes the todo, and spends quota only after independent verification passes.",
         ],
     }
 
