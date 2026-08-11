@@ -616,6 +616,44 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except ValueError as exc:
+        # Validation errors carry bounded, public-safe messages —
+        # surface them directly rather than routing through _quota_failure_payload.
+        command = args.quota_command
+        if command not in QUOTA_EVENT_KINDS:
+            payload = {
+                "ok": False,
+                "mode": command,
+                "registry": str(registry_path),
+                "runtime_root": runtime_root_arg,
+                "error_code": "QUOTA_VALIDATION_FAILED",
+                "error": str(exc),
+                "summary": {
+                    "registered_goals": 0,
+                    "health_blockers": 0,
+                    "next_automatic_turn": None,
+                    "states": {},
+                },
+                "groups": {},
+                "health_items": [],
+            }
+        else:
+            payload = {
+                "ok": False,
+                "mode": command,
+                "goal_id": args.goal_id,
+                "decision": "skip",
+                "should_run": False,
+                "error_code": "QUOTA_VALIDATION_FAILED",
+                "reason": str(exc),
+                "state": "blocked_validation",
+                "waiting_on": "codex",
+                "status": "quota_validation_failed",
+                "source": "quota",
+                "recommended_action": (
+                    "fix the command arguments before retrying"
+                ),
+            }
     except Exception as exc:  # noqa: BLE001 - CLI fail-safe boundary; error_code is typed below.
         payload = _quota_failure_payload(
             args,
