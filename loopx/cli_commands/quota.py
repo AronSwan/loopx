@@ -285,7 +285,7 @@ def _quota_failure_payload(
             "registry": str(registry_path),
             "runtime_root": runtime_root_arg,
             "error_code": quota_error_code(error),
-            "error": str(error),
+            "error": "quota collection failed",
             "summary": {
                 "registered_goals": 0,
                 "health_blockers": 1,
@@ -299,7 +299,9 @@ def _quota_failure_payload(
                     "status": "quota_collection_failed",
                     "waiting_on": "codex",
                     "severity": "high",
-                    "recommended_action": str(error),
+                    "recommended_action": (
+                        "fix quota/status collection before spending automatic compute"
+                    ),
                     "source": "quota",
                 }
             ],
@@ -313,7 +315,7 @@ def _quota_failure_payload(
         "decision": "skip",
         "should_run": False,
         "error_code": quota_error_code(error),
-        "reason": str(error),
+        "reason": "quota collection failed",
         "state": "blocked_health",
         "waiting_on": "codex",
         "status": "quota_collection_failed",
