@@ -51,6 +51,15 @@ def _blocked_payload(*, missing: list[str]) -> dict:
                 }
                 for capability in missing
             ],
+            "blocked_candidates": [
+                {
+                    "todo_id": "todo_blocked",
+                    "action_kind": "inspect_target",
+                    "target_key": "fixture/target.json",
+                    "text": "[P0] Inspect fixture/target.json.",
+                    "required_capabilities": missing,
+                }
+            ],
             "runnable_candidates": [],
         },
     }
@@ -65,12 +74,36 @@ def test_runtime_capability_gap_returns_verified_reentry_packet() -> None:
 
     reentry = contract["cli_channel"]["runtime_capability_reentry"]
     assert contract["agent_channel"]["primary_action"] == (
-        "execute interaction_contract.cli_channel.next_cli_actions[0] to "
-        "materialize the missing capability; do not backtrack to generic "
-        "inspection or a monitor fallback"
+        "execute interaction_contract.agent_channel.next_task_action.operation "
+        "once with its real task-facing tool and exact target_ref when projected; "
+        "preflight_allowed is false, and the instruction is context rather than "
+        "CLI text; on success "
+        "execute cli_channel."
+        "next_cli_actions[0] in the same turn and continue only when quota allows"
     )
+    assert contract["agent_channel"]["next_task_action"] == {
+        "kind": "capability_verification",
+        "capability": "network",
+        "todo_id": "todo_blocked",
+        "action_kind": "inspect_target",
+        "operation": "inspect_target",
+        "instruction": "[P0] Inspect fixture/target.json.",
+        "target_ref": "fixture/target.json",
+        "preflight_allowed": False,
+        "advancement_checkpoint": False,
+        "settles_turn": False,
+        "continuation_cli_action_index": 0,
+    }
     assert reentry["schema_version"] == "runtime_capability_reentry_v0"
     assert reentry["state"] == "verification_required"
+    assert reentry["verification_contract"] == {
+        "scope": "real_task_facing_callsite_for_blocked_todo",
+        "ordinary_delivery_allowed": False,
+        "advancement_checkpoint": False,
+        "settles_turn": False,
+        "on_success": "rerun_quota_in_same_turn_then_continue_if_allowed",
+        "on_failure": "record_exact_blocker_without_capability_flag",
+    }
     assert reentry["inheritance_contract"] == {
         "source_invocation": "verified quota should-run reentry",
         "propagates_to": [
@@ -86,25 +119,27 @@ def test_runtime_capability_gap_returns_verified_reentry_packet() -> None:
     assert candidate["verification_required"] == (
         "successful_real_callsite_observation"
     )
-    assert candidate["cli_args"] == [
-        "loopx",
-        "--format",
-        "json",
-        "quota",
-        "should-run",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--available-capability",
-        "shell",
-        "--available-capability",
-        "network",
-        "--runtime-profile",
-        "ark_managed_agent_goal",
-    ]
-    assert any(
-        action.startswith("after real-callsite verification of network:")
+    assert candidate["verification_target"] == {
+        "todo_id": "todo_blocked",
+        "action_kind": "inspect_target",
+        "instruction": "[P0] Inspect fixture/target.json.",
+        "target_ref": "fixture/target.json",
+    }
+    assert candidate["command"] == (
+        "loopx --format json quota should-run --goal-id "
+        f"{GOAL_ID} --agent-id {AGENT_ID} --available-capability shell "
+        "--available-capability network --runtime-profile ark_managed_agent_goal"
+    )
+    assert contract["cli_channel"]["next_cli_actions"] == [candidate["command"]]
+    assert contract["cli_channel"]["spend_after_validation"] is False
+    assert contract["cli_channel"]["spend_policy"] == (
+        "no spend or advancement checkpoint for capability verification; rerun "
+        "quota in the same turn"
+    )
+    assert all(
+        "todo add" not in action
+        and "refresh-state" not in action
+        and "spend-slot" not in action
         for action in contract["cli_channel"]["next_cli_actions"]
     )
 
