@@ -135,6 +135,28 @@ summary. For each selected PR:
 A review that only repeats the PR body, only discusses one blocker, or omits
 whole files/modules is incomplete and must be reworked.
 
+## Example / Walkthrough / Smoke-Only PRs
+
+When the review plan marks `smoke_or_example_only`, the `durable_smoke_value`
+evidence is mandatory before approval. The essence is real, durable value to
+the repository and product: running, deterministic, and public-safe are
+necessary but not enough.
+
+1. Name the shipped behavior, boundary, or maintenance cost this artifact
+   guards. "Demonstrates something that already works" is not durable value.
+2. Scan existing coverage (`rg -l '<behavior|module>' examples tests`) and the
+   same-author batch (`gh pr list ... --author <author>` / `gh search prs`);
+   flag same-shape batches opened within minutes as PR farming.
+3. Apply the repo smoke policy: thin + durable, guard shipped behavior or a
+   real boundary, compress rather than append, consolidate same-shape
+   walkthroughs into one PR or focused tests.
+4. Verdict: `REQUEST_CHANGES` for duplicative, oversized, or value-less
+   scaffolding; name the consolidation or thinning repair in the body.
+5. Repeat offenders: after a REQUEST_CHANGES warning, further low-value
+   same-shape PRs from the same author escalate to a contribution-restriction
+   recommendation (owner blocks the account from further PR submissions); the
+   warning must name this consequence.
+
 ## Autonomous Queue
 
 For recurring observation, use the same capability:
