@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 import subprocess
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -12,29 +11,33 @@ from pathlib import Path
 from typing import Any
 
 from ...heartbeat_prompt import build_heartbeat_prompt
+from ..quota.turn_envelope import quota_action_signature_document
 from ..runtime.agent_scoped_evidence_log import (
     build_agent_scoped_evidence_log_command,
 )
 from .doubao_model_behavior_actor import (
     ARK_API_KEY_ENV,
     DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_2_1_TURBO_MODEL,
-    DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
     DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
-    DoubaoActorTransportError,
     _direct_ark_transport,
 )
-
+from .model_behavior_qualification import (
+    model_behavior_semantic_contract_from_packet,
+)
+from .model_tool_behavior import (
+    DoubaoExecToolClient,
+    argument_value,
+    digest_text,
+    execute_loopx_cli,
+    loopx_command_tokens,
+)
 
 REPLAN_EVIDENCE_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
     "replan_evidence_tool_behavior_receipt_v0"
 )
 REPLAN_EVIDENCE_TOOL_BEHAVIOR_MAX_CALLS = 6
 
-_ALLOWED_MODELS = {DOUBAO_2_1_PRO_MODEL, DOUBAO_2_1_TURBO_MODEL}
-_MAX_TOOL_ARGUMENT_BYTES = 8_192
-_MAX_PROVIDER_TOKENS = 2_048
 _FIXTURE_GOAL_ID = "replan-evidence-live-fixture"
 _FIXTURE_AGENT_ID = "codex-replan-evidence"
 _READ_ONLY_PREFLIGHT_COMMANDS = {
@@ -43,28 +46,22 @@ _READ_ONLY_PREFLIGHT_COMMANDS = {
     "git branch --show-current",
     "git rev-parse --show-toplevel",
 }
-
-_EXEC_COMMAND_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "exec_command",
-        "description": (
-            "Run a shell command in the current workspace and return its output."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "cmd": {
-                    "type": "string",
-                    "description": "The shell command to run.",
-                }
-            },
-            "required": ["cmd"],
-            "additionalProperties": False,
-        },
-    },
+_EVIDENCE_PLAN_BOUNDARIES = {";", "&&", "||"}
+_EVIDENCE_PLAN_VALUE_OPTIONS = {
+    "--agent-id",
+    "--format",
+    "--goal-id",
+    "--limit",
+    "--registry",
+    "--runtime-root",
 }
-
+_REPLAN_SUPPLEMENTAL_OBSERVATION_PATHS = {
+    ("project", "status"),
+    ("registry", "get-goal"),
+    ("registry", "show-goal"),
+    ("status",),
+    ("todo", "list"),
+}
 
 @dataclass(frozen=True)
 class _ReplanEvidenceToolFixture:
@@ -78,15 +75,8 @@ class _ReplanEvidenceToolFixture:
     source_root: Path
 
 
-@dataclass(frozen=True)
-class _ToolCall:
-    call_id: str
-    command: str
-    provider_value: dict[str, Any]
-
-
 def _digest(value: str) -> str:
-    return f"sha256:{sha256(value.encode('utf-8')).hexdigest()}"
+    return digest_text(value)
 
 
 def _build_fixture(root: Path) -> _ReplanEvidenceToolFixture:
@@ -146,6 +136,18 @@ def _build_fixture(root: Path) -> _ReplanEvidenceToolFixture:
                 "coordination": {
                     "registered_agents": [_FIXTURE_AGENT_ID],
                     "agent_model": "peer_v1",
+                    "agent_profiles": {
+                        _FIXTURE_AGENT_ID: {
+                            "schema_version": "agent_profile_v1",
+                            "agent_id": _FIXTURE_AGENT_ID,
+                            "profile_role": "quality-qualification",
+                            "scope_summary": "Qualify bounded replan behavior.",
+                            "default_task_classes": [
+                                "advancement_task",
+                                "continuous_monitor",
+                            ],
+                        }
+                    },
                 },
                 "authority_sources": [],
                 "quota": {
@@ -219,116 +221,12 @@ def _build_fixture(root: Path) -> _ReplanEvidenceToolFixture:
     )
 
 
-def _provider_tool_call(response: Mapping[str, Any]) -> _ToolCall | None:
-    choices = response.get("choices")
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise DoubaoActorTransportError(
-            "Doubao tool behavior response must contain exactly one choice",
-            error_code="provider_invalid_shape",
-        )
-    choice = choices[0]
-    if not isinstance(choice, Mapping):
-        raise DoubaoActorTransportError(
-            "Doubao tool behavior choice must be an object",
-            error_code="provider_invalid_shape",
-        )
-    message = choice.get("message")
-    if not isinstance(message, Mapping):
-        raise DoubaoActorTransportError(
-            "Doubao tool behavior choice is missing its message",
-            error_code="provider_invalid_shape",
-        )
-    tool_calls = message.get("tool_calls")
-    if tool_calls in (None, []):
-        return None
-    if not isinstance(tool_calls, list) or len(tool_calls) != 1:
-        raise DoubaoActorTransportError(
-            "Doubao tool behavior must choose exactly one tool per step",
-            error_code="provider_invalid_tool_call",
-        )
-    raw_call = tool_calls[0]
-    if not isinstance(raw_call, Mapping):
-        raise DoubaoActorTransportError(
-            "Doubao tool call must be an object",
-            error_code="provider_invalid_tool_call",
-        )
-    function = raw_call.get("function")
-    if (
-        raw_call.get("type") != "function"
-        or not isinstance(function, Mapping)
-        or function.get("name") != "exec_command"
-    ):
-        raise DoubaoActorTransportError(
-            "Doubao tool behavior selected an unsupported tool",
-            error_code="provider_invalid_tool_call",
-        )
-    arguments_text = function.get("arguments")
-    if (
-        not isinstance(arguments_text, str)
-        or len(arguments_text.encode("utf-8")) > _MAX_TOOL_ARGUMENT_BYTES
-    ):
-        raise DoubaoActorTransportError(
-            "Doubao tool arguments are missing or too large",
-            error_code="provider_invalid_tool_call",
-        )
-    try:
-        arguments = json.loads(arguments_text)
-    except json.JSONDecodeError:
-        raise DoubaoActorTransportError(
-            "Doubao tool arguments are not valid JSON",
-            error_code="provider_invalid_tool_call",
-        ) from None
-    if not isinstance(arguments, Mapping) or set(arguments) != {"cmd"}:
-        raise DoubaoActorTransportError(
-            "Doubao exec_command arguments must contain only cmd",
-            error_code="provider_invalid_tool_call",
-        )
-    command = arguments.get("cmd")
-    if not isinstance(command, str) or not command.strip():
-        raise DoubaoActorTransportError(
-            "Doubao exec_command cmd must be non-empty text",
-            error_code="provider_invalid_tool_call",
-        )
-    call_id = str(raw_call.get("id") or "").strip()
-    if not call_id:
-        raise DoubaoActorTransportError(
-            "Doubao tool call is missing its id",
-            error_code="provider_invalid_tool_call",
-        )
-    return _ToolCall(
-        call_id=call_id,
-        command=command.strip(),
-        provider_value={
-            "id": call_id,
-            "type": "function",
-            "function": {
-                "name": "exec_command",
-                "arguments": arguments_text,
-            },
-        },
-    )
-
-
 def _loopx_command_tokens(command: str) -> list[str] | None:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None
-    for index, token in enumerate(tokens):
-        if Path(token).name == "loopx":
-            command_tokens = tokens[index:]
-            if any(token in {";", "&&", "||", "|"} for token in command_tokens):
-                return None
-            return command_tokens
-    return None
+    return loopx_command_tokens(command)
 
 
 def _argument_value(tokens: list[str], option: str) -> str | None:
-    try:
-        index = tokens.index(option)
-    except ValueError:
-        return None
-    return tokens[index + 1] if index + 1 < len(tokens) else None
+    return argument_value(tokens, option)
 
 
 def _clock_output(command: str) -> str | None:
@@ -384,14 +282,179 @@ def _required_evidence_command_from_packet(packet: Mapping[str, Any]) -> str:
     return command
 
 
-def _replace_argument(tokens: list[str], option: str, value: str) -> None:
+def _evidence_plan_segments(command: str) -> list[list[str]] | None:
+    if "$(" in command or "`" in command or "\x00" in command:
+        return None
+    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
     try:
-        index = tokens.index(option)
+        tokens = list(lexer)
     except ValueError:
-        return
-    if index + 1 >= len(tokens):
-        raise ValueError(f"missing value for {option}")
-    tokens[index + 1] = value
+        return None
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token == "|" or token.startswith("|") and token != "||":
+            return None
+        if token in _EVIDENCE_PLAN_BOUNDARIES:
+            if segments[-1]:
+                segments.append([])
+            continue
+        segments[-1].append(token)
+    return [segment for segment in segments if segment]
+
+
+def _loopx_read_tail(segment: list[str]) -> list[str] | None:
+    cleaned: list[str] = []
+    for token in segment:
+        if token == "2>/dev/null":
+            continue
+        if any(marker in token for marker in (">", "<")):
+            return None
+        cleaned.append(token)
+    try:
+        loopx_index = next(
+            index for index, token in enumerate(cleaned) if Path(token).name == "loopx"
+        )
+    except StopIteration:
+        return None
+    if loopx_index:
+        return None
+    argv = cleaned[1:]
+    index = 0
+    while index < len(argv) and argv[index] in {
+        "--format",
+        "--registry",
+        "--runtime-root",
+    }:
+        if index + 1 >= len(argv):
+            return None
+        index += 2
+    return argv[index:]
+
+
+def _read_options(
+    tokens: list[str],
+    *,
+    flags: set[str],
+) -> tuple[dict[str, str], set[str]] | None:
+    values: dict[str, str] = {}
+    seen_flags: set[str] = set()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in flags:
+            if token in seen_flags:
+                return None
+            seen_flags.add(token)
+            index += 1
+            continue
+        if token not in _EVIDENCE_PLAN_VALUE_OPTIONS or index + 1 >= len(tokens):
+            return None
+        if token in values:
+            return None
+        values[token] = tokens[index + 1]
+        index += 2
+    return values, seen_flags
+
+
+def _evidence_plan_classification(
+    command: str,
+    *,
+    required_evidence_command: str,
+) -> str | None:
+    required_tokens = _loopx_command_tokens(required_evidence_command)
+    if not required_tokens:
+        raise ValueError("required evidence command is not a bounded LoopX read")
+    expected_goal_id = _argument_value(required_tokens, "--goal-id")
+    expected_agent_id = _argument_value(required_tokens, "--agent-id")
+    expected_limit = _argument_value(required_tokens, "--limit")
+    if not expected_goal_id or not expected_agent_id or not expected_limit:
+        raise ValueError("required evidence command is missing its scoped identity")
+    segments = _evidence_plan_segments(command)
+    if not segments:
+        return "wrong_evidence_log" if "evidence-log" in command else None
+    evidence_count = 0
+    for segment in segments:
+        if segment[0] == "export":
+            if len(segment) != 2 or not segment[1].startswith("LOOPX_TURN="):
+                return "unexpected_command"
+            continue
+        if segment[0] == "echo":
+            if any(marker in token for token in segment[1:] for marker in (">", "<")):
+                return "unexpected_command"
+            continue
+        tail = _loopx_read_tail(segment)
+        if not tail:
+            return "unexpected_command"
+        if tail[0] == "evidence-log":
+            parsed = _read_options(tail[1:], flags={"--thin"})
+            if parsed is None:
+                return "wrong_evidence_log"
+            values, flags = parsed
+            if (
+                values
+                != {
+                    "--goal-id": expected_goal_id,
+                    "--agent-id": expected_agent_id,
+                    "--limit": expected_limit,
+                }
+                or flags != {"--thin"}
+            ):
+                return "wrong_evidence_log"
+            evidence_count += 1
+            continue
+        for path in _REPLAN_SUPPLEMENTAL_OBSERVATION_PATHS:
+            if tuple(tail[: len(path)]) != path:
+                continue
+            parsed = _read_options(tail[len(path) :], flags=set())
+            if parsed != ({"--goal-id": expected_goal_id}, set()):
+                return "unexpected_command"
+            break
+        else:
+            return "unexpected_command"
+        continue
+    if evidence_count == 1:
+        return "evidence_log"
+    return "wrong_evidence_log" if "evidence-log" in command else None
+
+
+def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
+    signature = quota_action_signature_document(packet)
+    action = dict(signature.get("action") or {})
+    user = dict(signature.get("user") or {})
+    selected_todo = dict(action.get("selected_todo") or {})
+    semantics = model_behavior_semantic_contract_from_packet(
+        packet,
+        arm="full_packet",
+    )
+    vision = dict(semantics.get("vision_continuation") or {})
+    trigger_kinds = sorted(
+        str(item) for item in vision.get("trigger_kinds") or [] if str(item)
+    )
+    required_reads = list(semantics.get("required_reads") or [])
+    if (
+        vision.get("required") is not True
+        or "required_agent_vision_missing" not in trigger_kinds
+        or len(required_reads) != 1
+    ):
+        raise ValueError(
+            "real quota packet must bind evidence-log replan to the missing vision"
+        )
+    must_attempt = bool(action.get("must_attempt"))
+    delivery_allowed = bool(action.get("delivery_allowed"))
+    quiet_noop_allowed = bool(action.get("quiet_noop_allowed"))
+    if not (must_attempt and delivery_allowed and not quiet_noop_allowed):
+        raise ValueError("real quota packet must require an executable replan")
+    return {
+        "decision": "execute",
+        "selected_todo_id": selected_todo.get("todo_id"),
+        "user_action_required": bool(user.get("action_required")),
+        "must_attempt_work": must_attempt,
+        "delivery_allowed": delivery_allowed,
+        "quiet_noop_allowed": quiet_noop_allowed,
+        "external_write_requested": False,
+        "vision_trigger_kinds": trigger_kinds,
+    }
 
 
 def _execute_loopx_read(
@@ -401,35 +464,19 @@ def _execute_loopx_read(
     turn_instance_id: str,
     quota_guard: bool,
 ) -> str:
-    tokens = _loopx_command_tokens(command)
-    if not tokens:
-        raise ValueError("command does not contain one bounded loopx invocation")
-    argv = list(tokens[1:])
-    if quota_guard:
-        _replace_argument(argv, "--registry", str(fixture.global_registry_path))
-        _replace_argument(argv, "--turn-instance-id", turn_instance_id)
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        str(fixture.source_root)
-        if not existing_pythonpath
-        else os.pathsep.join((str(fixture.source_root), existing_pythonpath))
+    return execute_loopx_cli(
+        command,
+        source_root=fixture.source_root,
+        project_root=fixture.project_root,
+        argument_overrides=(
+            {
+                "--registry": str(fixture.global_registry_path),
+                "--turn-instance-id": turn_instance_id,
+            }
+            if quota_guard
+            else None
+        ),
     )
-    completed = subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *argv],
-        cwd=fixture.project_root,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "LoopX read command failed with "
-            f"exit={completed.returncode}: {completed.stderr[-500:]}"
-        )
-    return completed.stdout
 
 
 def _execute_workspace_read(
@@ -457,10 +504,6 @@ def _classify_tool_command(
     quota_observed: bool,
     required_evidence_command: str | None,
 ) -> tuple[str, str | None]:
-    if command == (required_evidence_command or fixture.required_evidence_command):
-        if not quota_observed:
-            return "evidence_log_before_quota", None
-        return "evidence_log", None
     if _is_quota_guard(command):
         return "quota_should_run", None
     clock_output = _clock_output(command)
@@ -468,8 +511,18 @@ def _classify_tool_command(
         return "clock", clock_output
     if command in _READ_ONLY_PREFLIGHT_COMMANDS:
         return "workspace_read", None
-    if " evidence-log " in f" {command} ":
-        return "wrong_evidence_log", None
+    evidence_plan = _evidence_plan_classification(
+        command,
+        required_evidence_command=(
+            required_evidence_command or fixture.required_evidence_command
+        ),
+    )
+    if evidence_plan == "evidence_log":
+        if not quota_observed:
+            return "evidence_log_before_quota", None
+        return "evidence_log", None
+    if evidence_plan in {"wrong_evidence_log", "unexpected_command"}:
+        return evidence_plan, None
     return "unexpected_command", None
 
 
@@ -481,10 +534,11 @@ def _receipt(
     passed: bool,
     failure_code: str | None,
     required_evidence_command: str,
+    quota_observation: Mapping[str, Any] | None,
     local_fixture_writes_executed: bool,
     read_only_host_commands_executed: bool,
 ) -> dict[str, Any]:
-    return {
+    receipt = {
         "schema_version": REPLAN_EVIDENCE_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
         "qualification_id": qualification_id,
         "actor_ref": actor_ref,
@@ -506,6 +560,9 @@ def _receipt(
             "read_only_host_commands_executed": read_only_host_commands_executed,
         },
     }
+    if quota_observation is not None:
+        receipt.update(dict(quota_observation))
+    return receipt
 
 
 class DoubaoReplanEvidenceToolBehaviorActor:
@@ -519,18 +576,12 @@ class DoubaoReplanEvidenceToolBehaviorActor:
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
     ) -> None:
-        if not api_key.strip():
-            raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in _ALLOWED_MODELS:
-            raise ValueError(
-                "Doubao actor model must be an allowlisted Doubao 2.1 model"
-            )
-        if timeout_seconds <= 0 or timeout_seconds > 300:
-            raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
-        self._api_key = api_key
-        self._model = model
-        self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._client = DoubaoExecToolClient(
+            api_key=api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+        )
 
     @classmethod
     def from_environment(
@@ -573,9 +624,10 @@ class DoubaoReplanEvidenceToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        quota_observation: dict[str, Any] | None = None
         required_evidence_command: str | None = None
         seen_once: set[str] = set()
-        actor_ref = f"ark:{self._model}"
+        actor_ref = self._client.actor_ref
         local_fixture_writes_executed = True
         read_only_host_commands_executed = False
         qualification_digest = sha256(qualification_id.encode()).hexdigest()[:16]
@@ -591,44 +643,13 @@ class DoubaoReplanEvidenceToolBehaviorActor:
                 required_evidence_command=(
                     required_evidence_command or fixture.required_evidence_command
                 ),
+                quota_observation=quota_observation,
                 local_fixture_writes_executed=local_fixture_writes_executed,
                 read_only_host_commands_executed=read_only_host_commands_executed,
             )
 
         for _ in range(REPLAN_EVIDENCE_TOOL_BEHAVIOR_MAX_CALLS):
-            body = {
-                "model": self._model,
-                "messages": messages,
-                "tools": [_EXEC_COMMAND_TOOL],
-                "tool_choice": "auto",
-                "thinking": {"type": "disabled"},
-                "temperature": 0,
-                "max_tokens": _MAX_PROVIDER_TOKENS,
-                "stream": False,
-            }
-            try:
-                response = self._transport(
-                    endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    body=json.dumps(
-                        body,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8"),
-                    timeout_seconds=self._timeout_seconds,
-                )
-                tool_call = _provider_tool_call(response)
-            except DoubaoActorTransportError:
-                raise
-            except Exception:
-                raise DoubaoActorTransportError(
-                    "Doubao tool behavior provider transport failed",
-                    error_code="provider_transport_failed",
-                ) from None
+            tool_call = self._client.next_tool_call(messages)
             if tool_call is None:
                 return receipt(
                     passed=False,
@@ -651,7 +672,7 @@ class DoubaoReplanEvidenceToolBehaviorActor:
             if kind == "evidence_log":
                 try:
                     evidence_output = _execute_loopx_read(
-                        tool_call.command,
+                        required_evidence_command or fixture.required_evidence_command,
                         fixture=fixture,
                         turn_instance_id=turn_instance_id,
                         quota_guard=False,
@@ -700,6 +721,7 @@ class DoubaoReplanEvidenceToolBehaviorActor:
                     required_evidence_command = _required_evidence_command_from_packet(
                         quota_packet
                     )
+                    quota_observation = _quota_behavior_observation(quota_packet)
                     if required_evidence_command != fixture.required_evidence_command:
                         raise ValueError("quota required-read command drifted from fixture")
                     quota_observed = True
