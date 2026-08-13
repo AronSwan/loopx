@@ -144,7 +144,7 @@ def assert_public_scan(payload: dict[str, Any]) -> None:
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-status-quota-perf-budget-") as tmp:
         root = Path(tmp)
-        registry_path, _project, public_doc = write_fixture(root)
+        registry_path, project, public_doc = write_fixture(root)
 
         todo_payload, _todo_elapsed = run_cli(
             registry_path,
@@ -221,11 +221,102 @@ def main() -> int:
         assert leak_returncode != 0 or leak_payload.get("status_health_ok") is False, leak_payload
         assert "status or contract health" in json.dumps(leak_payload) + leak_stderr, leak_payload
 
+        public_doc.write_text(
+            "Public smoke fixture for status/quota perf budgets.\n",
+            encoding="utf-8",
+        )
+        state_file = (
+            project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+        )
+        state_text = state_file.read_text(encoding="utf-8")
+        assert " status=open " in state_text, state_text
+        state_file.write_text(
+            state_text.replace(" status=open ", " status=stuck ", 1),
+            encoding="utf-8",
+        )
+
+        (
+            malformed_status_payload,
+            malformed_status_elapsed,
+            malformed_status_returncode,
+            _malformed_status_stderr,
+        ) = run_cli_result(
+            registry_path,
+            "status",
+            "--scan-path",
+            str(public_doc),
+            "--limit",
+            "5",
+            "--agent-id",
+            AGENT_ID,
+            check=False,
+        )
+        assert malformed_status_returncode != 0, malformed_status_payload
+        assert malformed_status_payload.get("ok") is False, malformed_status_payload
+        error_diagnostics = (
+            (malformed_status_payload.get("contract") or {}).get("error_diagnostics")
+            or []
+        )
+        assert any(
+            item.get("code") == "todo_status_invalid"
+            for item in error_diagnostics
+            if isinstance(item, dict)
+        ), malformed_status_payload
+        assert_public_scan(malformed_status_payload)
+        assert malformed_status_elapsed <= STATUS_BUDGET_SECONDS, (
+            malformed_status_elapsed,
+            STATUS_BUDGET_SECONDS,
+            "malformed_state",
+        )
+
+        (
+            malformed_quota_payload,
+            malformed_quota_elapsed,
+            malformed_quota_returncode,
+            _malformed_quota_stderr,
+        ) = run_cli_result(
+            registry_path,
+            "quota",
+            "should-run",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--available-capability",
+            "shell",
+            "--scan-path",
+            str(public_doc),
+            "--limit",
+            "5",
+            check=False,
+        )
+        assert malformed_quota_returncode != 0, malformed_quota_payload
+        assert malformed_quota_payload.get("status_health_ok") is False, (
+            malformed_quota_payload
+        )
+        assert malformed_quota_payload.get("should_run") is False, (
+            malformed_quota_payload
+        )
+        assert malformed_quota_payload.get("effective_action") == "quota_skip", (
+            malformed_quota_payload
+        )
+        assert PRIVATE_DOC_MARKER not in json.dumps(malformed_quota_payload), (
+            malformed_quota_payload
+        )
+        assert malformed_quota_elapsed <= QUOTA_BUDGET_SECONDS, (
+            malformed_quota_elapsed,
+            QUOTA_BUDGET_SECONDS,
+            "malformed_state",
+        )
+
         print(
             "status_quota_perf_budget: "
             f"ignored_files={IGNORED_FILE_COUNT} "
             f"status={status_elapsed:.3f}s/{STATUS_BUDGET_SECONDS:.1f}s "
-            f"quota={quota_elapsed:.3f}s/{QUOTA_BUDGET_SECONDS:.1f}s"
+            f"quota={quota_elapsed:.3f}s/{QUOTA_BUDGET_SECONDS:.1f}s "
+            "malformed_state "
+            f"status={malformed_status_elapsed:.3f}s/{STATUS_BUDGET_SECONDS:.1f}s "
+            f"quota={malformed_quota_elapsed:.3f}s/{QUOTA_BUDGET_SECONDS:.1f}s"
         )
     print("status-quota-perf-budget-smoke ok")
     return 0
