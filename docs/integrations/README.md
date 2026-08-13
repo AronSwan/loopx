@@ -5,6 +5,7 @@ and external systems while preserving one control-plane authority.
 
 - [Integration guide](../integration.md)
 - [Runtime connector catalog](runtime-connector-catalog.md)
+- [DeepSeek Harness connector](deepseek-harness-connector.md)
 - [Session runtime control-plane adapter](session-runtime-control-plane-adapter.md)
 - [Worker bridge install contract](worker-bridge-install-contract.md)
 - [Codex peer task orchestration](codex-subagent-orchestration.md)

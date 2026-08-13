@@ -83,6 +83,8 @@ def main() -> int:
     assert agent_type_for_host_surface("ark-managed-agent") == "ark-managed-agent"
     assert agent_type_for_host_surface("traex-cli") == "traex-cli"
     assert agent_type_for_host_surface("traex") == "traex-cli"
+    assert agent_type_for_host_surface("deepseek-harness") == "deepseek-harness"
+    assert agent_type_for_host_surface("dsh") == "deepseek-harness"
 
     codex_app = build_host_loop_activation_packet(agent_type="codex-app", goal_id="demo")
     codex_app_ssh = build_host_loop_activation_packet(
@@ -99,6 +101,7 @@ def main() -> int:
         goal_id="demo",
     )
     traex_cli = build_host_loop_activation_packet(agent_type="traex-cli", goal_id="demo")
+    dsh = build_host_loop_activation_packet(agent_type="deepseek-harness", goal_id="demo")
     assert codex_app["activation_method"] == "create_or_update_codex_app_automation", codex_app
     assert codex_app_ssh["activation_method"] == "set_visible_goal", codex_app_ssh
     assert codex_app_ssh["host_surface"] == "codex_app_ssh_visible_goal_mode", codex_app_ssh
@@ -155,6 +158,10 @@ def main() -> int:
         traex_cli["commands"]["visible_goal_prompt_json"]
     ), traex_cli
     assert "automation_update" not in str(traex_cli), traex_cli
+    assert dsh["activation_method"] == "external_loop_driver", dsh
+    assert dsh["host_surface"] == "deepseek_harness_automation_loop", dsh
+    assert "--runtime-profile generic_cli" in dsh["commands"]["heartbeat_prompt"], dsh
+    assert "scripts/dsh_turn_host_adapter.py" in dsh["entry_command_hint"], dsh
     assert re.search(
         r"(?<![a-z0-9_/])/loop(?![a-z0-9_-])",
         str(traex_cli).lower(),

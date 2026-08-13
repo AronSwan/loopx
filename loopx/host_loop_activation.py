@@ -21,6 +21,7 @@ HOST_MANAGED_SKILL_AGENT_TYPES = frozenset(
     {
         "ark-managed-agent",
         "traex-cli",
+        "deepseek-harness",
         "other-agent",
     }
 )
@@ -42,6 +43,7 @@ def scheduler_command_binding_for_agent_type(
         "pi": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "gemini-cli": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)
     if runtime_profile is not None:
         return {"runtime_profile": runtime_profile.value}
@@ -64,6 +66,7 @@ SUPPORTED_AGENT_TYPES = [
     "pi",
     "gemini-cli",
     "cursor-agent",
+    "deepseek-harness",
     "manual",
     "other-agent",
 ]
@@ -203,6 +206,17 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
             "cursor cli",
         ],
     },
+    "deepseek-harness": {
+        "display_name": "DeepSeek Harness",
+        "host_loop": "DeepSeek Harness headless/automation loop gated by LoopX quota",
+        "entry": "loopx turn run-once with scripts/dsh_turn_host_adapter.py",
+        "accepted_inputs": [
+            "deepseek-harness",
+            "deepseek_harness",
+            "deepseek harness",
+            "dsh",
+        ],
+    },
     "manual": {
         "display_name": "Manual shell / external scheduler",
         "host_loop": "external scheduler or manual quota/status loop",
@@ -275,6 +289,8 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "gemini": "gemini-cli",
     "cursor-agent": "cursor-agent",
     "cursor": "cursor-agent",
+    "deepseek-harness": "deepseek-harness",
+    "dsh": "deepseek-harness",
     "shell": "manual",
     "http": "other-agent",
     "worker-bridge": "other-agent",
@@ -404,6 +420,7 @@ def _heartbeat_commands(
         "pi": "Pi visible goal loop gated by LoopX",
         "gemini-cli": "Gemini CLI agent loop gated by LoopX",
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
+        "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",
         "other-agent": "Custom agent host loop gated by LoopX",
     }
@@ -977,6 +994,38 @@ def _cursor_agent_activation(commands: dict[str, str], cli_bin: str) -> dict[str
     )
 
 
+def _deepseek_harness_activation(commands: dict[str, str]) -> dict[str, Any]:
+    return {
+        "host_surface": "deepseek_harness_automation_loop",
+        "entry_command_hint": "loopx turn run-once with scripts/dsh_turn_host_adapter.py",
+        "activation_method": "external_loop_driver",
+        "activation_input_command": commands["heartbeat_prompt_json"],
+        "host_mutation": {
+            "owner": "DeepSeek Harness adapter",
+            "host_loop_primitive": "deepseek-harness-sdk",
+            "cli_can_mutate_directly": False,
+            "missing_host_tool_gate": (
+                "DeepSeek Harness SDK or dsh runtime is unavailable; install "
+                "`loopx[deepseek-harness]` and verify the dsh cordis configuration "
+                "before claiming an automation loop."
+            ),
+        },
+        "activation_steps": [
+            "Install the optional DeepSeek Harness SDK (`loopx[deepseek-harness]`).",
+            "Prepare a dsh cordis.yml and any DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL settings.",
+            "Run the heartbeat-prompt JSON command after project state and todos are written.",
+            "Wire `loopx turn run-once` with `--host generic-cli` and "
+            "the `scripts/dsh_turn_host_adapter.py` host adapter command.",
+            "Start every automatic tick from quota should-run and stop when it says stop.",
+        ],
+        "success_criteria": [
+            "The DeepSeek Harness adapter returns a typed loopx_turn_result_v0.",
+            "Independent validation passes before LoopX writes state or spends quota.",
+            "Opaque dsh session roots stay outside public LoopX evidence.",
+        ],
+    }
+
+
 def _manual_activation(commands: dict[str, str]) -> dict[str, Any]:
     return {
         "host_surface": "external_scheduler_or_manual_shell",
@@ -1063,6 +1112,8 @@ def build_host_loop_activation_packet(
         surface = _gemini_cli_activation(commands, cli_bin)
     elif canonical == "cursor-agent":
         surface = _cursor_agent_activation(commands, cli_bin)
+    elif canonical == "deepseek-harness":
+        surface = _deepseek_harness_activation(commands)
     else:
         surface = _manual_activation(commands)
         if canonical == "other-agent":
