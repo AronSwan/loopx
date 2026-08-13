@@ -77,6 +77,7 @@ class _QualificationState:
     frontier_context_read: bool = False
     work_source_read: bool = False
     created_successor_id: str | None = None
+    successor_reentry_observation: dict[str, Any] | None = None
 
 
 def _digest(value: str) -> str:
@@ -246,11 +247,20 @@ def _build_fixture(
                 "evidence_ids": ["evidence-existing"],
             },
         }
-        prior_runs.append(run)
         safe_timestamp = generated_at.replace(":", "-")
-        (runs_dir / f"{safe_timestamp}.json").write_text(
+        json_path = runs_dir / f"{safe_timestamp}.json"
+        markdown_path = runs_dir / f"{safe_timestamp}.md"
+        json_path.write_text(
             json.dumps(run, sort_keys=True) + "\n",
             encoding="utf-8",
+        )
+        markdown_path.write_text("# Bounded fixture probe\n", encoding="utf-8")
+        prior_runs.append(
+            {
+                **run,
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+            }
         )
     (runs_dir / "index.jsonl").write_text(
         "".join(json.dumps(run, sort_keys=True) + "\n" for run in prior_runs),
@@ -508,6 +518,57 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _successor_reentry_observation(
+    packet: Mapping[str, Any],
+    *,
+    successor_todo_id: str,
+    composition_experiment_ref: str | None,
+) -> dict[str, Any]:
+    selected_todo = packet.get("selected_todo")
+    if not isinstance(selected_todo, Mapping):
+        raise ValueError("successor_reentry_selected_todo_missing")
+    if str(selected_todo.get("todo_id") or "") != successor_todo_id:
+        raise ValueError("successor_reentry_selected_todo_mismatch")
+    if packet.get("decision") == "autonomous_replan_required" or isinstance(
+        packet.get("autonomous_replan_obligation"), Mapping
+    ):
+        raise ValueError("successor_reentry_replan_not_closed")
+    if not (
+        packet.get("decision") == "run"
+        and packet.get("effective_action") == "normal_run"
+    ):
+        raise ValueError("successor_reentry_not_runnable")
+
+    observation: dict[str, Any] = {
+        "decision": packet.get("decision"),
+        "effective_action": packet.get("effective_action"),
+        "selected_todo_id": successor_todo_id,
+        "replan_closed": True,
+    }
+    if composition_experiment_ref:
+        frontier = packet.get("bounded_research_frontier")
+        gaps = (
+            frontier.get("gaps")
+            if isinstance(frontier, Mapping)
+            and isinstance(frontier.get("gaps"), list)
+            else []
+        )
+        gap = next(
+            (
+                item
+                for item in gaps
+                if isinstance(item, Mapping)
+                and item.get("experiment_node_ref") == composition_experiment_ref
+            ),
+            None,
+        )
+        if not isinstance(gap, Mapping) or gap.get("status") != "scheduled":
+            raise ValueError("successor_reentry_composition_not_scheduled")
+        observation["composition_experiment_ref"] = composition_experiment_ref
+        observation["composition_status"] = "scheduled"
+    return observation
+
+
 def _execute_loopx(
     command: str,
     *,
@@ -633,7 +694,7 @@ def _qualification_receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
-    return _receipt(
+    receipt = _receipt(
         qualification_id=qualification_id,
         actor_ref=actor_ref,
         steps=state.steps,
@@ -644,6 +705,9 @@ def _qualification_receipt(
         local_fixture_writes_executed=True,
         read_only_host_commands_executed=state.read_only_host_commands_executed,
     )
+    if state.successor_reentry_observation is not None:
+        receipt["successor_reentry"] = state.successor_reentry_observation
+    return receipt
 
 
 def _record_tool_step(
@@ -769,6 +833,20 @@ def _handle_successor_command(command: str, state: _QualificationState) -> str:
         "accepted": True,
         "satisfying_outcomes": ["new_runnable_successor"],
     }
+    reentry_output = _execute_loopx(
+        state.fixture.quota_guard_command,
+        fixture=state.fixture,
+        turn_instance_id=f"{state.turn_instance_id}-successor",
+    )
+    reentry_packet = json.loads(reentry_output)
+    if not isinstance(reentry_packet, dict):
+        raise ValueError("successor_reentry_quota_invalid")
+    state.successor_reentry_observation = _successor_reentry_observation(
+        reentry_packet,
+        successor_todo_id=state.created_successor_id,
+        composition_experiment_ref=state.fixture.composition_experiment_ref,
+    )
+    state.read_only_host_commands_executed = True
     return output
 
 
@@ -848,6 +926,12 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "repeated_successor_create",
         "successor_create_failed",
         "successor_transition_missing",
+        "successor_reentry_quota_invalid",
+        "successor_reentry_selected_todo_missing",
+        "successor_reentry_selected_todo_mismatch",
+        "successor_reentry_replan_not_closed",
+        "successor_reentry_not_runnable",
+        "successor_reentry_composition_not_scheduled",
         "quota_obligation_missing",
         "non_semantic_replan_action",
         "semantic_writeback_failed",
