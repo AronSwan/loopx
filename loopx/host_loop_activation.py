@@ -21,7 +21,6 @@ HOST_MANAGED_SKILL_AGENT_TYPES = frozenset(
     {
         "ark-managed-agent",
         "traex-cli",
-        "deepseek-harness",
         "other-agent",
     }
 )
