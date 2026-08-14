@@ -131,12 +131,20 @@ COMMAND_GROUPS: list[dict[str, object]] = [
         "commands": [
             {"command": "loopx bootstrap / loopx connect", "purpose": "Create or connect project-local state."},
             {
+                "command": "loopx project --help",
+                "purpose": "Register a durable Project and bind, unbind, or resolve its foreground Goal.",
+            },
+            {
                 "command": "loopx new-project-prompt",
                 "purpose": "Generate a copy-paste project connection prompt for an agent.",
             },
             {
                 "command": "loopx bind-agent-thread",
                 "purpose": "Persist one stable host thread binding to an already registered LoopX agent.",
+            },
+            {
+                "command": "loopx unbind-agent-thread",
+                "purpose": "Remove one exact host thread binding without unregistering its agent or peer sessions.",
             },
             {
                 "command": "loopx codex-cli-bootstrap-message",

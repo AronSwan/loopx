@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -77,6 +78,7 @@ from .cli_commands import (
     handle_multi_agent_command,
     handle_preset_command,
     handle_presentation_command,
+    handle_project_command,
     handle_project_lifecycle_command,
     handle_pr_review_command,
     handle_quota_command,
@@ -89,6 +91,7 @@ from .cli_commands import (
     handle_starter_command,
     handle_summary_all_command,
     handle_support_control_command,
+    handle_handoff_mode_command,
     handle_task_lease_command,
     handle_todo_command,
     handle_version_command,
@@ -114,6 +117,7 @@ from .cli_commands import (
     register_multi_agent_commands,
     register_preset_commands,
     register_presentation_commands,
+    register_project_commands,
     register_project_lifecycle_commands,
     register_pr_review_command,
     register_quota_command,
@@ -125,11 +129,16 @@ from .cli_commands import (
     register_status_commands,
     register_summary_all_command,
     register_support_control_commands,
+    register_handoff_mode_command,
     register_task_lease_command,
     register_todo_command,
     register_version_command,
     register_host_mode_plan_command,
     register_worker_bridge_commands,
+)
+from .cli_commands.opencode2_goal_worker import (
+    handle_opencode2_goal_worker_command,
+    register_opencode2_goal_worker_command,
 )
 from .cli_rollout import (
     append_benchmark_result_rollout_event,
@@ -218,6 +227,8 @@ def build_parser() -> LoopXArgumentParser:
 
     register_first_run_report_command(sub)
 
+    register_opencode2_goal_worker_command(sub)
+
     register_worker_bridge_commands(sub, add_subcommand_format)
 
     register_support_control_commands(sub, add_subcommand_format)
@@ -263,6 +274,7 @@ def build_parser() -> LoopXArgumentParser:
     register_host_mode_plan_command(sub, add_subcommand_format)
     register_preset_commands(sub, add_subcommand_format)
     register_presentation_commands(sub, add_subcommand_format)
+    register_project_commands(sub, add_subcommand_format)
     register_ready_score_command(sub, add_subcommand_format)
 
     register_registry_admin_commands(sub)
@@ -285,6 +297,7 @@ def build_parser() -> LoopXArgumentParser:
     register_explore_commands(sub, add_subcommand_format)
     register_todo_command(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
+    register_handoff_mode_command(sub, add_subcommand_format)
     register_quota_command(sub)
 
     return parser
@@ -301,6 +314,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw_argv)
     args.format = resolve_global_output_format(args)
     registry_path = Path(args.registry).expanduser()
+    registry_was_configured = user_supplied_registry(raw_argv) or bool(
+        os.environ.get("LOOPX_REGISTRY")
+    )
+    project_register_uses_default_registry = (
+        args.command == "project"
+        and args.project_command == "register"
+        and not registry_was_configured
+    )
+    if project_register_uses_default_registry:
+        registry_path = (
+            Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
+        )
     if (
         args.command
         not in {
@@ -338,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             "version",
             "host-mode-plan",
         }
-        and not user_supplied_registry(raw_argv)
+        and not project_register_uses_default_registry
+        and not registry_was_configured
         and not registry_path.exists()
     ):
         runtime_root = Path(args.runtime_root).expanduser() if args.runtime_root else DEFAULT_RUNTIME_ROOT
@@ -375,6 +401,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "first-run-report":
         return handle_first_run_report_command(args, print_payload)
+
+    if args.command == "opencode2-goal-worker":
+        return handle_opencode2_goal_worker_command(args, print_payload)
 
     worker_bridge_result = handle_worker_bridge_command(
         args,
@@ -495,6 +524,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     if presentation_result is not None:
         return presentation_result
+
+    project_result = handle_project_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if project_result is not None:
+        return project_result
 
     ready_score_result = handle_ready_score_command(
         args,
@@ -771,6 +810,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     if task_lease_result is not None:
         return task_lease_result
+
+    handoff_mode_result = handle_handoff_mode_command(
+        args,
+        registry_path=registry_path,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if handoff_mode_result is not None:
+        return handoff_mode_result
 
     if args.command == "quota":
         return handle_quota_command(
