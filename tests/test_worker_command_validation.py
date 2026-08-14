@@ -58,3 +58,30 @@ def test_spec_builder_rejects_unsafe_worker_command() -> None:
 
     with pytest.raises(ValueError, match="unsafe shell metacharacters"):
         build_visible_multi_agent_payload_from_spec(spec)
+
+
+def test_auto_research_supervisor_visible_worker_turn_hook_is_safe() -> None:
+    from loopx.capabilities.auto_research.demo_supervisor import (
+        build_auto_research_demo_supervisor_plan,
+        build_visible_worker_turn_command,
+    )
+    from loopx.capabilities.auto_research.user_contract import (
+        build_auto_research_preset_context,
+    )
+
+    command = build_visible_worker_turn_command(
+        goal_id="loopx-auto-research-safe-hook",
+        agent_id="auto-research-observer",
+        lane_count=1,
+    )
+    assert validate_worker_command(command, field="worker_turn_command") == command
+
+    payload = build_auto_research_demo_supervisor_plan(
+        goal_id="loopx-auto-research-safe-hook",
+        open_question="如何提升 KNN 精确近邻检索速度？",
+        preset_context=build_auto_research_preset_context("knn-demo"),
+        configure_visible_worker_turn=True,
+    )
+    assert payload["auto_research"]["visible_worker_turn_configured"] is True
+    for lane in payload["lanes"]:
+        assert lane["pane_local_a2a"]["worker_turn_configured"] is True

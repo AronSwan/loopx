@@ -22,6 +22,7 @@ from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
 from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
     build_auto_research_preset_context,
 )
+from loopx.visible_multi_agent_launcher import validate_worker_command  # noqa: E402
 
 
 GOAL_ID = "loopx-auto-research-visible-worker-hook-smoke"
@@ -47,14 +48,20 @@ def assert_public_safe(payload: Any) -> None:
 
 
 def assert_worker_turn_command_shape() -> None:
-    command = build_visible_worker_turn_command(objective=QUESTION)
-    assert '"$LOOPX_PANE_LOOPX" --format json auto-research worker-turn' in command
-    assert '--goal-id "$LOOPX_GOAL_ID"' in command
-    assert '--agent-id "$LOOPX_AGENT_ID"' in command
-    assert '--lane-count "${LOOPX_VISIBLE_LANE_COUNT:-1}"' in command
+    command = build_visible_worker_turn_command(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        lane_count=1,
+    )
+    assert validate_worker_command(command, field="worker_turn_command") == command
+    assert command.startswith("loopx --format json auto-research worker-turn")
+    assert f"--goal-id {GOAL_ID}" in command
+    assert f"--agent-id {AGENT_ID}" in command
+    assert "--lane-count 1" in command
     assert "--visible-lanes-accepted" in command
     assert "--complete-selected-todo" in command
     assert "--execute" in command
+    assert "$" not in command
     assert_public_safe(command)
 
 
@@ -77,6 +84,7 @@ def assert_supervisor_can_configure_worker_turn() -> None:
         assert lane["pane_local_a2a"]["status_check_only"] is True, lane
         assert lane["pane_local_a2a"]["counts_as_research_round"] is False, lane
         assert "LOOPX_PANE_WORKER_TURN" in lane["visible_launch_command"], lane
+        assert "export LOOPX_PANE_WORKER_TURN='" in lane["visible_launch_command"], lane
         assert "auto-research worker-turn" in lane["visible_launch_command"], lane
         assert "--visible-lanes-accepted" in lane["visible_launch_command"], lane
         assert "--complete-selected-todo" in lane["visible_launch_command"], lane
