@@ -16,9 +16,11 @@ from .driver import (
 )
 from .executor import (
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
+    LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
     LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION,
     build_loopx_turn_command_validator,
     build_loopx_turn_host_request,
+    inspect_loopx_turn_journal,
     load_loopx_turn_plan_from_journal,
     normalize_host_argv,
     run_loopx_turn_once,
@@ -49,6 +51,7 @@ __all__ = [
     "CODEX_CLI_SESSION_SCHEMA_VERSION",
     "LOOPX_TURN_EXECUTION_SCHEMA_VERSION",
     "LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION",
+    "LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION",
     "LOOPX_TURN_RESULT_SCHEMA_VERSION",
     "LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION",
     "LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION",
@@ -68,6 +71,7 @@ __all__ = [
     "codex_cli_session_id_from_jsonl",
     "decide_loop_disposition",
     "load_codex_cli_session",
+    "inspect_loopx_turn_journal",
     "load_loopx_turn_plan_from_journal",
     "loopx_turn_execution_committed",
     "loopx_turn_execution_has_durable_effects",

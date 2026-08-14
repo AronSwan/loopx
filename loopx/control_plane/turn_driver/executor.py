@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from ...authority import validate_public_safe_text
-from ...file_lock import exclusive_file_lock
+from ...file_lock import LockAcquireTimeoutError, exclusive_file_lock
+from ...runtime import validate_goal_id_path_segment
 from ..effect_program import (
     SettlementStepKind,
+    interpret_turn_journal,
     interpret_turn_result_packet,
     settlement_result_payload,
 )
@@ -34,6 +36,7 @@ from .transaction import (
 )
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION = "loopx_turn_host_request_v0"
+LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION = "loopx_turn_journal_inspection_v0"
 LOOPX_TURN_JOURNAL_SCHEMA_VERSION = "loopx_turn_journal_v0"
 LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION = "loopx_turn_task_validation_v0"
 HOST_RESULT_MAX_BYTES = 12_000
@@ -565,6 +568,59 @@ def _load_journal(path: Path) -> dict[str, Any] | None:
     if not isinstance(value, dict) or value.get("schema_version") != LOOPX_TURN_JOURNAL_SCHEMA_VERSION:
         raise ValueError("LoopX Turn journal has an unsupported schema")
     return value
+
+
+def inspect_loopx_turn_journal(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str,
+    turn_key: str,
+) -> dict[str, object]:
+    """Inspect one canonical Turn journal without granting execution authority."""
+
+    safe_goal_id = validate_goal_id_path_segment(goal_id)
+    if not agent_id or agent_id != agent_id.strip():
+        raise ValueError("agent_id must be a non-empty exact identity")
+    path = turn_journal_path(
+        runtime_root,
+        goal_id=safe_goal_id,
+        turn_key=turn_key,
+    )
+    try:
+        with exclusive_file_lock(path):
+            journal = _load_journal(path)
+    except json.JSONDecodeError:
+        raise ValueError("LoopX Turn journal contains malformed JSON") from None
+    except LockAcquireTimeoutError:
+        raise
+    except OSError:
+        raise ValueError("LoopX Turn journal could not be read") from None
+    if journal is None:
+        raise ValueError("LoopX Turn journal does not exist")
+
+    turn = interpret_turn_journal(
+        journal,
+        goal_id=safe_goal_id,
+        agent_id=agent_id,
+        turn_key=turn_key,
+    )
+    context = turn.request.context
+    return {
+        "ok": True,
+        "schema_version": LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
+        "decision": turn.observation.decision,
+        "journal_status": context["journal_status"],
+        "replay_legal": context["replay_legal"],
+        "goal_matches": context["goal_matches"],
+        "owner_matches": context["owner_matches"],
+        "turn_key_matches": context["turn_key_matches"],
+        "phases_form_ordered_prefix": context["phases_form_ordered_prefix"],
+        "completed_phases": list(context["completed_phases"]),
+        "tombstone_retained": context["tombstone_retained"],
+        "violations": list(context["violations"]),
+        "effects": [],
+    }
 
 
 def _journal_committed_effect_id(journal: Mapping[str, Any]) -> str | None:

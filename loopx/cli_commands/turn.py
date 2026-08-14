@@ -22,10 +22,12 @@ from ..control_plane.scheduler.execution_context import (
 )
 from ..control_plane.turn_driver import (
     LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
+    LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
     LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
     build_loopx_turn_command_validator,
     build_loopx_turn_plan,
     codex_cli_session_binding,
+    inspect_loopx_turn_journal,
     load_loopx_turn_plan_from_journal,
     run_codex_cli_host,
     run_loopx_turn_once,
@@ -55,9 +57,18 @@ def register_turn_commands(
 ) -> None:
     parser = subparsers.add_parser(
         "turn",
-        help="Plan or run one governed external-host turn from a live LoopX decision.",
+        help="Plan, run, or inspect one governed external-host Turn.",
     )
     command_sub = parser.add_subparsers(dest="turn_command", required=True)
+    inspect_journal = command_sub.add_parser(
+        "inspect-journal",
+        help="Inspect one canonical fenced Turn journal without executing effects.",
+    )
+    add_subcommand_format(inspect_journal)
+    inspect_journal.add_argument("--goal-id", required=True)
+    inspect_journal.add_argument("--agent-id", required=True)
+    inspect_journal.add_argument("--turn-key", required=True)
+
     plan = command_sub.add_parser(
         "plan",
         help="Build one typed read-only host decision without launching or writing.",
@@ -277,6 +288,45 @@ def _render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
     )
 
 
+def _render_loopx_turn_journal_inspection_markdown(
+    payload: dict[str, object],
+) -> str:
+    if not payload.get("ok"):
+        error = payload.get("error") or "Turn journal inspection failed"
+        return f"LoopX Turn journal inspection failed: {error}"
+    completed_phases = payload.get("completed_phases")
+    violations = payload.get("violations")
+    return "\n".join(
+        [
+            "# LoopX Turn Journal Inspection",
+            f"- decision: {payload.get('decision')}",
+            f"- journal_status: {payload.get('journal_status')}",
+            f"- replay_legal: {payload.get('replay_legal')}",
+            f"- goal_matches: {payload.get('goal_matches')}",
+            f"- owner_matches: {payload.get('owner_matches')}",
+            f"- turn_key_matches: {payload.get('turn_key_matches')}",
+            (
+                "- phases_form_ordered_prefix: "
+                f"{payload.get('phases_form_ordered_prefix')}"
+            ),
+            "- completed_phases: "
+            + (
+                ", ".join(str(value) for value in completed_phases)
+                if isinstance(completed_phases, list) and completed_phases
+                else "none"
+            ),
+            f"- tombstone_retained: {payload.get('tombstone_retained')}",
+            "- violations: "
+            + (
+                ", ".join(str(value) for value in violations)
+                if isinstance(violations, list) and violations
+                else "none"
+            ),
+            "- effects: none",
+        ]
+    )
+
+
 def handle_turn_command(
     args: argparse.Namespace,
     *,
@@ -287,6 +337,31 @@ def handle_turn_command(
 ) -> int | None:
     if args.command != "turn":
         return None
+    if args.turn_command == "inspect-journal":
+        try:
+            runtime_root = resolve_status_projection_cache_runtime_root(
+                registry_path=registry_path,
+                runtime_root_override=runtime_root_arg,
+            )
+            payload = inspect_loopx_turn_journal(
+                runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                turn_key=args.turn_key,
+            )
+        except Exception as exc:  # noqa: BLE001 - typed CLI failure boundary
+            payload = {
+                "ok": False,
+                "schema_version": LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION,
+                "error": str(exc),
+                "effects": [],
+            }
+        print_payload(
+            payload,
+            output_format(args),
+            _render_loopx_turn_journal_inspection_markdown,
+        )
+        return 0 if payload.get("ok") else 1
     try:
         scan_roots = [Path(item).expanduser() for item in args.scan_path]
         if not scan_roots:
