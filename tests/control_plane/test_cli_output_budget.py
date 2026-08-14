@@ -851,6 +851,102 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
         assert default_payload.get(key) == detail_payload.get(key)
 
 
+def test_malformed_todo_state_fails_closed_without_dropping_bounded_detail(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "malformed-todo-state") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[1],
+        )
+        state_text = state_file.read_text(encoding="utf-8")
+        state_file.write_text(
+            state_text.replace("status=open", "status=stuck", 1),
+            encoding="utf-8",
+        )
+        commands = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )
+        detail_command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["quota_should_run_todo_summary_detail"]
+
+        status_exit_code, status_text = _invoke_cli(commands["status"])
+        default_exit_code, default_text = _invoke_cli(commands["quota_should_run"])
+        detail_exit_code, detail_text = _invoke_cli(detail_command)
+
+    assert status_exit_code == 1, status_text
+    status_measurement = measure_cli_output(status_text, output_format="json")
+    assert_cli_output_baseline(
+        CLI_OUTPUT_BUDGET_BY_ID["status"],
+        scenario="crowded",
+        output_format="json",
+        text=status_text,
+        measurement=status_measurement,
+    )
+    status_payload = json.loads(status_text)
+    error_codes = {
+        row.get("code")
+        for row in status_payload["contract"]["error_diagnostics"]
+        if isinstance(row, dict)
+    }
+    assert "todo_status_invalid" in error_codes
+
+    assert default_exit_code == 1, default_text
+    default_measurement = measure_cli_output(default_text, output_format="json")
+    assert_cli_output_baseline(
+        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"],
+        scenario="crowded",
+        output_format="json",
+        text=default_text,
+        measurement=default_measurement,
+    )
+    default_payload = json.loads(default_text)
+    assert default_payload["status_health_ok"] is False
+    assert default_payload["should_run"] is False
+    assert default_payload["effective_action"] == "quota_skip"
+    default_summary = default_payload["agent_todo_summary"]
+    omitted_backlog = default_summary["payload_compaction"]["omitted_lanes"][
+        "backlog_items"
+    ]
+    assert omitted_backlog > 0
+    assert "backlog_items" not in default_summary
+    assert default_payload["todo_summary_projection"]["detail_ref"] == (
+        "quota should-run --include-detail agent-todos"
+    )
+
+    assert detail_exit_code == 1, detail_text
+    detail_measurement = measure_cli_output(detail_text, output_format="json")
+    assert_cli_output_mode_variant(
+        CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_todo_summary_detail"],
+        output_format="json",
+        text=detail_text,
+        measurement=detail_measurement,
+    )
+    detail_payload = json.loads(detail_text)
+    assert detail_payload["status_health_ok"] is False
+    assert detail_payload["should_run"] is False
+    assert detail_payload["effective_action"] == "quota_skip"
+    detail_summary = detail_payload["agent_todo_summary"]
+    backlog_budget = detail_summary["payload_compaction"]["compacted_lanes"][
+        "backlog_items"
+    ]
+    assert backlog_budget["total"] > backlog_budget["shown"] > 0
+    assert len(detail_summary["backlog_items"]) == backlog_budget["shown"]
+    assert detail_summary["backlog_items"][0]["todo_id"] == "todo_fixture_000"
+    assert str(project) not in json.dumps(detail_summary["backlog_items"])
+    for key in ("decision", "should_run", "effective_action", "selected_todo"):
+        assert default_payload.get(key) == detail_payload.get(key)
+
+
 def test_quota_cli_bounds_real_scale_vision_audit_and_keeps_cold_detail(
     tmp_path: Path,
 ) -> None:
