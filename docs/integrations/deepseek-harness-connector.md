@@ -99,8 +99,8 @@ The adapter stores opaque dsh session data under
 
 ## Hermetic Validation
 
-The repository includes two smokes that do not require a DeepSeek API key or a
-real dsh runtime:
+The repository includes three smokes. The first two do not require the
+DeepSeek Harness SDK or a real dsh runtime:
 
 ```bash
 python3 examples/dsh-turn-host-adapter-smoke.py
@@ -110,6 +110,18 @@ python3 examples/loopx-turn-dsh-e2e-smoke.py
 The first guards adapter translation and result shaping. The second drives the
 full `loopx turn run-once -> adapter -> fake dsh -> validator -> writeback ->
 quota spend -> idempotent replay` chain.
+
+The third uses the real `deepseek-harness-sdk` and the bundled dsh JSON-RPC
+runtime. It still avoids a real model call by serving a local mock OpenAI-compatible
+SSE endpoint, so it is hermetic and does not require `DEEPSEEK_API_KEY`:
+
+```bash
+python3 examples/loopx-turn-dsh-real-e2e-smoke.py
+```
+
+The real-dsh smoke proves that the adapter can start the actual dsh runtime,
+run one bounded turn through the real JSON-RPC agent loop, parse a typed JSON
+final message, and complete LoopX validation/writeback/quota spend.
 
 ## Related Contracts
 
