@@ -168,7 +168,8 @@ class TestTurnHostIdentities:
 
     def test_opencode_and_pi_aliases(self):
         assert VISIBLE_OPENCODE_ALIASES == {
-            "opencode": "generic-cli", "open-code": "generic-cli"}
+            "opencode": "generic-cli", "open-code": "generic-cli",
+            "opencode2": "generic-cli", "opencode-2": "generic-cli"}
         assert VISIBLE_PI_ALIASES == {"pi": "generic-cli"}
         assert VISIBLE_CONNECTOR_OVERRIDES == {"pi": "pi_goal_loop"}
 
