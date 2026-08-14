@@ -257,6 +257,27 @@ def test_pi_is_not_a_native_goal_host() -> None:
     }
 
 
+def test_deepseek_harness_is_an_exact_host_type_with_external_loop_activation() -> None:
+    assert normalize_agent_type("dsh") == "deepseek-harness"
+    assert normalize_agent_type("DeepSeek Harness") == "deepseek-harness"
+    assert agent_type_for_host_surface("deepseek-harness") == "deepseek-harness"
+    assert agent_type_for_host_surface("dsh") == "deepseek-harness"
+    assert scheduler_command_binding_for_agent_type("deepseek-harness") == {
+        "runtime_profile": "generic_cli"
+    }
+
+    packet = build_host_loop_activation_packet(
+        agent_type="deepseek-harness",
+        goal_id="fixture-goal",
+        agent_id="dsh-fixture",
+        registered_agents=["dsh-fixture"],
+    )
+    assert packet["host_surface"] == "deepseek_harness_automation_loop", packet
+    assert packet["activation_method"] == "external_loop_driver", packet
+    assert "--runtime-profile generic_cli" in packet["commands"]["heartbeat_prompt"], packet
+    assert "scripts/dsh_turn_host_adapter.py" in packet["entry_command_hint"], packet
+
+
 @pytest.mark.parametrize(
     "runtime_profile",
     ("ark_managed_agent_goal", "codex_app_ssh_goal"),

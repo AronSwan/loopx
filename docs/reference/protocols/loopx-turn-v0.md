@@ -87,6 +87,11 @@ A reference headless adapter for TraeX (`traex exec`) lives at
 Turn envelope and writes one typed result, leaving goal/todo authority and
 validation to LoopX.
 
+A DeepSeek Harness adapter lives at `scripts/dsh_turn_host_adapter.py`; it uses
+the optional `deepseek-harness-sdk` Python client to run one bounded dsh session
+and parses the final assistant JSON message into the same typed Turn result.
+See [DeepSeek Harness connector](../../integrations/deepseek-harness-connector.md).
+
 ### Five Questions For Any Agent CLI
 
 Before wiring Trae CLI, Codex CLI, or another host, answer these five questions:

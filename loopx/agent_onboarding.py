@@ -257,6 +257,7 @@ def _bootstrap_pack_command(
         "pi": "pi",
         "gemini-cli": "gemini-cli",
         "cursor-agent": "cursor-agent",
+        "deepseek-harness": "deepseek-harness",
         "ark-managed-agent": "ark-managed-agent",
         "manual": "shell",
         "other-agent": "other-agent",
@@ -309,6 +310,12 @@ def _start_instruction(agent_type: str) -> str:
             "carry the generated heartbeat task body as the session objective and "
             "start every following turn with `quota should-run`, reading state through "
             "the registered `loopx` MCP server or the CLI."
+        )
+    if agent_type == "deepseek-harness":
+        return (
+            "Install `loopx[deepseek-harness]`, prepare a dsh cordis.yml, and run "
+            "`loopx turn run-once` with `scripts/dsh_turn_host_adapter.py` as the "
+            "generic-cli host adapter; every tick starts from `quota should-run`."
         )
     if agent_type == "ark-managed-agent":
         return (
