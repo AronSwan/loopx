@@ -7,6 +7,8 @@ defined by the implementation and stable reference contracts.
 
 ## Active Drafts
 
+- [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md): treat effect feedback, bounded delivery, and authority intervention as three nested control intervals, then qualify their efficiency and failure modes before introducing adaptive stride selection.
+- [长程 Agent 分层步幅控制 v0](hierarchical-agent-stride-control-v0.zh-CN.md)：把 effect 反馈、有界交付与 authority 干预视为三种嵌套控制区间，在引入 adaptive stride selection 前，先验证各层效率与失败模式。
 - [Human Attention Wishlist v0](human-attention-wishlist-v0.md): let agents capture bounded, evidence-backed requests for optional human leverage as a non-blocking post-delivery sidecar, without changing user-gate authority, selected work, quota, or notification behavior.
 - [Human Attention Wishlist v0（中文版）](human-attention-wishlist-v0.zh-CN.md)：让 agent 把有证据、可增加价值但不阻塞当前交付的人类协作机会，作为有界的交付后 sidecar 写入；不改变 user gate 权限、选中工作、quota 或通知行为。
 - [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md): evolve a typed research frontier across coverage, closure, and explicit composition experiments while keeping Explore, goal-frontier, and execution authority separate.
