@@ -44,6 +44,31 @@ Interpretation therefore grants no authority to execute or retry a Turn,
 schedule work, write state, or spend quota. In particular, failed-journal
 recovery with `retry_failed=True` remains owned by the Turn executor.
 
+The public read-only consumer is:
+
+```bash
+loopx turn inspect-journal \
+  --goal-id <goal-id> \
+  --agent-id <agent-id> \
+  --turn-key <sha256:64-hex-digest> \
+  --format json
+```
+
+It resolves only the canonical journal location. There is no arbitrary
+`--journal-path` input. The command validates selectors, takes the existing
+journal lock, schema-checks the stored JSON, and returns the versioned
+`loopx_turn_journal_inspection_v0` projection. That projection allowlists only
+the replay decision, journal status, replay legality, identity-match booleans,
+ordered phase-prefix result, completed phase ids, tombstone retention, typed
+violation ids, and the explicit effect-free marker `effects: []`.
+
+JSON and Markdown render the same projection. They do not expose raw journal,
+plan, host-result, or receipt bodies; request context; capabilities;
+recommended actions; credentials; evidence; or resolved local paths. A
+successfully interpreted `replay_blocked` journal exits zero because replay
+legality is diagnostic data. Invalid selectors, missing journals, malformed
+JSON, and unsupported schemas exit non-zero.
+
 ## Canonical Example
 
 ### 1. Effect Request

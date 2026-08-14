@@ -231,6 +231,33 @@ One driver tick has exactly these ordered phases:
 The driver may stop after any phase. A stop must return a typed result and must
 not silently continue with a different execution mode.
 
+### Read-Only Journal Inspection
+
+Maintainers can inspect one existing fenced journal without entering the live
+Turn lifecycle:
+
+```bash
+loopx turn inspect-journal \
+  --goal-id <goal-id> \
+  --agent-id <agent-id> \
+  --turn-key <sha256:64-hex-digest> \
+  --format markdown
+```
+
+The command resolves the canonical runtime journal path, reads it under the
+existing journal lock, and projects `interpret_turn_journal` into
+`loopx_turn_journal_inspection_v0`. It branches before status collection,
+quota construction, scheduler context, planning, host invocation, settlement,
+spend, or state writeback. Its `effects` field is therefore always an empty
+list.
+
+Exit zero means that inspection completed, including when `decision` is
+`replay_blocked`. A non-zero exit means the command could not inspect the
+requested journal because a selector, file, JSON document, or schema was
+invalid. This surface is diagnostic evidence only: it grants no authority to
+resume, retry, settle, schedule, spend, or write, and it is never an execution
+gate. Settlement replay enforcement remains owned by the Turn executor.
+
 ### User-Gate Quiet Wait
 
 When the user owns the next step and the agent lane has no executable work, the
