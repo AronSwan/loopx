@@ -225,14 +225,34 @@ def execute_turn_driver_settlement(
     writeback: TurnEffect,
     spend: TurnEffect,
     checkpoint: TurnSettlementCheckpoint,
+    committed_effect_id: str | None = None,
 ) -> SettlementResult[TurnSettlementState]:
-    """Bind validation -> writeback -> spend for the isolated Turn adapter."""
+    """Bind validation -> writeback -> spend for the isolated Turn adapter.
+
+    ``committed_effect_id`` is the settlement effect id under which an
+    existing journal committed its receipts. When a journal is present, a
+    caller must prove that the committed receipts belong to the current plan's
+    settlement identity; otherwise a key/owner-mismatched replay would
+    re-attribute the committed validation/writeback/spend receipts to a
+    different effect while skipping its effects. A ``None`` provenance
+    keeps legacy plans and direct callers that have no journal readback
+    unchanged.
+    """
 
     effect_result = _settlement_effect_id(transaction_plan)
     if effect_result.failure is not None:
         return effect_result
     effect_id = effect_result.value
     assert effect_id is not None
+    if committed_effect_id and committed_effect_id != effect_id:
+        return SettlementResult.failed(
+            kind=SettlementFailureKind.IDENTITY_MISMATCH,
+            step_kind=SettlementStepKind.VALIDATION,
+            reason=(
+                "Turn journal belongs to another settlement effect: journal "
+                f"effect is {committed_effect_id} but plan effect is {effect_id}"
+            ),
+        )
     result = _seed_result(
         transaction_plan,
         transaction_phases=transaction_phases,

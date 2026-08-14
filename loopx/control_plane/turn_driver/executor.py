@@ -567,6 +567,30 @@ def _load_journal(path: Path) -> dict[str, Any] | None:
     return value
 
 
+def _journal_committed_effect_id(journal: Mapping[str, Any]) -> str | None:
+    """Return the settlement effect id under which the journal was written.
+
+    Legacy journals created before the typed settlement binding have no
+    ``settlement_plan``; callers then cannot prove provenance and the
+    identity cross-check is skipped, preserving legacy resume behavior.
+    """
+
+    stored_plan = journal.get("plan")
+    if not isinstance(stored_plan, Mapping):
+        return None
+    transaction = stored_plan.get("transaction")
+    if not isinstance(transaction, Mapping):
+        return None
+    settlement_plan = transaction.get("settlement_plan")
+    if not isinstance(settlement_plan, Mapping):
+        return None
+    identity = settlement_plan.get("identity")
+    if not isinstance(identity, Mapping):
+        return None
+    effect_id = str(identity.get("effect_id") or "").strip()
+    return effect_id or None
+
+
 def load_loopx_turn_plan_from_journal(
     runtime_root: Path,
     *,
@@ -1100,6 +1124,7 @@ def _typed_settlement_stage(
         writeback=writeback_effect,
         spend=spend,
         checkpoint=checkpoint,
+        committed_effect_id=_journal_committed_effect_id(journal),
     )
     journal["settlement_result"] = settlement_result_payload(settlement_result)
     if settlement_result.failure is not None:
