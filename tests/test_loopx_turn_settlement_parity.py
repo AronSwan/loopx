@@ -35,11 +35,7 @@ from loopx.control_plane.effect_program import (
 )
 from loopx.control_plane.turn_driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import _journal_committed_effect_id
-from loopx.control_plane.turn_driver.settlement import (
-    TurnSettlementCheckpoint,
-    TurnEffect,
-    execute_turn_driver_settlement,
-)
+from loopx.control_plane.turn_driver.settlement import execute_turn_driver_settlement
 from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
 
 COMMITTED_PHASES = list(TRANSACTION_PHASES[:5])  # host_execute .. quota_spend
