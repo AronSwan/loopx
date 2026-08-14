@@ -262,3 +262,5 @@ def test_policy_normalization_precedes_deterministic_peer_scope_selection() -> N
 
     assert len(selected) == 1
     assert selected <= set(registered_agents)
+
+
