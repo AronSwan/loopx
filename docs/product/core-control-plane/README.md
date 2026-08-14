@@ -1,5 +1,10 @@
 # Core Control-Plane Graphs
 
+> Positioning: LoopX runs on top of different agent harnesses and provides
+> long-horizon state, semantic decisions, governance, recovery, and
+> human-agent collaboration; these graphs map the control-plane state behind
+> that promise. See the [product vision](../vision.md).
+
 This folder keeps the three product diagrams that should move together when
 LoopX learns a new long-running agent behavior:
 
