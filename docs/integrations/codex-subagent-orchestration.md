@@ -208,9 +208,11 @@ loopx quota should-run \
   --available-capability peer_agent_activation
 ```
 
-The contract includes only peer lanes that are currently actionable. A dormant
-or non-resumable lane is projected under `blocked_peer_lanes`; if no peer lane
-can run, the bundle has `execution_state=blocked`,
+The contract includes only peer lanes that are currently actionable. Dormant
+registered agents and closed, blocked, or deferred todos are not coordinator
+candidates. A dormant or non-resumable lane is projected under
+`blocked_peer_lanes`; if no peer lane can run, the bundle has
+`execution_state=blocked`,
 `terminal_outcome=blocked`, and `retry_policy=material_peer_state_change_only`.
 That blocked diagnostic does not replace the coordinator's own runnable lane or
 re-arm an activation obligation on every heartbeat. If the coordinator also

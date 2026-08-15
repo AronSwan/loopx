@@ -210,7 +210,8 @@ def main() -> int:
         compact_prompt = " ".join(prompt.split())
         assert "state=operator_gate" not in compact_prompt, prompt
         assert "Normal turns use CLI `interaction_contract`" in compact_prompt, prompt
-        assert "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet" in compact_prompt, prompt
+        assert "`user_channel.notify` controls OUTPUT only" in compact_prompt, prompt
+        assert "NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出" in compact_prompt, prompt
         assert "Due/peer gate != prompt" in compact_prompt, prompt
         assert "missing NOTIFY action->具体user todo未投影" in compact_prompt, prompt
         assert "`LOOPX_TURN=<current_time_iso>`; reuse." in compact_prompt, prompt

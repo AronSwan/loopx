@@ -9,7 +9,7 @@ INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
     "compact": 6_200,
     "brief": 3_500,
-    "thin": 1_750,
+    "thin": 1_900,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]

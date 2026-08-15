@@ -62,7 +62,8 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
             "full: bare 'report, write back' (old form outside NOTIFY)"
         )
     else:
-        assert "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet" in body
+        assert "`user_channel.notify` controls OUTPUT only" in body
+        assert "NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出" in body
         assert "Due/peer gate != prompt" in body
         assert "missing NOTIFY action->" in body
         assert "具体user todo未投影" in body
@@ -107,7 +108,7 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
         return
 
     assert mode == "thin", mode
-    assert "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet." in body
+    assert "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出。" in body
 
 
 def assert_peer_scope_notification_authority(task_body: str) -> None:
@@ -577,7 +578,7 @@ def main() -> int:
         'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run '
         "--goal-id loopx-meta --agent-id codex-product-capability --available-capability network "
         "--available-capability external_evidence_poll",
-        "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
         "Due/peer gate != prompt",
         "missing NOTIFY action->",
         "具体user todo未投影",
@@ -591,7 +592,7 @@ def main() -> int:
         "drain_command/reply-readback/ACK",
         "P0 blocked: safe P1/P2; monitor quiet/no-spend",
         "No project branches",
-        "Do not consume learning queue unless asked",
+        "No learning queue unless asked",
         "Stop: private material, credentials, destructive git, unauthorized prod",
     ):
         assert phrase in live_peer_task, phrase
@@ -634,7 +635,7 @@ def main() -> int:
         "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         "Guard/retry; `LOOPX_TURN=<current_time_iso>`",
         'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
-        "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
         "Due/peer gate != prompt",
         "missing NOTIFY action->",
         "具体user todo未投影",
@@ -673,9 +674,8 @@ def main() -> int:
         "Advance `public-heartbeat-goal` from /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
-        "state/status/repo",
         "`quota should-run`",
-        "`user_channel.notify`: NOTIFY=Chinese action; DONT_NOTIFY=quiet",
+        "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
         "Due/peer gate != prompt",
         "missing NOTIFY action->",
         "具体user todo未投影",
@@ -687,7 +687,7 @@ def main() -> int:
         "P0 blocked: safe P1/P2",
         "monitor quiet/no-spend",
         "No project branches",
-        "Do not consume learning queue unless asked",
+        "No learning queue unless asked",
         "Stop: private material, credentials, destructive git, unauthorized prod",
     ):
         assert phrase in thin_task, phrase

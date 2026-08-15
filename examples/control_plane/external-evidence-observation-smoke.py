@@ -16,6 +16,9 @@ from loopx.control_plane.scheduler.external_evidence_observation import (  # noq
     build_external_evidence_poll_signal,
     projected_monitor_handle,
 )
+from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
+    GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+)
 from loopx.control_plane.scheduler.monitor_poll_policy import (  # noqa: E402
     allows_no_spend_external_monitor_poll,
 )
@@ -32,6 +35,15 @@ from loopx.control_plane.todos.projection import (  # noqa: E402
     todo_summary_open_task_counts,
 )
 from loopx.quota import build_quota_should_run  # noqa: E402
+
+
+def quota_guard(status_payload: dict[str, Any]) -> dict[str, Any]:
+    return build_quota_should_run(
+        status_payload,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
 
 
 GOAL_ID = "external-evidence-observation-fixture"
@@ -189,7 +201,7 @@ def assert_monitor_only_launched_poll_requires_observation() -> None:
     assert obligation and obligation["kind"] == "launched_external_work_monitor", obligation
     assert obligation["monitor_handle"]["target_key"] == "job:compact-result", obligation
 
-    guard = build_quota_should_run(status_payload(summary), goal_id=GOAL_ID, agent_id=AGENT_ID)
+    guard = quota_guard(status_payload(summary))
     lane = guard["work_lane_contract"]
     assert lane["lane"] == "continuous_monitor", guard
     assert lane["monitor_kind"] == "external_evidence", guard
@@ -205,7 +217,7 @@ def assert_recent_unchanged_observation_defers_to_capability_repair() -> None:
             unavailable_advancement_todo(),
         ]
     )
-    guard = build_quota_should_run(
+    guard = quota_guard(
         status_payload(
             summary,
             latest_runs=[
@@ -221,9 +233,7 @@ def assert_recent_unchanged_observation_defers_to_capability_repair() -> None:
                     "health_check": "external monitor observation unchanged; no quota spend; no material transition",
                 },
             ],
-        ),
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
+        )
     )
     assert guard["decision"] == "repair_bridge", guard
     assert guard["should_run"] is True, guard
@@ -242,7 +252,7 @@ def assert_recent_due_monitor_no_change_defers_to_capability_repair() -> None:
             unavailable_advancement_todo(),
         ]
     )
-    guard = build_quota_should_run(
+    guard = quota_guard(
         status_payload(
             summary,
             latest_runs=[
@@ -268,9 +278,7 @@ def assert_recent_due_monitor_no_change_defers_to_capability_repair() -> None:
                     },
                 },
             ],
-        ),
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
+        )
     )
     assert guard["decision"] == "repair_bridge", guard
     assert guard["should_run"] is True, guard
@@ -292,7 +300,7 @@ def assert_advancement_lane_keeps_external_monitor_as_context() -> None:
     item = selected_item(status_payload(summary))
     assert build_external_evidence_poll_signal(item, agent_todo_summary=summary), item
 
-    guard = build_quota_should_run(status_payload(summary), goal_id=GOAL_ID, agent_id=AGENT_ID)
+    guard = quota_guard(status_payload(summary))
     lane = guard["work_lane_contract"]
     assert lane["lane"] == "advancement_task", guard
     assert lane["obligation"] == "advance_one_bounded_segment", guard
@@ -325,7 +333,7 @@ def assert_future_scoped_monitor_does_not_fake_external_poll() -> None:
     )
     assert obligation is None, obligation
 
-    guard = build_quota_should_run(status_payload(summary), goal_id=GOAL_ID, agent_id=AGENT_ID)
+    guard = quota_guard(status_payload(summary))
     lane = guard["work_lane_contract"]
     assert lane["obligation"] == "quiet_until_material_monitor_transition", guard
     assert lane["must_attempt_work"] is False, guard
@@ -348,7 +356,7 @@ def assert_unavailable_advancement_defers_to_capability_repair() -> None:
     assert counts["monitor"] == 1 and counts["advancement"] == 1, counts
     assert build_external_evidence_poll_signal(item, agent_todo_summary=summary), item
 
-    guard = build_quota_should_run(status_payload(summary), goal_id=GOAL_ID, agent_id=AGENT_ID)
+    guard = quota_guard(status_payload(summary))
     assert "external_evidence_observation" not in guard, guard
     interaction = guard["interaction_contract"]
     assert interaction["mode"] == "capability_bridge_repair", interaction
@@ -381,7 +389,7 @@ def assert_selected_monitor_handle(
         assert signal["matched_signal"] == expected_signal, signal
     if expected_channel:
         assert signal["matched_channel"] == expected_channel, signal
-    guard = build_quota_should_run(payload, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    guard = quota_guard(payload)
     observation = guard["external_evidence_observation"]
     assert observation["monitor_handle"]["todo_id"] == expected_todo_id, guard
     assert expected_text in observation["observation_target"], observation
@@ -452,16 +460,14 @@ def assert_pr_dependency_wait_requires_first_observation() -> None:
     assert signal and signal["matched_signal"] == "external_dependency_wait", signal
     assert signal["monitor_handle"]["target_key"] == "pr_merged:#532", signal
 
-    guard = build_quota_should_run(
+    guard = quota_guard(
         status_payload(
             summary,
             status="active",
             next_action=next_action,
             latest_runs=[],
             lifecycle_flags=[],
-        ),
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
+        )
     )
     assert guard["should_run"] is True, guard
     assert guard["effective_action"] == "external_evidence_observe", guard
@@ -503,10 +509,12 @@ def assert_pr_dependency_wait_with_observation_does_not_reobserve_before_due() -
         ),
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
-    assert guard["effective_action"] == "autonomous_replan_required", guard
+    assert guard["effective_action"] == "monitor_quiet_skip", guard
     assert "external_evidence_observation" not in guard, guard
-    assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True, guard
+    assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is False, guard
+    assert guard["scheduler_hint"]["cadence_class"] == "monitor_wait", guard
 
 
 def assert_explicit_external_wait_builds_registry_obligation() -> None:

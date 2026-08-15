@@ -57,6 +57,7 @@ REPLAN_REQUIRED_OUTCOMES = (
 VISION_REPLAN_TRIGGER_KINDS = frozenset(
     {
         "vision_acceptance_gap",
+        "vision_checkpoint_missing",
         "vision_outcome_checkpoint_required",
         "vision_successor_required",
         "required_agent_vision_missing",

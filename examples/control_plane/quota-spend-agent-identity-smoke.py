@@ -148,6 +148,14 @@ def assert_interaction_cli_actions_preserve_agent_id(agent_id: str) -> None:
             mode=mode,
             available_capabilities=available_capabilities,
         )
+        if mode == "capability_bridge_repair":
+            assert actions, (mode, actions)
+            assert all(
+                "--available-capability credentials" not in action
+                and "--available-capability production_access" not in action
+                for action in actions
+            ), (mode, actions)
+            continue
         state_or_accounting_commands = [
             action
             for action in actions
