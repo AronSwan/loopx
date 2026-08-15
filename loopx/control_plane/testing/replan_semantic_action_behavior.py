@@ -60,6 +60,7 @@ class _ReplanSemanticActionFixture:
     frontier_target: Path
     work_source_target: Path
     composition_experiment_ref: str | None = None
+    frontier_exhausted: bool = False
 
 
 @dataclass
@@ -78,6 +79,7 @@ class _QualificationState:
     work_source_read: bool = False
     created_successor_id: str | None = None
     successor_reentry_observation: dict[str, Any] | None = None
+    semantic_reentry_observation: dict[str, Any] | None = None
 
 
 def _digest(value: str) -> str:
@@ -88,6 +90,7 @@ def _build_fixture(
     root: Path,
     *,
     composition_frontier: bool = False,
+    exhausted_frontier: bool = False,
 ) -> _ReplanSemanticActionFixture:
     source_root = Path(__file__).resolve().parents[3]
     project_root = root / "project"
@@ -136,15 +139,19 @@ def _build_fixture(
                         "evidence_id": "evidence-existing",
                     }
                 ],
-                "uncovered": [
-                    {
-                        "surface_id": _FIXTURE_NEW_SURFACE_ID,
-                        "hypothesis_id": _FIXTURE_NEW_HYPOTHESIS_ID,
-                        "probe_kind": _FIXTURE_NEW_PROBE_KIND,
-                        "evidence_id": _FIXTURE_NEW_EVIDENCE_ID,
-                        "source_ref": _FIXTURE_SOURCE_FILE,
-                    }
-                ],
+                "uncovered": (
+                    []
+                    if exhausted_frontier
+                    else [
+                        {
+                            "surface_id": _FIXTURE_NEW_SURFACE_ID,
+                            "hypothesis_id": _FIXTURE_NEW_HYPOTHESIS_ID,
+                            "probe_kind": _FIXTURE_NEW_PROBE_KIND,
+                            "evidence_id": _FIXTURE_NEW_EVIDENCE_ID,
+                            "source_ref": _FIXTURE_SOURCE_FILE,
+                        }
+                    ]
+                ),
             },
             ensure_ascii=False,
             indent=2,
@@ -153,30 +160,50 @@ def _build_fixture(
         + "\n",
         encoding="utf-8",
     )
+    fixture_objective = (
+        "Inspect the projected frontier and close the bounded goal when its "
+        "coverage is exhausted."
+        if exhausted_frontier
+        else "Inspect the projected frontier and select one uncovered surface."
+    )
+    fixture_next_action = (
+        f"Read `{_FIXTURE_FRONTIER_FILE}`. If no uncovered entries remain, "
+        "persist a coverage-backed exploration_exhausted result through "
+        "refresh-state."
+        if exhausted_frontier
+        else (
+            f"Read `{_FIXTURE_FRONTIER_FILE}`, inspect the selected uncovered "
+            "entry's `source_ref`, then persist the typed result through "
+            "refresh-state. If replan creates a successor Todo, bind the current "
+            "replan obligation in that same Todo add; when the command returns "
+            "host_action=end_current_heartbeat, end this heartbeat and do not "
+            "execute the successor until the next heartbeat."
+        )
+    )
+    fixture_agent_todo = (
+        "- [ ] [P1-monitor] Observe the bounded fixture until its frontier "
+        "changes.\n"
+        "  <!-- loopx:todo "
+        f"todo_id={_FIXTURE_WORK_ITEM_ID} status=open "
+        "task_class=continuous_monitor action_kind=observe_fixture "
+        f"claimed_by={_FIXTURE_AGENT_ID} "
+        "target_key=replan-semantic-fixture "
+        "cadence=1d next_due_at=2999-01-01T00%3A00%3A00Z -->\n"
+    )
     state_path.write_text(
         "---\n"
         "status: active\n"
         "owner_mode: goal\n"
-        'objective: "Inspect the projected frontier and select one uncovered surface."\n'
+        f'objective: "{fixture_objective}"\n'
         "updated_at: 2026-08-13T00:00:00+08:00\n"
         "---\n\n"
         "# Replan Semantic Action Fixture\n\n"
         "## Objective\n\n"
-        "Inspect the projected frontier and select one uncovered surface.\n\n"
+        f"{fixture_objective}\n\n"
         "## Next Action\n\n"
-        f"- Read `{_FIXTURE_FRONTIER_FILE}`, inspect the selected uncovered "
-        "entry's `source_ref`, then persist the typed result through "
-        "refresh-state. If replan creates a successor Todo, bind the current "
-        "replan obligation in that same Todo add; when the command returns "
-        "host_action=end_current_heartbeat, end this heartbeat and do not "
-        "execute the successor until the next heartbeat.\n\n"
+        f"- {fixture_next_action}\n\n"
         "## Agent Todo\n\n"
-        "- [ ] [P1-monitor] Observe the bounded fixture until its frontier changes.\n"
-        "  <!-- loopx:todo "
-        f"todo_id={_FIXTURE_WORK_ITEM_ID} status=open "
-        "task_class=continuous_monitor action_kind=observe_fixture "
-        f"claimed_by={_FIXTURE_AGENT_ID} target_key=replan-semantic-fixture "
-        "cadence=1d next_due_at=2999-01-01T00%3A00%3A00Z -->\n",
+        f"{fixture_agent_todo}",
         encoding="utf-8",
     )
     registry_goal: dict[str, Any] = {
@@ -377,6 +404,7 @@ def _build_fixture(
         composition_experiment_ref=(
             _FIXTURE_COMPOSITION_EXPERIMENT_ID if composition_frontier else None
         ),
+        frontier_exhausted=exhausted_frontier,
     )
 
 
@@ -569,6 +597,29 @@ def _successor_reentry_observation(
     return observation
 
 
+def _semantic_reentry_observation(
+    packet: Mapping[str, Any],
+    *,
+    obligation_id: str,
+) -> dict[str, Any]:
+    obligation = packet.get("autonomous_replan_obligation")
+    if (
+        isinstance(obligation, Mapping)
+        and obligation.get("obligation_id") == obligation_id
+    ):
+        raise ValueError("semantic_reentry_replan_not_closed")
+    if packet.get("decision") == "autonomous_replan_required":
+        raise ValueError("semantic_reentry_replan_not_closed")
+    if packet.get("decision") != "skip":
+        raise ValueError("semantic_reentry_did_not_exit")
+    return {
+        "decision": packet.get("decision"),
+        "effective_action": packet.get("effective_action"),
+        "replan_closed": True,
+        "exited": True,
+    }
+
+
 def _execute_loopx(
     command: str,
     *,
@@ -707,6 +758,8 @@ def _qualification_receipt(
     )
     if state.successor_reentry_observation is not None:
         receipt["successor_reentry"] = state.successor_reentry_observation
+    if state.semantic_reentry_observation is not None:
+        receipt["semantic_reentry"] = state.semantic_reentry_observation
     return receipt
 
 
@@ -774,12 +827,17 @@ def _expected_obligation_id(state: _QualificationState) -> str:
     return obligation_id
 
 
-def _require_observed_frontier(state: _QualificationState, *, prefix: str) -> None:
+def _require_observed_frontier(
+    state: _QualificationState,
+    *,
+    prefix: str,
+    work_source_required: bool = True,
+) -> None:
     if state.quota_packet is None:
         raise ValueError(f"{prefix}_before_quota")
     if not state.frontier_context_read:
         raise ValueError(f"{prefix}_before_frontier_read")
-    if not state.work_source_read:
+    if work_source_required and not state.work_source_read:
         raise ValueError(f"{prefix}_before_work_source_read")
 
 
@@ -855,16 +913,27 @@ def _handle_semantic_writeback(
     observation: Mapping[str, Any],
     state: _QualificationState,
 ) -> str:
-    _require_observed_frontier(state, prefix="semantic_action")
-    matches_observed_surface = bool(
-        observation.get("surface_id") == _FIXTURE_NEW_SURFACE_ID
-        and observation.get("hypothesis_id") == _FIXTURE_NEW_HYPOTHESIS_ID
-        and observation.get("probe_kind") == _FIXTURE_NEW_PROBE_KIND
-        and _FIXTURE_NEW_EVIDENCE_ID in set(observation.get("evidence_ids") or [])
-    )
-    if not matches_observed_surface:
-        raise ValueError("semantic_action_misses_uncovered_frontier")
     obligation_id = _expected_obligation_id(state)
+    result_class = str(observation.get("result_class") or "")
+    terminal_result = result_class in {
+        ProgressResultClass.BLOCKED.value,
+        ProgressResultClass.EXPLORATION_EXHAUSTED.value,
+        ProgressResultClass.NO_FOLLOWUP.value,
+    }
+    _require_observed_frontier(
+        state,
+        prefix="semantic_action",
+        work_source_required=not terminal_result,
+    )
+    if not terminal_result:
+        matches_observed_surface = bool(
+            observation.get("surface_id") == _FIXTURE_NEW_SURFACE_ID
+            and observation.get("hypothesis_id") == _FIXTURE_NEW_HYPOTHESIS_ID
+            and observation.get("probe_kind") == _FIXTURE_NEW_PROBE_KIND
+            and _FIXTURE_NEW_EVIDENCE_ID in set(observation.get("evidence_ids") or [])
+        )
+        if not matches_observed_surface:
+            raise ValueError("semantic_action_misses_uncovered_frontier")
     obligation = dict(
         (state.quota_packet or {}).get("autonomous_replan_obligation") or {}
     )
@@ -884,6 +953,23 @@ def _handle_semantic_writeback(
     decoded = json.loads(output)
     if not isinstance(decoded, dict) or decoded.get("ok") is not True:
         raise ValueError("semantic_writeback_failed")
+    if result_class in {
+        ProgressResultClass.EXPLORATION_EXHAUSTED.value,
+        ProgressResultClass.NO_FOLLOWUP.value,
+    }:
+        reentry_output = _execute_loopx(
+            state.fixture.quota_guard_command,
+            fixture=state.fixture,
+            turn_instance_id=f"{state.turn_instance_id}-semantic-reentry",
+        )
+        reentry_packet = json.loads(reentry_output)
+        if not isinstance(reentry_packet, dict):
+            raise ValueError("semantic_reentry_quota_invalid")
+        state.semantic_reentry_observation = _semantic_reentry_observation(
+            reentry_packet,
+            obligation_id=obligation_id,
+        )
+        state.read_only_host_commands_executed = True
     return output
 
 
@@ -935,6 +1021,9 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "quota_obligation_missing",
         "non_semantic_replan_action",
         "semantic_writeback_failed",
+        "semantic_reentry_quota_invalid",
+        "semantic_reentry_replan_not_closed",
+        "semantic_reentry_did_not_exit",
         "manual_evidence_read_is_not_replan",
         "unexpected_command",
     }
@@ -1063,10 +1152,12 @@ class DoubaoReplanSemanticActionBehaviorActor:
         qualification_id: str,
         fixture_root: Path,
         composition_frontier: bool = False,
+        exhausted_frontier: bool = False,
     ) -> dict[str, Any]:
         fixture = _build_fixture(
             fixture_root,
             composition_frontier=composition_frontier,
+            exhausted_frontier=exhausted_frontier,
         )
         messages: list[dict[str, Any]] = [
             {
