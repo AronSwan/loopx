@@ -38,7 +38,7 @@ provider.
   middleware ([issue #285](https://github.com/XSpoonAi/spoon-core/issues/285)).
   Status: planned.
 - **OpenViking / NoKV** — confirmed partners; see
-  [README Partner Projects](../../README.md#partner-projects).
+  [README Partner Projects](https://github.com/huangruiteng/loopx#partner-projects).
 
 ## 2. Sampling and Borrowing
 
