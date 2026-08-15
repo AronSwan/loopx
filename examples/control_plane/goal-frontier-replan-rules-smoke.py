@@ -54,16 +54,24 @@ def advancement(todo_id: str, claimed_by: str, *, index: int) -> dict:
     )
 
 
-def monitor() -> dict:
+def monitor(
+    *,
+    cadence: str | None = "15m",
+    next_due_at: str | None = "2999-01-01T00:00:00+00:00",
+) -> dict:
+    schedule = {}
+    if cadence is not None:
+        schedule["cadence"] = cadence
+    if next_due_at is not None:
+        schedule["next_due_at"] = next_due_at
     return quota_todo_item(
         todo_id="todo_monitor",
         text="[P1] Monitor a material transition.",
         claimed_by=CURRENT_AGENT,
         task_class="continuous_monitor",
         action_kind="monitor",
-        cadence="15m",
-        next_due_at="2999-01-01T00:00:00+00:00",
         target_key="goal-frontier-rule-smoke",
+        **schedule,
     )
 
 
@@ -108,10 +116,21 @@ def main() -> None:
     assert own_frontier["selected_todo"]["todo_id"] == "todo_current"
     assert own_frontier["goal_frontier_projection"]["replan_required"] is False
 
-    monitor_only = quota([monitor()], include_vision=False)
-    assert monitor_only["decision"] == "autonomous_replan_required", monitor_only
-    trigger = monitor_only["autonomous_replan_obligation"]["triggers"][0]
-    assert trigger["kind"] == "frontier_exhausted_monitor_lane", trigger
+    future_monitor = quota([monitor()], include_vision=False)
+    assert future_monitor["decision"] == "skip", future_monitor
+    assert future_monitor["effective_action"] == "monitor_quiet_skip", future_monitor
+    assert future_monitor["goal_frontier_projection"]["replan_required"] is False
+
+    unscheduled_monitor = quota(
+        [monitor(cadence=None, next_due_at=None)],
+        include_vision=False,
+    )
+    assert unscheduled_monitor["decision"] == "run", unscheduled_monitor
+    assert unscheduled_monitor["selected_todo"]["todo_id"] == "todo_monitor"
+    assert unscheduled_monitor["work_lane_contract"]["obligation"] == (
+        "repair_monitor_schedule_metadata"
+    )
+    assert unscheduled_monitor["goal_frontier_projection"]["replan_required"] is False
     print("goal-frontier-replan-rules-smoke ok")
 
 

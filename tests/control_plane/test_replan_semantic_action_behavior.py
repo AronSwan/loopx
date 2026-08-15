@@ -223,6 +223,7 @@ def test_model_exits_after_replan_confirms_goal_coverage_is_exhausted(
     assert receipt["semantic_reentry"] == {
         "decision": "skip",
         "effective_action": "monitor_quiet_skip",
+        "replan_rule": "future_monitor_wait",
         "replan_closed": True,
         "exited": True,
     }

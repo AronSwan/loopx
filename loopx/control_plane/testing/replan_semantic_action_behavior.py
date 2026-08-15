@@ -612,9 +612,33 @@ def _semantic_reentry_observation(
         raise ValueError("semantic_reentry_replan_not_closed")
     if packet.get("decision") != "skip":
         raise ValueError("semantic_reentry_did_not_exit")
+    frontier = packet.get("goal_frontier_projection")
+    normalized_progress = (
+        frontier.get("normalized_progress")
+        if isinstance(frontier, Mapping)
+        else None
+    )
+    monitor_lanes = (
+        frontier.get("monitor_only_lanes")
+        if isinstance(frontier, Mapping)
+        else None
+    )
+    future_monitor_wait = bool(
+        packet.get("effective_action") == "monitor_quiet_skip"
+        and isinstance(frontier, Mapping)
+        and frontier.get("replan_required") is False
+        and isinstance(monitor_lanes, Mapping)
+        and monitor_lanes.get("present") is True
+        and isinstance(normalized_progress, Mapping)
+        and int(normalized_progress.get("agent_monitor_open_count") or 0) > 0
+        and int(normalized_progress.get("agent_monitor_due_count") or 0) == 0
+    )
+    if not future_monitor_wait:
+        raise ValueError("semantic_reentry_not_future_monitor_wait")
     return {
         "decision": packet.get("decision"),
         "effective_action": packet.get("effective_action"),
+        "replan_rule": "future_monitor_wait",
         "replan_closed": True,
         "exited": True,
     }
@@ -1023,6 +1047,7 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "semantic_writeback_failed",
         "semantic_reentry_quota_invalid",
         "semantic_reentry_replan_not_closed",
+        "semantic_reentry_not_future_monitor_wait",
         "semantic_reentry_did_not_exit",
         "manual_evidence_read_is_not_replan",
         "unexpected_command",
