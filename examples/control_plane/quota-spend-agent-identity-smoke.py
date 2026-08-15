@@ -143,31 +143,57 @@ def assert_interaction_cli_actions_preserve_agent_id(agent_id: str) -> None:
         "successor_replan_required",
     ]
     for mode in command_modes:
+        mode_payload = scoped_payload
+        scheduler_execution_context = None
+        if mode == "capability_bridge_repair":
+            mode_payload = {
+                **scoped_payload,
+                "capability_gate": {
+                    "repair_missing": ["network"],
+                    "resolution_bindings": [
+                        {
+                            "owner": "agent",
+                            "capability": "network",
+                            "blocked_todo_ids": ["todo_network_probe"],
+                        }
+                    ],
+                    "blocked_candidates": [
+                        {
+                            "todo_id": "todo_network_probe",
+                            "required_capabilities": ["network"],
+                            "text": "Check the task-facing public endpoint.",
+                            "action_kind": "network_probe",
+                        }
+                    ],
+                },
+            }
+            scheduler_execution_context = (
+                GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
+            )
         actions = interaction_next_cli_actions(
-            scoped_payload,
+            mode_payload,
             mode=mode,
             available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
         )
-        if mode == "capability_bridge_repair":
-            assert actions, (mode, actions)
-            assert all(
-                "--available-capability credentials" not in action
-                and "--available-capability production_access" not in action
-                for action in actions
-            ), (mode, actions)
-            continue
         state_or_accounting_commands = [
             action
             for action in actions
             if "loopx refresh-state" in action
             or "loopx quota monitor-poll" in action
             or "loopx quota spend-slot" in action
+            or "loopx --format json quota should-run" in action
         ]
         assert state_or_accounting_commands, (mode, actions)
         assert all(
             f"--agent-id {agent_id}" in action
             for action in state_or_accounting_commands
         ), (mode, actions)
+        if mode == "capability_bridge_repair":
+            assert all(
+                "--available-capability network" in action
+                for action in state_or_accounting_commands
+            ), (mode, actions)
         assert all(
             all(
                 f"--available-capability {capability}" in action

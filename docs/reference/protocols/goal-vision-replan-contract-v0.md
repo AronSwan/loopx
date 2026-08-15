@@ -417,11 +417,15 @@ A valid replan writes at least one bounded delta:
 }
 ```
 
-An acknowledgement without a vision, todo, acceptance, or no-follow-up delta is
-`replan_noop` and must not clear the obligation. A typed `goal_vision_patch`
-repair delta is the vision-derived ACK that settles vision successor/checkpoint
-gaps even when the original acceptance gap remains visible in the source
-projection. `refresh-state` does not treat classification prose,
+An acknowledgement without an obligation-accepted typed semantic delta is
+`replan_noop` and must not clear the obligation. Depending on the obligation,
+accepted outcomes can be a new evidence-backed surface, hypothesis, or probe
+family; a runnable successor; a new concrete blocker; coverage-backed
+exploration exhaustion or no-follow-up; or a fresh evidence-linked vision path
+outcome. A typed `goal_vision_patch` repair delta is the vision-derived ACK that
+settles vision successor/checkpoint gaps even when the original acceptance gap
+remains visible in the source projection. `refresh-state` does not treat
+classification prose,
 `--autonomous-replan-recorded`, or a caller-supplied repair kind as proof. New
 writebacks use `typed_progress_observation_v0`: changed surface, hypothesis, or
 probe identifiers are compared with the obligation baseline; a successor id
