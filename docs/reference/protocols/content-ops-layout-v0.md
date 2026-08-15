@@ -32,6 +32,33 @@ Templates define canvas size, safe area, density limits, page archetypes, and
 portable style tokens. They do not contain project names, private paths, draft
 bodies, or provider credentials.
 
+All built-in templates set `density.role_overrides.cover.min` to `0.90` and
+`max` to `0.98`. The cover default is intentionally stricter than ordinary
+pages: at least 90% of the safe-area height must be occupied by meaningful
+content bounds. Decorative rules, indexes, page numbers, and footers do not
+count toward that density.
+
+Every built-in template also exposes the same `page_sequence` defaults:
+
+```json
+{
+  "first_role": "cover",
+  "density_order": "first_page_maximum",
+  "interior_min": 0.80
+}
+```
+
+The first planned page must be the cover and its measured density must be at
+least every later page. Pages between the cover and final page use `0.80` as a
+density floor, or a stricter role/template minimum when one exists. The final
+page keeps its own closing/CTA role limits so an intentional synthesis page
+does not need to imitate a dense analytical middle page.
+
+These defaults change acceptance for formerly valid sparse or misordered page
+sets: a cover below `0.90`, an interior page below `0.80`, a non-cover first
+page, or a later page denser than the cover now returns a typed revision
+failure. Publishing authority remains unchanged.
+
 ## Typed plan
 
 Build a plan before rendering:
@@ -100,6 +127,8 @@ loopx content-ops layout-check \
 `content_ops_layout_check_packet_v0` returns `pass` only when:
 
 - measured page ids exactly match the plan;
+- the first page has role `cover` and is at least as dense as every later page;
+- every interior page satisfies the built-in `0.80` density floor;
 - all required roles are present and the last page has the planned closing role;
 - canvas and density satisfy the selected template and role;
 - overflow, collision, and single-character-line checks are explicitly false;

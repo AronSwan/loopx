@@ -10,13 +10,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from loopx.capabilities.content_ops.layout import check_layout_packet  # noqa: E402
-
 
 def _run(*args: str, check: bool = True) -> dict[str, Any]:
     result = subprocess.run(
@@ -24,8 +20,7 @@ def _run(*args: str, check: bool = True) -> dict[str, Any]:
         cwd=REPO_ROOT,
         check=check,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     return json.loads(result.stdout)
 
@@ -34,7 +29,14 @@ def _measurement(*, sparse_page: str | None = None) -> dict[str, Any]:
     pages = []
     for index in range(1, 6):
         page_id = f"p{index:02d}"
-        bottom = 1364 if page_id != sparse_page else 700
+        if page_id == "p01":
+            bottom = 1640
+        elif page_id == "p05":
+            bottom = 1364
+        else:
+            bottom = 1470
+        if page_id == sparse_page:
+            bottom = 700
         pages.append(
             {
                 "page_id": page_id,
@@ -57,15 +59,35 @@ def _measurement(*, sparse_page: str | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
+    from loopx.capabilities.content_ops.layout import check_layout_packet
+
     catalog = _run("content-ops", "template-list")
     assert catalog["ok"] is True, catalog
     assert catalog["template_count"] == 4, catalog
-    assert {
+    template_ids = {
         "light-serif-longform",
         "monochrome-editorial",
         "product-brief",
         "control-plane-hybrid",
-    } == {template["template_id"] for template in catalog["templates"]}
+    }
+    assert template_ids == {
+        template["template_id"] for template in catalog["templates"]
+    }
+
+    for template_id in template_ids:
+        built_in = _run(
+            "content-ops",
+            "template-show",
+            "--template-id",
+            template_id,
+        )
+        cover_density = built_in["template"]["density"]["role_overrides"]["cover"]
+        assert cover_density == {"min": 0.90, "max": 0.98}, built_in
+        assert built_in["template"]["page_sequence"] == {
+            "first_role": "cover",
+            "density_order": "first_page_maximum",
+            "interior_min": 0.80,
+        }, built_in
 
     template = _run(
         "content-ops",
@@ -140,11 +162,42 @@ def main() -> int:
     assert accepted["status"] == "pass", accepted
     assert accepted["autopublish_allowed"] is False, accepted
 
-    sparse = _measurement(sparse_page="p02")
-    rejected = check_layout_packet(plan_packet, sparse)
-    assert rejected["status"] == "revise", rejected
-    codes = {failure["code"] for failure in rejected["failures"]}
-    assert "content_too_sparse" in codes, rejected
+    sparse_cover = _measurement()
+    sparse_cover["pages"][0]["meaningful_content_bounds"]["bottom"] = 1500
+    rejected_cover = check_layout_packet(plan_packet, sparse_cover)
+    assert rejected_cover["status"] == "revise", rejected_cover
+    cover_result = rejected_cover["page_results"][0]
+    assert cover_result["density"] < 0.90, rejected_cover
+    assert {failure["code"] for failure in cover_result["failures"]} == {
+        "content_too_sparse"
+    }, rejected_cover
+
+    loose_interior = _measurement()
+    loose_interior["pages"][1]["meaningful_content_bounds"]["bottom"] = 1364
+    rejected_interior = check_layout_packet(plan_packet, loose_interior)
+    assert rejected_interior["status"] == "revise", rejected_interior
+    interior_result = rejected_interior["page_results"][1]
+    assert 0.66 < interior_result["density"] < 0.80, rejected_interior
+    assert {failure["code"] for failure in interior_result["failures"]} == {
+        "content_too_sparse"
+    }, rejected_interior
+
+    denser_interior = _measurement()
+    denser_interior["pages"][1]["meaningful_content_bounds"]["bottom"] = 1660
+    rejected_sequence = check_layout_packet(plan_packet, denser_interior)
+    assert rejected_sequence["status"] == "revise", rejected_sequence
+    assert rejected_sequence["page_results"][1]["status"] == "pass", rejected_sequence
+    assert {
+        failure["code"] for failure in rejected_sequence["page_results"][0]["failures"]
+    } == {"first_page_not_density_maximum"}, rejected_sequence
+
+    wrong_first_role = json.loads(json.dumps(plan_packet))
+    wrong_first_role["plan"]["pages"][0]["role"] = "argument"
+    wrong_first_role["plan"]["pages"][1]["role"] = "cover"
+    rejected_first_role = check_layout_packet(wrong_first_role, _measurement())
+    assert "first_page_role_mismatch" in {
+        failure["code"] for failure in rejected_first_role["failures"]
+    }, rejected_first_role
 
     wrong_plan = _measurement()
     wrong_plan["plan_id"] = "layout:another-item:light-serif-longform"
