@@ -12,7 +12,7 @@ from loopx.quota import build_quota_should_run
 GOAL_ID = "effect-interpreter-fixture"
 
 
-def test_due_monitor_replan_routes_through_effect_turn() -> None:
+def test_due_monitor_run_routes_through_effect_turn() -> None:
     items = [
         quota_todo_item(
             todo_id="todo_monitor_route",
@@ -39,6 +39,6 @@ def test_due_monitor_replan_routes_through_effect_turn() -> None:
 
     assert turn.interpretation.route == "continuous_monitor"
     assert turn.interpretation.obligation == "attempt_due_monitor"
-    assert turn.observation.decision == "autonomous_replan_required"
-    assert turn.observation.effective_action == "autonomous_replan_required"
+    assert turn.observation.decision == "run"
+    assert turn.observation.effective_action == "normal_run"
     assert turn.next_effect.cli_actions

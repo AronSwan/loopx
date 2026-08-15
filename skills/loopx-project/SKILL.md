@@ -613,9 +613,11 @@ without another dry-run, file edit, or quota spend.
 The generated task body also carries a no-progress self-repair guard. More
 importantly, `quota should-run` may expose a hard
 `autonomous_replan_obligation` / `execution_obligation.must_attempt_work=true`
-contract when active state or public run history shows 2 consecutive stalled
-turns. `quota_monitor_poll` events are no-spend stall evidence for this
-detector. Obey that machine contract before another quiet no-op: run one
+contract when active state or public run history shows repeated typed no-progress
+turns. Quiet future-monitor heartbeat receipts are liveness evidence only;
+`dead_monitor_repeat` counts unchanged due/external monitor executions with a
+concrete Todo or target identity at its declared threshold. Obey that machine
+contract before another quiet no-op: run one
 bounded self-repair/replan batch through implementation, validation, and
 writeback when that boundary is clear, then spend once. Do not stop at the first
 tiny substep when the repair has an obvious validation boundary. Cancel or
