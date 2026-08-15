@@ -1,7 +1,14 @@
-"""Deterministic probes for the claim-only coordination authority proof.
+"""Deterministic probes for the coordination authority proof.
 
-Run ``python probes.py contract`` without NoKV or external services.  These
-probes do not qualify NoKV restart, recovery, GC, HA, or a live deployment.
+Run ``python probes.py contract`` without NoKV or external services.  The
+claim/CAS probes do not qualify NoKV restart, recovery, GC, HA, or a live
+deployment.  The durable-completion probes are the read-side comparison
+registered by RFC shared-goal-authority-state-provider-v0 (later runtime
+qualification slice): they prove the provider byte-CAS can hold and read back
+a post-completion head whose durable records project to the same typed
+continuation outcomes (``successor | no_followup | active_goal``, fail-closed
+on contradiction/dangling) as the LoopX projection seam.  They do not
+implement or qualify the atomic ``complete_todo_with_successor`` write side.
 """
 
 from __future__ import annotations
@@ -14,6 +21,16 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(
+    0,
+    os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ),
+)
+
+from loopx.control_plane.todos.durable_completion import (  # noqa: E402
+    project_durable_completion_outcome,
+)
 
 from provider import (  # noqa: E402
     CoordinationAuthority,
@@ -619,6 +636,147 @@ def probe_version_domains_and_retain_all() -> None:
     )
 
 
+def _evolve_completion_head(provider, todo_mutations: dict) -> None:
+    """CAS-write an evolved post-completion head over a bootstrapped open one.
+
+    The v0 authority proof only knows ``claim_work``; durable completion is a
+    later slice.  Each mutated todo is committed the way the future atomic
+    ``complete_todo_with_successor`` write will leave it (``status="done"`` plus
+    the declared continuation fields), so the probes read the bytes back through
+    the provider seam rather than through an in-memory fixture.
+    """
+    head, generation = load_head(provider, "goal-completion")
+    todos = head["coordination"]["todos"]
+    for todo_id, fields in todo_mutations.items():
+        record = copy.deepcopy(todos[todo_id])
+        record["status"] = "done"
+        record["todo_revision"] = record["todo_revision"] + 1
+        for key, value in fields.items():
+            record[key] = value
+        todos[todo_id] = record
+    result = provider.compare_and_put(generation, head)
+    assert result["result"] == "applied", result
+
+
+def _project_from_provider_head(provider) -> dict[str, dict]:
+    """Read the head back through the provider and project every done record.
+
+    Returns ``{todo_id: typed outcome}`` for each durably-done record (the seam
+    is invoked after a completion write, so open records are not projected),
+    using the head's full Todo id universe as ``existing_todo_ids`` (the
+    read-side seam's provider-first shape: same projection, same id universe,
+    no host JSON).
+    """
+    head, _generation = load_head(provider, "goal-completion")
+    todos = head["coordination"]["todos"]
+    existing = set(todos)
+    outcomes: dict[str, dict] = {}
+    for todo_id in sorted(todos):
+        record = {"todo_id": todo_id, **todos[todo_id]}
+        if record["status"] != "done":
+            continue
+        outcomes[todo_id] = project_durable_completion_outcome(
+            todo=record,
+            expected_todo_id=todo_id,
+            existing_todo_ids=existing,
+        )
+    return outcomes
+
+
+def probe_durable_completion_projection() -> None:
+    provider = DeterministicProvider()
+    bootstrap(
+        provider,
+        "goal-completion",
+        ["todo_done01", "todo_done02", "todo_done03", "todo_next01"],
+    )
+    _evolve_completion_head(
+        provider,
+        {
+            "todo_done01": {"successor_todo_ids": ["todo_next01"]},
+            "todo_done02": {"no_followup": True},
+            "todo_done03": {},
+        },
+    )
+    outcomes = _project_from_provider_head(provider)
+    assert outcomes["todo_done01"] == {
+        "todo_id": "todo_done01",
+        "continuation": "successor",
+        "successor_todo_ids": ["todo_next01"],
+    }
+    assert outcomes["todo_done02"] == {
+        "todo_id": "todo_done02",
+        "continuation": "no_followup",
+    }
+    assert outcomes["todo_done03"] == {
+        "todo_id": "todo_done03",
+        "continuation": "active_goal",
+    }
+    # Replay stability: re-reading the same provider bytes and projecting again
+    # yields the identical typed outcomes (no clock, no randomness).
+    replay = _project_from_provider_head(provider)
+    assert replay == outcomes
+    out(
+        "contract.durable_completion_projection",
+        ok=True,
+        continuations=[
+            outcomes["todo_done01"]["continuation"],
+            outcomes["todo_done02"]["continuation"],
+            outcomes["todo_done03"]["continuation"],
+        ],
+        replay_stable=True,
+    )
+
+
+def probe_durable_completion_fail_closed() -> None:
+    provider = DeterministicProvider()
+    bootstrap(
+        provider,
+        "goal-completion",
+        ["todo_done04", "todo_done05", "todo_next01"],
+    )
+    _evolve_completion_head(
+        provider,
+        {
+            # Contradiction: both no_followup and a (existing) successor.
+            "todo_done04": {"no_followup": True, "successor_todo_ids": ["todo_next01"]},
+            # Dangling: one declared successor exists, one does not.
+            "todo_done05": {
+                "successor_todo_ids": ["todo_next01", "todo_missing9"]
+            },
+        },
+    )
+    head, _generation = load_head(provider, "goal-completion")
+    todos = head["coordination"]["todos"]
+    existing = set(todos)
+    try:
+        project_durable_completion_outcome(
+            todo={"todo_id": "todo_done04", **todos["todo_done04"]},
+            expected_todo_id="todo_done04",
+            existing_todo_ids=existing,
+        )
+    except ValueError as exc:
+        assert "both no_followup and successor_todo_ids" in str(exc)
+    else:
+        raise AssertionError("contradictory durable state did not fail closed")
+    try:
+        project_durable_completion_outcome(
+            todo={"todo_id": "todo_done05", **todos["todo_done05"]},
+            expected_todo_id="todo_done05",
+            existing_todo_ids=existing,
+        )
+    except ValueError as exc:
+        assert "declares missing successor Todo ids: todo_missing9" in str(exc)
+    else:
+        raise AssertionError("dangling successor did not fail closed")
+    out(
+        "contract.durable_completion_fail_closed",
+        ok=True,
+        contradiction_rejected=True,
+        dangling_successor_rejected=True,
+    )
+
+
 PROBES = (
     probe_bootstrap_and_preconditions,
     probe_a_b_replay_a,
@@ -626,6 +784,8 @@ PROBES = (
     probe_competing_claims,
     probe_crash_windows_and_ambiguity,
     probe_version_domains_and_retain_all,
+    probe_durable_completion_projection,
+    probe_durable_completion_fail_closed,
 )
 
 
