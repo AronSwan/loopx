@@ -176,6 +176,22 @@ def _inline_progress_observation(
         return None
     if not fields["result_class"]:
         raise ValueError("typed progress observation requires --progress-result-class")
+    if fields["result_class"] in {
+        ProgressResultClass.EXPLORATION_EXHAUSTED.value,
+        ProgressResultClass.NO_FOLLOWUP.value,
+    } and not fields["coverage_scope_id"]:
+        raise ValueError(
+            f"--progress-result-class {fields['result_class']} requires "
+            "--progress-coverage-scope-id"
+        )
+    if (
+        fields["result_class"] == ProgressResultClass.EXPLORATION_EXHAUSTED.value
+        and fields["coverage_complete"] is not True
+    ):
+        raise ValueError(
+            "--progress-result-class exploration_exhausted requires "
+            "--progress-coverage-complete"
+        )
     return {
         "schema_version": "typed_progress_observation_v0",
         **{key: value for key, value in fields.items() if value is not None},

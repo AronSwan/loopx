@@ -1655,7 +1655,6 @@ def build_goal_frontier_projection_context_from_status(
             obligation_ack,
             replan_obligation,
         )
-        and (not acceptance_gaps or replan_transition_ack is not None)
     ):
         replan_obligation = None
         replan_scope = autonomous_replan_scope_decision(
@@ -1693,7 +1692,6 @@ def build_goal_frontier_projection_context_from_status(
             frontier_obligation_ack,
             frontier_replan_obligation,
         )
-        and (not acceptance_gaps or frontier_transition_ack is not None)
     ):
         frontier_replan_obligation = None
         replan_transition_ack = frontier_transition_ack
