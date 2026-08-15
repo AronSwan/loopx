@@ -257,14 +257,14 @@ unchanged monitor polls are quiet no-spend checks with `should_run=false` and
 letting it consume every eligible turn, and it keeps the hard routing rule in
 one small machine contract.
 When the current agent lane has only monitor work and no current, unclaimed, or
-other-agent advancement frontier, a future `next_due_at` is not enough to make
-the lane quiet. Quota must first project `autonomous_replan_required` unless a
-recent same-agent autonomous replan ACK explicitly carries
-`watch_lane_continuation`. Generic frontier deltas such as a vision patch,
-no-follow-up rationale, or active next action may settle their own replan
-obligations, but cannot silently convert an empty active-goal frontier into a
-monitor wait. Projected ACKs from a different agent lane are diagnostic only
-for this decision and cannot clear the current lane's empty-frontier obligation.
+other-agent advancement frontier, a valid future `next_due_at` is an explicit
+wait state: quota uses the typed `future_monitor_wait` rule, returns
+`monitor_quiet_skip`, and schedules the next bounded wake without requiring a
+synthetic replan. A due monitor remains executable through
+`due_monitor_execution`. Missing or invalid schedules, no-change streaks,
+vision/succession gaps, user gates, and real blockers still enter their
+higher-priority repair or replan rules. Projected ACKs from a different agent
+lane remain diagnostic only and cannot clear a current-lane obligation.
 
 Executable todos can also declare explicit write-scope requirements through
 todo metadata, for example `required_write_scopes=runner%2F%2A%2A` or the CLI
@@ -474,13 +474,17 @@ loopx quota monitor-poll --goal-id <GOAL_ID> \
 The command appends a `quota_monitor_poll` run record, does not mutate the
 registry, and does not append `quota_slot_spent`. The run includes
 `quota_monitor_target_v0`, a compact hash of the public monitor identity. Six
-consecutive public stalled monitor records with the same target feed
+consecutive unchanged executions of a concrete due/external monitor Todo or
+target with the same target feed
 `autonomous_replan_obligation` as
 `dead_monitor_repeat`, so the next independent `quota should-run` may flip to
 `autonomous_replan_required` /
 `execution_obligation.must_attempt_work=true`; the executor should then record a
 watch-lane expiry, concrete blocker, todo supersede, or successor runnable todo
-instead of another quiet skip.
+instead of another quiet skip. Automatic `quota should-run` heartbeat liveness
+receipts have no concrete executed-monitor identity and do not count toward
+this threshold; distinct heartbeat turn ids are idempotency evidence, not
+monitor execution evidence.
 
 After that bounded replan slice is acknowledged by a compact state run carrying
 `autonomous_replan_ack_v0` and `repair_delta_contract_v0` with
