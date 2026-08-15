@@ -32,6 +32,17 @@ Templates define canvas size, safe area, density limits, page archetypes, and
 portable style tokens. They do not contain project names, private paths, draft
 bodies, or provider credentials.
 
+All built-in templates set `density.role_overrides.cover.min` to `0.90` and
+`max` to `0.98`. The cover default is intentionally stricter than ordinary
+pages: at least 90% of the safe-area height must be occupied by meaningful
+content bounds. Decorative rules, indexes, page numbers, and footers do not
+count toward that density.
+
+This changes the default acceptance behavior only for pages with role
+`cover`: measurements below `0.90` that previously passed now return
+`content_too_sparse`. Non-cover role thresholds and publishing authority are
+unchanged.
+
 ## Typed plan
 
 Build a plan before rendering:
