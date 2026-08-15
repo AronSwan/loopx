@@ -123,13 +123,24 @@ It must prove all of the following:
   that the target todo conflicted;
 - pre/post-CAS faults and ambiguous results recover success only from a stored
   receipt or a later successful CAS after target revalidation; same-generation
-  receipt absence fails unproved.
+  receipt absence fails unproved;
+- a hand-evolved post-completion head read back through the provider byte-CAS
+  projects to the same typed continuation outcomes (`successor | no_followup |
+  active_goal`) as the LoopX durable-completion seam, failing closed on a
+  contradictory record (both `no_followup` and successors) and on a dangling
+  declared successor, with replay-stable projections.
 
-The six current result tags are
+The durable-completion probes are the read-side comparison registered by the
+RFC's later runtime qualification slice. They do not implement or qualify the
+atomic `complete_todo_with_successor` write side.
+
+The eight current result tags are
 `contract.bootstrap_and_preconditions`,
 `contract.a_success_b_advance_replay_a`, `contract.operation_identity`,
-`contract.competing_claims`, `contract.crash_windows_and_ambiguity`, and
-`contract.version_domains_and_retain_all`.
+`contract.competing_claims`, `contract.crash_windows_and_ambiguity`,
+`contract.version_domains_and_retain_all`,
+`contract.durable_completion_projection`, and
+`contract.durable_completion_fail_closed`.
 
 The probe has no live-stack mode in this candidate. A future live exercise
 would require etcd, an S3-compatible object store, `nokv serve`, and the NoKV
