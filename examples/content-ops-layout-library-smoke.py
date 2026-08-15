@@ -10,13 +10,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from loopx.capabilities.content_ops.layout import check_layout_packet  # noqa: E402
-
 
 def _run(*args: str, check: bool = True) -> dict[str, Any]:
     result = subprocess.run(
@@ -24,8 +20,7 @@ def _run(*args: str, check: bool = True) -> dict[str, Any]:
         cwd=REPO_ROOT,
         check=check,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     return json.loads(result.stdout)
 
@@ -34,7 +29,9 @@ def _measurement(*, sparse_page: str | None = None) -> dict[str, Any]:
     pages = []
     for index in range(1, 6):
         page_id = f"p{index:02d}"
-        bottom = 1364 if page_id != sparse_page else 700
+        bottom = 1640 if page_id == "p01" else 1364
+        if page_id == sparse_page:
+            bottom = 700
         pages.append(
             {
                 "page_id": page_id,
@@ -57,15 +54,30 @@ def _measurement(*, sparse_page: str | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
+    from loopx.capabilities.content_ops.layout import check_layout_packet
+
     catalog = _run("content-ops", "template-list")
     assert catalog["ok"] is True, catalog
     assert catalog["template_count"] == 4, catalog
-    assert {
+    template_ids = {
         "light-serif-longform",
         "monochrome-editorial",
         "product-brief",
         "control-plane-hybrid",
-    } == {template["template_id"] for template in catalog["templates"]}
+    }
+    assert template_ids == {
+        template["template_id"] for template in catalog["templates"]
+    }
+
+    for template_id in template_ids:
+        built_in = _run(
+            "content-ops",
+            "template-show",
+            "--template-id",
+            template_id,
+        )
+        cover_density = built_in["template"]["density"]["role_overrides"]["cover"]
+        assert cover_density == {"min": 0.90, "max": 0.98}, built_in
 
     template = _run(
         "content-ops",
@@ -139,6 +151,16 @@ def main() -> int:
     assert accepted["ok"] is True, accepted
     assert accepted["status"] == "pass", accepted
     assert accepted["autopublish_allowed"] is False, accepted
+
+    sparse_cover = _measurement()
+    sparse_cover["pages"][0]["meaningful_content_bounds"]["bottom"] = 1500
+    rejected_cover = check_layout_packet(plan_packet, sparse_cover)
+    assert rejected_cover["status"] == "revise", rejected_cover
+    cover_result = rejected_cover["page_results"][0]
+    assert cover_result["density"] < 0.90, rejected_cover
+    assert {failure["code"] for failure in cover_result["failures"]} == {
+        "content_too_sparse"
+    }, rejected_cover
 
     sparse = _measurement(sparse_page="p02")
     rejected = check_layout_packet(plan_packet, sparse)
