@@ -51,6 +51,9 @@ or role-incomplete page sets. See
 - Layout acceptance never implies content approval or publishing authority.
 - Built-in cover pages require `0.90–0.98` meaningful vertical density; the
   template field is `density.role_overrides.cover`.
+- Built-in `page_sequence` defaults require a cover first, make it the density
+  maximum, and require at least `0.80` meaningful density on interior pages;
+  the final page keeps its closing/CTA role limits.
 
 ## Connector-First Ops Pattern
 
