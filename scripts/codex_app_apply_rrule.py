@@ -19,6 +19,7 @@ overridden for tests or alternate installations.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sqlite3
@@ -28,9 +29,47 @@ import time
 from pathlib import Path
 from typing import Any
 
+from loopx.turn_identity import normalize_turn_instance_id
+
+
+_FAILURE_OUTPUT_LIMIT = 2_000
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _bounded_failure_output(value: str) -> str:
+    output = value.strip()
+    if len(output) <= _FAILURE_OUTPUT_LIMIT:
+        return output
+    half = (_FAILURE_OUTPUT_LIMIT - len(" ... ")) // 2
+    return f"{output[:half]} ... {output[-half:]}"
+
+
+def _subprocess_failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
+    details = []
+    for label, value in (
+        ("stdout", completed.stdout),
+        ("stderr", completed.stderr),
+    ):
+        bounded = _bounded_failure_output(value or "")
+        if bounded:
+            details.append(f"{label}={bounded}")
+    return "; ".join(details) or "no diagnostic output"
+
+
+def _scheduler_hint_turn_instance_id(parent_turn_instance_id: str) -> str:
+    """Derive one replay-safe child receipt identity for the fallback query."""
+
+    try:
+        normalized = normalize_turn_instance_id(parent_turn_instance_id)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not normalized:
+        raise SystemExit("--turn-instance-id must not be empty")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    return f"apply-rrule:{digest}"
 
 
 def _load_registry_goal(registry: Path, goal_id: str) -> dict[str, Any]:
@@ -77,7 +116,7 @@ def _heartbeat_task_body(
     if completed.returncode != 0:
         raise SystemExit(
             f"loopx heartbeat-prompt failed ({completed.returncode}): "
-            f"{completed.stderr[-500:]}"
+            f"{_subprocess_failure_detail(completed)}"
         )
     try:
         payload = json.loads(completed.stdout)
@@ -283,9 +322,10 @@ def _load_scheduler_hint(
     registry: Path,
     goal_id: str,
     agent_id: str,
-    turn_instance_id: str,
+    parent_turn_instance_id: str,
     capabilities: list[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    turn_instance_id = _scheduler_hint_turn_instance_id(parent_turn_instance_id)
     command = [
         loopx,
         "--format",
@@ -313,7 +353,7 @@ def _load_scheduler_hint(
     if completed.returncode != 0:
         raise SystemExit(
             f"loopx should-run failed ({completed.returncode}): "
-            f"{completed.stderr[-500:]}"
+            f"{_subprocess_failure_detail(completed)}"
         )
     try:
         payload = json.loads(completed.stdout)
@@ -383,7 +423,7 @@ def _run_ack(loopx: str, ack_args: list[str]) -> None:
     if completed.returncode != 0:
         raise SystemExit(
             f"loopx scheduler ACK failed ({completed.returncode}): "
-            f"{completed.stderr[-500:]}"
+            f"{_subprocess_failure_detail(completed)}"
         )
 
 
@@ -421,6 +461,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--turn-instance-id",
         default=f"apply-rrule-{_now_ms()}",
+        help=(
+            "outer host turn identity; the bridge derives a stable child identity "
+            "for its internal quota query"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
@@ -433,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
         registry=args.registry,
         goal_id=args.goal_id,
         agent_id=args.agent_id,
-        turn_instance_id=args.turn_instance_id,
+        parent_turn_instance_id=args.turn_instance_id,
         capabilities=args.capability,
     )
     apply_needed = stateful.get("apply_needed") is True
