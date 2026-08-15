@@ -13,10 +13,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.quota import build_quota_should_run, build_quota_slot_preview  # noqa: E402
+from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
+    GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+)
 
 
 GOAL_ID = "capability-gate-goal"
 AGENT_ID = "codex-main-control"
+SCHEDULER_CONTEXT = GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
 
 
 def todo(
@@ -161,6 +165,7 @@ def main() -> int:
         status_payload([p0_benchmark, p0_validate, p1_docs]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert p0_fallback["should_run"] is True, p0_fallback
     assert p0_fallback["normal_delivery_allowed"] is True, p0_fallback
@@ -172,12 +177,15 @@ def main() -> int:
     ] == ["todo_capability_2", "todo_capability_5"], p0_fallback
     assert p0_fallback["capability_gate"]["blocked_candidates"][0]["todo_id"] == "todo_capability_1", p0_fallback
     assert p0_fallback["capability_gate"]["repair_missing"] == ["benchmark_runner"], p0_fallback
-    assert any(
-        "--action-kind materialize_capability" in action
-        and "--target-capability benchmark_runner" in action
-        and "--unblocks-todo-id todo_capability_1" in action
-        for action in p0_fallback["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert p0_fallback["capability_gate"]["resolution_bindings"][0]["action"] == "repair_bridge", (
+        p0_fallback
+    )
+    assert p0_fallback["capability_gate"]["resolution_bindings"][0]["capability"] == (
+        "benchmark_runner"
     ), p0_fallback
+    assert p0_fallback["capability_gate"]["resolution_bindings"][0][
+        "primary_blocked_todo_id"
+    ] == "todo_capability_1", p0_fallback
     assert p0_fallback["recommended_action"] == p0_validate["text"], p0_fallback
     assert "choose one of 2 capability-runnable todo(s)" in p0_fallback["protocol_action_packet"]["summary"], p0_fallback
 
@@ -185,6 +193,7 @@ def main() -> int:
         status_payload([p0_benchmark, p0_network, p1_gpu, p1_docs]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert fallback["should_run"] is True, fallback
     assert fallback["normal_delivery_allowed"] is True, fallback
@@ -207,6 +216,7 @@ def main() -> int:
         status_payload([p0_repair_benchmark_bridge, p0_benchmark, p1_docs]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert repair_candidate["should_run"] is True, repair_candidate
     assert repair_candidate["normal_delivery_allowed"] is True, repair_candidate
@@ -236,6 +246,7 @@ def main() -> int:
         status_payload([p0_benchmark, p0_validate, p1_docs]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write", "benchmark_runner"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert benchmark_ready["capability_gate"]["action"] == "run", benchmark_ready
     assert [
@@ -251,6 +262,7 @@ def main() -> int:
         ),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert benchmark_ready_from_goal["capability_gate"]["action"] == "run", benchmark_ready_from_goal
     assert [
@@ -274,6 +286,7 @@ def main() -> int:
         status_payload([p0_benchmark]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert bridge_missing["should_run"] is True, bridge_missing
     assert bridge_missing["normal_delivery_allowed"] is False, bridge_missing
@@ -293,6 +306,7 @@ def main() -> int:
         status_payload([network_todo]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert runtime_repair["should_run"] is True, runtime_repair
     assert runtime_repair["normal_delivery_allowed"] is False, runtime_repair
@@ -314,6 +328,7 @@ def main() -> int:
         status_payload([credentials_todo]),
         goal_id=GOAL_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert owner_gate["should_run"] is False, owner_gate
     assert owner_gate["requires_user_action"] is True, owner_gate
@@ -340,6 +355,7 @@ def main() -> int:
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         available_capabilities=["shell", "filesystem_write"],
+        scheduler_execution_context=SCHEDULER_CONTEXT,
     )
     assert owner_with_fallback["should_run"] is True, owner_with_fallback
     assert owner_with_fallback["normal_delivery_allowed"] is True, owner_with_fallback

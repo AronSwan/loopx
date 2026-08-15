@@ -670,7 +670,7 @@ def assert_mixed_monitor_and_advancement_routes_to_advancement() -> None:
     assert [item["task_class"] for item in first_items] == ["advancement_task", "continuous_monitor"], guard
 
 
-def assert_not_due_monitor_only_requires_frontier_replan_without_delta() -> None:
+def assert_not_due_monitor_only_waits_quietly_without_replan_delta() -> None:
     guard = build_quota_should_run(
         status_payload(
             status="monitor_schedule_waiting",
@@ -690,15 +690,14 @@ def assert_not_due_monitor_only_requires_frontier_replan_without_delta() -> None
         goal_id=GOAL_ID,
     )
     lane = guard["work_lane_contract"]
-    assert guard["decision"] == "autonomous_replan_required", guard
-    assert guard["effective_action"] == "autonomous_replan_required", guard
+    assert guard["decision"] == "skip", guard
+    assert guard["effective_action"] == "monitor_quiet_skip", guard
     assert lane["lane"] == "continuous_monitor", lane
     assert lane["obligation"] == "quiet_until_material_monitor_transition", lane
-    assert guard["interaction_contract"]["mode"] == "autonomous_replan", guard
-    assert guard["goal_frontier_projection"]["replan_required"] is True, guard
-    obligation = guard["autonomous_replan_obligation"]
-    assert obligation["triggers"][0]["kind"] == "frontier_exhausted_monitor_lane", guard
-    assert obligation["triggers"][0]["future_monitor_schedule_present"] is True, guard
+    assert guard["interaction_contract"]["mode"] == "monitor_quiet_skip", guard
+    assert guard["goal_frontier_projection"]["replan_required"] is False, guard
+    assert "autonomous_replan_obligation" not in guard, guard
+    assert guard["scheduler_hint"]["cadence_class"] == "monitor_wait", guard
     assert guard["agent_todo_summary"]["monitor_due_count"] == 0, guard
 
 
@@ -725,9 +724,9 @@ def assert_due_monitor_only_requires_attempt() -> None:
         goal_id=GOAL_ID,
     )
     lane = guard["work_lane_contract"]
-    assert guard["decision"] == "autonomous_replan_required", guard
+    assert guard["decision"] == "run", guard
     assert guard["should_run"] is True, guard
-    assert guard["effective_action"] == "autonomous_replan_required", guard
+    assert guard["effective_action"] == "normal_run", guard
     assert lane["lane"] == "continuous_monitor", lane
     assert lane["monitor_kind"] == "todo_monitor_due", lane
     assert lane["obligation"] == "attempt_due_monitor", lane
@@ -736,11 +735,15 @@ def assert_due_monitor_only_requires_attempt() -> None:
     assert lane["monitor_due_count"] == 1, lane
     assert lane["selected_next_due_at"] == PAST_DUE_AT, lane
     assert guard["agent_todo_summary"]["monitor_due_count"] == 1, guard
-    assert guard["goal_frontier_projection"]["replan_required"] is True, guard
-    assert guard["interaction_contract"]["mode"] == "autonomous_replan", guard
+    assert guard["goal_frontier_projection"]["replan_required"] is False, guard
+    assert guard["interaction_contract"]["mode"] == "bounded_delivery", guard
     assert guard["interaction_contract"]["agent_channel"]["primary_action"] == (
-        f"run one bounded autonomous replan slice around {due_todo}"
+        due_todo
     ), guard
+    assert guard["execution_obligation"]["kind"] == "work_lane_contract", guard
+    assert guard["execution_obligation"]["contract_obligation"] == "attempt_due_monitor", guard
+    assert guard["execution_obligation"]["must_attempt_work"] is True, guard
+    assert guard["scheduler_hint"]["cadence_class"] == "active_work", guard
     assert "agent_lane_next_action" not in guard, guard
     markdown = render_quota_should_run_markdown(guard)
     assert "work_lane_monitor_due: count=1" in markdown, markdown
@@ -2125,7 +2128,7 @@ def assert_active_next_action_todo_survives_compact_candidate_limits() -> None:
             "todo_id": f"todo_filler_{index}",
             "required_capabilities": ["shell"],
         }
-        for index in range(1, 20)
+        for index in range(1, 13)
     ]
     target_action = (
         "[P1] Debug SkillsBench product-mode lifecycle counter semantics before "
@@ -2210,7 +2213,7 @@ def main() -> int:
     assert_structured_todo_lane_registration_beats_text_fallback()
     assert_structured_monitor_registration_beats_action_text()
     assert_mixed_monitor_and_advancement_routes_to_advancement()
-    assert_not_due_monitor_only_requires_frontier_replan_without_delta()
+    assert_not_due_monitor_only_waits_quietly_without_replan_delta()
     assert_due_monitor_only_requires_attempt()
     assert_due_monitor_lower_priority_does_not_preempt_advancement()
     assert_due_monitor_higher_priority_preempts_advancement()

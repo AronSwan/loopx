@@ -153,24 +153,23 @@ def main() -> int:
             "resolution_summary": "source=mode:user_gate drift=true",
         },
         "monitor": {
-            "decision": "autonomous_replan_required",
-            "effective_action": "autonomous_replan_required",
-            "mode": "autonomous_replan",
-            "primary_action": (
-                "run one bounded autonomous replan slice around todo_monitor: "
-                "[P0] Poll the due monitor."
-            ),
-            "resolution_summary": "source=mode:autonomous_replan drift=true",
+            "decision": "run",
+            "effective_action": "normal_run",
+            "mode": "bounded_delivery",
+            "primary_action": "todo_monitor: [P0] Poll the due monitor.",
+            "resolution_summary": "source=selected drift=true",
         },
         "replan": {
-            "decision": "autonomous_replan_required",
-            "effective_action": "autonomous_replan_required",
-            "mode": "autonomous_replan",
+            "decision": "skip",
+            "effective_action": "monitor_quiet_skip",
+            "mode": "monitor_quiet_skip",
             "primary_action": (
-                "run one bounded autonomous replan slice around wait quietly for "
-                "material monitor evidence"
+                "ensure this heartbeat's idempotent quota receipt is committed, "
+                "then stay quiet if unchanged; the guard records the eligible "
+                "no-progress observation and an earlier heartbeat receipt does "
+                "not satisfy this one"
             ),
-            "resolution_summary": "source=mode:autonomous_replan drift=true",
+            "resolution_summary": "source=mode:monitor_quiet_skip drift=true",
         },
     }
     assert actual == expected, actual

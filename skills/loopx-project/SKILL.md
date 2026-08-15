@@ -621,9 +621,9 @@ contract before another quiet no-op: run one
 bounded self-repair/replan batch through implementation, validation, and
 writeback when that boundary is clear, then spend once. Do not stop at the first
 tiny substep when the repair has an obvious validation boundary. Cancel or
-pause the heartbeat automation only when that repair path is itself stuck for 2
-more eligible turns, explain the no-progress loop with `NOTIFY`, and skip quota
-spend for that self-cancel turn.
+pause the heartbeat automation only after 2 consecutive stalled turns (the same
+repair path stuck for 2 more eligible turns); explain the no-progress loop with
+`NOTIFY`, and skip quota spend for that self-cancel turn.
 The same generated task body also makes routine public commit, push, and PR
 creation autonomous after validation plus a clean public/private boundary scan.
 Do not reintroduce a user gate for public-safe publication itself.

@@ -262,7 +262,8 @@ ACK, it must audit the current evidence against the active
 3. Treat weak, indirect, stale, or protocol-only evidence as incomplete.
 4. Before external research, inspect the selected goal's registry-declared
    `topic_authority` and `project_materials`, preferring the host-projected
-   replan coverage ledger and `agent_material_frontier`. Use role, freshness, revision,
+   replan coverage ledger, `agent_material_frontier`, and projected required
+   reads. Use role, freshness, revision,
    boundary, gate status, and conflict rule to select permitted references.
    Registration guides discovery; it neither grants access nor proves acceptance.
 5. If projected evidence and permitted registry references remain weak, and the
@@ -283,7 +284,7 @@ instruction packet for the agent. It borrows the strict done-judge stance used
 by autonomous goal loops without calling an LLM: the agent is told to compare
 the active vision `acceptance_summary` with the host-projected coverage ledger,
 then permitted registry-declared material references. The agent-scoped
-`evidence-log` remains an operator diagnostic, not a mandatory model ritual.
+`loopx evidence-log` remains an operator diagnostic, not a mandatory model ritual.
 Bounded public web research is the next
 fallback when those sources are missing or stale and the gap depends on public
 facts. `done=true` is only valid
@@ -416,8 +417,15 @@ A valid replan writes at least one bounded delta:
 }
 ```
 
-An acknowledgement without a typed semantic delta is a no-op and must not clear
-the obligation. `refresh-state` does not treat classification prose,
+An acknowledgement without an obligation-accepted typed semantic delta is
+`replan_noop` and must not clear the obligation. Depending on the obligation,
+accepted outcomes can be a new evidence-backed surface, hypothesis, or probe
+family; a runnable successor; a new concrete blocker; coverage-backed
+exploration exhaustion or no-follow-up; or a fresh evidence-linked vision path
+outcome. A typed `goal_vision_patch` repair delta is the vision-derived ACK that
+settles vision successor/checkpoint gaps even when the original acceptance gap
+remains visible in the source projection. `refresh-state` does not treat
+classification prose,
 `--autonomous-replan-recorded`, or a caller-supplied repair kind as proof. New
 writebacks use `typed_progress_observation_v0`: changed surface, hypothesis, or
 probe identifiers are compared with the obligation baseline; a successor id
@@ -479,7 +487,8 @@ self-repair fallback. Agents should write a bounded vision patch when:
 - a replan discovers that the current frontier no longer satisfies the
   acceptance summary;
 - a monitor-only lane should remain a watch lane but needs an explicit
-  continuation or expiry condition; or
+  continuation or expiry condition, including explicit monitor successors and
+  a watch ACK; or
 - a product bottleneck is real but no current todo/frontier projection exposes
   it.
 

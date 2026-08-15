@@ -35,7 +35,7 @@ LoopX 正在被其他开源项目采样、集成和再实现。本页是这份�
   （[issue #285](https://github.com/XSpoonAi/spoon-core/issues/285)）。
   状态：计划中。
 - **OpenViking / NoKV**——已确认合作伙伴；见
-  [README 合作伙伴项目](../../README.zh-CN.md#合作伙伴项目)。
+  [README 合作伙伴项目](https://github.com/huangruiteng/loopx/blob/main/README.zh-CN.md#合作伙伴项目)。
 
 ## 2. 采样与借鉴
 

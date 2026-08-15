@@ -284,7 +284,7 @@ def main() -> None:
         assert replay["status"] == "already_current", replay
         assert len(shared_index.read_text().splitlines()) == len(rows)
 
-        no_sync = run_cli(
+        no_sync_unqualified = run_cli_failure(
             "--registry",
             str(source_registry),
             "refresh-state",
@@ -303,9 +303,71 @@ def main() -> None:
             cwd=project,
             shared_runtime=shared_runtime,
         )
+        assert "open autonomous replan obligation requires a typed semantic delta" in (
+            no_sync_unqualified["error"]
+        ), no_sync_unqualified
+
+        no_change_vision = Path(tmp) / "no-change-vision.json"
+        no_change_vision.write_text(
+            json.dumps(
+                {
+                    "schema_version": "goal_vision_replan_contract_v0",
+                    "goal_id": GOAL_ID,
+                    "agent_id": AGENT_ID,
+                    "state": "active",
+                    "vision_patch": {
+                        "acceptance_summary": VISION_ACCEPTANCE,
+                    },
+                    "path_delta": {
+                        "schema_version": "goal_path_delta_v0",
+                        "outcome": "no_change",
+                        "prior_assumption": (
+                            "The project-local material refresh should stay visible "
+                            "to the shared runtime."
+                        ),
+                        "observed_reality": (
+                            "The source-local checkpoint was verified and kept out "
+                            "of the shared runtime without a sync."
+                        ),
+                        "retained": ["Keep the shared-runtime projection boundary."],
+                        "evidence_refs": ["evidence:shared-runtime-projection-verified"],
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        no_sync = run_cli(
+            "--registry",
+            str(source_registry),
+            "refresh-state",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--progress-scope",
+            "agent_lane",
+            "--classification",
+            "shared_runtime_projection_suppressed",
+            "--recommended-action",
+            "Keep this source-local checkpoint out of the shared runtime.",
+            "--agent-vision-json",
+            str(no_change_vision),
+            "--no-global-sync",
+            "--suppress-external-sinks",
+            cwd=project,
+            shared_runtime=shared_runtime,
+        )
         assert no_sync["runtime_projection_route"]["projection_enabled"] is False
         assert no_sync["global_sync"]["enabled"] is False
         assert no_sync["shared_runtime_projection"]["status"] == "disabled"
+        assert no_sync["autonomous_replan_ack"]["recorded"] is True, no_sync
+        assert no_sync["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True, (
+            no_sync
+        )
         assert len(shared_index.read_text().splitlines()) == len(rows)
 
         source_record["state"]["frontmatter"]["updated_at"] = str(project)

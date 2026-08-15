@@ -336,7 +336,9 @@ def assert_due_monitor_selected(registry_path: Path, *, due_count: int = 1) -> N
 
 def assert_unchanged_writeback() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-monitor-poll-unchanged-") as tmp:
-        registry_path, state_file = write_fixture(Path(tmp))
+        registry_path, state_file = write_fixture(
+            Path(tmp), primary_no_change_count=4
+        )
         assert_due_monitor_selected(registry_path)
 
         payload = run_cli(
@@ -359,10 +361,10 @@ def assert_unchanged_writeback() -> None:
         assert "replayed" not in payload, payload
         writeback = payload["todo_writeback"]
         assert writeback["todo_id"] == TODO_ID, payload
-        assert writeback["consecutive_no_change"] == 2, payload
+        assert writeback["consecutive_no_change"] == 5, payload
         item = find_todo(state_file, TODO_ID)
         assert item["result_hash"] == "old", item
-        assert item["consecutive_no_change"] == "2", item
+        assert item["consecutive_no_change"] == "5", item
         assert item["last_checked_at"], item
         assert item["next_due_at"] != "2026-01-01T00:00:00+00:00", item
         assert item["material_change"] == "false", item
@@ -435,7 +437,8 @@ def assert_interleaved_monitor_stalls_replan_blocked_benchmark() -> None:
         obligation = quota["autonomous_replan_obligation"]
         assert obligation["triggers"][0]["kind"] == "monitor_no_change_streak", obligation
         assert obligation["triggers"][0]["run_count"] == 28, obligation
-        assert obligation["dead_monitor_detector"]["threshold"] == 5, obligation
+        assert obligation["triggers"][0]["threshold"] == 5, obligation
+        assert obligation["triggers"][0]["monitor_target_id"], obligation
 
 
 def assert_stalled_monitor_does_not_preempt_runnable_advancement() -> None:

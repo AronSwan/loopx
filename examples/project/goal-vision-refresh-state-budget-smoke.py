@@ -207,6 +207,14 @@ def main() -> int:
                     "advancement_policy": "repeat_until_closed",
                     "replan_trigger_summary": "Frontier exhausted while acceptance remains open.",
                 },
+                "path_delta": {
+                    "schema_version": "goal_path_delta_v0",
+                    "outcome": "continue",
+                    "prior_assumption": "The current frontier can satisfy the acceptance summary.",
+                    "observed_reality": "A successor todo plus evidence references is now routable.",
+                    "retained": ["Keep the successor route and evidence boundary."],
+                    "evidence_refs": ["evidence:successor-route-01"],
+                },
                 "todo_delta": ["create_successor"],
                 "validation": {"write_correctness_checked": True},
             },
@@ -221,6 +229,7 @@ def main() -> int:
                 ],
                 check=True,
                 dry_run=False,
+                autonomous_replan_recorded=False,
             )
         )
         missing_baseline_checkpoint = missing_baseline["vision_checkpoint"]
@@ -234,8 +243,6 @@ def main() -> int:
         )
         assert missing_baseline_checkpoint["required_resolution"] == [
             "write_vision_patch",
-            "record_no_followup",
-            "link_successor_or_supersede",
         ], missing_baseline
         missing_baseline_quota = run_quota(registry_path, runtime)
         assert missing_baseline_quota["effective_action"] == (
@@ -321,11 +328,16 @@ def main() -> int:
             "acceptance_summary": 44,
             "advancement_policy": 19,
             "replan_trigger_summary": 49,
+            "path_delta.outcome": 8,
+            "path_delta.prior_assumption": 56,
+            "path_delta.observed_reality": 58,
+            "path_delta.retained[0]": 47,
+            "path_delta.evidence_refs[0]": 27,
         }, latest_status_vision
         assert latest_status_checkpoint["agent_id"] == AGENT_ID, latest_status_checkpoint
         assert latest_status_checkpoint["decision"] == "patched", latest_status_checkpoint
         assert latest_status_checkpoint["triggers"][0]["kind"] == (
-            "autonomous_replan_recorded"
+            "material_delivery_outcome"
         ), latest_status_checkpoint
 
         partial_inline = payload(
@@ -485,6 +497,7 @@ def main() -> int:
                     "Current per-agent vision still matches this bounded material closeout.",
                 ],
                 check=True,
+                autonomous_replan_recorded=False,
             )
         )
         assert unchanged["ok"] is True, unchanged
@@ -538,8 +551,6 @@ def main() -> int:
         assert missing_checkpoint["vision_checkpoint"]["required_resolution"] == [
             "write_vision_patch",
             "record_unchanged_reason",
-            "record_no_followup",
-            "link_successor_or_supersede",
         ], missing_checkpoint
         missing_markdown = run_cli(
             registry_path,

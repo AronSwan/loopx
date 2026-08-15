@@ -20,6 +20,11 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     "Due/peer gate != prompt; missing NOTIFY action->"
     "具体user todo未投影，需修复LoopX状态投影."
 )
+HEARTBEAT_NOTIFICATION_RULE_THIN = (
+    "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; "
+    "DONT_NOTIFY=安静输出。执行义务看 `agent_must_attempt`/`must_attempt_work`。"
+    "Due/peer gate != prompt; missing NOTIFY action->具体user todo未投影."
+)
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
     "writeback: no-change=`surface_only`/no spend; "
     "unchanged->`--vision-unchanged-reason`; material->actual outcome."
