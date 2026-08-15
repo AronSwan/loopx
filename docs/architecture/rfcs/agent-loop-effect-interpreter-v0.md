@@ -576,6 +576,15 @@ knowledge. Todo, monitor, capability, scheduler, and gate state machines keep
 their domain transition invariants. They do not move behind a shared protocol
 merely because their packets have similar fields.
 
+The replan semantic-exit repair in #3208 is an explicit non-candidate:
+`refresh-state` already re-derives the current obligation and records a typed
+semantic ACK, while the defect was an extra goal-frontier settlement condition
+that ignored valid non-successor ACKs when acceptance gaps remained. This is a
+domain-local reducer/ACK invariant, not a second multi-step executor. Keep it in
+the replan/goal-frontier owner. Revisit Effect Program migration only when a
+second real runtime scenario—such as a quota/status read ACK with the same
+plan/receipt lifecycle—can replace duplicate orchestration across two adapters.
+
 The earlier R5-R9 list is therefore not an implementation queue:
 
 - the shared `EffectInterpreter` protocol is deferred to M7.3;

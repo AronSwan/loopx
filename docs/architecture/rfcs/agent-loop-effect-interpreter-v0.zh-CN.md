@@ -377,6 +377,8 @@ M7.3：在两个 M7.2 adapter 都消费经过验证的 plan/receipt 语义后，
 
 M7.4：只有在移除重复知识时，才一次扩展一个有界状态族。Todo、monitor、capability、scheduler 和 gate 状态机保留自己的 domain transition invariants。它们不能仅仅因为 packet 字段相似就移到共享 protocol 后面。
 
+#3208 的 replan semantic-exit 修复明确不是候选：`refresh-state` 已经会重新推导当前 obligation 并记录 typed semantic ACK，实际缺陷是 goal-frontier 中一个额外的 settlement 条件在 acceptance gaps 仍存在时忽略了合法的 non-successor ACK。这是 domain-local reducer/ACK invariant，不是第二个 multi-step executor，应继续由 replan/goal-frontier owner 持有。只有第二个真实 runtime 场景（例如具有相同 plan/receipt lifecycle 的 quota/status read ACK）出现，并且能在两个 adapter 间删除重复编排时，才重新评估 Effect Program 迁移。
+
 因此，之前的 R5-R9 列表不是实施队列：
 
 - 共享 `EffectInterpreter` protocol 推迟到 M7.3；

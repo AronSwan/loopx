@@ -186,6 +186,11 @@ The agent should then write back one of:
 - coverage-backed `exploration_exhausted` or `no_followup`; or
 - for a vision-derived duty, a fresh evidence-linked vision path outcome.
 
+An accepted typed semantic ACK settles the corresponding projected obligation
+even when the source acceptance gap remains visible. Terminal coverage inputs
+fail at the CLI boundary when their required coverage scope is missing;
+`exploration_exhausted` additionally requires explicit coverage completion.
+
 Every successful diagnostic `loopx evidence-log` execution appends an
 `evidence_log_read` rollout event and returns an
 `evidence_log_read_receipt_v0`. The receipt carries the goal id, agent id,

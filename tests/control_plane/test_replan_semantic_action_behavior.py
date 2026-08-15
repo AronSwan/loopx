@@ -61,6 +61,32 @@ def _semantic_action(
     )
 
 
+def _exhausted_action(
+    request: Mapping[str, object],
+) -> ScriptedExecToolAction:
+    packet = _latest_quota_packet(request)
+    action = packet["replan_action_packet"]
+    assert isinstance(action, Mapping)
+    assert (
+        "coverage_backed_exploration_exhausted"
+        in action["uncovered_frontier"]["required_any_of"]
+    )
+    return ScriptedExecToolAction(
+        "loopx --format json --registry ignored --runtime-root ignored "
+        "refresh-state --goal-id replan-semantic-action-fixture "
+        "--agent-id codex-replan-semantic-action --progress-scope agent_lane "
+        "--classification bounded_replan_exhausted "
+        "--recommended-action bounded-goal-coverage-exhausted "
+        "--delivery-batch-scale single_surface "
+        "--delivery-outcome surface_only "
+        "--progress-result-class exploration_exhausted "
+        "--progress-coverage-scope-id coverage-fixture-all-surfaces "
+        "--progress-coverage-complete "
+        "--progress-evidence-id evidence-frontier-inventory "
+        "--no-global-sync --suppress-external-sinks"
+    )
+
+
 def _composition_successor_action(
     request: Mapping[str, object],
 ) -> ScriptedExecToolAction:
@@ -162,6 +188,95 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
         "surface-permission-config"
     )
     assert latest["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+
+
+def test_model_exits_after_replan_confirms_goal_coverage_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle", exhausted_frontier=True)
+    transport = ScriptedDoubaoExecTransport(
+        [
+            ScriptedExecToolAction(command=fixture.quota_guard_command),
+            ScriptedExecToolAction(command="cat replan-frontier.json"),
+            _exhausted_action,
+        ]
+    )
+
+    receipt = DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder",
+        transport=transport,
+    ).qualify(
+        qualification_id="replan-exhausted-exit-001",
+        fixture_root=tmp_path / "actor",
+        exhausted_frontier=True,
+    )
+
+    assert receipt["qualification_passed"] is True, receipt
+    assert receipt["observed_tool_sequence"] == [
+        "quota_should_run",
+        "workspace_read",
+        "semantic_replan_writeback",
+    ]
+    assert receipt["selected_semantic_outcomes"] == [
+        "coverage_backed_exploration_exhausted"
+    ]
+    assert receipt["semantic_reentry"] == {
+        "decision": "skip",
+        "effective_action": "monitor_quiet_skip",
+        "replan_rule": "future_monitor_wait",
+        "replan_closed": True,
+        "exited": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("terminal_args", "expected_error"),
+    [
+        (
+            "--progress-result-class no_followup ",
+            "no_followup requires --progress-coverage-scope-id",
+        ),
+        (
+            "--progress-result-class exploration_exhausted ",
+            "exploration_exhausted requires --progress-coverage-scope-id",
+        ),
+        (
+            "--progress-result-class exploration_exhausted "
+            "--progress-coverage-scope-id coverage-fixture-all-surfaces ",
+            "exploration_exhausted requires --progress-coverage-complete",
+        ),
+    ],
+)
+def test_terminal_progress_cli_reports_missing_coverage_contract(
+    tmp_path: Path,
+    terminal_args: str,
+    expected_error: str,
+) -> None:
+    fixture = _build_fixture(tmp_path / "fixture", exhausted_frontier=True)
+    index_path = (
+        fixture.runtime_root
+        / "goals"
+        / "replan-semantic-action-fixture"
+        / "runs"
+        / "index.jsonl"
+    )
+    before = index_path.read_text(encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        _execute_loopx(
+            "loopx --format json --registry ignored --runtime-root ignored "
+            "refresh-state --goal-id replan-semantic-action-fixture "
+            "--agent-id codex-replan-semantic-action "
+            "--progress-scope agent_lane "
+            "--classification bounded_replan_terminal "
+            f"{terminal_args}"
+            "--progress-evidence-id evidence-frontier-inventory "
+            "--no-global-sync --suppress-external-sinks",
+            fixture=fixture,
+            turn_instance_id="invalid-terminal-progress-turn",
+        )
+
+    assert index_path.read_text(encoding="utf-8") == before
 
 
 def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(

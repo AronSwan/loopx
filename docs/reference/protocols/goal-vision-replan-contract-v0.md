@@ -84,7 +84,9 @@ For machine-generated or multi-field patches, the same command also accepts
 both pass through the same budget validation. When a vision-derived replan duty
 is open, a valid packet counts only when it carries a fresh evidence-linked path
 outcome accepted by the shared semantic write gate. An invalid, over-budget, or
-pathless packet fails instead of recording a partial closure.
+pathless packet fails instead of recording a partial closure. A matching typed
+semantic ACK settles the vision-derived duty even while the original acceptance
+gap remains visible in the source projection.
 
 Inline vision writes require `--agent-id`. JSON packets must also resolve to
 the same `agent_id` as the refresh run. This keeps `research-executor`,

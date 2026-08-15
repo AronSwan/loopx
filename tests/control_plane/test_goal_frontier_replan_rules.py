@@ -107,6 +107,24 @@ from loopx.control_plane.todos.summary_item import compact_todo_summary_item
             False,
         ),
         (
+            {
+                "monitor_only_lane": True,
+                "monitor_count": 1,
+                "future_monitor_schedule_present": True,
+            },
+            GoalFrontierReplanRule.FUTURE_MONITOR_WAIT,
+            False,
+        ),
+        (
+            {
+                "monitor_only_lane": True,
+                "monitor_count": 1,
+                "monitor_schedule_gap_count": 1,
+            },
+            GoalFrontierReplanRule.MONITOR_FRONTIER_EXHAUSTED,
+            True,
+        ),
+        (
             {"monitor_only_lane": True, "monitor_count": 1},
             GoalFrontierReplanRule.MONITOR_FRONTIER_EXHAUSTED,
             True,
@@ -335,6 +353,52 @@ def test_empty_authoritative_todo_source_does_not_use_stale_display_item() -> No
     )
 
     assert ack is None
+
+
+def test_terminal_ack_cannot_hide_invalid_monitor_schedule() -> None:
+    monitor = {
+        "todo_id": "todo_monitor_gap",
+        "status": "open",
+        "task_class": "continuous_monitor",
+        "claimed_by": "current-agent",
+        "target_key": "bounded-monitor",
+        "cadence": "1d",
+    }
+    terminal_ack = {
+        "schema_version": "autonomous_replan_ack_v0",
+        "recorded": True,
+        "generated_at": "2026-08-13T09:00:00+08:00",
+        "semantic_delta": {
+            "accepted": True,
+            "outcomes": ["coverage_backed_exploration_exhausted"],
+        },
+    }
+
+    obligation = derive_goal_frontier_replan_obligation_from_summaries(
+        user_todo_summary={"open_count": 0},
+        agent_todo_summary={
+            "open_count": 1,
+            "claimed_advancement_open_count": 0,
+            "current_agent_claimed_advancement_count": 0,
+            "unclaimed_priority_open_items": [],
+            "executable_backlog_items": [],
+            "claim_scope": {"other_agent_claimed_items": []},
+            "monitor_open_items": [monitor],
+            "monitor_due_count": 0,
+            "monitor_schedule_gap_count": 1,
+        },
+        work_lane_contract={
+            "lane": "continuous_monitor",
+            "must_attempt_work": False,
+        },
+        agent_id="current-agent",
+        existing_replan_obligation=None,
+        latest_replan_ack=terminal_ack,
+    )
+
+    assert obligation is not None
+    assert obligation["triggers"][0]["kind"] == "frontier_exhausted_monitor_lane"
+    assert obligation["triggers"][0]["future_monitor_schedule_present"] is False
 
 
 def _ack(generated_at: str, delta_kind: str = "goal_vision_patch") -> dict[str, object]:

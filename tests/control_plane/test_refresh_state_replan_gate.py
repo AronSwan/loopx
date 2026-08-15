@@ -14,6 +14,9 @@ from loopx.state_refresh import (
     enforce_open_replan_writeback,
     refresh_state_run,
 )
+from loopx.control_plane.work_items.semantic_replan_writeback import (
+    qualify_replan_writeback,
+)
 
 GOAL_ID = "replan-gate-fixture"
 AGENT_ID = "codex-replan-gate-agent"
@@ -87,6 +90,21 @@ def _call_gate(
         goal_id=GOAL_ID,
         progress_observation=progress_observation,
     )
+
+
+def _current_obligation_id(
+    runs: list[dict],
+    *,
+    state_text: str = STATE_TEXT,
+) -> str:
+    obligation, _ = qualify_replan_writeback(
+        newest_first_runs=runs,
+        state_text=state_text,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+    )
+    assert obligation is not None
+    return str(obligation["obligation_id"])
 
 
 def test_maintenance_writeback_rejected_when_replan_due() -> None:
@@ -262,10 +280,6 @@ def test_rotated_vision_obligation_rejects_first_maintenance_writeback() -> None
 
 def test_rotated_vision_obligation_contains_all_three_acceptance_gaps() -> None:
     """The write gate sees quota's vision, checkpoint, and completed-chain truth."""
-
-    from loopx.control_plane.work_items.semantic_replan_writeback import (
-        qualify_replan_writeback,
-    )
 
     obligation, semantic_delta = qualify_replan_writeback(
         newest_first_runs=_rotated_vision_runs(),
@@ -449,3 +463,104 @@ def test_rotated_vision_obligation_accepts_fresh_evidence_linked_path() -> None:
     assert semantic_delta["satisfying_outcomes"] == [
         "fresh_vision_path_outcome"
     ]
+
+
+@pytest.mark.parametrize(
+    ("progress_observation", "expected_outcome"),
+    [
+        (
+            {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "blocked",
+                "blocker_id": "blocker-current-path",
+                "evidence_ids": ["evidence-current-blocker"],
+            },
+            "new_concrete_blocker",
+        ),
+        (
+            {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "exploration_exhausted",
+                "coverage_scope_id": "coverage-current-goal",
+                "coverage_complete": True,
+                "evidence_ids": ["evidence-current-coverage"],
+            },
+            "coverage_backed_exploration_exhausted",
+        ),
+        (
+            {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "no_followup",
+                "coverage_scope_id": "coverage-current-goal",
+                "evidence_ids": ["evidence-current-coverage"],
+            },
+            "coverage_backed_no_followup",
+        ),
+    ],
+)
+def test_rotated_vision_obligation_accepts_terminal_progress(
+    progress_observation: dict,
+    expected_outcome: str,
+) -> None:
+    runs = _rotated_vision_runs()
+    state_text = _completed_advancement_chain_state()
+    semantic_delta = enforce_open_replan_writeback(
+        newest_first_runs=runs,
+        state_text=state_text,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        progress_observation=progress_observation,
+    )
+
+    assert semantic_delta is not None
+    assert semantic_delta["satisfying_outcomes"] == [expected_outcome]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "fresh_vision_path_outcome",
+        "new_concrete_blocker",
+        "coverage_backed_exploration_exhausted",
+        "coverage_backed_no_followup",
+    ],
+)
+def test_matching_non_successor_ack_clears_rotated_vision_obligation(
+    outcome: str,
+) -> None:
+    runs = _rotated_vision_runs()
+    state_text = _completed_advancement_chain_state()
+    obligation_id = _current_obligation_id(runs, state_text=state_text)
+    semantic_ack = {
+        "classification": "bounded_replan_progress",
+        "generated_at": "2026-08-13T12:00:00+08:00",
+        "agent_id": AGENT_ID,
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0",
+            "recorded": True,
+            "source": "refresh_state_semantic_delta",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0",
+                "accepted": True,
+                "outcomes": [outcome],
+                "satisfying_outcomes": [outcome],
+                "required_any_of": [
+                    "fresh_vision_path_outcome",
+                    "new_runnable_successor",
+                    "new_concrete_blocker",
+                    "coverage_backed_exploration_exhausted",
+                    "coverage_backed_no_followup",
+                ],
+                "obligation_id": obligation_id,
+            },
+        },
+    }
+
+    remaining, _ = qualify_replan_writeback(
+        newest_first_runs=[semantic_ack, *runs],
+        state_text=state_text,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+    )
+
+    assert remaining is None
