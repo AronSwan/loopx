@@ -6,8 +6,7 @@ state drift, human gates, run evidence, handoffs, ownership, quota, and
 public/private boundaries. The larger product category is a dynamic goal
 control plane: a way to turn a static agent goal into long-running, reviewable
 state that stays understandable and recoverable across many turns. LoopX runs
-on top of different agent harnesses — Codex App, Codex CLI, Claude Code,
-Cursor, dsh, or your own runtime — and provides long-horizon state, semantic
+on top of different agent harnesses and provides long-horizon state, semantic
 decisions, governance, recovery, and human-agent collaboration without
 replacing the harness that executes the work.
 

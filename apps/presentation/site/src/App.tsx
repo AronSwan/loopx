@@ -76,7 +76,7 @@ const content = {
       thirdPrefix: "You keep the ",
       thirdAccent: "judgment",
     },
-    body: "LoopX runs on top of Codex, Claude Code, Cursor, dsh, or your own agent harness — providing long-horizon state, semantic decisions, governance, recovery, and human-agent collaboration while authority, gates, todos, quota, and evidence stay in one loop.",
+    body: "LoopX runs on top of any agent harness, providing long-horizon state, semantic decisions, governance, recovery, and human-agent collaboration while authority, gates, todos, quota, and evidence stay in one loop.",
     copy: "Get started",
     setup: {
       eyebrow: "Set up LoopX",
@@ -177,7 +177,7 @@ const content = {
       thirdPrefix: "判断始终",
       thirdAccent: "由你掌握",
     },
-    body: "LoopX 运行在 Codex、Claude Code、Cursor、dsh 或自有 harness 之上，提供长程状态、语义决策、治理、恢复与人机协同；权限、Gate、Todo、Quota 与 Evidence 仍集中在同一个控制闭环中。",
+    body: "LoopX 运行在任何 agent harness 之上，提供长程状态、语义决策、治理、恢复与人机协同；权限、Gate、Todo、Quota 与 Evidence 仍集中在同一个控制闭环中。",
     copy: "开始使用",
     setup: {
       eyebrow: "设置 LoopX",
