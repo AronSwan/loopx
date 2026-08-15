@@ -559,17 +559,19 @@ def assert_due_monitor_poll_state_machine(root: Path) -> None:
     )
     assert quota_payload["ok"] is True, quota_payload
     assert quota_payload["should_run"] is True, quota_payload
-    assert quota_payload["decision"] == "autonomous_replan_required", quota_payload
-    assert quota_payload["effective_action"] == "autonomous_replan_required", quota_payload
+    assert quota_payload["decision"] == "run", quota_payload
+    assert quota_payload["effective_action"] == "normal_run", quota_payload
     lane = quota_payload["work_lane_contract"]
     assert lane["monitor_kind"] == "todo_monitor_due", lane
     assert lane["obligation"] == "attempt_due_monitor", lane
     assert lane["selected_todo_id"] == MONITOR_TODO_ID, lane
     contract = quota_payload["interaction_contract"]
-    assert contract["mode"] == "autonomous_replan", contract
+    assert contract["mode"] == "bounded_delivery", contract
     assert contract["agent_channel"]["must_attempt"] is True, contract
     assert contract["agent_channel"]["quiet_noop_allowed"] is False, contract
     assert contract["cli_channel"]["spend_allowed_now"] is False, contract
+    assert quota_payload["goal_frontier_projection"]["replan_required"] is False, quota_payload
+    assert quota_payload.get("autonomous_replan_obligation") is None, quota_payload
 
     monitor_payload = run_cli(
         registry_path,
@@ -609,22 +611,20 @@ def assert_due_monitor_poll_state_machine(root: Path) -> None:
         AGENT_ID,
         "--codex-app",
     )
-    assert quiet_payload["decision"] == "autonomous_replan_required", quiet_payload
-    assert quiet_payload["effective_action"] == "autonomous_replan_required", quiet_payload
-    assert quiet_payload["execution_obligation"]["must_attempt_work"] is True, quiet_payload
-    assert quiet_payload["execution_obligation"]["kind"] == "autonomous_replan_required", quiet_payload
-    assert quiet_payload["interaction_contract"]["mode"] == "autonomous_replan", quiet_payload
+    assert quiet_payload["decision"] == "skip", quiet_payload
+    assert quiet_payload["effective_action"] == "monitor_quiet_skip", quiet_payload
+    assert quiet_payload["should_run"] is False, quiet_payload
+    assert quiet_payload["execution_obligation"]["must_attempt_work"] is False, quiet_payload
+    assert quiet_payload["interaction_contract"]["mode"] == "monitor_quiet_skip", quiet_payload
     assert quiet_payload["work_lane_contract"]["obligation"] == (
         "quiet_until_material_monitor_transition"
     ), quiet_payload
     assert quiet_payload["work_lane_contract"]["must_attempt_work"] is False, quiet_payload
     assert quiet_payload["goal_frontier_projection"]["monitor_only_lanes"]["present"] is True, quiet_payload
-    assert quiet_payload["goal_frontier_projection"]["replan_required"] is True, quiet_payload
-    obligation = quiet_payload["autonomous_replan_obligation"]
-    assert obligation["triggers"][0]["kind"] == "frontier_exhausted_monitor_lane", quiet_payload
-    assert obligation["triggers"][0]["future_monitor_schedule_present"] is True, quiet_payload
+    assert quiet_payload["goal_frontier_projection"]["replan_required"] is False, quiet_payload
+    assert quiet_payload.get("autonomous_replan_obligation") is None, quiet_payload
     assert quiet_payload["agent_todo_summary"]["monitor_due_count"] == 0, quiet_payload
-    assert quiet_payload["scheduler_hint"]["cadence_class"] == "active_work", quiet_payload
+    assert quiet_payload["scheduler_hint"]["action"] != "run_now", quiet_payload
 
 
 def assert_markdown_same_agent_continuation_read_path(root: Path) -> None:

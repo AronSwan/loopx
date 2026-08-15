@@ -141,6 +141,7 @@ def write_fixture(
     *,
     typed_repeat_count: int = 0,
     monitor_repeat_count: int = 0,
+    heartbeat_monitor_repeat_count: int = 0,
     periodic_run_count: int = 0,
 ) -> tuple[Path, Path]:
     project = root / "project"
@@ -222,11 +223,31 @@ def write_fixture(
                 "classification": "quota_monitor_poll",
                 "agent_id": AGENT_ID,
                 "delivery_outcome": "surface_only",
+                "todo_id": "todo_due_monitor",
+                "target_key": "monitor-current-route",
                 "monitor_target": {
                     "schema_version": "quota_monitor_target_v0",
                     "target_id": "monitor-current-route",
                     "monitor_mode": "due_monitor_observed_without_material_transition",
                     "effective_action": "normal_run",
+                    "agent_id": AGENT_ID,
+                },
+            },
+        )
+    for offset in range(heartbeat_monitor_repeat_count):
+        append_run_record(
+            runs_dir,
+            {
+                "generated_at": f"2026-01-01T02:{offset + 20:02d}:00+00:00",
+                "classification": "quota_monitor_poll",
+                "agent_id": AGENT_ID,
+                "turn_instance_id": f"heartbeat-turn-{offset}",
+                "delivery_outcome": "surface_only",
+                "monitor_target": {
+                    "schema_version": "quota_monitor_target_v0",
+                    "target_id": "heartbeat-liveness-route",
+                    "monitor_mode": "monitor_quiet_until_material_transition",
+                    "effective_action": "monitor_quiet_skip",
                     "agent_id": AGENT_ID,
                 },
             },
@@ -367,6 +388,19 @@ def assert_typed_monitor_and_periodic_thresholds_remain_explicit() -> None:
         obligation = item["project_asset"]["autonomous_replan_obligation"]
         assert obligation["triggers"][0]["kind"] == "dead_monitor_repeat", obligation
         assert obligation["triggers"][0]["run_count"] == 6, obligation
+
+    with tempfile.TemporaryDirectory(prefix="loopx-heartbeat-monitor-replan-") as tmp:
+        registry_path, runtime = write_fixture(
+            Path(tmp),
+            heartbeat_monitor_repeat_count=6,
+        )
+        item = attention_item(run_cli("status", registry_path=registry_path, runtime=runtime))
+        obligation = (item.get("project_asset") or {}).get(
+            "autonomous_replan_obligation"
+        )
+        assert not obligation or obligation["triggers"][0]["kind"] != (
+            "dead_monitor_repeat"
+        ), item
 
     with tempfile.TemporaryDirectory(prefix="loopx-periodic-replan-") as tmp:
         registry_path, runtime = write_fixture(Path(tmp), periodic_run_count=20)
