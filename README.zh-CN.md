@@ -6,7 +6,7 @@
 
 **面向长程 Agent 的开放、有状态、Provider-neutral 控制面。**
 
-<sub>Codex、Claude Code、Cursor 或自有 runtime 负责一次次有界执行；LoopX 让目标、gate、todo、证据、quota 和交接跨轮次保持稳定。</sub>
+<sub>LoopX 运行在任何 agent harness 之上，提供长程状态、语义决策、治理、恢复与人机协同；目标、gate、todo、证据、quota 和交接跨轮次保持稳定，有界执行仍由 harness 负责。</sub>
 
 <a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="huangruiteng/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
@@ -21,8 +21,9 @@
 ---
 
 LoopX 是开放且 Provider-neutral 的轻量 state kernel，也是 local-first
-的 Loop Engineering 控制面。它不替代真正执行任务的 agent runtime，而是让
-跨轮次、跨工具、跨 agent 的工作可审阅、可恢复、可接力。
+的 Loop Engineering 控制面。它运行在不同 agent harness 之上，而不是替代
+它们：LoopX 提供长程状态、语义决策、治理、恢复与人机协同，让跨轮次、
+跨工具、跨 agent 的工作可审阅、可恢复、可接力。
 
 > 让 Loop 持续向前，让关键判断留在人手里。
 
@@ -257,7 +258,9 @@ loopx doctor
 
 ## 能力
 
-LoopX 把控制面归结为五个用户可以直接行动的问题：
+LoopX 把控制面归结为五个用户可以直接行动的问题。每个问题对应一个产品
+承诺：目标 → 长程状态；下一步 → 语义决策；人类判断 → 人机协同；
+证据 → 恢复；能否继续 → 治理。
 
 | 问题 | LoopX 保持可见的状态 |
 | --- | --- |

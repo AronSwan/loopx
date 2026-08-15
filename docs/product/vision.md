@@ -5,7 +5,10 @@ because engineering work exposes the hard control-plane problems quickly:
 state drift, human gates, run evidence, handoffs, ownership, quota, and
 public/private boundaries. The larger product category is a dynamic goal
 control plane: a way to turn a static agent goal into long-running, reviewable
-state that stays understandable and recoverable across many turns.
+state that stays understandable and recoverable across many turns. LoopX runs
+on top of different agent harnesses and provides long-horizon state, semantic
+decisions, governance, recovery, and human-agent collaboration without
+replacing the harness that executes the work.
 
 The long-term product should help humans who do not want to inspect prompts,
 logs, or traces. The first customer is the maintainer/operator of a Loop Agent:
@@ -46,7 +49,11 @@ clear next improvement targets.
 
 **Dynamic goal control plane for long-running agents**
 
+**Runs on top of any agent harness — long-horizon state, semantic decisions, governance, recovery, and human-agent collaboration**
+
 **让多个 agent 昼夜接力，把人的判断留在控制面。**
+
+**运行在不同 agent harness 之上，为它们提供长程状态、语义决策、治理、恢复与人机协同。**
 
 LoopX 把目标、用户决策、agent todo、认领关系、scope、safe fallback、
 run history 和 quota 放进同一层状态：该等人的地方明确等人，不该空等的

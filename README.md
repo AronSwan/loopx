@@ -6,7 +6,7 @@
 
 **The open, provider-neutral, stateful control plane for long-running agents.**
 
-<sub>Keep objectives, gates, todos, evidence, quota, and handoffs stable while Codex, Claude Code, Cursor, or your own runtime executes bounded turns.</sub>
+<sub>Runs on top of any agent harness — Codex App, Claude Code, Cursor, dsh, or your own — providing long-horizon state, semantic decisions, governance, recovery, and human-agent collaboration. Objectives, gates, todos, evidence, quota, and handoffs stay stable while the harness executes bounded turns.</sub>
 
 <a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="huangruiteng/loopx on Trendshift" width="220" height="48"></a>
 
@@ -21,9 +21,11 @@
 ---
 
 Open and provider-neutral, LoopX is a lightweight state kernel and local-first
-control plane for loop engineering. It keeps long-running work reviewable,
-restartable, and easier to hand off across turns, tools, and agents without
-replacing the runtime that performs the work.
+control plane for loop engineering. It runs on top of different agent harnesses
+rather than replacing them, providing the long-horizon state, semantic
+decisions about what happens next, governance, recovery, and human-agent
+collaboration that keep long-running work reviewable, restartable, and easier
+to hand off across turns, tools, and agents.
 
 **Loop engineering for long-running AI agents and peer agent teams.**
 
@@ -283,7 +285,10 @@ loopx doctor
 
 ## Capabilities
 
-LoopX folds its control-plane mechanics into five questions:
+LoopX folds its control-plane mechanics into five questions. Each question
+delivers one product promise on top of any agent harness: objective →
+long-horizon state; next → semantic decisions; human judgment →
+human-agent collaboration; evidence → recovery; continuation → governance.
 
 | Question | What LoopX keeps visible |
 | --- | --- |
