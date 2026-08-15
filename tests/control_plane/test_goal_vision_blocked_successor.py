@@ -330,6 +330,32 @@ def _generic_quiet_polls(*, target_id: str = "generic-watch-target") -> list[dic
     ]
 
 
+def _executed_monitor_polls(
+    *,
+    target_id: str = "generic-watch-target",
+    agent_id: str = AGENT_ID,
+    date: str = "2026-07-16",
+) -> list[dict]:
+    return [
+        {
+            "classification": "quota_monitor_poll",
+            "generated_at": f"{date}T00:0{minute}:00+00:00",
+            "agent_id": agent_id,
+            "todo_id": MONITOR_ID,
+            "target_key": "bounded-watch",
+            "monitor_target": {
+                "schema_version": "quota_monitor_target_v0",
+                "target_id": target_id,
+                "monitor_mode": "due_monitor_observed_without_material_transition",
+                "effective_action": "normal_run",
+                "action_summary": "Observe the due bounded watch.",
+                "agent_id": agent_id,
+            },
+        }
+        for minute in range(6, 0, -1)
+    ]
+
+
 def _generic_watch_ack(*, frontier_identity: str) -> dict:
     return {
         "classification": "autonomous_replan_recorded",
@@ -389,7 +415,7 @@ def _generic_watch_quota(
         expires_at=expires_at,
     )
     runs = [
-        *_generic_quiet_polls(target_id=target_id),
+        *_executed_monitor_polls(target_id=target_id),
         *([ack] if ack is not None else []),
         _vision_run(
             state="conditional_monitoring",
@@ -1079,6 +1105,7 @@ def test_dead_monitor_repeat_rejects_noncausal_watch_ack(
     obligation = guard["autonomous_replan_obligation"]
     assert obligation["frontier_identity"] == "generic-watch-target"
     assert obligation["triggers"][0]["kind"] == "dead_monitor_repeat"
+    assert obligation["triggers"][0]["threshold"] == 6
 
 
 def test_dead_monitor_repeat_rejects_unrelated_bounded_watch_evidence() -> None:
@@ -1352,6 +1379,7 @@ def test_legacy_watch_ack_cannot_close_current_agent_frontier(tmp_path) -> None:
             "generated_at": generated_at,
             "agent_id": agent_id,
             "monitor_target": {
+                "target_id": frontier_identity,
                 "monitor_mode": "blocked_successor_wait_without_material_transition",
                 "agent_id": agent_id,
                 "frontier_identity": frontier_identity,
@@ -1410,7 +1438,12 @@ def test_legacy_watch_ack_cannot_close_current_agent_frontier(tmp_path) -> None:
 
     index_path = runtime_root / "goals" / "half-speed" / "runs" / "index.jsonl"
     with index_path.open("a", encoding="utf-8") as index_file:
-        for run in reversed(runs):
+        executed_runs = _executed_monitor_polls(
+            target_id=current_frontier,
+            agent_id=SCOPED_AGENT_ID,
+            date="2099-01-01",
+        )
+        for run in reversed(executed_runs):
             index_file.write(json.dumps(run, ensure_ascii=False) + "\n")
 
     with pytest.raises(ValueError, match="typed semantic delta"):
@@ -1445,6 +1478,8 @@ def test_legacy_watch_ack_cannot_cross_material_run_with_todo_evidence(
         "classification": "quota_monitor_poll",
         "generated_at": "2099-01-01T00:02:00+00:00",
         "agent_id": SCOPED_AGENT_ID,
+        "todo_id": MONITOR_ID,
+        "target_key": "bounded-watch",
         "monitor_target": {
             "monitor_mode": "monitor_quiet_until_material_transition",
             "agent_id": SCOPED_AGENT_ID,
@@ -1460,6 +1495,14 @@ def test_legacy_watch_ack_cannot_cross_material_run_with_todo_evidence(
     index_path = runtime_root / "goals" / "half-speed" / "runs" / "index.jsonl"
     with index_path.open("a", encoding="utf-8") as index_file:
         for run in (poll, material_run):
+            index_file.write(json.dumps(run, ensure_ascii=False) + "\n")
+        for run in reversed(
+            _executed_monitor_polls(
+                target_id=target_id,
+                agent_id=SCOPED_AGENT_ID,
+                date="2099-01-01",
+            )
+        ):
             index_file.write(json.dumps(run, ensure_ascii=False) + "\n")
 
     with pytest.raises(ValueError, match="typed semantic delta"):
