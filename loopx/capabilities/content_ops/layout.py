@@ -18,6 +18,10 @@ class PageRole(str, Enum):
     CTA = "cta"
 
 
+class PageDensityOrder(str, Enum):
+    FIRST_PAGE_MAXIMUM = "first_page_maximum"
+
+
 _TEMPLATE_RESOURCE = "templates/layout-catalog-v0.json"
 
 
@@ -79,6 +83,27 @@ def _normalize_role(value: object) -> str:
     except ValueError as exc:
         allowed = ", ".join(role.value for role in PageRole)
         raise ValueError(f"unsupported page role {value!r}; choose one of: {allowed}") from exc
+
+
+def _page_sequence(template: Mapping[str, Any]) -> tuple[str, PageDensityOrder, float]:
+    sequence = template.get("page_sequence")
+    if not isinstance(sequence, Mapping):
+        raise ValueError("layout template requires page_sequence defaults")
+    first_role = _normalize_role(sequence.get("first_role"))
+    try:
+        density_order = PageDensityOrder(str(sequence.get("density_order")))
+    except ValueError as exc:
+        allowed = ", ".join(order.value for order in PageDensityOrder)
+        raise ValueError(
+            f"unsupported page density order {sequence.get('density_order')!r}; "
+            f"choose one of: {allowed}"
+        ) from exc
+    interior_min = float(sequence.get("interior_min", -1))
+    if not 0.0 <= interior_min <= 1.0:
+        raise ValueError(
+            "layout template page_sequence.interior_min must be between 0 and 1"
+        )
+    return first_role, density_order, interior_min
 
 
 def build_layout_plan_packet(
@@ -183,6 +208,7 @@ def check_layout_packet(
         raise ValueError("plan must use content_ops_layout_plan_v0")
     template_id = str(plan.get("template_id") or "")
     template = _template(template_id)
+    first_role, density_order, interior_min = _page_sequence(template)
     measured_by_id = _measurement_pages(measurement)
     planned_pages = plan.get("pages")
     if not isinstance(planned_pages, list) or not planned_pages:
@@ -216,6 +242,13 @@ def check_layout_packet(
         )
 
     roles = [_normalize_role(page["role"]) for page in planned_pages]
+    if roles[0] != first_role:
+        failures.append(
+            {
+                "code": "first_page_role_mismatch",
+                "message": f"first page must use role {first_role}",
+            }
+        )
     required_roles = [
         _normalize_role(required_role) for required_role in plan.get("required_roles", [])
     ]
@@ -238,7 +271,7 @@ def check_layout_packet(
 
     target_canvas = template["canvas"]
     safe_area = template["safe_area"]
-    for planned_page in planned_pages:
+    for page_index, planned_page in enumerate(planned_pages):
         page_id = str(planned_page["page_id"])
         role = str(planned_page["role"])
         measured = measured_by_id.get(page_id)
@@ -282,6 +315,8 @@ def check_layout_packet(
                 )
                 density = round((bottom - top) / usable_height, 3)
                 minimum, maximum = _density_limits(template, role)
+                if 0 < page_index < len(planned_pages) - 1:
+                    minimum = max(minimum, interior_min)
                 if density < minimum:
                     page_failures.append(
                         {
@@ -319,6 +354,47 @@ def check_layout_packet(
             {"code": failure["code"], "message": f"{page_id}: {failure['message']}"}
             for failure in page_failures
         )
+
+    if density_order is PageDensityOrder.FIRST_PAGE_MAXIMUM:
+        first_result = page_results[0]
+        first_density_value = first_result["density"]
+        first_density = (
+            float(first_density_value)
+            if isinstance(first_density_value, (int, float))
+            else None
+        )
+        denser_later_pages: list[tuple[dict[str, object], float]] = []
+        if first_density is not None:
+            for result in page_results[1:]:
+                later_density = result["density"]
+                if (
+                    isinstance(later_density, (int, float))
+                    and later_density > first_density
+                ):
+                    denser_later_pages.append((result, float(later_density)))
+        if denser_later_pages:
+            densest, densest_density = max(
+                denser_later_pages,
+                key=lambda result_with_density: result_with_density[1],
+            )
+            failure = {
+                "code": "first_page_not_density_maximum",
+                "message": (
+                    f"first-page density {first_density:.3f} must be at least every "
+                    f"later page; {densest['page_id']} is {densest_density:.3f}"
+                ),
+            }
+            first_failures = first_result["failures"]
+            if not isinstance(first_failures, list):
+                raise TypeError("layout page result failures must be a list")
+            first_failures.append(failure)
+            first_result["status"] = "revise"
+            failures.append(
+                {
+                    "code": failure["code"],
+                    "message": f"{first_result['page_id']}: {failure['message']}",
+                }
+            )
 
     return {
         "ok": not failures,
