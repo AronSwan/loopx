@@ -25,6 +25,8 @@ class GoalFrontierReplanRule(str, Enum):
     NOT_MONITOR_ONLY = "not_monitor_only"
     NO_OPEN_MONITOR = "no_open_monitor"
     ADVANCEMENT_REMAINS = "advancement_remains"
+    DUE_MONITOR_EXECUTION = "due_monitor_execution"
+    FUTURE_MONITOR_WAIT = "future_monitor_wait"
     MONITOR_FRONTIER_EXHAUSTED = "monitor_frontier_exhausted"
 
 
@@ -52,6 +54,10 @@ class GoalFrontierReplanFacts:
     monitor_no_change_streak_triggered: bool = False
     monitor_only_lane: bool = False
     monitor_count: int = 0
+    monitor_due_count: int = 0
+    monitor_schedule_gap_count: int = 0
+    future_monitor_schedule_present: bool = False
+    monitor_lane_semantically_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,23 @@ def select_goal_frontier_replan_rule(
             or facts.total_frontier_advancement > 0,
             False,
             "advancement work remains on the frontier",
+        ),
+        (
+            GoalFrontierReplanRule.DUE_MONITOR_EXECUTION,
+            facts.monitor_due_count > 0
+            and facts.monitor_schedule_gap_count == 0
+            and facts.monitor_lane_semantically_valid,
+            False,
+            "a scheduled monitor is due and remains executable",
+        ),
+        (
+            GoalFrontierReplanRule.FUTURE_MONITOR_WAIT,
+            facts.future_monitor_schedule_present
+            and facts.monitor_due_count == 0
+            and facts.monitor_schedule_gap_count == 0
+            and facts.monitor_lane_semantically_valid,
+            False,
+            "the monitor-only lane has a valid future schedule and should wait quietly",
         ),
         (
             GoalFrontierReplanRule.MONITOR_FRONTIER_EXHAUSTED,

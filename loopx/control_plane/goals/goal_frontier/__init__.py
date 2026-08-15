@@ -1098,6 +1098,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     existing_replan_obligation: dict[str, Any] | None,
     latest_replan_ack: dict[str, Any] | None = None,
     acceptance_gaps: list[dict[str, Any]] | None = None,
+    monitor_lane_semantically_valid: bool = True,
 ) -> dict[str, Any] | None:
     """Return a compact replan obligation when the goal frontier has no advancement.
 
@@ -1188,6 +1189,16 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             ),
             monitor_only_lane=_is_monitor_only_lane(work_lane_contract),
             monitor_count=agent_counts.get("monitor", 0),
+            monitor_due_count=safe_non_negative_int(
+                (agent_todo_summary or {}).get("monitor_due_count")
+            ),
+            monitor_schedule_gap_count=safe_non_negative_int(
+                (agent_todo_summary or {}).get("monitor_schedule_gap_count")
+            ),
+            future_monitor_schedule_present=(
+                _monitor_only_lane_has_future_schedule(agent_todo_summary)
+            ),
+            monitor_lane_semantically_valid=monitor_lane_semantically_valid,
         )
     )
     if not replan_rule.derives_obligation:
@@ -1660,6 +1671,9 @@ def build_goal_frontier_projection_context_from_status(
         existing_replan_obligation=replan_obligation,
         latest_replan_ack=effective_replan_ack,
         acceptance_gaps=acceptance_gaps,
+        monitor_lane_semantically_valid=not goal_vision_state_is_closed(
+            (latest_agent_vision or {}).get("state")
+        ),
     )
     frontier_transition_ack = replan_successor_transition_ack(
         agent_todo_summary,

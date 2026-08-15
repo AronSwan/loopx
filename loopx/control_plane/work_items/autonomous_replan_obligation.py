@@ -687,6 +687,17 @@ def autonomous_replan_obligation_from_runs(
                 if monitor_target.get(key)
             },
         }
+        monitor_event = run.get("monitor_event")
+        if not isinstance(monitor_event, dict):
+            monitor_event = {}
+        todo_id = str(run.get("todo_id") or monitor_event.get("todo_id") or "").strip()
+        target_key = str(
+            run.get("target_key") or monitor_event.get("target_key") or ""
+        ).strip()
+        if todo_id:
+            signal["todo_id"] = todo_id
+        if target_key:
+            signal["target_key"] = target_key
         turn_instance_id = str(run.get("turn_instance_id") or "").strip()
         if turn_instance_id:
             signal["turn_instance_id"] = turn_instance_id
@@ -738,23 +749,20 @@ def autonomous_replan_obligation_from_runs(
         ]
         return build_autonomous_replan_obligation(evidence, agent_todos=agent_todos)
 
-    heartbeat_signals = monitor_signals[:autonomous_replan_stall_threshold]
-    heartbeat_turn_ids = {
-        str(signal.get("turn_instance_id") or "")
-        for signal in heartbeat_signals
-        if signal.get("turn_instance_id")
-    }
-    distinct_heartbeat_repeat = (
-        len(heartbeat_signals) == autonomous_replan_stall_threshold
-        and len(heartbeat_turn_ids) == autonomous_replan_stall_threshold
-    )
-    monitor_repeat_threshold = (
-        autonomous_replan_stall_threshold
-        if distinct_heartbeat_repeat
-        else dead_monitor_repeat_threshold
-    )
-    repeated_monitors = monitor_signals[:monitor_repeat_threshold]
-    if len(repeated_monitors) < monitor_repeat_threshold:
+    executed_monitor_signals = [
+        signal
+        for signal in monitor_signals
+        if (
+            (signal.get("todo_id") or signal.get("target_key"))
+            and str((signal.get("monitor_target") or {}).get("monitor_mode") or "")
+            in {
+                "due_monitor_observed_without_material_transition",
+                "external_monitor_observed_without_material_transition",
+            }
+        )
+    ]
+    repeated_monitors = executed_monitor_signals[:dead_monitor_repeat_threshold]
+    if len(repeated_monitors) < dead_monitor_repeat_threshold:
         return periodic_review()
     monitor_target_ids = {
         str(signal.get("monitor_target_id") or "")
@@ -769,7 +777,7 @@ def autonomous_replan_obligation_from_runs(
             "schema_version": dead_monitor_repeat_schema_version,
             "section": "run_history",
             "run_count": len(repeated_monitors),
-            "threshold": monitor_repeat_threshold,
+            "threshold": dead_monitor_repeat_threshold,
             "monitor_target_id": next(iter(monitor_target_ids)),
             "latest_generated_at": repeated_monitors[0].get("generated_at"),
             "agent_id": _single_public_agent_id(repeated_monitors),
