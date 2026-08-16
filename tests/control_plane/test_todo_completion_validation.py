@@ -447,3 +447,22 @@ def test_corrupted_argv_declaration_fails_closed(tmp_path: Path) -> None:
     assert receipt["passed"] is False
     assert receipt["status"] == "command_malformed"
     assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
+
+
+def test_empty_argv_declaration_reports_neutral_message(
+    tmp_path: Path,
+) -> None:
+    # An argv declaration collapsing to [] (e.g. corrupted on disk) surfaces
+    # the form-neutral empty-command error inside the malformed receipt.
+    registry, _state = _write_fixture(tmp_path)
+    receipt = completion_validation_module._run_declared_completion_validation(
+        validation_command=None,
+        validation_argv=[],
+        validation_label=None,
+        validation_timeout_seconds=None,
+        registry_path=registry,
+        goal_id=GOAL_ID,
+    )
+    assert receipt is not None
+    assert receipt["status"] == "command_malformed"
+    assert "validation command must not be empty" in receipt["summary"]

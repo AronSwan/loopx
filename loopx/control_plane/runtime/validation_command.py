@@ -40,7 +40,7 @@ def run_caller_validation(
         else shlex.split(validation_command or "")
     )
     if not argv:
-        raise ValueError("validation_command must not be empty")
+        raise ValueError("validation command must not be empty")
     result = subprocess.run(
         argv,
         cwd=workspace,
