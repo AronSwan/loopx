@@ -12,6 +12,7 @@ from .rules import (
     HEARTBEAT_NOTIFICATION_RULE_THIN,
     HEARTBEAT_VISION_WRITEBACK_RULE_SHORT,
     HOST_LOOP_QUOTA_DISPATCH_RULE,
+    HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE,
     HOST_LOOP_TODO_CLOSEOUT_RULE,
     RUNTIME_CAPABILITY_PROJECTION_THIN_RULE,
     RUNTIME_EXECUTION_ROUTING_RULE,
@@ -300,7 +301,7 @@ If `should_run=true`: fetch compact; use `status --limit 3` and
 `handoff_delivery_contract`; do 1 bounded segment/batch when
 `execution_obligation.must_attempt_work=true`; if recovery, run
 ranker/cross-domain evidence recovery or blocker writeback;
-validate/writeback/todos; {HOST_LOOP_TODO_CLOSEOUT_RULE} Progress(actual,no upgrade):
+validate/writeback/todos; {HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE} Progress(actual,no upgrade):
 `{progress_refresh_state_command}`
 Spend:
 `{quota_spend_command}`
@@ -406,7 +407,7 @@ If `should_run=true`:
 8. Validate; write files/validation/critic/next action to active state;
    use `{cli_bin} todo add --goal-id {goal_id} --role user --task-class user_gate|user_action`
    for owner todos and `--role agent` for agent todos, not prose.
-   {HOST_LOOP_TODO_CLOSEOUT_RULE}
+   {HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE}
 9. Account actual validated class/scale/outcome; never default/upgrade. Then
    refresh and spend:
 
