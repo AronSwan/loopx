@@ -43,6 +43,7 @@ recovery 与 host parity 是所有战略方向共用的底座。其可靠性工�
 | 方向 | 目标 | 阶段 | 从这里开始 |
 | --- | --- | --- | --- |
 | 长程 Benchmark 与证据 | 产出 benchmark-native、可复现的长程能力证据，并用受控任务研究机制。 | Active research | [Tracker #3243](https://github.com/huangruiteng/loopx/issues/3243) · [RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md) |
+| 可靠性诊断与治理交付 | 证明 observer-first 产品入口：先在不改变 Agent 执行的前提下诊断长程 workflow，再只在验收通过的 seam 增加 authority。 | Draft 产品方向 / 交付 qualification | [RFC](../architecture/rfcs/long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) |
 | Operator Surface 与 IM Integration | 通过一致的 operator workspace，让 goal、session、decision、evidence 和有界协作清晰可操作。 | 在 integration branch 孵化 | [Tracker #3244](https://github.com/huangruiteng/loopx/issues/3244) · [integration branch](https://github.com/huangruiteng/loopx/tree/frontend-control-plane-im-prototype-rfc) |
 | Shared Goal Authority 与跨 Host 协作 | 让多 host 围绕显式共享 goal 协作，同时避免 provider 或 host session 变成控制面权威。 | Draft contract / provider qualification | [Tracker #3245](https://github.com/huangruiteng/loopx/issues/3245) · [RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.zh-CN.md) |
 | 架构与研究孵化器 | 在扩大生产代码范围之前验证架构演进与研究机制。 | 混合成熟度，见下表 | [Tracker #3246](https://github.com/huangruiteng/loopx/issues/3246) · [RFC 索引](../architecture/rfcs/README.md) |
@@ -61,6 +62,20 @@ ALE、LHTB 与 DeepSWE 提供互补的外部效度环境。LoopX 保留每个 be
 treatment-integrity 检查、public-safe reducer 和分析契约。真实 case、raw task、
 trajectory、verifier output、upload、官方 scoring 和未公开比较仍由 maintainer
 负责。
+
+## 可靠性诊断与治理交付
+
+该产品方向把更广的商业化判断收窄成一个有边界的 entry offer。第一个 operating level
+是在 native harness 与完整 LoopX adoption 之间的 shadow observer：它单向消费 event、
+写入独立 diagnostic ledger，不得注入 prompt，也不得 schedule、retry、stop、resume、
+gate 或修改 worker state。在考虑任何 control authority 前，必须用 matched native/passive
+benchmark arm 同时证明 diagnostic value 与 non-interference。
+
+后续等级明确区分 advisory recommendation、seam-scoped governed command 与完整
+semantic-control-plane adoption。每个正式 pilot 都必须具备 outcome owner、fixed budget、
+matched baseline（或显式标为更弱的 baseline）、acceptance criteria、reusable asset path
+与 rollback。本文仍是 draft 产品与交付合同，不证明付费 PMF，也不授权在 promotion gate
+通过前建设 managed service。
 
 ## Operator Surface 与 IM Integration
 
