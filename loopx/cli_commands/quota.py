@@ -269,6 +269,17 @@ def _prepare_quota_command_context(
     )
 
 
+def _verbose_debug_fields(error: Exception, *, verbose: bool) -> dict[str, object]:
+    if not verbose:
+        return {}
+    return {
+        "verbose_debug": {
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    }
+
+
 def _quota_failure_payload(
     args: argparse.Namespace,
     *,
@@ -278,6 +289,9 @@ def _quota_failure_payload(
 ) -> dict[str, object]:
     command = args.quota_command
     lock_timeout_fields = lock_timeout_error_fields(error)
+    verbose_debug = _verbose_debug_fields(
+        error, verbose=bool(getattr(args, "verbose", False))
+    )
     if command not in QUOTA_EVENT_KINDS:
         return {
             "ok": False,
@@ -305,6 +319,7 @@ def _quota_failure_payload(
                     "source": "quota",
                 }
             ],
+            **verbose_debug,
             **lock_timeout_fields,
         }
 
@@ -323,6 +338,7 @@ def _quota_failure_payload(
         "recommended_action": (
             "fix quota/status collection before spending automatic compute"
         ),
+        **verbose_debug,
         **lock_timeout_fields,
     }
     if lock_timeout_fields:
