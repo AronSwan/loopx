@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -77,6 +78,7 @@ def _add_todo(
     registry: Path,
     *,
     validation_command: str | None = None,
+    validation_command_json: str | None = None,
     validation_label: str | None = None,
     validation_timeout_seconds: int | None = None,
 ) -> dict:
@@ -88,6 +90,7 @@ def _add_todo(
         task_class="advancement_task",
         claimed_by=AGENT,
         validation_command=validation_command,
+        validation_command_json=validation_command_json,
         validation_label=validation_label,
         validation_timeout_seconds=validation_timeout_seconds,
     )
@@ -318,3 +321,129 @@ def test_validation_timeout_requires_validation_command(tmp_path: Path) -> None:
     registry, _state = _write_fixture(tmp_path)
     with pytest.raises(ValueError, match="requires --validation-command"):
         _add_todo(registry, validation_timeout_seconds=5)
+
+
+def test_validation_command_json_passing_commits_completion(
+    tmp_path: Path,
+) -> None:
+    registry, state = _write_fixture(tmp_path)
+    pass_argv = json.dumps([sys.executable, "-c", "raise SystemExit(0)"])
+    todo = _add_todo(
+        registry,
+        validation_command_json=pass_argv,
+        validation_label="argv-form smoke",
+    )
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(todo["todo_id"]),
+        agent_id=AGENT,
+        evidence="validated completion",
+    )
+    assert result["ok"] is True
+    assert "validation_blocked_completion" not in result
+    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "done"
+
+
+def test_validation_command_json_failing_blocks_completion(
+    tmp_path: Path,
+) -> None:
+    registry, state = _write_fixture(tmp_path)
+    fail_argv = json.dumps([sys.executable, "-c", "raise SystemExit(1)"])
+    todo = _add_todo(registry, validation_command_json=fail_argv)
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(todo["todo_id"]),
+        agent_id=AGENT,
+        evidence="claim of completion",
+    )
+    assert result["ok"] is False
+    assert result["validation_blocked_completion"] is True
+    receipt = result["validation"]
+    assert receipt["passed"] is False
+    assert receipt["exit_code"] == 1
+    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
+
+
+def test_validation_command_forms_mutually_exclusive(tmp_path: Path) -> None:
+    registry, _state = _write_fixture(tmp_path)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _add_todo(
+            registry,
+            validation_command=_PASS_COMMAND,
+            validation_command_json=json.dumps([sys.executable, "-c", "pass"]),
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json at all",
+        '{"not":"a list"}',
+        "[]",
+        json.dumps([sys.executable, 123]),
+        json.dumps([sys.executable, ""]),
+    ],
+)
+def test_validation_command_json_must_be_nonempty_string_array(
+    tmp_path: Path, payload: str
+) -> None:
+    registry, _state = _write_fixture(tmp_path)
+    with pytest.raises(ValueError, match="must be a JSON string array"):
+        _add_todo(registry, validation_command_json=payload)
+
+
+def test_validation_timeout_works_with_command_json(tmp_path: Path) -> None:
+    registry, state = _write_fixture(tmp_path)
+    sleep_argv = json.dumps([sys.executable, "-c", "import time; time.sleep(30)"])
+    todo = _add_todo(
+        registry,
+        validation_command_json=sleep_argv,
+        validation_timeout_seconds=1,
+    )
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(todo["todo_id"]),
+        agent_id=AGENT,
+        evidence="claim of completion",
+    )
+    assert result["ok"] is False
+    receipt = result["validation"]
+    assert receipt["status"] == "timeout"
+    assert "timed out after 1s" in receipt["summary"]
+    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
+
+
+def test_corrupted_argv_declaration_fails_closed(tmp_path: Path) -> None:
+    registry, state = _write_fixture(tmp_path)
+    todo = _add_todo(
+        registry,
+        validation_command_json=json.dumps(
+            [sys.executable, "-c", "raise SystemExit(0)"]
+        ),
+    )
+    # Corrupt the persisted argv declaration in place; completion must run the
+    # gate and fail closed as a malformed command, never silently skip it.
+    text = state.read_text(encoding="utf-8")
+    corrupted, substitutions = re.subn(
+        r"validation_command_argv=\S+",
+        "validation_command_argv=%5Bbroken",
+        text,
+    )
+    assert substitutions == 1
+    state.write_text(corrupted, encoding="utf-8")
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(todo["todo_id"]),
+        agent_id=AGENT,
+        evidence="claim of completion",
+    )
+    assert result["ok"] is False
+    assert result["validation_blocked_completion"] is True
+    receipt = result["validation"]
+    assert receipt["passed"] is False
+    assert receipt["status"] == "command_malformed"
+    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"

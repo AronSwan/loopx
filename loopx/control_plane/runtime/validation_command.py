@@ -15,19 +15,30 @@ CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION = "issue_fix_validation_command_v0"
 def run_caller_validation(
     workspace: Path,
     *,
-    validation_command: str,
+    validation_command: str | None = None,
+    validation_argv: list[str] | None = None,
     validation_label: str,
     timeout_seconds: int,
 ) -> dict[str, Any]:
     """Run a caller-approved validation command and return a privacy-safe receipt.
 
-    The command is ``shlex.split`` (no shell) and run with ``cwd=workspace``.
+    Exactly one of ``validation_command`` (shell-free ``shlex.split``) or
+    ``validation_argv`` (pre-split JSON argv array, no shell parsing) selects
+    the command form. The command runs with ``cwd=workspace``.
     Only ``exit_code`` and the boolean ``passed`` are recorded; command stdout,
     stderr, and local paths are deliberately not captured. A timeout raises
     ``subprocess.TimeoutExpired``; callers decide whether to convert that into
     a failure receipt.
     """
-    argv = shlex.split(validation_command)
+    if (validation_command is None) == (validation_argv is None):
+        raise ValueError(
+            "exactly one of validation_command or validation_argv is required"
+        )
+    argv = (
+        [str(item) for item in validation_argv]
+        if validation_argv is not None
+        else shlex.split(validation_command or "")
+    )
     if not argv:
         raise ValueError("validation_command must not be empty")
     result = subprocess.run(

@@ -222,13 +222,23 @@ def register_todo_command(
         help="Optional public-safe label for the validation receipt.",
     )
     todo_parser.add_argument(
+        "--validation-command-json",
+        help=(
+            "Trusted JSON string array (argv form, no shell parsing) for the "
+            "completion validation command, e.g. '[\"pytest\",\"-q\",\"tests/"
+            "test_x.py\"]'. Mutually exclusive with --validation-command; set "
+            "on `todo add`."
+        ),
+    )
+    todo_parser.add_argument(
         "--validation-timeout-seconds",
         type=int,
         help=(
             "Per-todo timeout for the caller-approved validation command. "
-            "Only meaningful with --validation-command on `todo add`; must be "
-            "1-29 so a timed-out validation still produces a typed receipt "
-            "inside the 30s outer subprocess budget. Defaults to 20."
+            "Only meaningful with --validation-command or "
+            "--validation-command-json on `todo add`; must be 1-29 so a "
+            "timed-out validation still produces a typed receipt inside the "
+            "30s outer subprocess budget. Defaults to 20."
         ),
     )
     todo_parser.add_argument("--reason", help="Public-safe reason for blocked/deferred/supersede transitions.")
@@ -629,6 +639,7 @@ def handle_todo_command(
                 replan_obligation_id=replan_obligation_id,
                 resume_when=args.resume_when,
                 validation_command=args.validation_command,
+                validation_command_json=args.validation_command_json,
                 validation_label=args.validation_label,
                 validation_timeout_seconds=args.validation_timeout_seconds,
                 monitor_metadata={

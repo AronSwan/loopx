@@ -47,6 +47,7 @@ TODO_OPTION_FIELDS = (
     ("--successor-todo-id", "successor_todo_ids"),
     ("--resume-when", "resume_when"),
     ("--validation-command", "validation_command"),
+    ("--validation-command-json", "validation_command_json"),
     ("--validation-label", "validation_label"),
     ("--validation-timeout-seconds", "validation_timeout_seconds"),
     ("--clear-resume-when", "clear_resume_when"),
