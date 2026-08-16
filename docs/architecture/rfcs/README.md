@@ -31,6 +31,15 @@ promote a proposal beyond that status.
   feedback, bounded delivery, and authority intervention as nested control
   intervals before introducing adaptive stride selection.
 
+## Product Direction And Delivery Contracts
+
+- [Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md)
+  ([中文版](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md)):
+  define an observer-first entry between a native harness and full LoopX
+  adoption, qualify it with matched benchmark evidence, and add execution
+  authority only through accepted, reversible seams and reusable delivery
+  assets.
+
 ## Drafts Under Review
 
 - [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md)

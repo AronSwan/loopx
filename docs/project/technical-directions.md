@@ -48,6 +48,7 @@ label. It is ongoing product hardening, not a competing source of direction.
 | Direction | Outcome | Stage | Start here |
 | --- | --- | --- | --- |
 | Long-Horizon Benchmarks and Evidence | Produce benchmark-native, reproducible evidence for long-horizon capability and use controlled tasks to study mechanisms. | Active research | [Tracker #3243](https://github.com/huangruiteng/loopx/issues/3243) · [RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
+| Reliability Diagnostics and Governed Delivery | Prove an observer-first product entry that diagnoses long-running workflows without changing agent execution, then adds authority only at accepted seams. | Draft product direction / delivery qualification | [RFC](../architecture/rfcs/long-running-agent-reliability-diagnostics-governed-delivery-v0.md) |
 | Operator Surface and IM Integration | Make goals, sessions, decisions, evidence, and bounded collaboration legible through a coherent operator workspace. | Incubating on an integration branch | [Tracker #3244](https://github.com/huangruiteng/loopx/issues/3244) · [integration branch](https://github.com/huangruiteng/loopx/tree/frontend-control-plane-im-prototype-rfc) |
 | Shared Goal Authority and Cross-host Coordination | Coordinate explicitly shared goals across hosts without turning a provider or host session into control-plane authority. | Draft contract / provider qualification | [Tracker #3245](https://github.com/huangruiteng/loopx/issues/3245) · [RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) |
 | Architecture and Research Incubator | Qualify architectural changes and research mechanisms before they expand production scope. | Mixed; see the portfolio below | [Tracker #3246](https://github.com/huangruiteng/loopx/issues/3246) · [RFC index](../architecture/rfcs/README.md) |
@@ -68,6 +69,23 @@ aggregate score. Contributor-ready work includes deterministic adapter
 fixtures, treatment-integrity checks, public-safe reducers, and analysis
 contracts. Live cases, raw tasks, trajectories, verifier output, uploads,
 official scoring, and unpublished comparisons remain maintainer-owned.
+
+## Reliability Diagnostics And Governed Delivery
+
+This product direction turns the broader commercialization thesis into a
+bounded entry offer. Its first operating level is a shadow observer between a
+native harness and full LoopX adoption: it consumes one-way events, writes an
+independent diagnostic ledger, and may not inject prompts, schedule, retry,
+stop, resume, gate, or mutate worker state. A matched native/passive benchmark
+arm must prove both diagnostic value and non-interference before any control
+authority is considered.
+
+Later levels separate advisory recommendations, seam-scoped governed commands,
+and full semantic-control-plane adoption. Every formal pilot requires an
+outcome owner, fixed budget, matched or explicitly weaker baseline, acceptance
+criteria, reusable asset path, and rollback. This is a draft product and
+delivery contract, not evidence of paid PMF or permission to build a managed
+service before the promotion gates pass.
 
 ## Operator Surface And IM Integration
 
