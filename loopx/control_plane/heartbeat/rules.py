@@ -57,6 +57,9 @@ HOST_LOOP_TODO_CLOSEOUT_RULE = (
     "Done -> successor first; final -> accountable refresh, spend, then "
     "no-follow-up completion."
 )
+HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE = (
+    "Done->successor first; final->refresh->spend->no-follow-up."
+)
 CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE = (
     "\n\nNative Codex `/goal` owns blocked state. Recheck quota at the "
     "`scheduler_hint.unchanged_poll` limit. Third identical blocked turn with no "
