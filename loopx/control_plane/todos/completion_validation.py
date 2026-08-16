@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -34,27 +35,32 @@ def _resolve_goal_repo_workspace(registry_path: Path, goal_id: str) -> Path | No
 
 def _read_declared_validation(
     *, state_file: Path, todo_id: str, role: str | None
-) -> tuple[str | None, str | None, int | None, bool]:
+) -> tuple[str | None, list[str] | None, str | None, int | None, bool]:
     """Pre-read a todo's declared validation command without the mutation lock.
 
-    Returns ``(validation_command, validation_label, validation_timeout_seconds,
-    already_completed)`` from the markdown state file, or ``(None, None, None,
-    False)`` when the todo is not materialized in markdown. Read-only; safe to
-    call before acquiring the state-file lock so a slow validation command does
-    not block concurrent todo operations on the same goal (the MUTATION lock
-    deadline is 5s). ``validation_command`` and ``validation_timeout_seconds``
-    are set only at ``todo add`` and have no update path, so the values cannot
-    drift between this pre-read and the in-lock commit. A stored timeout that
-    fails to parse as an int falls back to ``None`` (the default), matching the
-    writer-side range check that guarantees a well-formed value.
+    Returns ``(validation_command, validation_argv, validation_label,
+    validation_timeout_seconds, already_completed)`` from the markdown state
+    file, or ``(None, None, None, None, False)`` when the todo is not
+    materialized in markdown. Read-only; safe to call before acquiring the
+    state-file lock so a slow validation command does not block concurrent todo
+    operations on the same goal (the MUTATION lock deadline is 5s).
+    ``validation_command``, ``validation_command_argv`` and
+    ``validation_timeout_seconds`` are set only at ``todo add`` and have no
+    update path, so the values cannot drift between this pre-read and the
+    in-lock commit. A stored timeout that fails to parse as an int falls back
+    to ``None`` (the default), matching the writer-side range check that
+    guarantees a well-formed value. A stored argv that fails to parse as a
+    non-empty string list collapses to ``[]`` — never to ``None`` — so a
+    corrupted declaration still runs the gate and fails closed as a malformed
+    command instead of silently skipping validation.
     """
     try:
         lines = state_file.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
-        return None, None, None, False
+        return None, None, None, None, False
     match = find_todo_block(lines, todo_id=todo_id, role=role)
     if not match:
-        return None, None, None, False
+        return None, None, None, None, False
     _role, _section, _start, _end, block = match
     try:
         timeout_seconds: int | None = (
@@ -64,8 +70,23 @@ def _read_declared_validation(
         )
     except (TypeError, ValueError):
         timeout_seconds = None
+    validation_argv: list[str] | None = None
+    if block.get("validation_command_argv"):
+        try:
+            parsed_argv = json.loads(block["validation_command_argv"])
+        except ValueError:
+            parsed_argv = None
+        if (
+            isinstance(parsed_argv, list)
+            and parsed_argv
+            and all(isinstance(item, str) and item for item in parsed_argv)
+        ):
+            validation_argv = parsed_argv
+        else:
+            validation_argv = []
     return (
         block.get("validation_command") or None,
+        validation_argv,
         block.get("validation_label") or None,
         timeout_seconds,
         block.get("status") == TODO_STATUS_DONE,
@@ -75,6 +96,7 @@ def _read_declared_validation(
 def _run_declared_completion_validation(
     *,
     validation_command: str | None,
+    validation_argv: list[str] | None,
     validation_label: str | None,
     validation_timeout_seconds: int | None,
     registry_path: Path,
@@ -82,16 +104,18 @@ def _run_declared_completion_validation(
 ) -> dict[str, Any] | None:
     """Run a todo's declared caller-approved validation command.
 
-    Returns ``None`` when no ``validation_command`` is declared (the unchanged
-    fast path). ``validation_timeout_seconds`` overrides the module default
-    when declared on ``todo add``; ``None`` keeps the default. Otherwise always
-    returns a privacy-safe receipt whose ``passed`` is True only when the
-    command ran and exited zero; setup failures (no repository workspace),
-    timeouts, missing executables, and malformed commands are all reported as
-    ``passed=False`` receipts rather than raised, so completion can surface a
-    typed failure without committing.
+    Returns ``None`` when no command form is declared (the unchanged fast
+    path). ``validation_argv`` (the JSON argv form declared on ``todo add``)
+    takes the run-once no-shell path; ``validation_command`` keeps the
+    legacy shlex form. ``validation_timeout_seconds`` overrides the module
+    default when declared on ``todo add``; ``None`` keeps the default.
+    Otherwise always returns a privacy-safe receipt whose ``passed`` is True
+    only when the command ran and exited zero; setup failures (no repository
+    workspace), timeouts, missing executables, and malformed commands are all
+    reported as ``passed=False`` receipts rather than raised, so completion
+    can surface a typed failure without committing.
     """
-    if not validation_command:
+    if not validation_command and validation_argv is None:
         return None
     timeout_seconds = (
         validation_timeout_seconds
@@ -116,6 +140,13 @@ def _run_declared_completion_validation(
             "local_path_captured": False,
         }
     try:
+        if validation_argv is not None:
+            return run_caller_validation(
+                workspace,
+                validation_argv=validation_argv,
+                validation_label=label,
+                timeout_seconds=timeout_seconds,
+            )
         return run_caller_validation(
             workspace,
             validation_command=str(validation_command),
@@ -149,7 +180,9 @@ def _run_declared_completion_validation(
             "local_path_captured": False,
         }
     except ValueError as exc:
-        # shlex.split rejects malformed (e.g. unbalanced-quote) commands.
+        # shlex.split rejects malformed (e.g. unbalanced-quote) commands, and
+        # an argv form that collapsed to [] (corrupted stored declaration)
+        # fails the runner's own empty-command check.
         return {
             "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
             "command_label": label,
@@ -184,6 +217,7 @@ def run_completion_validation_gate(
     """
     (
         validation_command,
+        validation_argv,
         validation_label,
         validation_timeout_seconds,
         already_completed,
@@ -191,6 +225,7 @@ def run_completion_validation_gate(
     completion_validation = (
         _run_declared_completion_validation(
             validation_command=validation_command,
+            validation_argv=validation_argv,
             validation_label=validation_label,
             validation_timeout_seconds=validation_timeout_seconds,
             registry_path=registry_path,

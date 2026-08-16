@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from json import dumps as json_dumps
+from json import loads as json_loads
 from pathlib import Path
 from typing import Any
 
@@ -548,6 +550,28 @@ def list_goal_todos(
     return payload
 
 
+def _normalize_validation_command_json(raw: str | None) -> list[str] | None:
+    """Validate a ``--validation-command-json`` payload (run-once precedent).
+
+    Returns the argv list, or ``None`` when no JSON form is declared. Raises
+    ``ValueError`` when the payload is not a non-empty JSON string array —
+    the same shape rule the Turn-level ``--validation-command-json`` applies.
+    """
+    if raw is None:
+        return None
+    try:
+        argv = json_loads(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "--validation-command-json must be a JSON string array"
+        ) from exc
+    if not isinstance(argv, list) or not argv or not all(
+        isinstance(item, str) and item for item in argv
+    ):
+        raise ValueError("--validation-command-json must be a JSON string array")
+    return argv
+
+
 def add_todo_to_lines(
     lines: list[str],
     *,
@@ -576,16 +600,24 @@ def add_todo_to_lines(
     replan_obligation_id: str | None = None,
     resume_when: str | None = None,
     validation_command: str | None = None,
+    validation_command_json: str | None = None,
     validation_label: str | None = None,
     validation_timeout_seconds: int | None = None,
     monitor_metadata: dict[str, Any] | None = None,
     evidence: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
+    if validation_command and validation_command_json:
+        raise ValueError(
+            "--validation-command and --validation-command-json are mutually "
+            "exclusive; declare the validation command in exactly one form"
+        )
+    validation_argv = _normalize_validation_command_json(validation_command_json)
     if validation_timeout_seconds is not None:
-        if not validation_command:
+        if not validation_command and validation_argv is None:
             raise ValueError(
-                "--validation-timeout-seconds requires --validation-command"
+                "--validation-timeout-seconds requires --validation-command "
+                "or --validation-command-json"
             )
         if not (
             1
@@ -674,6 +706,11 @@ def add_todo_to_lines(
             replan_obligation_id=replan_obligation_id,
             resume_when=normalized_resume_when,
             validation_command=validation_command,
+            validation_command_argv=(
+                json_dumps(validation_argv)
+                if validation_argv is not None
+                else None
+            ),
             validation_label=validation_label,
             validation_timeout_seconds=(
                 str(validation_timeout_seconds)
@@ -867,6 +904,7 @@ def add_goal_todo(
     replan_obligation_id: str | None = None,
     resume_when: str | None = None,
     validation_command: str | None = None,
+    validation_command_json: str | None = None,
     validation_label: str | None = None,
     validation_timeout_seconds: int | None = None,
     monitor_metadata: dict[str, Any] | None = None,
@@ -1068,6 +1106,7 @@ def add_goal_todo(
             replan_obligation_id=replan_obligation_id,
             resume_when=normalized_resume_when,
             validation_command=validation_command,
+            validation_command_json=validation_command_json,
             validation_label=validation_label,
             validation_timeout_seconds=validation_timeout_seconds,
             monitor_metadata=normalized_monitor_metadata,
