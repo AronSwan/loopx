@@ -22,6 +22,68 @@ without invoking a model. Full mode starts one turn and waits for a correlated
 terminal event, then keeps draining Codex-owned continuation turns until the Goal
 leaves `active`. The same total timeout covers the full Goal lifecycle.
 
+### Formal installed profile and skill discovery
+
+A treatment that only supplies a Goal prompt and a source-checkout CLI has not
+proved the real LoopX product path. The prompt, installed skills, and installed
+CLI are three independent inputs. Use `native_codex_profile` to create an isolated
+local release through LoopX's shipped `scripts/install-local.sh` instead of copying
+skill files or importing an arbitrary checkout:
+
+```python
+from loopx.capabilities.benchmark_toolkit.native_codex_goal import NativeGoalConfig
+from loopx.capabilities.benchmark_toolkit.native_codex_profile import (
+    install_native_codex_profile,
+    native_codex_profile_environment,
+    render_native_codex_goal_prompt,
+)
+
+profile = install_native_codex_profile(loopx_source, isolated_profile_root)
+prompt = render_native_codex_goal_prompt(
+    profile,
+    project_root=task_visible_cwd,
+    goal_id=goal_id,
+    agent_id=agent_id,
+    runtime_registry_path=case_runtime_registry,
+)
+config = NativeGoalConfig(
+    cwd=task_visible_cwd,
+    objective=prompt.task_body,
+    task_instruction=task_instruction,
+    required_skill_ids=profile.required_skill_ids,
+)
+process_env = native_codex_profile_environment(profile)
+```
+
+The profile installer redirects the release, executable, manual, home, and Codex
+skill roots into the supplied isolated directory. It uses the fixed installer path,
+including its generated `$loopx` entry skill and packaged workflow-skill readback;
+unrelated interactive slash-command surfaces are disabled for this non-interactive
+worker. Inspection verifies a release-snapshot CLI, exact source revision, clean
+source by default, skill-tree digests, and `doctor --agent-type codex-app-ssh`.
+
+`render_native_codex_goal_prompt` calls `heartbeat-prompt --thin` through the
+release-snapshot CLI, requires the `codex_app_ssh_goal` profile and interface budget,
+and proves that the returned body names that installed CLI. For an isolated case it
+also replaces the generic global-registry token with the explicit case registry.
+Use `native_codex_profile_environment` for app-server so the same profile supplies
+`HOME`, `CODEX_HOME`, and `PATH`. Setting `required_skill_ids` makes the native
+runtime call the real app-server `skills/list` surface before `thread/start`;
+missing skills, discovery errors, or a wrong cwd fail before any model turn. The
+path-free profile, prompt, and Goal receipts can then prove all three inputs without
+publishing installation paths, prompt text, or skill bodies.
+
+Run the formal installer plus no-model readback smoke with:
+
+```bash
+python examples/benchmark-native-goal-installed-profile-smoke.py \
+  --require-app-server
+```
+
+The helper installs only into its target directory. It grants no credential,
+network, task, evaluator, upload, submission, or scoring authority; those remain
+runner-owned boundaries.
+
 The toolkit borrows the useful contracts already established by modern benchmark
 runners: an ATIF-compatible agent trajectory, a separately owned verifier phase,
 explicit attempt accounting, and compact result reduction. LoopX adds the control-
