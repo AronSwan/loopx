@@ -279,6 +279,17 @@ def _prepare_quota_command_context(
     )
 
 
+def _verbose_debug_fields(error: Exception, *, verbose: bool) -> dict[str, object]:
+    if not verbose:
+        return {}
+    return {
+        "verbose_debug": {
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    }
+
+
 def _quota_failure_payload(
     args: argparse.Namespace,
     *,
@@ -288,6 +299,9 @@ def _quota_failure_payload(
 ) -> dict[str, object]:
     command = args.quota_command
     lock_timeout_fields = lock_timeout_error_fields(error)
+    verbose_debug = _verbose_debug_fields(
+        error, verbose=bool(getattr(args, "verbose", False))
+    )
     if command not in QUOTA_EVENT_KINDS:
         return {
             "ok": False,
@@ -295,7 +309,7 @@ def _quota_failure_payload(
             "registry": str(registry_path),
             "runtime_root": runtime_root_arg,
             "error_code": quota_error_code(error),
-            "error": str(error),
+            "error": "quota collection failed",
             "summary": {
                 "registered_goals": 0,
                 "health_blockers": 1,
@@ -309,10 +323,13 @@ def _quota_failure_payload(
                     "status": "quota_collection_failed",
                     "waiting_on": "codex",
                     "severity": "high",
-                    "recommended_action": str(error),
+                    "recommended_action": (
+                        "fix quota/status collection before spending automatic compute"
+                    ),
                     "source": "quota",
                 }
             ],
+            **verbose_debug,
             **lock_timeout_fields,
         }
 
@@ -323,7 +340,7 @@ def _quota_failure_payload(
         "decision": "skip",
         "should_run": False,
         "error_code": quota_error_code(error),
-        "reason": str(error),
+        "reason": "quota collection failed",
         "state": "blocked_health",
         "waiting_on": "codex",
         "status": "quota_collection_failed",
@@ -331,6 +348,7 @@ def _quota_failure_payload(
         "recommended_action": (
             "fix quota/status collection before spending automatic compute"
         ),
+        **verbose_debug,
         **lock_timeout_fields,
     }
     if lock_timeout_fields:
@@ -366,6 +384,86 @@ def _quota_failure_payload(
             }
         )
     return payload
+
+
+def _quota_validation_failure_payload(
+    args: argparse.Namespace,
+    exc: ValueError,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+) -> dict[str, object]:
+    command = args.quota_command
+    if command not in QUOTA_EVENT_KINDS:
+        return {
+            "ok": False,
+            "mode": command,
+            "registry": str(registry_path),
+            "runtime_root": runtime_root_arg,
+            "error_code": "QUOTA_VALIDATION_FAILED",
+            "error": str(exc),
+            "summary": {
+                "registered_goals": 0,
+                "health_blockers": 0,
+                "next_automatic_turn": None,
+                "states": {},
+            },
+            "groups": {},
+            "health_items": [],
+        }
+    return {
+        "ok": False,
+        "mode": command,
+        "goal_id": args.goal_id,
+        "decision": "skip",
+        "should_run": False,
+        "error_code": "QUOTA_VALIDATION_FAILED",
+        "reason": str(exc),
+        "state": "blocked_validation",
+        "waiting_on": "codex",
+        "status": "quota_validation_failed",
+        "source": "quota",
+        "recommended_action": "fix the command arguments before retrying",
+    }
+
+
+def _quota_scheduler_fail_current_payload(
+    status_payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    runtime_root: Path,
+    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    operator_inbox_urgency_projector: Callable[..., dict[str, object]],
+) -> dict[str, object]:
+    observed_rrule = str(args.codex_app_current_rrule or "").strip()
+    if not observed_rrule:
+        host_observation = resolve_codex_app_automation_rrule(
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+        )
+        if host_observation.get("available") is True:
+            observed_rrule = str(host_observation.get("rrule") or "")
+    failure_decision = build_quota_should_run(
+        status_payload,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        available_capabilities=args.available_capabilities,
+        codex_app_current_rrule=observed_rrule,
+        scheduler_execution_context=scheduler_context,
+        operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+    )
+    return record_quota_scheduler_failure_for_decision(
+        failure_decision,
+        runtime_root=runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        execute=bool(args.execute),
+        surface=args.surface,
+        state_key=args.state_key,
+        failed_rrule=args.failed_rrule,
+        observed_host_rrule=observed_rrule,
+        failure_kind=args.failure_kind,
+    )
 
 
 def _quota_renderer(
@@ -580,34 +678,12 @@ def handle_quota_command(
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             )
         elif args.quota_command == "scheduler-fail-current":
-            observed_rrule = str(args.codex_app_current_rrule or "").strip()
-            if not observed_rrule:
-                host_observation = resolve_codex_app_automation_rrule(
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                )
-                if host_observation.get("available") is True:
-                    observed_rrule = str(host_observation.get("rrule") or "")
-            failure_decision = build_quota_should_run(
+            payload = _quota_scheduler_fail_current_payload(
                 status_payload,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                available_capabilities=args.available_capabilities,
-                codex_app_current_rrule=observed_rrule,
-                scheduler_execution_context=scheduler_context,
-                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-            )
-            payload = record_quota_scheduler_failure_for_decision(
-                failure_decision,
+                args,
                 runtime_root=runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                execute=bool(args.execute),
-                surface=args.surface,
-                state_key=args.state_key,
-                failed_rrule=args.failed_rrule,
-                observed_host_rrule=observed_rrule,
-                failure_kind=args.failure_kind,
+                scheduler_context=scheduler_context,
+                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             )
         elif args.quota_command == "spend-slot":
             payload = spend_quota_slot(
@@ -637,6 +713,15 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except ValueError as exc:
+        # Validation errors carry bounded, public-safe messages —
+        # surface them directly rather than routing through _quota_failure_payload.
+        payload = _quota_validation_failure_payload(
+            args,
+            exc,
+            registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
+        )
     except Exception as exc:  # noqa: BLE001 - CLI fail-safe boundary; error_code is typed below.
         payload = _quota_failure_payload(
             args,

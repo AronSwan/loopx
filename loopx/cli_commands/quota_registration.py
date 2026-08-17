@@ -76,6 +76,15 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Include the raw exception detail in failure payloads for maintainer "
+            "diagnosis. Off by default so the public failure payload stays "
+            "path-free."
+        ),
+    )
+    quota_parser.add_argument(
         "--include-scheduler-detail",
         action="store_true",
         # Deprecated compatibility alias. Remove in the next breaking release.
