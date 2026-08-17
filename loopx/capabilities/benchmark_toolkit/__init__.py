@@ -35,6 +35,13 @@ from .native_codex_goal import (
     start_native_goal_turn,
     wait_native_goal_turn,
 )
+from .native_codex_isolation import (
+    NativeCodexIsolationEnvelope,
+    NativeCodexIsolationError,
+    NativeCodexLoopXStateRebase,
+    build_native_codex_isolation_envelope,
+    rebase_native_codex_loopx_workspace_state,
+)
 from .native_codex_profile import (
     NATIVE_CODEX_GOAL_PROMPT_SCHEMA_VERSION,
     NATIVE_CODEX_PROFILE_REQUIRED_SKILL_IDS,
@@ -76,6 +83,9 @@ __all__ = [
     "RUN_PERMISSION_POLICY_SCHEMA_VERSION",
     "RUN_PERMISSION_QUOTA_PROJECTION_SCHEMA_VERSION",
     "NativeCodexGoalPrompt",
+    "NativeCodexIsolationEnvelope",
+    "NativeCodexIsolationError",
+    "NativeCodexLoopXStateRebase",
     "NativeCodexProfile",
     "NativeCodexProfileError",
     "NativeGoalConfig",
@@ -88,6 +98,7 @@ __all__ = [
     "attach_native_goal",
     "build_benchmark_candidate_source_boundary",
     "build_benchmark_integrity_qualification",
+    "build_native_codex_isolation_envelope",
     "build_run_permission_policy",
     "classify_benchmark_artifact_path",
     "classify_benchmark_candidate_source_path",
@@ -103,6 +114,7 @@ __all__ = [
     "native_codex_profile_environment",
     "observe_native_goal_event",
     "probe_native_goal_process",
+    "rebase_native_codex_loopx_workspace_state",
     "refresh_native_goal_status",
     "render_native_codex_goal_prompt",
     "run_native_goal_process",
