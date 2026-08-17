@@ -394,6 +394,30 @@ def test_quota_collection_failure_payload_is_path_free_by_default(
     assert "/private/internal/secret.json" not in json.dumps(payload, sort_keys=True)
 
 
+def test_quota_runtime_value_error_is_not_treated_as_public_safe_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from loopx.cli_commands import quota as quota_command
+
+    def fail_collect_status(**_kwargs: object) -> dict[str, object]:
+        raise ValueError("/private/internal/runtime-secret.json")
+
+    monkeypatch.setattr(quota_command, "collect_status", fail_collect_status)
+
+    exit_code = main(["--format", "json", "quota", "status"])
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "quota_unexpected_collection_error"
+    assert payload["error"] == "quota collection failed"
+    assert "verbose_debug" not in payload
+    assert "/private/internal/runtime-secret.json" not in json.dumps(
+        payload, sort_keys=True
+    )
+
+
 def test_quota_collection_failure_verbose_surfaces_raw_exception(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

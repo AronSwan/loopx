@@ -15,7 +15,10 @@ from ..control_plane.quota.cli_projection import (
 )
 from ..control_plane.goals.path_resolution import resolve_goal_local_path
 from ..control_plane.quota.goal_boundary import registry_goal_by_id
-from ..control_plane.quota.error_codes import quota_error_code
+from ..control_plane.quota.error_codes import (
+    QuotaCommandValidationError,
+    quota_error_code,
+)
 from ..control_plane.quota.heartbeat_receipt import (
     fail_heartbeat_receipt,
     find_heartbeat_receipt,
@@ -129,12 +132,12 @@ def _scheduler_execution_context_from_args(
         args.execution_mode,
     )
     if args.codex_app and (args.runtime_profile or any(explicit_scheduler_fields)):
-        raise ValueError(
+        raise QuotaCommandValidationError(
             "--codex-app cannot be combined with --runtime-profile, "
             "--host-surface, --scheduler-owner, or --execution-mode"
         )
     if args.runtime_profile and any(explicit_scheduler_fields):
-        raise ValueError(
+        raise QuotaCommandValidationError(
             "--runtime-profile cannot be combined with --host-surface, "
             "--scheduler-owner, or --execution-mode"
         )
@@ -163,10 +166,12 @@ def _prepare_quota_command_context(
 ) -> _QuotaCommandContext:
     command = args.quota_command
     if bool(getattr(args, "turn_envelope", False)) and command != "should-run":
-        raise ValueError("--turn-envelope is only valid with `quota should-run`")
+        raise QuotaCommandValidationError(
+            "--turn-envelope is only valid with `quota should-run`"
+        )
     requested_details = set(getattr(args, "include_details", None) or ())
     if requested_details and command not in {"should-run", "monitor-poll"}:
-        raise ValueError(
+        raise QuotaCommandValidationError(
             "--include-detail is only valid with `quota should-run` or "
             "`quota monitor-poll`"
         )
@@ -178,7 +183,7 @@ def _prepare_quota_command_context(
         )
         unsupported_details = sorted(requested_details - allowed_details)
         if unsupported_details:
-            raise ValueError(
+            raise QuotaCommandValidationError(
                 f"`quota {command}` does not accept --include-detail "
                 f"{', '.join(unsupported_details)}"
             )
@@ -186,24 +191,40 @@ def _prepare_quota_command_context(
         bool(getattr(args, "include_scheduler_detail", False))
         and command != "should-run"
     ):
-        raise ValueError(
+        raise QuotaCommandValidationError(
             "--include-scheduler-detail is only valid with `quota should-run`"
         )
     if bool(getattr(args, "record_host_poll", False)) and command != "should-run":
-        raise ValueError("--record-host-poll is only valid with `quota should-run`")
+        raise QuotaCommandValidationError(
+            "--record-host-poll is only valid with `quota should-run`"
+        )
 
-    heartbeat_turn_id = normalize_turn_instance_id(
-        getattr(args, "turn_instance_id", None)
-    )
+    try:
+        heartbeat_turn_id = normalize_turn_instance_id(
+            getattr(args, "turn_instance_id", None)
+        )
+    except ValueError as exc:
+        raise QuotaCommandValidationError(str(exc)) from exc
     if heartbeat_turn_id and command not in {"should-run", "spend-slot"}:
-        raise ValueError(
+        raise QuotaCommandValidationError(
             "--turn-instance-id is only valid with `quota should-run` or "
             "`quota spend-slot`"
         )
     if heartbeat_turn_id and not args.agent_id:
-        raise ValueError("turn-scoped quota settlement requires --agent-id")
+        raise QuotaCommandValidationError(
+            "turn-scoped quota settlement requires --agent-id"
+        )
     if heartbeat_turn_id and command == "should-run" and bool(args.dry_run):
-        raise ValueError("turn-scoped `quota should-run` cannot use --dry-run")
+        raise QuotaCommandValidationError(
+            "turn-scoped `quota should-run` cannot use --dry-run"
+        )
+
+    scheduler_context = (
+        _scheduler_execution_context_from_args(args)
+        if command in QUOTA_SCHEDULER_COMMANDS
+        else None
+    )
+    validate_quota_command_request(args)
 
     scan_roots = [Path(item).expanduser() for item in args.scan_path]
     if not scan_roots:
@@ -221,11 +242,6 @@ def _prepare_quota_command_context(
     status_goal_id = args.goal_id if command not in {"status", "plan"} else None
     projection_cache_ttl_seconds = int(
         getattr(args, "projection_cache_ttl_seconds", 120)
-    )
-    scheduler_context = (
-        _scheduler_execution_context_from_args(args)
-        if command in QUOTA_SCHEDULER_COMMANDS
-        else None
     )
     status_payload = None
     cache_metadata = None
@@ -264,7 +280,6 @@ def _prepare_quota_command_context(
     elif isinstance(status_payload.get("projection_cache"), dict):
         cache_metadata = dict(status_payload["projection_cache"])
 
-    validate_quota_command_request(args)
     return _QuotaCommandContext(
         runtime_root=runtime_root,
         scan_roots=scan_roots,
@@ -388,7 +403,7 @@ def _quota_failure_payload(
 
 def _quota_validation_failure_payload(
     args: argparse.Namespace,
-    exc: ValueError,
+    exc: QuotaCommandValidationError,
     *,
     registry_path: Path,
     runtime_root_arg: str | None,
@@ -713,9 +728,8 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
-    except ValueError as exc:
-        # Validation errors carry bounded, public-safe messages —
-        # surface them directly rather than routing through _quota_failure_payload.
+    except QuotaCommandValidationError as exc:
+        # Only typed CLI validation diagnostics are public-safe by contract.
         payload = _quota_validation_failure_payload(
             args,
             exc,
