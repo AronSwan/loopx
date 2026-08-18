@@ -11,6 +11,7 @@ import pytest
 
 from loopx import windows_install
 from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES
+from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
 
 def _run_loopx(
@@ -74,15 +75,16 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     pointer_path = install_root / "current-release.json"
     assert installed["pointer"] == str(pointer_path)
     assert (bin_dir / "loopx.ps1").is_file()
+    launcher_pointer = bin_dir / windows_install.LAUNCHER_POINTER_FILENAME
+    assert installed["launcher_pointer"] == str(launcher_pointer)
+    assert launcher_pointer.is_file()
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    assert json.loads(launcher_pointer.read_text(encoding="utf-8")) == pointer
     release_root = Path(pointer["release_root"])
     assert release_root.is_dir()
     expected_skills = {
         "loopx",
-        "loopx-doc-registry",
-        "loopx-pr-review",
-        "loopx-project",
-        "loopx-self-repair",
+        *PACKAGED_HOST_SKILL_IDS,
         "loopx-global-summary",
         "loopx-global-gates",
         "loopx-global-todos",
@@ -96,8 +98,11 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
         path.name for path in skills_dir.iterdir() if (path / "SKILL.md").is_file()
     }
 
+    # A real fresh shell does not inherit the installer's pointer override. The
+    # launcher must discover the sidecar next to itself, including when the
+    # caller selected a non-default InstallRoot.
     launch_env = dict(env)
-    launch_env["LOOPX_CURRENT_RELEASE_FILE"] = str(pointer_path)
+    launch_env.pop("LOOPX_CURRENT_RELEASE_FILE", None)
     launcher = bin_dir / "loopx.ps1"
     doctor = _run_loopx(
         pwsh=pwsh,
@@ -291,3 +296,54 @@ def test_windows_installer_keeps_pointer_when_candidate_validation_fails(
 
     assert pointer.read_text(encoding="utf-8") == original_pointer
     assert not (install_root / "releases" / "rejected").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
+def test_windows_installer_rolls_back_late_user_surface_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    install_root = tmp_path / "share" / "loopx"
+    bin_dir = tmp_path / "bin"
+    skills_dir = tmp_path / "codex" / "skills"
+    pointer = install_root / "current-release.json"
+    launcher = bin_dir / "loopx.ps1"
+    launcher_pointer = bin_dir / windows_install.LAUNCHER_POINTER_FILENAME
+    existing_skill = skills_dir / PACKAGED_HOST_SKILL_IDS[0] / "SKILL.md"
+    for path, content in (
+        (pointer, '{"release_id":"known-good"}\n'),
+        (launcher, "# known-good launcher\n"),
+        (launcher_pointer, '{"release_id":"known-good"}\n'),
+        (existing_skill, "# known-good skill\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def fail_after_skill_write(
+        release_root: Path, target_skills_dir: Path, installed_at: str
+    ) -> list[str]:
+        del release_root, installed_at
+        existing_skill_path = target_skills_dir / PACKAGED_HOST_SKILL_IDS[0] / "SKILL.md"
+        existing_skill_path.write_text("# partial update\n", encoding="utf-8")
+        raise RuntimeError("late skill failure")
+
+    monkeypatch.setattr(windows_install, "_install_skills", fail_after_skill_write)
+
+    with pytest.raises(RuntimeError, match="late skill failure"):
+        windows_install.install_windows(
+            source_root=repo_root,
+            install_root=install_root,
+            bin_dir=bin_dir,
+            skills_dir=skills_dir,
+            python_requested=sys.executable,
+            install_skills=True,
+            requested_release_id="rejected-late",
+        )
+
+    assert pointer.read_text(encoding="utf-8") == '{"release_id":"known-good"}\n'
+    assert launcher.read_text(encoding="utf-8") == "# known-good launcher\n"
+    assert launcher_pointer.read_text(encoding="utf-8") == (
+        '{"release_id":"known-good"}\n'
+    )
+    assert existing_skill.read_text(encoding="utf-8") == "# known-good skill\n"
+    assert not (install_root / "releases" / "rejected-late").exists()

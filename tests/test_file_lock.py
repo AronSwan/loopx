@@ -13,12 +13,16 @@ from loopx.file_lock import (
     exclusive_file_lock,
     fcntl,
     lock_incident_path,
+    msvcrt,
     try_exclusive_file_lock,
 )
 from loopx.presentation.markdown import append_operator_action_markdown
 
 
-pytestmark = pytest.mark.skipif(fcntl is None, reason="POSIX flock is required")
+pytestmark = pytest.mark.skipif(
+    fcntl is None and msvcrt is None,
+    reason="a supported kernel file-lock backend is required",
+)
 
 
 def _start_stalled_holder(target: Path) -> subprocess.Popen[str]:

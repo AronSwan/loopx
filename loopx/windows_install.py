@@ -15,12 +15,14 @@ from .file_lock import exclusive_file_lock
 from .release_manifest import write_release_manifest
 from .skill_install_readback import (
     PACKAGED_HOST_SKILL_IDS,
+    SKILL_INSTALL_READBACK_FILENAME,
     write_skill_install_readback,
 )
 from .slash_command_install import install_slash_commands, materialize_loopx_entry_skill
 
 
 POINTER_SCHEMA_VERSION = "loopx_windows_release_pointer_v0"
+LAUNCHER_POINTER_FILENAME = "loopx-current-release.json"
 COPY_DIRECTORIES = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps", ".github")
 COPY_FILES = ("README.md", "README.zh-CN.md", "CONTRIBUTOR_TASKS.md", "LICENSE", "pyproject.toml")
 REQUIRED_DEEP_CHECKS = {
@@ -155,6 +157,70 @@ def _atomic_copy(source: Path, target: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _copy_path(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        target.symlink_to(os.readlink(source), target_is_directory=source.is_dir())
+    elif source.is_dir():
+        shutil.copytree(source, target, symlinks=True)
+    else:
+        shutil.copy2(source, target)
+
+
+def _skill_mutation_paths(skills_dir: Path) -> list[Path]:
+    codex_home = skills_dir.parent
+    paths = {
+        *(skills_dir / skill_id for skill_id in PACKAGED_HOST_SKILL_IDS),
+        skills_dir / "loopx",
+        skills_dir / SKILL_INSTALL_READBACK_FILENAME,
+    }
+    slash_plan = install_slash_commands(
+        execute=False,
+        surfaces=["codex"],
+        cli_bin="loopx",
+        codex_home=str(codex_home),
+    )
+    for item in slash_plan.get("installed", []):
+        if not isinstance(item, dict) or not item.get("path"):
+            continue
+        path = Path(str(item["path"]))
+        if path.is_relative_to(skills_dir):
+            relative = path.relative_to(skills_dir)
+            if relative.parts:
+                paths.add(skills_dir / relative.parts[0])
+        else:
+            paths.add(path)
+    return sorted(paths, key=lambda item: str(item))
+
+
+def _snapshot_paths(
+    paths: Sequence[Path], backup_root: Path
+) -> list[tuple[Path, Path | None]]:
+    snapshots: list[tuple[Path, Path | None]] = []
+    for index, path in enumerate(paths):
+        if not path.exists() and not path.is_symlink():
+            snapshots.append((path, None))
+            continue
+        backup = backup_root / str(index)
+        _copy_path(path, backup)
+        snapshots.append((path, backup))
+    return snapshots
+
+
+def _restore_paths(snapshots: Sequence[tuple[Path, Path | None]]) -> None:
+    for path, backup in reversed(snapshots):
+        _remove_path(path)
+        if backup is not None:
+            _copy_path(backup, path)
+
+
 def _install_skills(release_root: Path, skills_dir: Path, installed_at: str) -> list[str]:
     skills_dir.mkdir(parents=True, exist_ok=True)
     installed_ids: list[str] = []
@@ -230,22 +296,49 @@ def install_windows(
             shutil.rmtree(temporary, ignore_errors=True)
             raise
 
-        installed_skill_ids = (
-            _install_skills(release_root, skills_dir, installed_at) if install_skills else []
-        )
         launcher = bin_dir / "loopx.ps1"
-        _atomic_copy(release_root / "scripts" / "loopx.ps1", launcher)
         pointer = install_root / "current-release.json"
-        _atomic_json(
-            pointer,
-            {
-                "schema_version": POINTER_SCHEMA_VERSION,
-                "release_id": release_id,
-                "release_root": str(release_root),
-                "python": str(python),
-                "installed_at": installed_at,
-            },
-        )
+        launcher_pointer = bin_dir / LAUNCHER_POINTER_FILENAME
+        pointer_payload = {
+            "schema_version": POINTER_SCHEMA_VERSION,
+            "release_id": release_id,
+            "release_root": str(release_root),
+            "python": str(python),
+            "installed_at": installed_at,
+        }
+        mutation_paths = [launcher, pointer, launcher_pointer]
+        if install_skills:
+            mutation_paths.extend(_skill_mutation_paths(skills_dir))
+        with tempfile.TemporaryDirectory(
+            prefix=".install-rollback.", dir=install_root
+        ) as rollback_dir:
+            snapshots = _snapshot_paths(mutation_paths, Path(rollback_dir))
+            try:
+                installed_skill_ids = (
+                    _install_skills(release_root, skills_dir, installed_at)
+                    if install_skills
+                    else []
+                )
+                _atomic_copy(release_root / "scripts" / "loopx.ps1", launcher)
+                _atomic_json(pointer, pointer_payload)
+                # This sidecar is the launcher-visible promotion point. Keeping
+                # it last prevents a fresh shell from observing a partially
+                # updated launcher, skill set, or release pointer.
+                _atomic_json(launcher_pointer, pointer_payload)
+            except Exception as exc:
+                rollback_error: Exception | None = None
+                try:
+                    _restore_paths(snapshots)
+                except Exception as restore_exc:  # pragma: no cover - filesystem failure
+                    rollback_error = restore_exc
+                finally:
+                    shutil.rmtree(release_root, ignore_errors=True)
+                if rollback_error is not None:
+                    raise RuntimeError(
+                        "Windows installation failed and rollback was incomplete: "
+                        f"{rollback_error}"
+                    ) from exc
+                raise
 
     return {
         "ok": True,
@@ -253,6 +346,7 @@ def install_windows(
         "release_root": str(release_root),
         "launcher": str(launcher),
         "pointer": str(pointer),
+        "launcher_pointer": str(launcher_pointer),
         "skills_dir": str(skills_dir),
         "installed_skill_ids": installed_skill_ids,
     }

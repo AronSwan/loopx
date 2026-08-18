@@ -3,7 +3,12 @@
 $ErrorActionPreference = "Stop"
 $pointerPath = $env:LOOPX_CURRENT_RELEASE_FILE
 if ([string]::IsNullOrWhiteSpace($pointerPath)) {
-    $pointerPath = Join-Path $HOME ".local/share/loopx/current-release.json"
+    $launcherPointer = Join-Path $PSScriptRoot "loopx-current-release.json"
+    $pointerPath = if (Test-Path -LiteralPath $launcherPointer -PathType Leaf) {
+        $launcherPointer
+    } else {
+        Join-Path $HOME ".local/share/loopx/current-release.json"
+    }
 }
 if (-not (Test-Path -LiteralPath $pointerPath -PathType Leaf)) {
     throw "LoopX current release pointer was not found: $pointerPath"
