@@ -189,10 +189,10 @@ More inspectable surfaces:
 
 ## Try LoopX
 
-Requirements: Python 3.11+ and a macOS or Linux shell. Use an active Python
-environment whose console scripts are on `PATH`; Git is only needed for
-contributor clone/canary workflows. The package has no runtime dependencies
-outside the standard library.
+Requirements: Python 3.11+. Use an active Python environment whose console
+scripts are on `PATH`; macOS and Linux use a POSIX shell, while native Windows
+uses PowerShell 7. Git is only needed for contributor clone/canary workflows.
+The package has no runtime dependencies outside the standard library.
 
 Install from PyPI without cloning:
 
@@ -202,9 +202,19 @@ loopx workflow-skills --install
 loopx doctor
 ```
 
+On native Windows PowerShell 7, use the same PyPI release without a POSIX
+compatibility layer:
+
+```powershell
+py -3.11 -m pip install --upgrade loopx
+loopx workflow-skills --install
+loopx doctor
+```
+
 Restart your agent host after first install so it reloads the workflow skills.
 See [Installing LoopX](docs/guides/installing-loopx.md) for `pipx`, host
-command surfaces, upgrade, uninstall, and the archive fallback.
+command surfaces, native Windows checkout installation, upgrade, rollback,
+uninstall, and the archive fallback.
 
 Then connect from your project root:
 

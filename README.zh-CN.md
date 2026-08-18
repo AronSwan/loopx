@@ -169,9 +169,9 @@ creator dogfooding、reproducible demo 和证据强度标签见
 
 ## 试用 LoopX
 
-要求：Python 3.11+，以及 macOS 或 Linux shell。使用 console scripts 已加入
-`PATH` 的 Python 环境；普通用户不需要 Git，package 除标准库外没有 runtime
-依赖。
+要求：Python 3.11+。使用 console scripts 已加入 `PATH` 的 Python 环境；macOS
+和 Linux 使用 POSIX shell，原生 Windows 使用 PowerShell 7。普通用户不需要
+Git，package 除标准库外没有 runtime 依赖。
 
 无需 clone，直接从 PyPI 安装：
 
@@ -181,8 +181,16 @@ loopx workflow-skills --install
 loopx doctor
 ```
 
+原生 Windows PowerShell 7 可直接使用同一 PyPI release，不需要 POSIX 兼容层：
+
+```powershell
+py -3.11 -m pip install --upgrade loopx
+loopx workflow-skills --install
+loopx doctor
+```
+
 首次安装后重启 Agent host，使其重新加载 workflow skills。`pipx`、host command
-surfaces、升级、卸载与 archive fallback 见
+surfaces、原生 Windows checkout 安装、升级、回滚、卸载与 archive fallback 见
 [Installing LoopX](docs/guides/installing-loopx.md)。
 
 然后在项目根目录连接：
