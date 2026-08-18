@@ -25,6 +25,62 @@ loopx workflow-skills --install
 loopx doctor
 ```
 
+## Native Windows PowerShell 7
+
+The PyPI distribution is also the default native Windows path. From PowerShell
+7, use a Python 3.11+ interpreter and validate the installed console script:
+
+```powershell
+py -3.11 -m pip install --upgrade loopx
+loopx workflow-skills --install
+loopx doctor
+```
+
+Contributors and operators who deliberately need an immutable snapshot from a
+trusted checkout can install the native PowerShell launcher without Bash,
+POSIX symlinks, or WSL:
+
+```powershell
+git clone https://github.com/huangruiteng/loopx.git "$HOME/loopx"
+Set-Location "$HOME/loopx"
+pwsh -NoLogo -NoProfile -File .\scripts\install-windows.ps1 `
+  -Python (Get-Command python).Source `
+  -AddToUserPath
+loopx doctor --deep
+```
+
+The snapshot installer validates the candidate before promotion, writes an
+atomic release pointer, and places `loopx.ps1` plus its release-pointer sidecar
+in `$HOME/.local/bin` by default. `-InstallRoot`, `-BinDir`, and `-SkillsDir`
+remain explicit overrides; a fresh shell discovers a custom install through
+the sidecar, without requiring `LOOPX_CURRENT_RELEASE_FILE`. Use `-SkipSkills`
+when another trusted host manager owns the LoopX skill files, and omit
+`-AddToUserPath` when PATH changes are not authorized.
+
+Native snapshot `loopx update` and automatic rollback fail closed. To upgrade
+or roll back, check out the intended trusted revision, rerun
+`scripts/install-windows.ps1`, then verify `loopx doctor --deep`. The previous
+release directories remain under the selected install root until the operator
+removes them; changing a pointer by hand is not the supported rollback path.
+
+Before removing a native snapshot, run the managed host uninstallers while the
+launcher is still available, then remove the launcher files and snapshot root:
+
+```powershell
+loopx slash-commands --uninstall
+loopx workflow-skills --uninstall
+Remove-Item -LiteralPath "$HOME/.local/bin/loopx.ps1" -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$HOME/.local/bin/loopx-current-release.json" -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$HOME/.local/share/loopx" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+If installation used `-AddToUserPath`, remove the chosen `BinDir` from the
+Windows user PATH through Windows Environment Variables after uninstalling.
+Installation and PATH opt-in only expose local command and skill files. They do
+not grant repository, network, credential, external-system, or merge authority,
+and uninstall does not delete project-local `.loopx/`, `.codex/goals/`, or
+evidence state.
+
 ## Host Command Surfaces
 
 The workflow-skill command installs the rich Codex workflows and managed
