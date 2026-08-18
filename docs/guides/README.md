@@ -9,6 +9,8 @@ Guides are task-oriented paths for people starting or operating LoopX.
 - [Minimal custom runtime example (中文)](minimal-custom-runtime-example.zh-CN.md)
 - [Custom Agent runner integration](custom-agent-runner-integration.md)
 - [Custom Agent runner integration (中文)](custom-agent-runner-integration.zh-CN.md)
+- [KunlunCode adapter guide (中文 Markdown)](kunluncode-adapter.zh-CN.md)
+- [KunlunCode adapter guide (中文 HTML)](kunluncode-adapter.zh-CN.html)
 - [Auto-research command path](../../loopx/capabilities/auto_research/README.md)
 - [Multi-agent product recipe](multi-agent-product-recipe.md)
 - [Codex App multi-provider switching](codex-app-provider-switching.md)
