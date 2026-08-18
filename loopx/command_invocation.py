@@ -20,18 +20,27 @@ def resolve_command_path(
         explicit_path = Path(explicit).expanduser()
         if explicit_path.is_file():
             return explicit_path
-    resolved = shutil.which(name, path=source_env.get("PATH"))
-    if resolved:
-        return Path(resolved).expanduser()
     if os.name != "nt":
-        return None
+        resolved = shutil.which(name, path=source_env.get("PATH"))
+        return Path(resolved).expanduser() if resolved else None
 
-    candidates: list[Path] = []
+    # Preserve PATH directory precedence across native executables and .ps1
+    # launchers. A single global ``which`` would find a later loopx.exe before
+    # considering an earlier loopx.ps1, unlike PowerShell command discovery.
     for entry in source_env.get("PATH", "").split(os.pathsep):
-        if entry.strip():
-            candidates.append(Path(entry).expanduser() / f"{name}.ps1")
-    candidates.append((home or Path.home()) / ".local" / "bin" / f"{name}.ps1")
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
+        normalized = entry.strip().strip('"')
+        if not normalized:
+            continue
+        directory = Path(normalized).expanduser()
+        resolved = shutil.which(name, path=str(directory))
+        if resolved:
+            return Path(resolved).expanduser()
+        powershell_script = directory / f"{name}.ps1"
+        if powershell_script.is_file():
+            return powershell_script
+
+    fallback = (home or Path.home()) / ".local" / "bin" / f"{name}.ps1"
+    return fallback if fallback.is_file() else None
 
 
 def command_argv(

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 import time
 import importlib
 from typing import Any, Iterator, TextIO
@@ -120,6 +121,11 @@ def _lock_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.lock")
 
 
+def lock_holder_path(path: Path) -> Path:
+    lock_path = _lock_path(path)
+    return lock_path.with_name(f"{lock_path.name}.holder.json")
+
+
 def lock_incident_path(path: Path) -> Path:
     lock_path = _lock_path(path)
     return lock_path.with_name(f"{lock_path.name}.incidents.jsonl")
@@ -162,19 +168,35 @@ def _holder_record(
     }
 
 
-def _write_holder_record(lock_file, record: dict[str, object]) -> None:
-    lock_file.seek(0)
-    lock_file.truncate()
-    json.dump(record, lock_file, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    lock_file.write("\n")
-    lock_file.flush()
-    os.fsync(lock_file.fileno())
+def _write_holder_record(holder_path: Path, record: dict[str, object]) -> None:
+    holder_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{holder_path.name}.",
+        suffix=".tmp",
+        dir=holder_path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as holder_file:
+            json.dump(
+                record,
+                holder_file,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            holder_file.write("\n")
+            holder_file.flush()
+            os.fsync(holder_file.fileno())
+        os.replace(temporary_path, holder_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
-def _mark_released(lock_file, record: dict[str, object]) -> None:
+def _mark_released(holder_path: Path, record: dict[str, object]) -> None:
     released = {**record, "released_at": _utc_now_iso()}
     try:
-        _write_holder_record(lock_file, released)
+        _write_holder_record(holder_path, released)
     except OSError:
         # Releasing the kernel lock is more important than refreshing advisory
         # metadata; a future holder overwrites the complete record.
@@ -284,7 +306,7 @@ def _timeout_error(
     agent_id: str | None,
     operation: str | None,
 ) -> LockAcquireTimeoutError:
-    holder = _read_holder_record(_lock_path(path))
+    holder = _read_holder_record(lock_holder_path(path))
     waiter = {
         **_identity(agent_id=agent_id, operation=operation, policy=policy),
         "started_at": started_at,
@@ -338,6 +360,7 @@ def exclusive_file_lock(
         else max(0.001, poll_interval_seconds)
     )
     lock_path = _lock_path(path)
+    holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(descriptor, "r+", encoding="utf-8") as lock_file:
@@ -363,11 +386,11 @@ def exclusive_file_lock(
             operation=operation,
             policy=selected_policy,
         )
-        _write_holder_record(lock_file, record)
         try:
+            _write_holder_record(holder_path, record)
             yield lock_path
         finally:
-            _mark_released(lock_file, record)
+            _mark_released(holder_path, record)
             _release_kernel_lock(lock_file)
 
 
@@ -385,6 +408,7 @@ def try_exclusive_file_lock(
     """
 
     lock_path = _lock_path(path)
+    holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(descriptor, "r+", encoding="utf-8") as lock_file:
@@ -397,9 +421,9 @@ def try_exclusive_file_lock(
             operation=operation,
             policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
         )
-        _write_holder_record(lock_file, record)
         try:
+            _write_holder_record(holder_path, record)
             yield lock_path
         finally:
-            _mark_released(lock_file, record)
+            _mark_released(holder_path, record)
             _release_kernel_lock(lock_file)

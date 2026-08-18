@@ -324,7 +324,12 @@ def test_python_distribution_uses_pip_native_upgrade_path(tmp_path: Path) -> Non
     assert freshness["python_distribution_version"] == "0.4.8"
     assert "-m pip install --upgrade loopx" in str(freshness["upgrade_command"])
     assert "loopx workflow-skills --install" in str(freshness["upgrade_command"])
-    assert "huangruiteng.github.io" in str(freshness["no_clone_upgrade_command"])
+    if os.name == "nt":
+        assert "install-windows.ps1" in str(freshness["no_clone_upgrade_command"])
+    else:
+        assert "huangruiteng.github.io" in str(
+            freshness["no_clone_upgrade_command"]
+        )
 
 
 def test_python_distribution_ignores_archive_manifest_version(tmp_path: Path) -> None:
