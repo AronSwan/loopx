@@ -434,14 +434,15 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
         <ul>
           <li>主机上的 <code>kunluncode</code> 已安装并能启动 provider；</li>
           <li><code>uv</code> 与 Git 可用；</li>
-          <li>拥有包含 KunlunCode 适配器的 LoopX 源码或安装包；</li>
+          <li>拥有包含 KunlunCode 适配器的 LoopX 发布包，或用于开发的源码 checkout；</li>
           <li>拥有目标项目目录；若安装 MCP/使用 legacy headless，还需用户 MCP 配置写权限。</li>
         </ul>
-        <div class="code-wrap"><pre><code>kunluncode --version
+        <div class="code-wrap"><pre><code>python3 --version
+kunluncode --version
 uv --version
 git --version
 
-export LOOPX_SOURCE=/path/to/loopx
+export LOOPX_KUNLUN=loopx-kunluncode
 export TARGET_PROJECT=/path/to/your-project
 export LOOPX_GOAL_ID=my-long-running-goal
 export KUNLUN_AGENT_ID=kunlun</code></pre></div>
@@ -450,65 +451,60 @@ export KUNLUN_AGENT_ID=kunlun</code></pre></div>
 
       <section id="environment">
         <span class="section-no">04 / ENVIRONMENT</span>
-        <h2>用 uv 准备适配器环境</h2>
-        <p>LoopX 与固定版本的 MCP SDK 必须位于同一个 uv 环境。适配器不会用 pip 修改系统 Python。</p>
-        <div class="code-wrap"><pre><code>cd "$LOOPX_SOURCE"
+        <h2>安装适配器</h2>
+        <p>普通用户安装发布包；<code>install</code> 会通过 uv 创建 adapter-owned MCP 环境，安装相同版本的 LoopX 与 <code>mcp==1.27.2</code>，不要求源码 checkout。</p>
+        <div class="code-wrap"><pre><code>python3 -m pip install --upgrade loopx
+loopx-kunluncode install
+loopx-kunluncode --help</code></pre></div>
+        <p>贡献者才需要 checkout-local 环境：</p>
+        <div class="code-wrap"><pre><code>export LOOPX_SOURCE=/path/to/loopx
+cd "$LOOPX_SOURCE"
 uv venv .venv
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'</code></pre></div>
-        <p>验证导入与命令入口：</p>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/python" -c \
-  'from importlib.metadata import version; import loopx.kunluncode_goal_mode.server; print(version("mcp"))'
-
-"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" --help</code></pre></div>
-        <p>应输出 MCP <code>1.27.2</code>，并列出 <code>connect / install / uninstall / add / run / status</code>。</p>
+uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+export LOOPX_KUNLUN="$LOOPX_SOURCE/.venv/bin/loopx-kunluncode"
+"$LOOPX_KUNLUN" install --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
+        <p><code>"$LOOPX_KUNLUN" --help</code> 应列出 <code>connect / install / uninstall / add / run / status</code>；内置 provisioner 不修改系统 Python。</p>
       </section>
 
       <section id="connect">
         <span class="section-no">05 / CONNECT</span>
         <h2>连接项目</h2>
         <h3>新项目：创建 goal 并安装 MCP</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" connect \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" connect \
   --project "$TARGET_PROJECT" \
   --goal-id "$LOOPX_GOAL_ID" \
   --agent-id "$KUNLUN_AGENT_ID" \
-  --objective "持续完成该项目中经过验证的实现任务" \
-  --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
+  --objective "持续完成该项目中经过验证的实现任务"</code></pre></div>
         <p>当项目没有 <code>.loopx/registry.json</code> 时，<code>--objective</code> 必填。命令会 bootstrap goal、注册 peer Agent、加入 <code>kunluncode</code> backend、写项目绑定，并安装用户级 <code>loopx-kunluncode</code> MCP entry。</p>
 
         <h3>已有 LoopX goal</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" connect \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" connect \
   --project "$TARGET_PROJECT" \
   --goal-id "$LOOPX_GOAL_ID" \
-  --agent-id "$KUNLUN_AGENT_ID" \
-  --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
+  --agent-id "$KUNLUN_AGENT_ID"</code></pre></div>
         <p>使用 registry 中真实存在的 goal id。适配器会保留已有的 <code>cc</code>、Codex 或其他 Agent，再追加 KunlunCode 身份；不存在的 goal 会失败关闭。</p>
 
         <h3>拆开项目绑定和 MCP 安装</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" connect \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" connect \
   --project "$TARGET_PROJECT" \
   --goal-id "$LOOPX_GOAL_ID" \
   --agent-id "$KUNLUN_AGENT_ID" \
   --skip-mcp
 
-        "$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" install \
-  --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
-        <div class="callout warning"><strong>同名 entry 保护</strong>若 <code>loopx-kunluncode</code> 不是 LoopX 管理的 entry，安装器拒绝覆盖。先 readback，只有确认应接管时才使用 <code>--replace</code>。</div>
+"$LOOPX_KUNLUN" install</code></pre></div>
+        <div class="callout warning"><strong>同名 entry 保护</strong>若 <code>loopx-kunluncode</code> 不是 LoopX 管理的 entry，安装器拒绝覆盖。先 readback，只有确认应接管时才使用 <code>--replace</code>。新 entry 添加失败时会恢复可重建的旧 command entry；无法安全恢复的 entry 会在删除前被拒绝。</div>
         <p>Native <code>goal-pro</code>/<code>goal</code> 由 app-server 外层回写，本身不依赖 MCP；<code>--skip-mcp</code> 后仍可运行。MCP 用于 readback、交互使用和 <code>--mode headless</code>。</p>
       </section>
 
       <section id="verify">
         <span class="section-no">06 / VERIFY</span>
         <h2>验证连接</h2>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/python" \
-  "$LOOPX_SOURCE/examples/kunluncode-app-server-goal-pro-smoke.py" --require
-
-kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode
-
-"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" status \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" status \
   --project "$TARGET_PROJECT"
 
+kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode
 kunluncode config get mcp_servers</code></pre></div>
-        <p>协议 smoke 应证明 <code>2026-07-27</code>、<code>mode=strict</code>、<code>status=complete</code>、<code>verification_passed=true</code> 和跨进程同 thread 恢复。若安装 MCP，MCP test 应列出四个 LoopX 工具。</p>
+        <p>状态应显示正确 goal 与 Agent；若安装 MCP，MCP test 应列出四个 LoopX 工具。源码贡献者还应运行 <code>examples/kunluncode-app-server-goal-pro-smoke.py --require</code>，证明 <code>2026-07-27</code>、<code>mode=strict</code>、<code>status=complete</code>、<code>verification_passed=true</code> 和跨进程同 thread 恢复。</p>
         <div class="table-scroll"><table>
           <thead><tr><th>状态字段</th><th>期望值</th></tr></thead>
           <tbody>
@@ -530,13 +526,13 @@ kunluncode config get mcp_servers</code></pre></div>
         <span class="section-no">07 / RUN</span>
         <h2>添加并运行任务</h2>
         <h3>添加一个有界 todo</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" add \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" add \
   --project "$TARGET_PROJECT" \
   "修复配置解析问题，运行相关测试，并记录通过结果"</code></pre></div>
         <p><code>add</code> 会把 todo 绑定并 claim 给当前 KunlunCode Agent。任务文本应包含清晰完成条件，但不应包含密钥、原始日志或私有材料。</p>
 
         <h3>默认：可恢复的原生 Goal Pro</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" run \
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" run \
   --project "$TARGET_PROJECT" \
   --mode goal-pro \
   --permission-mode auto \
@@ -601,15 +597,14 @@ loopx-kunluncode run --project "$TARGET_PROJECT" \
       <section id="maintenance">
         <span class="section-no">10 / MAINTENANCE</span>
         <h2>常用维护命令</h2>
-        <h3>源码或 uv 环境搬家后刷新 MCP</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" install \
-  --python "$LOOPX_SOURCE/.venv/bin/python"
+        <h3>升级发布包或源码环境搬家后刷新 MCP</h3>
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" install
 
-        kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode</code></pre></div>
+kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode</code></pre></div>
         <h3>停止执行但保留状态</h3>
         <p>停止调用 <code>run</code> 即可。适配器没有常驻 scheduler；active native Goal 的 opaque identity 留在本地 journal，之后同一命令会恢复。</p>
         <h3>卸载 LoopX 管理的 MCP entry</h3>
-        <div class="code-wrap"><pre><code>"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" uninstall</code></pre></div>
+        <div class="code-wrap"><pre><code>"$LOOPX_KUNLUN" uninstall</code></pre></div>
         <p>卸载器只删除能确认由 LoopX 管理的 entry；native app-server mode 仍可运行。解除项目绑定时删除 <code>kunluncode.json</code>。仅在 journal <code>phase=committed</code> 后删除 <code>kunluncode-runtime.json</code>；active 阶段删除代表明确放弃恢复。以上操作都不会删除 goal、todo、历史、KunlunCode thread 或其他 Agent。</p>
       </section>
 
@@ -630,8 +625,7 @@ loopx-kunluncode run --project "$TARGET_PROJECT" \
         <div class="code-wrap"><pre><code>cd "$LOOPX_SOURCE"
 uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
 
-"$LOOPX_SOURCE/.venv/bin/loopx-kunluncode" install \
-  --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
+"$LOOPX_KUNLUN" install --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
         <h3><code>should_run=false</code></h3>
         <p>读取 <code>effective_action</code>、<code>reason</code>、<code>interaction_contract</code> 与 <code>scheduler_hint</code>。没有 todo、终态、quota、user gate 或 monitor cadence 都可能正确阻止执行。</p>
         <div class="callout"><strong>实现已规避关键宿主陷阱</strong>MCP 脚本避免遮蔽 Python 包；registration 使用绝对路径；native controller 不伪造 slash prompt，直接使用协议版本 <code>2026-07-27</code>；写回阶段有本地 journal 与 agent-scoped evidence 对账。</div>

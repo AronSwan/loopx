@@ -39,8 +39,21 @@ an explicit compatibility mode.
 
 ## Install and connect
 
-Run the command from one uv-managed environment containing LoopX and
-`mcp==1.27.2`:
+For a packaged install, install LoopX normally and let the adapter provision its
+owned MCP environment through `uv`:
+
+```bash
+python3 -m pip install --upgrade loopx
+loopx-kunluncode install
+loopx-kunluncode connect \
+  --project . \
+  --goal-id my-goal \
+  --agent-id kunlun
+```
+
+The provisioner installs the same LoopX distribution version and `mcp==1.27.2`
+outside a source checkout. Contributors can instead use one checkout-local
+uv-managed environment:
 
 ```bash
 uv venv .venv
@@ -52,17 +65,25 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
   --python .venv/bin/python
 ```
 
+The commands below use the packaged `loopx-kunluncode` entry on `PATH`;
+checkout users can substitute `.venv/bin/loopx-kunluncode`.
+
 KunlunCode currently stores MCP registrations in its user configuration even
 when project or overlay settings contain `mcp_servers`. The installer therefore
 creates one explicitly named global entry, `loopx-kunluncode`; project and
 identity selection still come from the current working directory and the
 ignored `.loopx/kunluncode.json` binding.
 
+The installer never overwrites a foreign same-name entry unless `--replace` is
+explicit. If adding the replacement fails, it restores a command-based previous
+entry; registrations that cannot be safely reconstructed are rejected before
+removal.
+
 Read the connection back:
 
 ```bash
 kunluncode --cwd "$PWD" mcp test loopx-kunluncode
-.venv/bin/loopx-kunluncode status --project .
+loopx-kunluncode status --project .
 ```
 
 ## Run a native Goal
@@ -70,8 +91,8 @@ kunluncode --cwd "$PWD" mcp test loopx-kunluncode
 Add one bounded task and run the default native Goal Pro controller:
 
 ```bash
-.venv/bin/loopx-kunluncode add --project . "Run the focused check and record the result"
-.venv/bin/loopx-kunluncode run --project . --permission-mode auto
+loopx-kunluncode add --project . "Run the focused check and record the result"
+loopx-kunluncode run --project . --permission-mode auto
 ```
 
 The native transaction is:
@@ -96,7 +117,7 @@ window, `--max-duration-secs` for KunlunCode's per-turn soft budget, and
 Inspect the native and LoopX state together:
 
 ```bash
-.venv/bin/loopx-kunluncode status --project .
+loopx-kunluncode status --project .
 .venv/bin/python examples/kunluncode-app-server-goal-pro-smoke.py --require
 ```
 
@@ -111,8 +132,8 @@ Use native `/goal` semantics without the strict verifier with
 required:
 
 ```bash
-.venv/bin/loopx-kunluncode run --project . --mode goal
-.venv/bin/loopx-kunluncode run --project . --mode headless --permission-mode auto
+loopx-kunluncode run --project . --mode goal
+loopx-kunluncode run --project . --mode headless --permission-mode auto
 ```
 
 ## Disable and remove
@@ -121,7 +142,7 @@ Stop invoking `run` to disable execution without changing state. A later native
 run resumes the same active journal. Remove the host-wide MCP entry with:
 
 ```bash
-.venv/bin/loopx-kunluncode uninstall
+loopx-kunluncode uninstall
 ```
 
 Native app-server mode does not require MCP writeback, so uninstalling the MCP
