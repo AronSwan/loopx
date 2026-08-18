@@ -825,6 +825,7 @@ def build_quota_slot_preview(
     available_capabilities: Any = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     todo_id: str | None = None,
+    replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
 ) -> dict[str, Any]:
@@ -851,6 +852,7 @@ def build_quota_slot_preview(
         quota_status_builder=quota_status,
         self_repair_spend_actions=SELF_REPAIR_SPEND_ACTIONS,
         todo_id=todo_id,
+        replan_obligation_id=replan_obligation_id,
         turn_instance_id=turn_instance_id,
         source=source,
     )
@@ -1067,6 +1069,7 @@ def spend_quota_slot(
     available_capabilities: Any = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     todo_id: str | None = None,
+    replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
@@ -1115,6 +1118,7 @@ def spend_quota_slot(
             agent_id=agent_id,
             todo_id=todo_id,
             turn_instance_id=turn_instance_id,
+            replan_obligation_id=replan_obligation_id,
         )
         if guard_result.failure is not None or guard_result.value is None:
             return {
@@ -1152,6 +1156,7 @@ def spend_quota_slot(
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,
+                "replan_obligation_id": identity.replan_obligation_id,
                 "turn_instance_id": identity.turn_instance_id,
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
@@ -1168,6 +1173,7 @@ def spend_quota_slot(
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,
+                "replan_obligation_id": identity.replan_obligation_id,
                 "turn_instance_id": identity.turn_instance_id,
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
@@ -1182,6 +1188,7 @@ def spend_quota_slot(
         available_capabilities=available_capabilities,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         todo_id=todo_id,
+        replan_obligation_id=replan_obligation_id,
         turn_instance_id=turn_instance_id,
         source=source,
     )
