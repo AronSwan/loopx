@@ -26,6 +26,7 @@ deepseek-harness = [
 ]
 test = [
   "jsonschema>=4.23,<5",
+  "mcp==1.27.2",
   "types-jsonschema>=4.23,<5",
   "pytest>=8,<9",
   "pytest-cov>=5,<7",
@@ -36,6 +37,7 @@ test = [
 
 [project.scripts]
 loopx = "loopx.entrypoint:main"
+loopx-kunluncode = "loopx.kunluncode_goal_mode.cli:main"
 loopx-lark-provider = "loopx.extensions.lark.provider:main"
 loopx-openviking-history-export = "loopx.extensions.openviking_semantic_preference.history_export:main"
 loopx-openviking-semantic-preference = "loopx.extensions.openviking_semantic_preference.provider:main"
@@ -53,6 +55,7 @@ include = ["loopx*"]
 "loopx.opencode_goal_mode" = ["*.js", "*.mjs", "README.md"]
 "loopx.opencode2_goal_mode" = ["*.mjs", "README.md"]
 "loopx.pi_goal_mode" = ["*.ts", "*.mjs", "README.md"]
+"loopx.kunluncode_goal_mode" = ["README.md"]
 
 [tool.setuptools.data-files]
 "share/loopx/skills/loopx-project" = [
