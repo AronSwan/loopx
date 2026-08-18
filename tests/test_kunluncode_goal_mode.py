@@ -268,6 +268,80 @@ def test_installer_refuses_to_replace_a_foreign_named_entry(
         )
 
 
+def test_installer_restores_previous_entry_when_replacement_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    previous = {
+        "name": "loopx-kunluncode",
+        "command": "/user/custom-server",
+        "args": ["--serve"],
+    }
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
+    monkeypatch.setattr(
+        cli, "_configured_mcp_servers", lambda _binary: [previous]
+    )
+
+    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[1:3] == ["mcp", "add"] and "/managed/.venv/bin/python" in command:
+            return subprocess.CompletedProcess(command, 1, "", "new entry rejected")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli, "_run", capture)
+
+    with pytest.raises(RuntimeError, match="previous entry was restored"):
+        cli.install_mcp(
+            python="/managed/.venv/bin/python",
+            dry_run=False,
+            replace=True,
+        )
+
+    assert calls == [
+        ["/usr/bin/kunluncode", "mcp", "remove", "loopx-kunluncode"],
+        [
+            "/usr/bin/kunluncode",
+            "mcp",
+            "add",
+            "loopx-kunluncode",
+            "--command",
+            "/managed/.venv/bin/python",
+            "--args",
+            str(cli.MCP_SCRIPT),
+        ],
+        [
+            "/usr/bin/kunluncode",
+            "mcp",
+            "add",
+            "loopx-kunluncode",
+            "--command",
+            "/user/custom-server",
+            "--args",
+            "--serve",
+        ],
+    ]
+
+
+def test_installer_refuses_unrestorable_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
+    monkeypatch.setattr(
+        cli,
+        "_configured_mcp_servers",
+        lambda _binary: [{"name": "loopx-kunluncode", "url": "https://example.test"}],
+    )
+
+    with pytest.raises(RuntimeError, match="cannot be safely replaced"):
+        cli.install_mcp(
+            python="/managed/.venv/bin/python",
+            dry_run=False,
+            replace=True,
+        )
+
+
 def test_installer_normalizes_relative_python_to_an_absolute_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -452,6 +526,7 @@ class _FakeControlPlane:
         self.todo = todo
         self.calls: list[str] = []
         self.ledger: list[dict[str, object]] = []
+        self.evidence_error = False
 
     def should_run(self) -> dict[str, object]:
         self.calls.append("should_run")
@@ -463,6 +538,8 @@ class _FakeControlPlane:
 
     def evidence_since(self, _since: str) -> dict[str, object]:
         self.calls.append("evidence_since")
+        if self.evidence_error:
+            raise KunlunNativeGoalRuntimeError("evidence ledger unavailable")
         return {"ok": True, "ledger": list(self.ledger)}
 
     def record_verified_delivery(self, *, mode: str) -> dict[str, object]:
@@ -645,6 +722,48 @@ def _native_state(
             "quota_spent": False,
         },
     }
+
+
+def test_runtime_journal_rejects_illegal_writeback_order(tmp_path: Path) -> None:
+    state = _native_state(_native_todo(), verified=True)
+    state["writeback"]["quota_spent"] = True
+
+    with pytest.raises(KunlunNativeGoalRuntimeError, match="before todo completion"):
+        write_runtime_state(tmp_path, state)
+
+
+def test_runtime_journal_rejects_unsupported_schema_before_write(
+    tmp_path: Path,
+) -> None:
+    state = _native_state(_native_todo())
+    state["schema_version"] = "future-schema"
+
+    with pytest.raises(KunlunNativeGoalRuntimeError, match="unsupported schema"):
+        write_runtime_state(tmp_path, state)
+
+    assert not (tmp_path / ".loopx" / "kunluncode-runtime.json").exists()
+
+
+def test_runtime_journal_rejects_goal_pro_without_verifier_proof(
+    tmp_path: Path,
+) -> None:
+    state = _native_state(_native_todo(), verified=True)
+    state["native"]["verification_passed"] = False
+
+    with pytest.raises(KunlunNativeGoalRuntimeError, match="without verifier proof"):
+        write_runtime_state(tmp_path, state)
+
+
+def test_runtime_journal_rejects_incomplete_typed_state(tmp_path: Path) -> None:
+    journal = tmp_path / ".loopx" / "kunluncode-runtime.json"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        json.dumps({"schema_version": RUNTIME_STATE_SCHEMA_VERSION}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KunlunNativeGoalRuntimeError, match="binding object"):
+        read_runtime_state(tmp_path)
 
 
 def test_strict_native_goal_requires_verification_passed_event() -> None:
@@ -870,6 +989,32 @@ def test_native_goal_reconciles_crash_after_writeback_without_repeating_it(
     assert recovered["writeback"]["delivery_recorded"] is True
     assert recovered["writeback"]["todo_completed"] is True
     assert recovered["writeback"]["quota_spent"] is True
+
+
+def test_verified_recovery_does_not_repeat_writeback_without_ledger_evidence(
+    tmp_path: Path,
+) -> None:
+    todo = _native_todo(claimed=True)
+    control = _FakeControlPlane(todo)
+    control.evidence_error = True
+    write_runtime_state(tmp_path, _native_state(todo, verified=True))
+
+    with pytest.raises(KunlunNativeGoalRuntimeError, match="ledger unavailable"):
+        run_native_goal(
+            tmp_path,
+            _native_context(tmp_path),
+            mode="goal-pro",
+            permission_mode="auto",
+            max_duration_secs=60,
+            controller_timeout_secs=120,
+            kunluncode_bin="/usr/bin/kunluncode",
+            control_plane=control,
+            client_factory=lambda *_args, **_kwargs: pytest.fail(
+                "verified recovery must not relaunch KunlunCode"
+            ),
+        )
+
+    assert control.calls == ["evidence_since"]
 
 
 def test_native_goal_resumes_the_same_thread_and_goal_after_interruption(

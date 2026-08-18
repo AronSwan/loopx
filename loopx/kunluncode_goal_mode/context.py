@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from loopx.file_lock import exclusive_file_lock
 from loopx.goal_mode_context import find_registry, resolve_goal_context
+from loopx.registry import atomic_write_json
 
 
 BINDING_SCHEMA_VERSION = "loopx_kunluncode_binding_v0"
@@ -47,7 +49,8 @@ def write_binding(
         "goal_id": goal_id,
         "agent_id": agent_id,
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    with exclusive_file_lock(path, operation="kunluncode_binding_write"):
+        atomic_write_json(path, payload)
     return path
 
 

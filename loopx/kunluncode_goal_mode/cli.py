@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from loopx.file_lock import exclusive_file_lock
 from loopx.goal_mode_context import registered_agent_ids
 from loopx.kunluncode_goal_mode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
 from loopx.kunluncode_goal_mode.app_server import build_app_server_command
@@ -21,6 +22,7 @@ from loopx.kunluncode_goal_mode.runtime import (
     read_runtime_state,
     run_native_goal,
 )
+from loopx.registry import atomic_write_json
 
 
 MCP_REQUIREMENT = "mcp==1.27.2"
@@ -140,6 +142,43 @@ def _is_managed_server(entry: dict[str, Any]) -> bool:
     )
 
 
+def _mcp_add_command(
+    kunluncode: str,
+    *,
+    name: str,
+    command: str,
+    args: list[str],
+) -> list[str]:
+    result = [
+        kunluncode,
+        "mcp",
+        "add",
+        name,
+        "--command",
+        command,
+    ]
+    if args:
+        result.extend(["--args", *args])
+    return result
+
+
+def _restorable_mcp_command(
+    kunluncode: str, entry: dict[str, Any]
+) -> list[str] | None:
+    command = entry.get("command")
+    args = entry.get("args", [])
+    if not isinstance(command, str) or not command.strip() or not isinstance(args, list):
+        return None
+    if not all(isinstance(argument, str) for argument in args):
+        return None
+    return _mcp_add_command(
+        kunluncode,
+        name=str(entry.get("name") or MCP_SERVER_NAME),
+        command=command,
+        args=args,
+    )
+
+
 def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
     kunluncode = shutil.which("kunluncode")
     if not kunluncode:
@@ -167,6 +206,14 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
         raise RuntimeError(
             f"KunlunCode MCP server {MCP_SERVER_NAME!r} is user-owned; pass --replace to replace it"
         )
+    restore_command = (
+        _restorable_mcp_command(kunluncode, existing) if existing else None
+    )
+    if existing and restore_command is None:
+        raise RuntimeError(
+            f"KunlunCode MCP server {MCP_SERVER_NAME!r} cannot be safely replaced because its "
+            "registration cannot be restored with `mcp add`; back it up and remove it manually"
+        )
     if dry_run:
         return selected_python
     if existing:
@@ -174,18 +221,25 @@ def install_mcp(*, python: str | None, dry_run: bool, replace: bool) -> str:
         if removed.returncode != 0:
             raise RuntimeError("failed to remove prior managed KunlunCode MCP entry")
     added = _run(
-        [
+        _mcp_add_command(
             kunluncode,
-            "mcp",
-            "add",
-            MCP_SERVER_NAME,
-            "--command",
-            selected_python,
-            "--args",
-            str(MCP_SCRIPT),
-        ]
+            name=MCP_SERVER_NAME,
+            command=selected_python,
+            args=[str(MCP_SCRIPT)],
+        )
     )
     if added.returncode != 0:
+        if restore_command is not None:
+            restored = _run(restore_command)
+            if restored.returncode == 0:
+                raise RuntimeError(
+                    "KunlunCode MCP registration failed; the previous entry was restored: "
+                    + (added.stdout + added.stderr)[-800:]
+                )
+            raise RuntimeError(
+                "KunlunCode MCP registration failed and automatic restoration of the previous "
+                "entry also failed; inspect `kunluncode config get mcp_servers` before retrying"
+            )
         raise RuntimeError(
             "KunlunCode MCP registration failed: "
             + (added.stdout + added.stderr)[-800:]
@@ -225,16 +279,19 @@ def _registry_path(project: Path) -> Path:
 
 
 def _annotate_registry(registry: Path, *, goal_id: str, agent_id: str) -> None:
-    payload = json.loads(registry.read_text(encoding="utf-8"))
-    goals = payload.get("goals") or []
-    if not any(
-        str(goal.get("id") or "") == goal_id for goal in goals if isinstance(goal, dict)
-    ):
-        raise RuntimeError(f"goal {goal_id!r} is not registered in {registry}")
-    backends = payload.setdefault("agent_backends", [])
-    if "kunluncode" not in backends:
-        backends.append("kunluncode")
-    registry.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    with exclusive_file_lock(registry, operation="kunluncode_registry_annotate"):
+        payload = json.loads(registry.read_text(encoding="utf-8"))
+        goals = payload.get("goals") or []
+        if not any(
+            str(goal.get("id") or "") == goal_id
+            for goal in goals
+            if isinstance(goal, dict)
+        ):
+            raise RuntimeError(f"goal {goal_id!r} is not registered in {registry}")
+        backends = payload.setdefault("agent_backends", [])
+        if "kunluncode" not in backends:
+            backends.append("kunluncode")
+        atomic_write_json(registry, payload, preserve_mode=True)
     write_binding(registry.parent.parent, goal_id=goal_id, agent_id=agent_id)
 
 

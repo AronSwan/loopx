@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +31,7 @@ from loopx.kunluncode_goal_mode.guards import (
     NATIVE_CONTROLLER_ENV,
     NATIVE_CONTROLLER_GOAL_ENV,
 )
+from loopx.registry import atomic_write_json
 
 
 RUNTIME_STATE_SCHEMA_VERSION = "loopx_kunluncode_runtime_v0"
@@ -46,30 +46,79 @@ def runtime_state_path(project: str | Path) -> Path:
     return Path(project) / ".loopx" / RUNTIME_STATE_FILENAME
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        text=True,
-    )
-    temporary_path = Path(temporary)
-    try:
-        os.chmod(temporary_path, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(
-                dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True
+def _validate_runtime_state_payload(payload: dict[str, Any]) -> None:
+    if payload.get("schema_version") != RUNTIME_STATE_SCHEMA_VERSION:
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal has an unsupported schema"
+        )
+    binding = payload.get("binding")
+    native = payload.get("native")
+    writeback = payload.get("writeback")
+    if not isinstance(binding, dict):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal is missing a binding object"
+        )
+    if not isinstance(native, dict):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal is missing a native state object"
+        )
+    if not isinstance(writeback, dict):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal is missing a writeback state object"
+        )
+    if not all(str(binding.get(key) or "").strip() for key in ("goal_id", "agent_id")):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal has an incomplete goal or agent binding"
+        )
+    if not str(payload.get("todo_id") or "").strip():
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal is missing its todo identity"
+        )
+    if native.get("mode") not in NATIVE_GOAL_MODES:
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal has an unsupported native goal mode"
+        )
+    objective_digest = str(native.get("objective_sha256") or "")
+    if len(objective_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in objective_digest
+    ):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal has an invalid objective digest"
+        )
+    for key in ("verification_passed", "verified", "resumed"):
+        if not isinstance(native.get(key), bool):
+            raise KunlunNativeGoalRuntimeError(
+                f"KunlunCode runtime journal native field {key!r} must be boolean"
             )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass
+    for key in ("delivery_recorded", "todo_completed", "quota_spent"):
+        if not isinstance(writeback.get(key), bool):
+            raise KunlunNativeGoalRuntimeError(
+                f"KunlunCode runtime journal writeback field {key!r} must be boolean"
+            )
+    if writeback["todo_completed"] and not writeback["delivery_recorded"]:
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal records todo completion before delivery"
+        )
+    if writeback["quota_spent"] and not writeback["todo_completed"]:
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal records quota spend before todo completion"
+        )
+    if any(writeback.values()) and native["verified"] is not True:
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal records writeback before native verification"
+        )
+    if native["verified"] and native.get("status") != "complete":
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode runtime journal marks a non-complete native goal verified"
+        )
+    if (
+        native["verified"]
+        and native.get("mode") == "goal-pro"
+        and native["verification_passed"] is not True
+    ):
+        raise KunlunNativeGoalRuntimeError(
+            "KunlunCode Goal Pro runtime journal is verified without verifier proof"
+        )
 
 
 def read_runtime_state(project: str | Path) -> dict[str, Any] | None:
@@ -86,17 +135,15 @@ def read_runtime_state(project: str | Path) -> dict[str, Any] | None:
         raise KunlunNativeGoalRuntimeError(
             "KunlunCode runtime journal is not an object"
         )
-    if payload.get("schema_version") != RUNTIME_STATE_SCHEMA_VERSION:
-        raise KunlunNativeGoalRuntimeError(
-            "KunlunCode runtime journal has an unsupported schema"
-        )
+    _validate_runtime_state_payload(payload)
     return payload
 
 
 def write_runtime_state(project: str | Path, state: dict[str, Any]) -> Path:
     state["updated_at"] = _now()
+    _validate_runtime_state_payload(state)
     path = runtime_state_path(project)
-    _atomic_write_json(path, state)
+    atomic_write_json(path, state)
     return path
 
 
@@ -248,10 +295,7 @@ def _reconcile_writeback_evidence(
     since = str(native.get("verified_at") or "")
     if not since:
         return
-    try:
-        payload = control.evidence_since(since)
-    except KunlunNativeGoalRuntimeError:
-        return
+    payload = control.evidence_since(since)
     ledger = payload.get("ledger") if isinstance(payload.get("ledger"), list) else []
     writeback = state["writeback"]
     todo_id = str(state.get("todo_id") or "")
