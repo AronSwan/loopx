@@ -123,7 +123,9 @@ def _lock_path(path: Path) -> Path:
 
 def lock_holder_path(path: Path) -> Path:
     lock_path = _lock_path(path)
-    return lock_path.with_name(f"{lock_path.name}.holder.json")
+    if os.name == "nt":
+        return lock_path.with_name(f"{lock_path.name}.holder.json")
+    return lock_path
 
 
 def lock_incident_path(path: Path) -> Path:
@@ -168,7 +170,16 @@ def _holder_record(
     }
 
 
-def _write_holder_record(holder_path: Path, record: dict[str, object]) -> None:
+def _write_holder_record(lock_file: TextIO, record: dict[str, object]) -> None:
+    lock_file.seek(0)
+    lock_file.truncate()
+    json.dump(record, lock_file, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    lock_file.write("\n")
+    lock_file.flush()
+    os.fsync(lock_file.fileno())
+
+
+def _write_holder_sidecar(holder_path: Path, record: dict[str, object]) -> None:
     holder_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{holder_path.name}.",
@@ -193,10 +204,34 @@ def _write_holder_record(holder_path: Path, record: dict[str, object]) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def _mark_released(holder_path: Path, record: dict[str, object]) -> None:
+def _persist_holder_record(
+    lock_file: TextIO,
+    *,
+    lock_path: Path,
+    holder_path: Path,
+    record: dict[str, object],
+) -> None:
+    if holder_path == lock_path:
+        _write_holder_record(lock_file, record)
+        return
+    _write_holder_sidecar(holder_path, record)
+
+
+def _mark_released(
+    lock_file: TextIO,
+    *,
+    lock_path: Path,
+    holder_path: Path,
+    record: dict[str, object],
+) -> None:
     released = {**record, "released_at": _utc_now_iso()}
     try:
-        _write_holder_record(holder_path, released)
+        _persist_holder_record(
+            lock_file,
+            lock_path=lock_path,
+            holder_path=holder_path,
+            record=released,
+        )
     except OSError:
         # Releasing the kernel lock is more important than refreshing advisory
         # metadata; a future holder overwrites the complete record.
@@ -387,10 +422,20 @@ def exclusive_file_lock(
             policy=selected_policy,
         )
         try:
-            _write_holder_record(holder_path, record)
+            _persist_holder_record(
+                lock_file,
+                lock_path=lock_path,
+                holder_path=holder_path,
+                record=record,
+            )
             yield lock_path
         finally:
-            _mark_released(holder_path, record)
+            _mark_released(
+                lock_file,
+                lock_path=lock_path,
+                holder_path=holder_path,
+                record=record,
+            )
             _release_kernel_lock(lock_file)
 
 
@@ -422,8 +467,18 @@ def try_exclusive_file_lock(
             policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
         )
         try:
-            _write_holder_record(holder_path, record)
+            _persist_holder_record(
+                lock_file,
+                lock_path=lock_path,
+                holder_path=holder_path,
+                record=record,
+            )
             yield lock_path
         finally:
-            _mark_released(holder_path, record)
+            _mark_released(
+                lock_file,
+                lock_path=lock_path,
+                holder_path=holder_path,
+                record=record,
+            )
             _release_kernel_lock(lock_file)

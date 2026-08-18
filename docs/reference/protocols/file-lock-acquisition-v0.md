@@ -20,16 +20,17 @@ unbounded `LOCK_EX` wait is not part of this contract.
 
 ## Holder And Incident Records
 
-After acquisition, the holder atomically overwrites the sibling
-`*.lock.holder.json` sidecar with public-safe JSON:
+After acquisition, the holder writes public-safe JSON to the POSIX `*.lock`
+file or atomically overwrites the Windows `*.lock.holder.json` sidecar:
 
 - stable hashed `lock_id` (never an absolute target path);
 - PID, agent id, operation, policy, and acquisition time;
 - release time after a normal exit.
 
-Holder metadata is separate because a Windows byte-range lock prevents another
-file handle from reading the locked byte. The sidecar remains advisory; the
-`*.lock` kernel lock is authoritative on every platform.
+Windows metadata is separate because a byte-range lock prevents another file
+handle from reading the locked byte. POSIX retains the existing single-file
+contract, where advisory metadata and `flock` share `*.lock`. In both cases the
+kernel lock, not the metadata file's existence, is authoritative.
 
 A timeout appends one `file_lock_incident_v0` row to the sibling
 `*.lock.incidents.jsonl` channel. That append uses `O_APPEND` directly and does
