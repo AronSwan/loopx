@@ -7,13 +7,13 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .command_invocation import resolve_command_path
 from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
     PROMOTION_READINESS_RUNTIME_INDEX,
@@ -81,11 +81,39 @@ class GitRevisionRelation(str, Enum):
     UNKNOWN = "unknown"
 
 
+def _powershell_literal(value: str | Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
+    if os.name == "nt":
+        return (
+            "pwsh -NoLogo -NoProfile -File "
+            f"{_powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
+            f"-Python {_powershell_literal(sys.executable)}"
+            + (" -SkipSkills" if skip_skills else "")
+        )
+    command = str(repo_root / "scripts" / "install-local.sh")
+    return f"LOOPX_INSTALL_SKILL=0 {command}" if skip_skills else command
+
+
 def no_clone_upgrade_command(
     source_ref: Any = None,
     *,
     doctor_agent_type: str | None = None,
+    skip_skills: bool = False,
 ) -> str:
+    if os.name == "nt":
+        repo_root = Path(__file__).resolve().parents[1]
+        doctor_agent_arg = (
+            f" --agent-type {_powershell_literal(doctor_agent_type)}"
+            if doctor_agent_type
+            else ""
+        )
+        return (
+            f"{local_install_command(repo_root, skip_skills=skip_skills)}\n"
+            f"loopx doctor{doctor_agent_arg}"
+        )
     ref = str(source_ref or "").strip()
     installer = f"curl -fsSL {NO_CLONE_INSTALL_URL}"
     doctor_agent_arg = (
@@ -93,8 +121,13 @@ def no_clone_upgrade_command(
         if doctor_agent_type
         else ""
     )
+    install_env: list[str] = []
     if ref and ref != "stable":
-        installer = f"{installer} | env LOOPX_REF={shlex.quote(ref)} bash"
+        install_env.append(f"LOOPX_REF={shlex.quote(ref)}")
+    if skip_skills:
+        install_env.append("LOOPX_INSTALL_SKILL=0")
+    if install_env:
+        installer = f"{installer} | env {' '.join(install_env)} bash"
     else:
         installer = f"{installer} | bash"
     return (
@@ -112,6 +145,18 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
 
 
+def codex_skill_roots() -> tuple[Path, ...]:
+    roots = (codex_home() / "skills", Path.home() / ".agents" / "skills")
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = os.path.normcase(os.path.abspath(root))
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return tuple(unique)
+
+
 def command_release_root(command_realpath: Path | None) -> Path | None:
     if (
         command_realpath
@@ -120,11 +165,6 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
     ):
         return command_realpath.parent.parent
     return None
-
-
-def resolve_command_path(name: str) -> Path | None:
-    path_text = shutil.which(name)
-    return Path(path_text).expanduser() if path_text else None
 
 
 def current_script_invocation_path() -> Path | None:
@@ -172,8 +212,13 @@ def is_release_snapshot(root: Path | None) -> bool:
     return bool(root and "releases" in root.parts)
 
 
-def command_root_summary(command_path: Path | None, command_realpath: Path | None) -> dict[str, Any]:
-    root = command_release_root(command_realpath)
+def command_root_summary(
+    command_path: Path | None,
+    command_realpath: Path | None,
+    *,
+    release_root: Path | None = None,
+) -> dict[str, Any]:
+    root = release_root or command_release_root(command_realpath)
     return {
         "command": str(command_path) if command_path else None,
         "realpath": str(command_realpath) if command_realpath else None,
@@ -403,14 +448,21 @@ def build_install_freshness(
     if release_time:
         age_hours = round(max(0, (reference - release_time.astimezone(timezone.utc)).total_seconds()) / 3600, 2)
 
-    skill_problem = require_installed_skills and any(
-        not skill.get("exists") or not skill.get("required_phrases") for skill in skills.values()
+    skills_ready = bool(skills) and all(
+        skill.get("exists")
+        and skill.get("required_phrases")
+        and not skill.get("route_conflict")
+        for skill in skills.values()
     )
     distribution_install = (
         python_distribution
         if isinstance(python_distribution, dict) and python_distribution.get("available")
         else None
     )
+    externally_managed_skills = skills_ready and any(
+        skill.get("managed_externally") for skill in skills.values()
+    )
+    skill_problem = require_installed_skills and not skills_ready
     if command_path is None:
         status = "missing"
         reason = "loopx is not on PATH"
@@ -463,6 +515,7 @@ def build_install_freshness(
     no_clone_command = no_clone_upgrade_command(
         manifest_source.get("ref"),
         doctor_agent_type=doctor_agent_type,
+        skip_skills=externally_managed_skills,
     )
     doctor_agent_arg = (
         f" --agent-type {shlex.quote(doctor_agent_type)}"
@@ -470,7 +523,7 @@ def build_install_freshness(
         else ""
     )
     contributor_upgrade_command = (
-        f"{repo_root / 'scripts' / 'install-local.sh'}\n"
+        f"{local_install_command(repo_root, skip_skills=externally_managed_skills)}\n"
         f"loopx doctor{doctor_agent_arg}"
     )
     upgrade_command = (
@@ -558,6 +611,7 @@ def build_install_freshness(
         "python_distribution_installer": (
             distribution_install.get("installer") if distribution_install else None
         ),
+        "externally_managed_skills": externally_managed_skills,
         "release_manifest_available": manifest.get("available"),
         "release_manifest_path": manifest.get("path"),
         "release_manifest_reason": manifest.get("reason"),
@@ -667,13 +721,6 @@ def add_promotion_readiness_freshness(
     return result
 
 
-def skill_has_delivery_hints(skill_path: Path) -> bool:
-    if not skill_path.exists():
-        return False
-    text = " ".join(skill_path.read_text(encoding="utf-8").split())
-    return all(phrase in text for phrase in REQUIRED_INSTALLED_SKILL_PHRASES["loopx-project"])
-
-
 def skill_has_required_phrases(skill_path: Path, phrases: tuple[str, ...]) -> bool:
     if not skill_path.exists():
         return False
@@ -681,14 +728,32 @@ def skill_has_required_phrases(skill_path: Path, phrases: tuple[str, ...]) -> bo
     return all(phrase in text for phrase in phrases)
 
 
-def installed_skill_summary(skills_root: Path) -> dict[str, dict[str, Any]]:
+def installed_skill_summary(skills_roots: tuple[Path, ...]) -> dict[str, dict[str, Any]]:
+    if not skills_roots:
+        raise ValueError("at least one Codex skill root is required")
+    primary_root = skills_roots[0]
     summaries: dict[str, dict[str, Any]] = {}
     for skill_name, phrases in REQUIRED_INSTALLED_SKILL_PHRASES.items():
-        skill_path = skills_root / skill_name / "SKILL.md"
+        candidates = [
+            (root, root / skill_name / "SKILL.md")
+            for root in skills_roots
+            if (root / skill_name / "SKILL.md").exists()
+        ]
+        selected = candidates[0] if len(candidates) == 1 else None
+        selected_root = selected[0] if selected else None
+        skill_path = selected[1] if selected else primary_root / skill_name / "SKILL.md"
+        route_conflict = len(candidates) > 1
         summaries[skill_name] = {
             "path": str(skill_path),
-            "exists": skill_path.exists(),
-            "required_phrases": skill_has_required_phrases(skill_path, phrases),
+            "candidate_paths": [str(path) for _, path in candidates],
+            "route_count": len(candidates),
+            "route_conflict": route_conflict,
+            "source_root": str(selected_root) if selected_root else None,
+            "managed_externally": bool(selected_root and selected_root != primary_root),
+            "exists": bool(candidates),
+            "required_phrases": bool(
+                selected and skill_has_required_phrases(skill_path, phrases)
+            ),
         }
     return summaries
 
@@ -835,9 +900,18 @@ def collect_doctor(
     python_distribution = python_distribution_install(module_path)
     package_dir = module_path.parent
     repo_root = package_dir.parent
-    install_script = repo_root / "scripts" / "install-local.sh"
-    wrapper_script = repo_root / "scripts" / "loopx"
-    release_root = command_release_root(command_realpath)
+    install_script = repo_root / "scripts" / (
+        "install-windows.ps1" if os.name == "nt" else "install-local.sh"
+    )
+    wrapper_script = repo_root / "scripts" / (
+        "loopx.ps1" if os.name == "nt" else "loopx"
+    )
+    active_release_root_text = os.environ.get("LOOPX_RELEASE_ROOT")
+    release_root = (
+        Path(active_release_root_text).expanduser().resolve()
+        if active_release_root_text
+        else command_release_root(command_realpath)
+    )
     canary_root = command_release_root(canary_realpath)
     release_manifest = load_release_manifest(release_root)
     comparison_source = None
@@ -846,18 +920,23 @@ def collect_doctor(
         comparison_source["label"] = "loopx-canary"
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
     local_bin = user_local_bin()
-    skills_root = codex_home() / "skills"
-    skill_path = skills_root / "loopx-project" / "SKILL.md"
-    skills = installed_skill_summary(skills_root)
+    skill_roots = codex_skill_roots()
+    skills = installed_skill_summary(skill_roots)
+    project_skill = skills["loopx-project"]
+    skill_path = Path(str(project_skill["path"]))
     project_scoped_skill_ids = discover_project_scoped_skill_ids(
         repo_root / "skills"
     )
     globally_visible_project_skills = [
         skill_name
         for skill_name in project_scoped_skill_ids
-        if (skills_root / skill_name).exists()
+        if any((root / skill_name).exists() for root in skill_roots)
     ]
-    default_release = command_root_summary(command_path, command_realpath)
+    default_release = command_root_summary(
+        command_path,
+        command_realpath,
+        release_root=release_root,
+    )
     default_release["release_manifest_available"] = release_manifest.get("available")
     default_release["release_manifest_path"] = release_manifest.get("path")
     release_manifest_body = (
@@ -925,6 +1004,12 @@ def collect_doctor(
         doctor_agent_type=canonical_agent_type,
         python_distribution=python_distribution,
     )
+    externally_managed_skills = bool(
+        install_freshness.get("externally_managed_skills")
+    )
+    external_skill_delivery = externally_managed_skills and all(
+        skill.get("managed_externally") for skill in skills.values()
+    )
     if installed_skills_required:
         skill_delivery_status = (
             "ready"
@@ -941,7 +1026,11 @@ def collect_doctor(
     skill_delivery = {
         "agent_type": canonical_agent_type,
         "owner": (
-            "loopx_surface_installer"
+            (
+                "external_skill_manager"
+                if external_skill_delivery
+                else "loopx_surface_installer"
+            )
             if installed_skills_required
             else (
                 "loopx_install_script"
@@ -950,8 +1039,10 @@ def collect_doctor(
             )
         ),
         "mode": "surface_managed" if installed_skills_required else "host_managed",
-        "codex_skills_root_applicable": installed_skills_required,
+        "codex_skills_root_applicable": installed_skills_required
+        and not external_skill_delivery,
         "installed_skills_required_for_freshness": installed_skills_required,
+        "skill_roots": [str(root) for root in skill_roots],
         "status": skill_delivery_status,
         **(
             {"filesystem_readback": host_skill_install_readback}
@@ -1060,13 +1151,13 @@ def collect_doctor(
         },
         installed_skill_check(
             "installed_skill_exists",
-            actual_ok=skill_path.exists(),
+            actual_ok=bool(project_skill.get("exists")),
             detail=str(skill_path),
             applicable=installed_skills_required,
         ),
         installed_skill_check(
             "installed_skill_delivery_hints",
-            actual_ok=skill_has_delivery_hints(skill_path),
+            actual_ok=bool(project_skill.get("required_phrases")),
             detail=str(skill_path),
             applicable=installed_skills_required,
         ),
@@ -1078,9 +1169,13 @@ def collect_doctor(
         ),
         installed_skill_check(
             "installed_required_skill_routes",
-            actual_ok=all(skill.get("required_phrases") for skill in skills.values()),
+            actual_ok=all(
+                skill.get("required_phrases") and not skill.get("route_conflict")
+                for skill in skills.values()
+            ),
             detail=",".join(
-                f"{name}={skill.get('required_phrases')}"
+                f"{name}=valid:{skill.get('required_phrases')};"
+                f"routes:{skill.get('route_count')};path:{skill.get('path')}"
                 for name, skill in sorted(skills.items())
             ),
             applicable=installed_skills_required,
@@ -1172,8 +1267,10 @@ def collect_doctor(
         "upgrade_hint": install_freshness,
         "skill": {
             "path": str(skill_path),
-            "exists": skill_path.exists(),
-            "delivery_hints": skill_has_delivery_hints(skill_path),
+            "exists": bool(project_skill.get("exists")),
+            "delivery_hints": bool(project_skill.get("required_phrases")),
+            "route_conflict": bool(project_skill.get("route_conflict")),
+            "candidate_paths": list(project_skill.get("candidate_paths") or []),
         },
         "skill_delivery": skill_delivery,
         "skills": skills,
@@ -1182,7 +1279,7 @@ def collect_doctor(
         "checks": checks,
         "fix": (
             "Set `LOOPX_SKILLS_DIR=<PROJECT_WORKSPACE>/.agents/skills` and rerun "
-            f"`{repo_root / 'scripts' / 'install-local.sh'}`; then rerun doctor "
+            f"`{local_install_command(repo_root)}`; then rerun doctor "
             "with the same environment. Filesystem readback proves materialization; "
             "the host must still report its runtime loaded-skill readback."
             if canonical_agent_type == "ark-managed-agent"
@@ -1198,9 +1295,16 @@ def collect_doctor(
                 f"installation with `{shlex.quote(sys.executable)} -m pip install --upgrade loopx`."
                 if python_distribution.get("available")
                 else (
-                    f"Run `{repo_root / 'scripts' / 'install-local.sh'}` and start a new shell, "
-                    f"or export PATH=\"{local_bin}:$PATH\". For no-clone repair, run "
-                    f"`curl -fsSL {NO_CLONE_INSTALL_URL} | bash`."
+                    f"Run `{local_install_command(repo_root, skip_skills=externally_managed_skills)}` "
+                    "and start a new shell. "
+                    + (
+                        f"Ensure `{local_bin}` is on the Windows user PATH."
+                        if os.name == "nt"
+                        else (
+                            f"Or export PATH=\"{local_bin}:$PATH\". For no-clone repair, run "
+                            f"`curl -fsSL {NO_CLONE_INSTALL_URL} | bash`."
+                        )
+                    )
                 )
             )
         ),
