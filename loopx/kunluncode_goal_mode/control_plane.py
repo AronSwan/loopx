@@ -138,7 +138,7 @@ class LoopXControlPlane:
             ]
         )
 
-    def evidence_since(self, since: str) -> dict[str, Any]:
+    def evidence_since(self, since: str, *, todo_id: str) -> dict[str, Any]:
         return self._run_json(
             [
                 "evidence-log",
@@ -146,6 +146,8 @@ class LoopXControlPlane:
                 self.goal_id,
                 "--agent-id",
                 self.agent_id,
+                "--todo-id",
+                todo_id,
                 "--thin",
                 "--since",
                 since,
@@ -154,7 +156,7 @@ class LoopXControlPlane:
             ]
         )
 
-    def record_verified_delivery(self, *, mode: str) -> dict[str, Any]:
+    def record_verified_delivery(self, *, mode: str, todo_id: str) -> dict[str, Any]:
         workspace_arguments = (
             ["--delivery-workspace-path", str(self.project)]
             if capture_delivery_workspace(self.project)
@@ -165,6 +167,8 @@ class LoopXControlPlane:
                 "refresh-state",
                 "--goal-id",
                 self.goal_id,
+                "--todo-id",
+                todo_id,
                 "--project",
                 str(self.project),
                 "--classification",
@@ -205,13 +209,15 @@ class LoopXControlPlane:
             ]
         )
 
-    def spend(self) -> dict[str, Any]:
+    def spend(self, *, todo_id: str) -> dict[str, Any]:
         return self._run_json(
             [
                 "quota",
                 "spend-slot",
                 "--goal-id",
                 self.goal_id,
+                "--todo-id",
+                todo_id,
                 "--slots",
                 "1",
                 "--source",

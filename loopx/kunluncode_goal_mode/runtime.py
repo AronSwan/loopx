@@ -295,15 +295,17 @@ def _reconcile_writeback_evidence(
     since = str(native.get("verified_at") or "")
     if not since:
         return
-    payload = control.evidence_since(since)
+    todo_id = str(state.get("todo_id") or "")
+    payload = control.evidence_since(since, todo_id=todo_id)
     ledger = payload.get("ledger") if isinstance(payload.get("ledger"), list) else []
     writeback = state["writeback"]
-    todo_id = str(state.get("todo_id") or "")
     classification = VERIFIED_CLASSIFICATIONS[str(native.get("mode") or "goal-pro")]
     for event in ledger:
         if not isinstance(event, Mapping):
             continue
         event_kind = str(event.get("event_kind") or "")
+        if str(event.get("todo_id") or "") != todo_id:
+            continue
         if (
             event_kind == "refresh_state"
             and event.get("classification") == classification
@@ -338,7 +340,10 @@ def _closeout_writeback(
     writeback = state["writeback"]
     mode = str(state["native"]["mode"])
     if writeback.get("delivery_recorded") is not True:
-        payload = control.record_verified_delivery(mode=mode)
+        payload = control.record_verified_delivery(
+            mode=mode,
+            todo_id=str(state["todo_id"]),
+        )
         if payload.get("appended") is not True:
             raise KunlunNativeGoalRuntimeError(
                 "LoopX did not append the verified KunlunCode delivery record"
@@ -362,7 +367,7 @@ def _closeout_writeback(
         )
         write_runtime_state(project, state)
     if writeback.get("quota_spent") is not True:
-        payload = control.spend()
+        payload = control.spend(todo_id=str(state["todo_id"]))
         if payload.get("appended") is not True:
             raise KunlunNativeGoalRuntimeError(
                 "LoopX did not append quota accounting for the verified KunlunCode delivery: "

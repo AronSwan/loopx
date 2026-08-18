@@ -27,6 +27,7 @@ from loopx.kunluncode_goal_mode.context import (
     goal_context as kunluncode_context,
     write_binding,
 )
+from loopx.kunluncode_goal_mode.control_plane import LoopXControlPlane
 from loopx.kunluncode_goal_mode.guards import (
     NATIVE_CONTROLLER_AGENT_ENV,
     NATIVE_CONTROLLER_ENV,
@@ -521,6 +522,45 @@ def test_worker_prepends_the_adapter_environment_to_path(
     )
 
 
+def test_native_control_plane_scopes_recovery_and_writeback_to_todo(
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    def capture(
+        command: list[str], **_kwargs
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            '{"ok": true, "appended": true, "ledger": []}',
+            "",
+        )
+
+    control = LoopXControlPlane(
+        tmp_path,
+        {
+            "registry": str(tmp_path / ".loopx" / "registry.json"),
+            "goal_id": "shared-goal",
+            "agent_id": "kunlun",
+        },
+        command_prefix=["loopx"],
+        runner=capture,
+    )
+
+    control.evidence_since("2026-08-18T00:00:00Z", todo_id="todo-native-1")
+    control.record_verified_delivery(
+        mode="goal-pro", todo_id="todo-native-1"
+    )
+    control.spend(todo_id="todo-native-1")
+
+    assert len(commands) == 3
+    for command in commands:
+        todo_index = command.index("--todo-id")
+        assert command[todo_index + 1] == "todo-native-1"
+
+
 class _FakeControlPlane:
     def __init__(self, todo: dict[str, object]) -> None:
         self.todo = todo
@@ -536,13 +576,17 @@ class _FakeControlPlane:
         self.calls.append(f"claim:{todo_id}")
         return {"ok": True, "todo_id": todo_id, "changed": True}
 
-    def evidence_since(self, _since: str) -> dict[str, object]:
+    def evidence_since(self, _since: str, *, todo_id: str) -> dict[str, object]:
+        assert todo_id == str(self.todo["todo_id"])
         self.calls.append("evidence_since")
         if self.evidence_error:
             raise KunlunNativeGoalRuntimeError("evidence ledger unavailable")
         return {"ok": True, "ledger": list(self.ledger)}
 
-    def record_verified_delivery(self, *, mode: str) -> dict[str, object]:
+    def record_verified_delivery(
+        self, *, mode: str, todo_id: str
+    ) -> dict[str, object]:
+        assert todo_id == str(self.todo["todo_id"])
         self.calls.append(f"record:{mode}")
         return {
             "ok": True,
@@ -563,7 +607,8 @@ class _FakeControlPlane:
             "changed": True,
         }
 
-    def spend(self) -> dict[str, object]:
+    def spend(self, *, todo_id: str) -> dict[str, object]:
+        assert todo_id == str(self.todo["todo_id"])
         self.calls.append("spend")
         return {
             "ok": True,
@@ -962,9 +1007,10 @@ def test_native_goal_reconciles_crash_after_writeback_without_repeating_it(
         {
             "event_kind": "refresh_state",
             "classification": "kunluncode_native_goal_pro_verified",
+            "todo_id": "todo-native-1",
         },
         {"event_kind": "todo_complete", "todo_id": "todo-native-1"},
-        {"event_kind": "quota_spend"},
+        {"event_kind": "quota_spend", "todo_id": "todo-native-1"},
     ]
 
     def forbidden_factory(*_args, **_kwargs):
@@ -989,6 +1035,45 @@ def test_native_goal_reconciles_crash_after_writeback_without_repeating_it(
     assert recovered["writeback"]["delivery_recorded"] is True
     assert recovered["writeback"]["todo_completed"] is True
     assert recovered["writeback"]["quota_spent"] is True
+
+
+def test_verified_recovery_ignores_writeback_evidence_for_another_todo(
+    tmp_path: Path,
+) -> None:
+    todo = _native_todo(claimed=True)
+    control = _FakeControlPlane(todo)
+    write_runtime_state(tmp_path, _native_state(todo, verified=True))
+    control.ledger = [
+        {
+            "event_kind": "refresh_state",
+            "classification": "kunluncode_native_goal_pro_verified",
+            "todo_id": "other-todo",
+        },
+        {"event_kind": "todo_complete", "todo_id": "other-todo"},
+        {"event_kind": "quota_spend", "todo_id": "other-todo"},
+    ]
+
+    result = run_native_goal(
+        tmp_path,
+        _native_context(tmp_path),
+        mode="goal-pro",
+        permission_mode="auto",
+        max_duration_secs=60,
+        controller_timeout_secs=120,
+        kunluncode_bin="/usr/bin/kunluncode",
+        control_plane=control,
+        client_factory=lambda *_args, **_kwargs: pytest.fail(
+            "verified recovery must not relaunch KunlunCode"
+        ),
+    )
+
+    assert result["recovered"] is True
+    assert control.calls == [
+        "evidence_since",
+        "record:goal-pro",
+        "complete:todo-native-1",
+        "spend",
+    ]
 
 
 def test_verified_recovery_does_not_repeat_writeback_without_ledger_evidence(
