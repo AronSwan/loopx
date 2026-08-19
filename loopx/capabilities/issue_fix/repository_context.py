@@ -95,6 +95,11 @@ def _safe_text(value: Any, *, field: str, limit: int = 220) -> str:
 
 
 def _safe_reference(value: Any, *, field: str) -> str:
+    raw_reference = str(value or "").strip()
+    if raw_reference.startswith(("/", "~")) or re.match(
+        r"^[A-Za-z]:[\\/]", raw_reference
+    ):
+        raise ValueError(f"{field} must not be an absolute or home-relative path")
     reference = _safe_text(value, field=field, limit=260)
     if "://" in reference:
         parsed = urlsplit(reference)
@@ -103,8 +108,6 @@ def _safe_reference(value: Any, *, field: str) -> str:
         if parsed.query:
             raise ValueError(f"{field} URL must not contain query parameters")
         return reference
-    if reference.startswith(("/", "~")) or re.match(r"^[A-Za-z]:[\\/]", reference):
-        raise ValueError(f"{field} must not be an absolute or home-relative path")
     path = PurePosixPath(reference)
     if ".." in path.parts:
         raise ValueError(f"{field} must not traverse outside the repository")

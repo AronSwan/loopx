@@ -652,11 +652,15 @@ def handle_todo_command(
                 validation_label=args.validation_label,
                 validation_timeout_seconds=args.validation_timeout_seconds,
                 monitor_metadata={
-                    "target_key": args.monitor_target_key,
-                    "cadence": args.cadence,
-                    "next_due_at": args.next_due_at,
-                    "expires_at": args.expires_at,
-                    "watch_only": "true" if args.watch_only else None,
+                    key: value
+                    for key, value in {
+                        "target_key": args.monitor_target_key,
+                        "cadence": args.cadence,
+                        "next_due_at": args.next_due_at,
+                        "expires_at": args.expires_at,
+                        "watch_only": "true" if args.watch_only else None,
+                    }.items()
+                    if value is not None
                 },
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
@@ -729,11 +733,15 @@ def handle_todo_command(
                 clear_resume_when=bool(args.clear_resume_when),
                 no_followup=True if args.no_follow_up else None,
                 monitor_metadata={
-                    "target_key": args.monitor_target_key,
-                    "cadence": args.cadence,
-                    "next_due_at": args.next_due_at,
-                    "expires_at": args.expires_at,
-                    "watch_only": "true" if args.watch_only else None,
+                    key: value
+                    for key, value in {
+                        "target_key": args.monitor_target_key,
+                        "cadence": args.cadence,
+                        "next_due_at": args.next_due_at,
+                        "expires_at": args.expires_at,
+                        "watch_only": "true" if args.watch_only else None,
+                    }.items()
+                    if value is not None
                 },
                 clear_claim=bool(args.clear_claim),
                 **_todo_path_args(args),

@@ -317,7 +317,7 @@ def onboarding_next_action(
         )
         if validation_action:
             return validation_action["text"]
-        return "Review the first Goal Todo and advance only within its declared execution boundary."
+        return "Initial routing is owned by the connected domain adapter."
     need_heartbeat_choice = codex_app_heartbeat == "ask"
     if not accept_onboarding_agent_todos or not begin_autonomous_advance or need_heartbeat_choice:
         asks: list[str] = []
