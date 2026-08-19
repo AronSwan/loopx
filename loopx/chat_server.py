@@ -57,7 +57,11 @@ from .paths import resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .state_projection import build_active_state_structured_projection
 from .status import collect_status
-from .status_server import is_loopback_host, is_loopback_origin
+from .status_server import (
+    cors_response_headers,
+    is_loopback_host,
+    is_loopback_origin,
+)
 
 
 DEFAULT_CHAT_HOST = "127.0.0.1"
@@ -89,6 +93,13 @@ CHAT_LARK_CHATS_PATH = "/api/chat/lark/chats"
 CHAT_LARK_CONNECTIONS_PATH = "/api/chat/lark/connections"
 CHAT_ACTIONS_PATH = "/api/actions"
 CHAT_ACTION_PREVIEW_PATH = f"{CHAT_ACTIONS_PATH}/preview"
+
+
+def chat_cors_response_headers(origin: str | None) -> dict[str, str]:
+    headers = cors_response_headers(origin)
+    if headers:
+        headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    return headers
 
 
 def default_chat_assets_dir() -> Path:
@@ -418,6 +429,8 @@ class ChatRequestHandler(LarkChatRequestMixin, BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -773,6 +786,8 @@ class ChatRequestHandler(LarkChatRequestMixin, BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
+        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+            self.send_header(key, value)
         self.end_headers()
         cursor = str(last_event_id or "0")
         heartbeat_at = time.monotonic()
@@ -1335,6 +1350,12 @@ class ChatRequestHandler(LarkChatRequestMixin, BaseHTTPRequestHandler):
         if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "interrupt":
             return self._interrupt_turn(parts[3], parts[5])
         self._send_error("unknown path", status=404)
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        for key, value in chat_cors_response_headers(self.headers.get("Origin")).items():
+            self.send_header(key, value)
+        self.end_headers()
 
     def do_DELETE(self) -> None:
         if not self._require_loopback_origin():

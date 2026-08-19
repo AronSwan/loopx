@@ -59,6 +59,20 @@ The workspace gives you one place to:
 loopx dashboard
 ```
 
+`loopx dashboard` is the supported browser/PWA launch path. For a native
+window, the experimental source-built Tauri shell reuses the same loopback
+status and Chat services without becoming another state authority:
+
+```bash
+cd apps/desktop/loopx-control-plane
+npm install
+npm run dev
+```
+
+[Read the desktop shell guide](apps/desktop/loopx-control-plane/README.md).
+Closing the window stops only the service processes that the shell started;
+existing LoopX services and durable Goal state remain intact.
+
 [Watch the full 32-second walkthrough](docs/assets/personal-workspace/loopx-dashboard-launch.mp4)
 · [Read the workspace guide](docs/guides/personal-workspace-user-guide.md)
 · [Try the five-minute tour](docs/guides/personal-workspace-trial-guide.md)

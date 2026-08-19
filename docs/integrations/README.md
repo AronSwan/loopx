@@ -7,6 +7,7 @@ and external systems while preserving one control-plane authority.
 - [Runtime connector catalog](runtime-connector-catalog.md)
 - [DeepSeek Harness connector](deepseek-harness-connector.md)
 - [Session runtime control-plane adapter](session-runtime-control-plane-adapter.md)
+- [LoopX Control Plane desktop shell](../../apps/desktop/loopx-control-plane/README.md)
 - [Worker bridge install contract](worker-bridge-install-contract.md)
 - [Codex peer task orchestration](codex-subagent-orchestration.md)
 - [Complex project read-only adapter](complex-project-readonly-adapter.md)
