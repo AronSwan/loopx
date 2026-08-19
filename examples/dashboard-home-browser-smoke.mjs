@@ -1217,7 +1217,7 @@ async function main() {
       "需要你",
       "Showcase user gate safe side path",
       "Showcase creator operator",
-      "Showcase side agent self iteration",
+      "Showcase peer agent self iteration",
       "LoopX meta",
       "询问全局待办",
       "汇总所有 Goal 进展",
