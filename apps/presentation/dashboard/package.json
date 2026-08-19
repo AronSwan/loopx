@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && vite build --config vite.chat.config.ts",
+    "build:desktop": "tsc --noEmit && vite build",
     "build:chat": "tsc --noEmit && vite build --config vite.chat.config.ts",
     "dev": "bash ../../../scripts/dashboard-dev.sh",
     "dev:web": "vite --host 127.0.0.1",
@@ -51,6 +52,7 @@
     "vite": "^8.2.1"
   },
   "overrides": {
+    "nanoid": "3.3.18",
     "postcss": "8.5.26"
   }
 }
