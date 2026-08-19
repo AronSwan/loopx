@@ -14,7 +14,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "smoke:action-packet": "rm -rf /tmp/loopx-action-packet-smoke && tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --outDir /tmp/loopx-action-packet-smoke smoke/action-packet-smoke.ts src/data/action-packet.ts && node /tmp/loopx-action-packet-smoke/smoke/action-packet-smoke.js",
     "smoke:pwa-bundle": "python3 ../../../examples/dashboard-pwa-bundle-smoke.py",
-    "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
+    "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts src/vite-env.d.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
     "smoke:demo-readiness": "python3 ../../../examples/dashboard-demo-readiness-smoke.py",
     "smoke:frontstage-browser": "node ../../../examples/dashboard-frontstage-browser-smoke.mjs",
     "smoke:frontstage-design-baseline": "node ../../../examples/dashboard-frontstage-design-baseline-smoke.mjs",
