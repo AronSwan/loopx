@@ -4,6 +4,10 @@ This directory contains the experimental Tauri shell for the LoopX personal
 Agent workspace. It reuses the existing React dashboard and LoopX HTTP
 services; it does not introduce another Goal, Todo, Gate, or Chat state owner.
 
+This is currently a source-built preview. It is not installed by the LoopX
+Python package, and LoopX releases do not yet promise prebuilt desktop
+installers. Use `loopx dashboard` for the supported browser/PWA launch path.
+
 ## Runtime Model
 
 The shell:
@@ -53,8 +57,10 @@ cd ..
 npm run build
 ```
 
-`npm run build` produces the platform bundles under
-`src-tauri/target/release/bundle/`.
+`npm run build` produces the configured Linux `.deb` and AppImage bundles under
+`src-tauri/target/release/bundle/`. Other platforms can run the development
+shell after satisfying Tauri's platform prerequisites, but prebuilt installers
+are not yet a LoopX release contract.
 
 ## Disable Or Remove
 

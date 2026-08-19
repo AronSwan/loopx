@@ -54,6 +54,19 @@ LoopX 是开放且 Provider-neutral 的轻量 state kernel，也是 local-first
 loopx dashboard
 ```
 
+`loopx dashboard` 是受支持的浏览器 / PWA 启动方式。若希望使用原生窗口，
+可从源码运行实验性 Tauri shell；它复用同一组 loopback status 与 Chat 服务，
+不会成为新的状态权威：
+
+```bash
+cd apps/desktop/loopx-control-plane
+npm install
+npm run dev
+```
+
+[阅读桌面 shell 指南](apps/desktop/loopx-control-plane/README.md)。关闭窗口时，
+shell 只停止由自己启动的服务进程；已有 LoopX 服务与持久化 Goal 状态不会受影响。
+
 [观看 32 秒完整演示](docs/assets/personal-workspace/loopx-dashboard-launch.mp4)
 · [阅读工作区指南](docs/guides/personal-workspace-user-guide.md)
 · [开始五分钟体验](docs/guides/personal-workspace-trial-guide.md)
