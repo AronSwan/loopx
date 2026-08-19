@@ -82,6 +82,7 @@ from .cli_commands import (
     handle_multi_agent_command,
     handle_preset_command,
     handle_presentation_command,
+    handle_dash_command,
     handle_project_command,
     handle_project_lifecycle_command,
     handle_pr_review_command,
@@ -122,6 +123,7 @@ from .cli_commands import (
     register_multi_agent_commands,
     register_preset_commands,
     register_presentation_commands,
+    register_dash_commands,
     register_project_commands,
     register_project_lifecycle_commands,
     register_pr_review_command,
@@ -278,6 +280,7 @@ def build_parser() -> LoopXArgumentParser:
     register_host_mode_plan_command(sub, add_subcommand_format)
     register_preset_commands(sub, add_subcommand_format)
     register_presentation_commands(sub, add_subcommand_format)
+    register_dash_commands(sub, add_subcommand_format)
     register_project_commands(sub, add_subcommand_format)
     register_ready_score_command(sub, add_subcommand_format)
 
@@ -558,6 +561,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     if presentation_result is not None:
         return presentation_result
+
+    dash_result = handle_dash_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        print_payload=print_payload,
+        output_format=output_format,
+    )
+    if dash_result is not None:
+        return dash_result
 
     project_result = handle_project_command(
         args,
