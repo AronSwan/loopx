@@ -5,9 +5,9 @@ import {
   todoPreviewMatchesRequest,
   type TodoApplyResult,
   type TodoPreview,
-} from "./chat-model";
+} from "./chat-model.js";
 
-const configuredChatOrigin = String(import.meta.env.VITE_LOOPX_CHAT_ORIGIN ?? "")
+const configuredChatOrigin = String(import.meta.env?.VITE_LOOPX_CHAT_ORIGIN ?? "")
   .trim()
   .replace(/\/+$/, "");
 
@@ -38,7 +38,7 @@ export {
   todoReceiptLabel,
   todoReceiptOutcomeLabel,
   todoReceiptProjected,
-} from "./chat-model";
+} from "./chat-model.js";
 export type {
   AgentResponse,
   ChatCapabilities,
@@ -54,7 +54,7 @@ export type {
   TodoProposal,
   TodoApplyResult,
   TodoWriteReceipt,
-} from "./chat-model";
+} from "./chat-model.js";
 
 export const chatTodoSchema = z.object({
   todo_id: z.string().nullable(),
