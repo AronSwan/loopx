@@ -34,11 +34,11 @@ loopx dashboard
 graph TD
     A[LoopX 控制台] --> B[LoopX 管家模式 (全局总览)]
     A --> C[Goal 频道模式 (单一目标深度)]
-    
+
     B --> B1[你不在的时候 (离线统计)]
     B --> B2[4 泳道任务流 (需要你 / 执行中 / 观察中 / 已安排)]
     B --> B3[全局快捷问询与创建 Goal]
-    
+
     C --> C1[Tasks 4 列看板]
     C --> C2[Chat 完整对话流]
     C --> C3[Files 产出交付物]
