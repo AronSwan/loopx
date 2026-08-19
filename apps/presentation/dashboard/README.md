@@ -164,6 +164,31 @@ It provides a unified, coherent experience for managing long-running agent Goals
 
 - **Action Safety & Control Plane**:
   Durable modifications to Goals, Todos, Heartbeats, monitors, or settings follow the typed preview → explicit user confirmation → verified receipt protocol. The browser never performs unmediated direct writes to control-plane truth.
+  The Goal directory keeps only active Goals in its main list. Use the pause action
+  beside a Goal to preview and confirm a reversible stop; stopped Goals retain their
+  Todos, history, and evidence in a collapsed **Stopped Goals** section and can be
+  restored from the same section. Stopping a Goal pauses automatic Agent turns; it
+  does not mark the Goal complete or delete state. A stopped Goal leaves active
+  attention and projects zero effective quota, allowing the scheduler to stop host
+  automation such as a Codex App heartbeat while retaining the configured quota.
+  Goal stop and `quota.compute=0` share this shutdown path but keep distinct resume
+  authority: only Goal lifecycle resume may reactivate a stopped Goal, while an
+  explicit positive quota update resumes a quota pause. Stop does not force-kill an
+  in-flight tool call; the next `quota should-run` packet tells the host to pause or
+  delete the recurring heartbeat before another automatic turn. The equivalent CLI
+  flow is:
+
+  ```bash
+  loopx goal-lifecycle --goal-id <goal-id> --operation stop
+  loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
+  loopx goal-lifecycle --goal-id <goal-id> --operation resume --execute
+  loopx quota status --goal-id <goal-id>
+  ```
+
+  The first command is a zero-write preview. The executed commands write the
+  authoritative source registry, refresh the shared registry projection, and verify
+  both readbacks. Resume restores scheduling eligibility; quota, Gates, and Todos
+  still decide whether work may run.
 
 - **Public Frontstage (`/frontstage`)**:
   Public `/frontstage` continues to serve as an unauthenticated, read-only showcase and public-safe presentation surface. Real local operator workflows belong exclusively in the Personal Workspace.
