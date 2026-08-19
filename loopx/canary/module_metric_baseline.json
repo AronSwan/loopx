@@ -10,20 +10,10 @@
       "dict_any_count": 0,
       "lines": 2240
     },
-    "loopx/chat_actions.py": {
-      "any_count": 52,
-      "dict_any_count": 0,
-      "lines": 1590
-    },
     "loopx/canary/planner.py": {
       "any_count": 22,
       "dict_any_count": 0,
       "lines": 1992
-    },
-    "loopx/chat_server.py": {
-      "any_count": 25,
-      "dict_any_count": 0,
-      "lines": 1513
     },
     "loopx/capabilities/auto_research/demo_e2e.py": {
       "any_count": 0,
@@ -44,6 +34,16 @@
       "any_count": 5,
       "dict_any_count": 0,
       "lines": 1822
+    },
+    "loopx/chat_actions.py": {
+      "any_count": 52,
+      "dict_any_count": 0,
+      "lines": 1590
+    },
+    "loopx/chat_server.py": {
+      "any_count": 25,
+      "dict_any_count": 0,
+      "lines": 1513
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,
@@ -99,6 +99,11 @@
       "any_count": 219,
       "dict_any_count": 0,
       "lines": 1999
+    },
+    "loopx/slash_command_install.py": {
+      "any_count": 11,
+      "dict_any_count": 0,
+      "lines": 1502
     },
     "loopx/state_refresh.py": {
       "any_count": 30,
