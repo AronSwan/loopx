@@ -1,0 +1,2 @@
+# Vite bundles may retain whitespace-only lines inside generated template literals.
+loopx/web/chat/assets/*.js whitespace=-blank-at-eol
