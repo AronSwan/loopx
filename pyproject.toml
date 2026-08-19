@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "0.4.9"
+version = "0.5.0"
 description = "A lightweight Loop Engineering control plane for long-running agent goals."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,7 +26,7 @@ deepseek-harness = [
 ]
 test = [
   "jsonschema>=4.23,<5",
-  "mcp==1.27.2",
+  "mcp==1.28.1",
   "types-jsonschema>=4.23,<5",
   "pytest>=8,<9",
   "pytest-cov>=5,<7",

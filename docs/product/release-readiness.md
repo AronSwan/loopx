@@ -450,6 +450,11 @@ path, and canary route rather than as a user-facing release baseline.
   ledger, and hardens heartbeat settlement, Todo validation, PR review
   scheduling, native Goal benchmark isolation, and public repository signal
   providers.
+- `v0.5.0` on 2026-08-20: personal control-plane workspace release at the
+  matching `v0.5.0` tag. LoopX promotes the dashboard as the supported
+  browser/PWA workspace, adds a source-built native desktop shell over the same
+  local authority, makes Goal stop/resume and repository change windows
+  operator-visible, and admits goal-bound external capability providers.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

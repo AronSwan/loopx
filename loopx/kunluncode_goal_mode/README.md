@@ -51,13 +51,13 @@ loopx-kunluncode connect \
   --agent-id kunlun
 ```
 
-The provisioner installs the same LoopX distribution version and `mcp==1.27.2`
+The provisioner installs the same LoopX distribution version and `mcp==1.28.1`
 outside a source checkout. Contributors can instead use one checkout-local
 uv-managed environment:
 
 ```bash
 uv venv .venv
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 .venv/bin/loopx-kunluncode connect \
   --project . \
   --goal-id my-goal \
