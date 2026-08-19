@@ -99,13 +99,13 @@ includes(
 
 includes(
   packageSource,
-  "dashboard-promotion-readiness-browser-smoke.mjs",
-  "canonical promotion readiness browser smoke script",
+  "personal-workspace-browser-smoke.mjs",
+  "canonical personal workspace browser smoke script",
 );
 excludes(
   packageSource,
-  "dashboard-promotion-readiness-smoke.mjs",
-  "stale promotion readiness browser smoke script",
+  "dashboard-promotion-readiness-browser-smoke.mjs",
+  "retired legacy Ops promotion readiness browser smoke script",
 );
 
 for (const [snippet, label] of [

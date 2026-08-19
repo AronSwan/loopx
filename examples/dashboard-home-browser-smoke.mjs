@@ -118,6 +118,7 @@ const goalSpecs = [
   },
   {
     id: "showcase-side-agent-self-iteration",
+    displayName: "Showcase peer agent self iteration",
     domain: "side-bypass-fixture",
     status: "state_refreshed",
     waiting_on: "codex",
@@ -369,6 +370,7 @@ const statusFixture = {
     run_count: goalSpecs.length,
     goals: goalSpecs.map((spec) => ({
       id: spec.id,
+      display_name: spec.displayName,
       domain: spec.domain,
       status: spec.status,
       lifecycle_phase: "fixture",
