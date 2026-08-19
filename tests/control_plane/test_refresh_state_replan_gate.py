@@ -10,16 +10,17 @@ import pytest
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
 )
+from loopx.control_plane.work_items.semantic_replan_writeback import (
+    qualify_replan_writeback,
+)
 from loopx.state_refresh import (
     enforce_open_replan_writeback,
     refresh_state_run,
 )
-from loopx.control_plane.work_items.semantic_replan_writeback import (
-    qualify_replan_writeback,
-)
 
 GOAL_ID = "replan-gate-fixture"
 AGENT_ID = "codex-replan-gate-agent"
+OTHER_AGENT_ID = "codex-replan-gate-other-agent"
 STATE_TEXT = "# Active Goal State\n"
 
 
@@ -278,11 +279,52 @@ def _open_vision_after_prior_ack() -> dict:
     }
 
 
+def _state_with_other_agent_user_gate() -> str:
+    return f"""\
+## User Todo / Owner Review Reading Queue
+
+- [ ] [P0] Review the other agent's independent delivery.
+  <!-- loopx:todo todo_id=todo_other_agent_review status=open task_class=user_action bound_agent={OTHER_AGENT_ID} -->
+
+## Agent Todo
+
+- [ ] [P0] Continue the current agent's bounded implementation.
+  <!-- loopx:todo todo_id=todo_current_agent_slice status=open task_class=advancement_task claimed_by={AGENT_ID} -->
+"""
+
+
 def _rotated_vision_runs() -> list[dict]:
     return [
         _open_vision_after_prior_ack(),
         _prior_periodic_ack(),
         *_durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD),
+    ]
+
+
+def test_writeback_scopes_other_agent_user_gate_like_quota() -> None:
+    """A peer's user gate must not hide this agent's vision obligation."""
+
+    obligation, semantic_delta = qualify_replan_writeback(
+        newest_first_runs=[_open_vision_after_prior_ack()],
+        state_text=_state_with_other_agent_user_gate(),
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        registry_goal={
+            "id": GOAL_ID,
+            "status": "active",
+            "coordination": {
+                "agent_model": "peer_v1",
+                "registered_agents": [AGENT_ID, OTHER_AGENT_ID],
+            },
+        },
+    )
+
+    assert obligation is not None
+    assert semantic_delta is not None
+    assert semantic_delta["accepted"] is False
+    assert [trigger["kind"] for trigger in obligation["triggers"]] == [
+        "vision_acceptance_gap",
+        "vision_outcome_checkpoint_required",
     ]
 
 
