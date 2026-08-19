@@ -158,7 +158,7 @@ export KUNLUN_AGENT_ID=kunlun
 ## 4. 安装适配器
 
 普通用户直接安装发布包；`install` 会用 `uv` 创建独立的 MCP 环境，并安装与当前命令
-相同版本的 LoopX 和固定版本 `mcp==1.27.2`：
+相同版本的 LoopX 和固定版本 `mcp==1.28.1`：
 
 ```bash
 python3 -m pip install --upgrade loopx
@@ -172,7 +172,7 @@ loopx-kunluncode --help
 export LOOPX_SOURCE=/path/to/loopx
 cd "$LOOPX_SOURCE"
 uv venv .venv
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 export LOOPX_KUNLUN="$LOOPX_SOURCE/.venv/bin/loopx-kunluncode"
 "$LOOPX_KUNLUN" install --python "$LOOPX_SOURCE/.venv/bin/python"
 ```
@@ -490,7 +490,7 @@ kunluncode --version
 ### `uv is required`
 
 适配器拒绝修改系统 Python。安装 `uv` 后重新运行 install/connect，或显式传入一个已经
-包含 LoopX 和 `mcp==1.27.2` 的 uv Python。
+包含 LoopX 和 `mcp==1.28.1` 的 uv Python。
 
 ### Python 不能 import LoopX 或 MCP 版本不对
 
@@ -498,7 +498,7 @@ kunluncode --version
 
 ```bash
 cd "$LOOPX_SOURCE"
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 ```
 
 然后用绝对 `--python` 路径重新执行 `install`。
@@ -583,7 +583,7 @@ log 对账，并从缺失阶段继续。
 
 在称为“成功接入”前逐项确认：
 
-- [ ] `uv --version` 正常；适配器与 `mcp==1.27.2` 在同一 uv 环境；
+- [ ] `uv --version` 正常；适配器与 `mcp==1.28.1` 在同一 uv 环境；
 - [ ] `connect` 返回 `ok: true`，goal id 和 Agent id 正确；
 - [ ] `.loopx/kunluncode.json` 未被 Git 跟踪；
 - [ ] 连接已有 goal 时其他 registered agents 仍存在；
