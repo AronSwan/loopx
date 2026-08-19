@@ -15,7 +15,9 @@ The shell:
 5. terminates only the service process groups it started when the window exits.
 
 An unknown process on either LoopX port is a hard startup error. Existing
-services are reused only after their bounded HTTP fingerprints match.
+services are reused only after a successful response exposes the exact expected
+top-level JSON fingerprint; marker-like text in headers or nested values is not
+accepted.
 
 The WebView can navigate only inside its own loopback asset origin. Dashboard
 requests to the status and Chat services remain restricted to loopback CORS and

@@ -11,6 +11,7 @@ use std::{
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceKind {
@@ -40,10 +41,10 @@ impl ServiceKind {
         }
     }
 
-    fn expected_marker(self) -> &'static str {
+    fn expected_fingerprint(self) -> (&'static str, &'static str) {
         match self {
-            Self::Status => "\"source\":\"serve-status\"",
-            Self::Chat => "\"schema_version\":\"loopx_chat_capabilities_v1\"",
+            Self::Status => ("source", "serve-status"),
+            Self::Chat => ("schema_version", "loopx_chat_capabilities_v1"),
         }
     }
 
@@ -220,25 +221,44 @@ fn probe(kind: ServiceKind) -> Probe {
         return Probe::Foreign;
     }
     let mut response = String::new();
-    if stream.read_to_string(&mut response).is_err() {
+    if stream
+        .take(MAX_PROBE_RESPONSE_BYTES + 1)
+        .read_to_string(&mut response)
+        .is_err()
+        || response.len() as u64 > MAX_PROBE_RESPONSE_BYTES
+    {
         return Probe::Foreign;
     }
     classify_response(kind, &response)
 }
 
 fn classify_response(kind: ServiceKind, response: &str) -> Probe {
-    let compact: String = response
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace())
-        .collect();
-    if response.starts_with("HTTP/1.")
-        && response.contains(" 200 ")
-        && compact.contains(kind.expected_marker())
-    {
-        Probe::Matching
-    } else {
-        Probe::Foreign
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Probe::Foreign;
+    };
+    let Some(status_line) = headers.lines().next() else {
+        return Probe::Foreign;
+    };
+    let mut status_parts = status_line.split_ascii_whitespace();
+    let version = status_parts.next();
+    let status = status_parts.next();
+    if !matches!(version, Some("HTTP/1.0" | "HTTP/1.1")) || status != Some("200") {
+        return Probe::Foreign;
     }
+
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Probe::Foreign;
+    };
+    let (field, expected) = kind.expected_fingerprint();
+    if payload
+        .as_object()
+        .and_then(|object| object.get(field))
+        .and_then(serde_json::Value::as_str)
+        == Some(expected)
+    {
+        return Probe::Matching;
+    }
+    Probe::Foreign
 }
 
 #[cfg(test)]
@@ -281,6 +301,27 @@ mod tests {
             classify_response(
                 ServiceKind::Chat,
                 "HTTP/1.1 200 OK\r\n\r\n{\"schema_version\":\"other\"}"
+            ),
+            Probe::Foreign
+        );
+        assert_eq!(
+            classify_response(
+                ServiceKind::Status,
+                "HTTP/1.1 200 OK\r\nX-LoopX: {\"source\":\"serve-status\"}\r\n\r\n{\"source\":\"other\"}"
+            ),
+            Probe::Foreign
+        );
+        assert_eq!(
+            classify_response(
+                ServiceKind::Status,
+                "HTTP/1.1 200 OK\r\n\r\n{\"nested\":{\"source\":\"serve-status\"}}"
+            ),
+            Probe::Foreign
+        );
+        assert_eq!(
+            classify_response(
+                ServiceKind::Status,
+                "HTTP/1.1 201 Created\r\n\r\n{\"source\":\"serve-status\"}"
             ),
             Probe::Foreign
         );

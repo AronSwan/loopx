@@ -2022,6 +2022,7 @@ version = "0.1.0"
 dependencies = [
  "command-group",
  "portpicker",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-localhost",
