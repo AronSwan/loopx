@@ -23,8 +23,11 @@ BASE_COMMANDS = [
 
 BROWSER_COMMANDS = [
     ("dashboard home browser", ["npm", "run", "smoke:home-browser"], DASHBOARD_DIR),
-    ("dashboard ops decision freshness browser", ["npm", "run", "smoke:ops-decision-freshness"], DASHBOARD_DIR),
-    ("dashboard promotion readiness browser", ["npm", "run", "smoke:promotion-readiness"], DASHBOARD_DIR),
+    (
+        "personal workspace browser",
+        ["npm", "run", "smoke:personal-workspace"],
+        DASHBOARD_DIR,
+    ),
 ]
 
 COMMON_NODE_PATHS = [

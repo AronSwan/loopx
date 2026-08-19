@@ -336,7 +336,10 @@ npm run smoke:demo-readiness
 
 That command runs the LaunchAgent status-output smoke, the structured
 `promotion-gate` fresh/warning contract smoke, the source-contract smokes, and
-the three browser smokes below. In CI environments without Playwright/Chrome,
+the current Home and Personal Workspace browser smokes. The decision-freshness
+and promotion-readiness read models remain covered by focused control-plane
+smokes instead of browser tests for the retired legacy Ops view. In CI
+environments without Playwright/Chrome,
 use:
 
 ```bash
@@ -348,9 +351,8 @@ surface:
 
 ```bash
 npm run smoke:home-browser
+npm run smoke:personal-workspace
 npm run smoke:frontstage-share-bundle
-npm run smoke:ops-decision-freshness
-npm run smoke:promotion-readiness
 node examples/dashboard-throttled-browser-smoke.mjs
 node examples/dashboard-operator-gate-browser-smoke.mjs
 ```
