@@ -4,6 +4,7 @@ import http.client
 import threading
 
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.extensions.lark.cli_resolution import LarkCliResolution
 
 
 def _start_server() -> tuple[ChatHTTPServer, threading.Thread]:
@@ -11,6 +12,13 @@ def _start_server() -> tuple[ChatHTTPServer, threading.Thread]:
     server.verbose = False
     server.selected_goal_id = None
     server.runtime_controller = _RuntimeController()
+    server.lark_cli_resolution = LarkCliResolution(
+        command=None,
+        available=False,
+        source="missing",
+        version=None,
+        error_code="lark_cli_not_installed",
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
