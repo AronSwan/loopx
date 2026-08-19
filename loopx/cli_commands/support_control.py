@@ -26,11 +26,8 @@ from ..chat_server import (
     DEFAULT_CHAT_PORT,
     serve_chat,
 )
-from ..chat_endpoints import AgentEndpointRegistry
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from ..dashboard_launcher import launch_dashboard
-from ..history import load_registry
-from ..paths import resolve_runtime_root
 from ..presentation.renderers.status_markdown import render_status_markdown
 from ..promotion_gate import (
     build_promotion_gate,
@@ -51,11 +48,6 @@ from ..self_update import (
     execute_update_plan,
     render_update_plan_markdown,
 )
-from ..state_backup import (
-    build_state_backup_plan,
-    execute_state_backup_plan,
-    render_state_backup_markdown,
-)
 from ..status_server import (
     DEFAULT_STATUS_HOST,
     DEFAULT_STATUS_PATH,
@@ -67,6 +59,14 @@ from .support_control_registry import (
     default_public_scan_root,
     explicit_global_registry,
     resolve_heartbeat_active_state,
+)
+from .support_control_backup import (
+    handle_backup_state_command,
+    register_backup_state_command,
+)
+from .support_control_chat_endpoint import (
+    handle_chat_endpoint_command,
+    register_chat_endpoint_command,
 )
 from .support_control_supervisor import (
     SUPERVISOR_CONTROL_COMMANDS,
@@ -103,48 +103,7 @@ def register_support_control_commands(
     subparsers: argparse._SubParsersAction,
     add_subcommand_format: AddFormat,
 ) -> None:
-    backup_state_parser = subparsers.add_parser(
-        "backup-state",
-        help="Preview or create a private local archive of LoopX state.",
-    )
-    add_subcommand_format(backup_state_parser)
-    backup_state_parser.add_argument(
-        "--project",
-        default=".",
-        help=(
-            "Current project root whose .loopx, .codex/goals, .claude/goals, and "
-            ".local/goals state is included alongside every project discovered from "
-            "the global registry."
-        ),
-    )
-    backup_state_parser.add_argument(
-        "--output-dir",
-        help="Directory for the backup archive and manifest. Defaults to <runtime-root>/backups.",
-    )
-    backup_state_parser.add_argument(
-        "--backup-id",
-        help="Stable id for the archive name. Defaults to a UTC timestamp.",
-    )
-    backup_state_parser.add_argument(
-        "--no-automations",
-        action="store_true",
-        help="Exclude $CODEX_HOME/automations from the backup.",
-    )
-    backup_state_parser.add_argument(
-        "--no-skills",
-        action="store_true",
-        help="Exclude $CODEX_HOME/skills/loopx-* skill directories from the backup.",
-    )
-    backup_state_parser.add_argument(
-        "--current-project-only",
-        action="store_true",
-        help="Do not discover additional project state from the global registry.",
-    )
-    backup_state_parser.add_argument(
-        "--execute",
-        action="store_true",
-        help="Write the backup archive and manifest. Omit for a dry-run plan.",
-    )
+    register_backup_state_command(subparsers, add_subcommand_format)
 
     heartbeat_prompt_parser = subparsers.add_parser(
         "heartbeat-prompt",
@@ -518,20 +477,7 @@ def register_support_control_commands(
     )
     chat_parser.add_argument("--verbose", action="store_true", help="Print HTTP request logs.")
 
-    chat_endpoint_parser = subparsers.add_parser(
-        "chat-endpoint",
-        help="Manage owner-local ACP Agent bindings used by LoopX Chat.",
-    )
-    add_subcommand_format(chat_endpoint_parser)
-    chat_endpoint_parser.add_argument("action", choices=("list", "add", "remove"))
-    chat_endpoint_parser.add_argument(
-        "--config",
-        help="Private JSON endpoint definition used by the add action.",
-    )
-    chat_endpoint_parser.add_argument(
-        "--agent-id",
-        help="Custom Agent id used by the remove action.",
-    )
+    register_chat_endpoint_command(subparsers, add_subcommand_format)
 
     dashboard_parser = subparsers.add_parser(
         "dashboard",
@@ -603,81 +549,19 @@ def handle_support_control_command(
         return None
 
     if args.command == "chat-endpoint":
-        try:
-            registry = load_registry(registry_path) if registry_path.exists() else {}
-            runtime_root = resolve_runtime_root(
-                registry,
-                args.runtime_root,
-                registry_path=registry_path,
-            )
-            endpoints = AgentEndpointRegistry(runtime_root / "chat")
-            if args.action == "add":
-                if not args.config:
-                    raise ValueError("--config is required for chat-endpoint add")
-                config_path = Path(args.config).expanduser().resolve()
-                definition = json.loads(config_path.read_text(encoding="utf-8"))
-                if not isinstance(definition, dict):
-                    raise ValueError("Agent endpoint config must be a JSON object")
-                endpoint = endpoints.upsert(definition)
-                payload: dict[str, object] = {
-                    "ok": True,
-                    "schema_version": "loopx_chat_endpoint_binding_v1",
-                    "action": "added",
-                    "endpoint": endpoint.public_summary(),
-                }
-            elif args.action == "remove":
-                if not args.agent_id:
-                    raise ValueError("--agent-id is required for chat-endpoint remove")
-                deleted = endpoints.delete(args.agent_id)
-                payload = {
-                    "ok": deleted,
-                    "schema_version": "loopx_chat_endpoint_binding_v1",
-                    "action": "removed" if deleted else "not_found",
-                    "agent_id": args.agent_id,
-                }
-            else:
-                payload = {
-                    "ok": True,
-                    "schema_version": "loopx_chat_endpoint_list_v1",
-                    "endpoints": [endpoint.public_summary() for endpoint in endpoints.list()],
-                }
-        except Exception as exc:
-            payload = {
-                "ok": False,
-                "schema_version": "loopx_chat_endpoint_binding_v1",
-                "error": str(exc),
-            }
-        print_payload(payload, args.format, lambda item: json.dumps(item, ensure_ascii=False, indent=2))
-        return 0 if payload.get("ok") else 1
+        return handle_chat_endpoint_command(
+            args,
+            registry_path=registry_path,
+            print_payload=print_payload,
+        )
 
     if args.command == "backup-state":
-        try:
-            backup_runtime_root = Path(args.runtime_root).expanduser() if args.runtime_root else None
-            if backup_runtime_root is None and registry_path.exists():
-                backup_runtime_root = resolve_runtime_root(load_registry(registry_path))
-            payload = build_state_backup_plan(
-                project=Path(args.project).expanduser(),
-                runtime_root=backup_runtime_root,
-                output_dir=Path(args.output_dir).expanduser() if args.output_dir else None,
-                backup_id=args.backup_id,
-                include_automations=not bool(args.no_automations),
-                include_skills=not bool(args.no_skills),
-                include_registry_projects=not bool(args.current_project_only),
-            )
-            if args.execute:
-                payload = execute_state_backup_plan(payload)
-        except Exception as exc:
-            payload = {
-                "ok": False,
-                "schema_version": "loopx_state_backup_v0",
-                "mode": "state_backup",
-                "dry_run": not bool(getattr(args, "execute", False)),
-                "execute_requested": bool(getattr(args, "execute", False)),
-                "error": str(exc),
-                "recommended_action": "fix backup planning before retrying",
-            }
-        print_payload(payload, output_format(args), render_state_backup_markdown)
-        return 0 if payload.get("ok") else 1
+        return handle_backup_state_command(
+            args,
+            registry_path=registry_path,
+            print_payload=print_payload,
+            output_format=output_format,
+        )
 
     if args.command == "heartbeat-prequota":
         prequota_registry = (

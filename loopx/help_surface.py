@@ -85,6 +85,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Set up, inspect, sync, or notify the provider channel bound to one goal.",
             },
             {
+                "command": "loopx goal-lifecycle --help",
+                "purpose": "Preview, stop, or resume a Goal without deleting its history, todos, or evidence.",
+            },
+            {
                 "command": "loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin",
                 "purpose": "Read the current agent's thin public-safe ledger before replan or handoff.",
             },
