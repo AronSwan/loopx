@@ -353,6 +353,7 @@ def main() -> int:
             encoding="utf-8",
         )
         hook.chmod(0o755)
+        _run_git(repo_path, ["config", "core.hooksPath", ".git/hooks"])
 
         pinned_payload = _run_caller_repo_json_command(
             repo_path,

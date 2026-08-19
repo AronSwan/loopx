@@ -238,20 +238,35 @@ def assert_dashboard_first_screen_render_contract() -> None:
     dashboard = (REPO_ROOT / "apps/presentation/dashboard/src/views/dashboard-page.tsx").read_text(
         encoding="utf-8"
     )
+    workspace = (
+        REPO_ROOT
+        / "apps/presentation/dashboard/src/features/personal-workspace/personal-workspace-page.tsx"
+    ).read_text(encoding="utf-8")
+    tasks = (
+        REPO_ROOT
+        / "apps/presentation/dashboard/src/features/personal-workspace/goal-tasks-view.tsx"
+    ).read_text(encoding="utf-8")
     for marker in (
-        'item.projectAssetSource === "legacy_raw_fallback"',
-        "item.projectOwner ?",
-        "item.projectGate ?",
-        "item.projectNextAction ?",
-        "item.projectStopCondition ?",
-        "<UserTodoCallout",
-        "{agentTodo.text}",
-        "formatLatestValidation(item.latestValidation)",
-        "buildQuotaView(item.quota)",
-        "{item.agentCommand ?",
-        "{item.safePathLabel}",
+        "todosFromProjectAssetSummary(projectAsset?.user_todos",
+        "todosFromProjectAssetSummary(projectAsset?.agent_todos",
+        "row.queueItem?.project_asset?.latest_validation",
+        "row.queueItem?.recommended_action",
+        "personalRunEvidence(payload, row)",
     ):
         assert marker in dashboard, marker
+    for marker in (
+        "goal.needsYou ?? goal.nextSentence",
+        "goal.agentTodos",
+        "goal.latestActivity",
+    ):
+        assert marker in workspace, marker
+    for marker in (
+        "attentionItems",
+        "openAgentTodos",
+        "scheduleItems",
+        "doneAgentTodos",
+    ):
+        assert marker in tasks, marker
 
 
 def main() -> int:
