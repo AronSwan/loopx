@@ -172,9 +172,12 @@ async function installApi(page) {
         const goal = (fixture.run_history?.goals ?? []).find((item) => item.id === body.goal_id);
         runtime.larkConnections = runtime.larkConnections.filter((item) => item.goal_id !== body.goal_id);
         runtime.larkConnections.push({
+          agent_id: body.agent_id ?? null,
           app_label: "LoopX Mew", app_ref: body.app_ref, chat_name: body.chat_name, enabled: true,
+          capture_scope: body.capture_scope,
           event_count: 0, health_error_code: "lark_event_delivery_unverified",
           goal_id: body.goal_id, goal_title: goal?.id ?? body.goal_id, incoming_mode: body.incoming_mode,
+          ingress_mode: body.ingress_mode,
           last_event_reason: null, last_event_status: null, listener_error_code: null, listener_status: "listening", replied_count: 0,
           reply_mode: "topic_reply", target_ref: "product-group", topic_name: goal?.id ?? body.goal_id,
           topic_setup_required: false, reply_ready: false,
@@ -607,6 +610,11 @@ async function main() {
     await connectDialog.waitFor({ state: "visible" });
     await connectDialog.getByRole("option", { name: "Product group" }).waitFor({ state: "attached" });
     await connectDialog.getByLabel("Group chat").selectOption({ label: "Product group" });
+    await connectDialog.getByLabel("Capture scope").selectOption("configured_chat_all");
+    await connectDialog.getByLabel("Processing mode").selectOption("async_inbox");
+    await connectDialog.getByLabel("Target Agent").waitFor({ state: "visible" });
+    await connectDialog.getByLabel("Reply mode").selectOption("topic_reply");
+    await page.screenshot({ path: resolve(outputDir, "lark-routing-modes.png"), fullPage: false, animations: "disabled" });
     await connectDialog.getByRole("button", { name: "Connect", exact: true }).click();
     await connectDialog.waitFor({ state: "hidden" });
     const connectionReadback = await page.evaluate(async () => (await fetch("/api/chat/lark/connections")).json());
@@ -621,6 +629,9 @@ async function main() {
     if (!(await connectedRow.getByText("事件订阅待验证", { exact: false }).isVisible())) throw new Error("A zero-event listener was presented as automatic-reply ready");
     if (!(await connectedRow.getByRole("link", { name: "查看飞书事件配置" }).isVisible())) throw new Error("An unverified Lark event subscription lacked repair guidance");
     if (api.larkWrites.length !== 1 || api.larkWrites[0].execute !== true) throw new Error("Lark connect did not perform exactly one approved external write");
+    if (api.larkWrites[0].capture_scope !== "configured_chat_all" || api.larkWrites[0].incoming_mode !== "all") throw new Error(`Lark capture mode was not projected: ${JSON.stringify(api.larkWrites[0])}`);
+    if (api.larkWrites[0].ingress_mode !== "async_inbox" || !api.larkWrites[0].agent_id) throw new Error(`Lark Agent inbox mode lost its Agent binding: ${JSON.stringify(api.larkWrites[0])}`);
+    if (api.larkWrites[0].reply_mode !== "topic_reply") throw new Error(`Lark reply mode was not projected: ${JSON.stringify(api.larkWrites[0])}`);
     Object.assign(api.larkConnections[0], {
       event_count: 1,
       health_error_code: "lark_event_route_mismatch",
@@ -643,8 +654,12 @@ async function main() {
     }
     await routeMismatchRow.getByText("请重新选择群聊并连接该 Goal", { exact: false }).waitFor({ state: "visible" });
     await page.locator(".personal-lark-table-row", { hasText: "Product group" }).getByRole("button", { name: /配置/ }).click();
-    await page.getByRole("dialog", { name: "Edit Lark Connection" }).waitFor({ state: "visible" });
-    await page.getByRole("dialog", { name: "Edit Lark Connection" }).getByRole("button", { name: "Cancel" }).click();
+    const editDialog = page.getByRole("dialog", { name: "Edit Lark Connection" });
+    await editDialog.waitFor({ state: "visible" });
+    if (await editDialog.getByLabel("Capture scope").inputValue() !== "configured_chat_all") throw new Error("Lark edit mode did not restore capture_scope");
+    if (await editDialog.getByLabel("Processing mode").inputValue() !== "async_inbox") throw new Error("Lark edit mode did not restore ingress_mode");
+    if (await editDialog.getByLabel("Target Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
+    await editDialog.getByRole("button", { name: "Cancel" }).click();
     await page.screenshot({ path: resolve(outputDir, "lark-goal-connections.png"), fullPage: false, animations: "disabled" });
     await page.getByRole("button", { name: "关闭 Lark 设置" }).click();
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();

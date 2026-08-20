@@ -992,6 +992,9 @@ export async function cancelLarkAppSetup(setupId: string) {
 }
 
 export type LarkGroupChat = { chat_id: string; chat_name: string };
+export type LarkCaptureScope = "addressed_only" | "configured_chat_all";
+export type LarkIngressMode = "direct_session" | "async_inbox";
+export type LarkReplyMode = "topic_reply";
 
 const larkGroupChatsSchema = z.object({
   ok: z.literal(true),
@@ -1007,14 +1010,17 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 }
 
 export type LarkGoalConnection = {
+  agent_id: string | null;
   app_label: string;
   app_ref: string;
+  capture_scope: LarkCaptureScope;
   chat_name: string;
   enabled: boolean;
   goal_id: string;
   goal_title: string;
   health_error_code: string | null;
   incoming_mode: "mentions" | "all";
+  ingress_mode: LarkIngressMode;
   event_count: number;
   last_event_reason: string | null;
   last_event_status: string | null;
@@ -1022,7 +1028,7 @@ export type LarkGoalConnection = {
   listener_status: "starting" | "listening" | "retrying" | "stopped" | null;
   replied_count: number;
   reply_ready: boolean;
-  reply_mode: "topic_reply";
+  reply_mode: LarkReplyMode;
   target_ref: string;
   topic_name: string;
   topic_setup_required: boolean;
@@ -1031,14 +1037,17 @@ export type LarkGoalConnection = {
 const larkConnectionsSchema = z.object({
   ok: z.literal(true),
   connections: z.array(z.object({
+    agent_id: z.string().nullable().default(null),
     app_label: z.string(),
     app_ref: z.string(),
+    capture_scope: z.enum(["addressed_only", "configured_chat_all"]).default("addressed_only"),
     chat_name: z.string(),
     enabled: z.boolean(),
     goal_id: z.string(),
     goal_title: z.string(),
     health_error_code: z.string().nullable().default(null),
     incoming_mode: z.enum(["mentions", "all"]),
+    ingress_mode: z.enum(["direct_session", "async_inbox"]).default("direct_session"),
     event_count: z.number().int().nonnegative().default(0),
     last_event_reason: z.string().nullable().default(null),
     last_event_status: z.string().nullable().default(null),
@@ -1060,23 +1069,31 @@ export async function fetchLarkConnections() {
 }
 
 export async function connectLarkGoalTopic(options: {
+  agentId?: string;
   appRef: string;
+  captureScope: LarkCaptureScope;
   chatId: string;
   chatName: string;
   execute: boolean;
   goalId: string;
   incomingMode: "mentions" | "all";
+  ingressMode: LarkIngressMode;
+  replyMode: LarkReplyMode;
 }) {
   return goalChannelOperationSchema.parse(
     await requestJson<unknown>("/api/chat/lark/connections", {
       method: "POST",
       body: JSON.stringify({
+        ...(options.agentId ? { agent_id: options.agentId } : {}),
         app_ref: options.appRef,
+        capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,
         execute: options.execute,
         goal_id: options.goalId,
         incoming_mode: options.incomingMode,
+        ingress_mode: options.ingressMode,
+        reply_mode: options.replyMode,
       }),
     }),
   );

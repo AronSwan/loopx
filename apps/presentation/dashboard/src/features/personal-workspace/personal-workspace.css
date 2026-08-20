@@ -294,6 +294,7 @@
 .personal-lark-modal header small { color: var(--pw-muted); font-size: 10px; }
 .personal-lark-modal h2 { margin: 3px 0 0; font-size: 20px; letter-spacing: -.02em; }
 .personal-lark-modal > label { display: grid; gap: 7px; color: var(--pw-muted); font-size: 11px; font-weight: 650; }
+.personal-lark-modal > label > small { color: var(--pw-faint); font-size: 10px; font-weight: 450; line-height: 1.45; }
 .personal-lark-modal input[type="search"], .personal-lark-modal input[type="text"], .personal-lark-modal input:not([type]), .personal-lark-modal select { width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid var(--pw-line-strong); border-radius: 9px; background: #fff; color: var(--pw-text); font: inherit; }
 .personal-lark-modal label:has(input[type="search"]) { grid-template-columns: 1fr; }
 .personal-lark-modal label:has(input[type="search"]) input { margin-bottom: 2px; }
@@ -307,7 +308,7 @@
 .personal-lark-topic-preview { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 11px; border: 1px solid var(--pw-line); border-radius: 9px; background: #f7f7f4; color: var(--pw-text); font-size: 12px; font-weight: 500; }
 .personal-lark-topic-preview.is-locked { color: var(--pw-muted); }
 .personal-lark-cardinality { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 9px; background: var(--pw-blue-soft); color: var(--pw-blue-ink); font-size: 11px; }
-.personal-lark-modal footer { display: flex; justify-content: flex-end; gap: 9px; padding-top: 4px; }
+.personal-lark-modal footer { position: sticky; bottom: -22px; z-index: 2; display: flex; justify-content: flex-end; gap: 9px; margin: 0 -22px -22px; padding: 12px 22px 22px; border-top: 1px solid var(--pw-line); background: #fff; }
 .personal-lark-modal footer button { width: auto; min-width: 96px; margin-top: 0; padding: 0 16px; }
 .personal-lark-modal-backdrop.is-setup { z-index: 90; }
 .personal-lark-setup-modal { width: min(620px, 100%); }
