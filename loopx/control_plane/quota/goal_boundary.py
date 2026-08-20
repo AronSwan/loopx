@@ -228,8 +228,16 @@ def goal_boundary(
                 reviewer_notification.get("config_path")
             ),
         }
+    agent_inboxes = (
+        control_plane.get("lark_event_inboxes")
+        if isinstance(control_plane.get("lark_event_inboxes"), dict)
+        else {}
+    )
+    agent_inbox = agent_inboxes.get(agent_id) if agent_id else None
     lark_event_inbox = (
-        control_plane.get("lark_event_inbox")
+        agent_inbox
+        if isinstance(agent_inbox, dict)
+        else control_plane.get("lark_event_inbox")
         if isinstance(control_plane.get("lark_event_inbox"), dict)
         else {}
     )
@@ -245,6 +253,8 @@ def goal_boundary(
                 str(goal.get("id") or ""),
             ]
         )
+        if isinstance(agent_inbox, dict) and agent_id:
+            drain_parts.extend(["--agent-id", agent_id])
         drain_command = shlex.join(drain_parts)
         inbox_capability: dict[str, Any] = {
             "enabled": True,

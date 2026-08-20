@@ -267,7 +267,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "notifications" }
+  | { goalId?: string; kind: "settings"; tab?: "appearance" | "lark" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";

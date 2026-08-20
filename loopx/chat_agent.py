@@ -171,9 +171,14 @@ class CodexChatAgentSession:
     hard_timeout_sec: float = 900.0
     next_request_id: int = 5
     current_turn_id: str = ""
-    _pending_events: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _pending_events: "queue.Queue[dict[str, Any]]" = field(default_factory=queue.Queue, repr=False)
+    _response_waiters: dict[int, "queue.Queue[dict[str, Any]]"] = field(
+        default_factory=dict,
+        repr=False,
+    )
     _write_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _request_id_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _response_waiters_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @classmethod
     def start(
@@ -309,6 +314,28 @@ class CodexChatAgentSession:
                 raise self._runtime_error("Codex app-server returned an unreadable response.")
             return message
 
+    def _route_response(self, message: dict[str, Any]) -> bool:
+        response_id = message.get("id")
+        if not isinstance(response_id, int):
+            return False
+        with self._response_waiters_lock:
+            waiter = self._response_waiters.get(response_id)
+        if waiter is None:
+            return False
+        waiter.put(message)
+        return True
+
+    def _next_event(self, *, deadline: float) -> dict[str, Any]:
+        while True:
+            try:
+                return self._pending_events.get_nowait()
+            except queue.Empty:
+                pass
+            message = self._next_message(deadline=deadline)
+            if self._route_response(message):
+                continue
+            return message
+
     def _check_server_gate(self, message: dict[str, Any]) -> None:
         if message.get("id") is not None and message.get("method"):
             raise CodexChatAgentError(
@@ -324,19 +351,76 @@ class CodexChatAgentSession:
         request_id: int | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
-            request_id = self.next_request_id
-            self.next_request_id += 1
-        self._write({"id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + self.response_timeout_sec
-        while True:
-            message = self._next_message(deadline=deadline)
-            if message.get("id") == request_id:
-                if message.get("error"):
-                    raise self._runtime_error(f"Codex app-server rejected {method}.")
-                result = message.get("result")
-                return result if isinstance(result, dict) else {}
-            self._check_server_gate(message)
-            self._pending_events.append(message)
+            with self._request_id_lock:
+                request_id = self.next_request_id
+                self.next_request_id += 1
+        waiter: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=1)
+        with self._response_waiters_lock:
+            self._response_waiters[request_id] = waiter
+        try:
+            self._write({"id": request_id, "method": method, "params": params})
+            deadline = time.monotonic() + self.response_timeout_sec
+            while True:
+                try:
+                    message = waiter.get_nowait()
+                except queue.Empty:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise self._runtime_error("Codex app-server timed out.")
+                    try:
+                        raw = self.messages.get(timeout=min(0.1, remaining))
+                    except queue.Empty:
+                        continue
+                    if isinstance(raw, EOFError):
+                        raise self._runtime_error(
+                            "Codex app-server closed before completing the request."
+                        )
+                    if isinstance(raw, Exception):
+                        raise self._runtime_error(
+                            "Codex app-server returned an unreadable response."
+                        )
+                    message = raw
+                    if message.get("id") != request_id and self._route_response(message):
+                        continue
+                if message.get("id") == request_id:
+                    if message.get("error"):
+                        raise self._runtime_error(f"Codex app-server rejected {method}.")
+                    result = message.get("result")
+                    return result if isinstance(result, dict) else {}
+                self._check_server_gate(message)
+                self._pending_events.put(message)
+        finally:
+            with self._response_waiters_lock:
+                self._response_waiters.pop(request_id, None)
+
+    def steer(self, user_message: str, *, expected_turn_id: str) -> str:
+        """Inject one user message into the exact active Codex Turn."""
+
+        text = " ".join(str(user_message or "").split())
+        selected_turn_id = str(expected_turn_id or "").strip()
+        if not text or not selected_turn_id:
+            raise ValueError("steering requires a message and expected active turn id")
+        result = self._request(
+            "turn/steer",
+            {
+                "threadId": self.thread_id,
+                "expectedTurnId": selected_turn_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": _turn_prompt(
+                            text,
+                            context_summary=self.context_summary,
+                            execution_mode=self.execution_mode,
+                        ),
+                    }
+                ],
+            },
+        )
+        turn_id = _extract_id(result, "turn", "turnId")
+        if turn_id != selected_turn_id:
+            raise self._runtime_error("Codex app-server steered an unexpected turn.")
+        return turn_id
 
     def interrupt(self, turn_id: str | None = None) -> None:
         selected_turn_id = str(turn_id or self.current_turn_id or "")
@@ -397,8 +481,6 @@ class CodexChatAgentSession:
         parts: list[str] = []
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
         visible_delta_count = 0
-        pending = self._pending_events
-        self._pending_events = []
         started_at = time.monotonic()
         last_activity_at = started_at
         while True:
@@ -409,7 +491,7 @@ class CodexChatAgentSession:
                 raise self._timeout_error("idle_timeout", "Codex Chat turn stopped producing activity.")
             deadline = min(started_at + self.hard_timeout_sec, last_activity_at + self.idle_timeout_sec)
             try:
-                message = pending.pop(0) if pending else self._next_message(deadline=deadline)
+                message = self._next_event(deadline=deadline)
             except CodexChatAgentError:
                 now = time.monotonic()
                 if now - started_at >= self.hard_timeout_sec:

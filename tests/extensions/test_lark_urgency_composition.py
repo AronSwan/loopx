@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from loopx.cli_commands import lark_inbox
+from loopx.configure_goal import configure_goal
 from loopx.control_plane.quota.goal_boundary import goal_boundary
 
 
@@ -75,3 +77,46 @@ def test_disabled_lark_extension_cannot_schedule_from_private_config(
     assert urgency["projection_status"] == "unavailable"
     assert urgency["local_private_content_returned"] is False
     assert projected is False
+
+
+def test_agent_scoped_inbox_is_registered_and_projected_only_for_its_agent(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal-alpha",
+                        "repo": str(tmp_path),
+                        "coordination": {
+                            "registered_agents": ["agent-alpha", "agent-beta"]
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    configured = configure_goal(
+        registry_path=registry_path,
+        goal_id="goal-alpha",
+        lark_event_inbox_config=".loopx/config/lark/agent-alpha.json",
+        lark_event_inbox_agent_id="agent-alpha",
+        execute=True,
+    )
+
+    assert configured["written"] is True
+    goal = json.loads(registry_path.read_text(encoding="utf-8"))["goals"][0]
+    assert (
+        lark_inbox._goal_inbox_config(goal, agent_id="agent-alpha")
+        == ".loopx/config/lark/agent-alpha.json"
+    )
+    assert lark_inbox._goal_inbox_config(goal, agent_id="agent-beta") is None
+    alpha = goal_boundary(goal, agent_id="agent-alpha", registry_path=registry_path)
+    beta = goal_boundary(goal, agent_id="agent-beta", registry_path=registry_path)
+    assert "--agent-id agent-alpha" in alpha["capabilities"]["lark_event_inbox"]["drain_command"]
+    assert beta is None or "lark_event_inbox" not in beta.get("capabilities", {})

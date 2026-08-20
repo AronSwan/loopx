@@ -101,16 +101,28 @@ def _reviewer_notification_config_summary(goal: dict[str, Any]) -> dict[str, boo
     }
 
 
-def _lark_event_inbox_config_summary(goal: dict[str, Any]) -> dict[str, bool]:
+def _lark_event_inbox_config_summary(goal: dict[str, Any]) -> dict[str, Any]:
     control_plane = _control_plane(goal)
     inbox = (
         control_plane.get("lark_event_inbox")
         if isinstance(control_plane.get("lark_event_inbox"), dict)
         else {}
     )
+    agent_inboxes = (
+        control_plane.get("lark_event_inboxes")
+        if isinstance(control_plane.get("lark_event_inboxes"), dict)
+        else {}
+    )
+    enabled_agent_inboxes = {
+        str(agent_id): value
+        for agent_id, value in agent_inboxes.items()
+        if isinstance(value, dict) and value.get("enabled") is True
+    }
     return {
-        "enabled": inbox.get("enabled") is True,
-        "config_pointer_registered": bool(inbox.get("config_path")),
+        "enabled": inbox.get("enabled") is True or bool(enabled_agent_inboxes),
+        "config_pointer_registered": bool(inbox.get("config_path"))
+        or any(bool(value.get("config_path")) for value in enabled_agent_inboxes.values()),
+        "agent_scoped_count": len(enabled_agent_inboxes),
     }
 
 
@@ -452,6 +464,7 @@ def configure_goal(
     issue_fix_reviewer_notification_config: str | None = None,
     clear_issue_fix_reviewer_notification_config: bool = False,
     lark_event_inbox_config: str | None = None,
+    lark_event_inbox_agent_id: str | None = None,
     clear_lark_event_inbox_config: bool = False,
     lark_kanban_heartbeat_sync: bool | None = None,
     reward_memory_config: str | None = None,
@@ -533,6 +546,13 @@ def configure_goal(
             "--clear-lark-event-inbox-config cannot be combined with "
             "--lark-event-inbox-config"
         )
+    if lark_event_inbox_agent_id and not (
+        lark_event_inbox_config or clear_lark_event_inbox_config
+    ):
+        raise ValueError(
+            "--lark-event-inbox-agent-id requires --lark-event-inbox-config "
+            "or --clear-lark-event-inbox-config"
+        )
     if clear_reward_memory_config and (
         reward_memory_config or reward_memory_agents
     ):
@@ -589,6 +609,13 @@ def configure_goal(
         lark_event_inbox_config,
         label="lark event inbox config",
     )
+    normalized_lark_inbox_agent = normalize_todo_claimed_by(
+        lark_event_inbox_agent_id
+    )
+    if lark_event_inbox_agent_id and not normalized_lark_inbox_agent:
+        raise ValueError(
+            "--lark-event-inbox-agent-id must be a public-safe registered agent id"
+        )
     reward_memory_config = _local_private_config_path(
         reward_memory_config,
         label="reward memory experiment config",
@@ -612,6 +639,13 @@ def configure_goal(
         if registered_agents is not None
         else normalize_registered_agents(existing_coordination.get("registered_agents"))
     )
+    if (
+        normalized_lark_inbox_agent
+        and normalized_lark_inbox_agent not in effective_registered_agents
+    ):
+        raise ValueError(
+            "--lark-event-inbox-agent-id must name an agent registered for the goal"
+        )
     if (
         peer_task_coordinator is not None
         and peer_task_coordinator not in effective_registered_agents
@@ -819,7 +853,24 @@ def configure_goal(
 
     if lark_event_inbox_config is not None or clear_lark_event_inbox_config:
         control_plane = _mutable_control_plane(goal)
-        if clear_lark_event_inbox_config:
+        if normalized_lark_inbox_agent:
+            agent_inboxes = (
+                dict(control_plane.get("lark_event_inboxes"))
+                if isinstance(control_plane.get("lark_event_inboxes"), dict)
+                else {}
+            )
+            if clear_lark_event_inbox_config:
+                agent_inboxes.pop(normalized_lark_inbox_agent, None)
+            else:
+                agent_inboxes[normalized_lark_inbox_agent] = {
+                    "enabled": True,
+                    "config_path": lark_event_inbox_config,
+                }
+            if agent_inboxes:
+                control_plane["lark_event_inboxes"] = agent_inboxes
+            else:
+                control_plane.pop("lark_event_inboxes", None)
+        elif clear_lark_event_inbox_config:
             control_plane.pop("lark_event_inbox", None)
         else:
             control_plane["lark_event_inbox"] = {

@@ -172,9 +172,12 @@ async function installApi(page) {
         const goal = (fixture.run_history?.goals ?? []).find((item) => item.id === body.goal_id);
         runtime.larkConnections = runtime.larkConnections.filter((item) => item.goal_id !== body.goal_id);
         runtime.larkConnections.push({
+          agent_id: body.agent_id ?? null,
           app_label: "LoopX Mew", app_ref: body.app_ref, chat_name: body.chat_name, enabled: true,
+          capture_scope: body.capture_scope,
           event_count: 0, health_error_code: "lark_event_delivery_unverified",
           goal_id: body.goal_id, goal_title: goal?.id ?? body.goal_id, incoming_mode: body.incoming_mode,
+          ingress_mode: body.ingress_mode,
           last_event_reason: null, last_event_status: null, listener_error_code: null, listener_status: "listening", replied_count: 0,
           reply_mode: "topic_reply", target_ref: "product-group", topic_name: goal?.id ?? body.goal_id,
           topic_setup_required: false, reply_ready: false,
@@ -602,15 +605,25 @@ async function main() {
     if (!(await page.getByText("loopx-ai/loopx", { exact: true }).isVisible())) throw new Error("Goal drawer did not show the read-only repository context");
     await page.getByRole("button", { name: /关闭详情/ }).click();
 
-    await page.getByRole("button", { name: "通知设置", exact: true }).click();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("heading", { name: "Lark", exact: true }).waitFor({ state: "visible" });
-    if (await page.locator(".personal-channel-composer").count()) throw new Error("Pure Lark configuration mode left the chat composer visible");
-    if (await page.locator("[data-context-drawer]").count()) throw new Error("Pure Lark configuration mode left the context drawer visible");
+    if (await page.locator(".personal-workspace-shell").count()) throw new Error("Workspace Settings did not replace the workspace shell");
+    if (await page.locator(".personal-channel-composer").count()) throw new Error("Workspace Settings left the chat composer visible");
+    if (await page.locator("[data-context-drawer]").count()) throw new Error("Workspace Settings left the context drawer visible");
+    await page.screenshot({ path: resolve(outputDir, "workspace-settings.png"), fullPage: false, animations: "disabled" });
     await page.getByRole("button", { name: /Connect Lark App/ }).click();
     const connectDialog = page.getByRole("dialog", { name: "Connect Lark App" });
     await connectDialog.waitFor({ state: "visible" });
     await connectDialog.getByRole("option", { name: "Product group" }).waitFor({ state: "attached" });
     await connectDialog.getByLabel("Group chat").selectOption({ label: "Product group" });
+    await connectDialog.getByLabel("Capture scope").selectOption("configured_chat_all");
+    const ingressGroup = connectDialog.getByRole("group", { name: "Agent ingress" });
+    const ingressOptions = await ingressGroup.locator("input[type=radio]").evaluateAll((options) => options.map((option) => option.value));
+    if (JSON.stringify(ingressOptions) !== JSON.stringify(["live_steering", "session_queue", "async_inbox"])) throw new Error(`Lark Agent ingress modes drifted: ${JSON.stringify(ingressOptions)}`);
+    await ingressGroup.getByLabel("Async inbox").check();
+    await connectDialog.getByLabel("Target Agent").waitFor({ state: "visible" });
+    await connectDialog.getByLabel("Reply mode").selectOption("topic_reply");
+    await page.screenshot({ path: resolve(outputDir, "lark-routing-modes.png"), fullPage: false, animations: "disabled" });
     await connectDialog.getByRole("button", { name: "Connect", exact: true }).click();
     await connectDialog.waitFor({ state: "hidden" });
     const connectionReadback = await page.evaluate(async () => (await fetch("/api/chat/lark/connections")).json());
@@ -625,6 +638,9 @@ async function main() {
     if (!(await connectedRow.getByText("事件订阅待验证", { exact: false }).isVisible())) throw new Error("A zero-event listener was presented as automatic-reply ready");
     if (!(await connectedRow.getByRole("link", { name: "查看飞书事件配置" }).isVisible())) throw new Error("An unverified Lark event subscription lacked repair guidance");
     if (api.larkWrites.length !== 1 || api.larkWrites[0].execute !== true) throw new Error("Lark connect did not perform exactly one approved external write");
+    if (api.larkWrites[0].capture_scope !== "configured_chat_all" || api.larkWrites[0].incoming_mode !== "all") throw new Error(`Lark capture mode was not projected: ${JSON.stringify(api.larkWrites[0])}`);
+    if (api.larkWrites[0].ingress_mode !== "async_inbox" || !api.larkWrites[0].agent_id) throw new Error(`Lark Agent inbox mode lost its Agent binding: ${JSON.stringify(api.larkWrites[0])}`);
+    if (api.larkWrites[0].reply_mode !== "topic_reply") throw new Error(`Lark reply mode was not projected: ${JSON.stringify(api.larkWrites[0])}`);
     Object.assign(api.larkConnections[0], {
       event_count: 1,
       health_error_code: "lark_event_route_mismatch",
@@ -635,10 +651,10 @@ async function main() {
     if (mismatchReadback.connections?.[0]?.last_event_reason !== "topic_mismatch") {
       throw new Error(`Lark route mismatch API readback mismatch: ${JSON.stringify(mismatchReadback)}`);
     }
-    await page.getByRole("button", { name: "关闭 Lark 设置" }).click();
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "通知设置", exact: true }).click();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
     const routeMismatchRow = page.locator(".personal-lark-table-row", { hasText: "Product group" });
     try {
       await routeMismatchRow.getByText("消息未匹配当前 Goal Topic", { exact: false }).waitFor({ state: "visible" });
@@ -647,10 +663,14 @@ async function main() {
     }
     await routeMismatchRow.getByText("请重新选择群聊并连接该 Goal", { exact: false }).waitFor({ state: "visible" });
     await page.locator(".personal-lark-table-row", { hasText: "Product group" }).getByRole("button", { name: /配置/ }).click();
-    await page.getByRole("dialog", { name: "Edit Lark Connection" }).waitFor({ state: "visible" });
-    await page.getByRole("dialog", { name: "Edit Lark Connection" }).getByRole("button", { name: "Cancel" }).click();
+    const editDialog = page.getByRole("dialog", { name: "Edit Lark Connection" });
+    await editDialog.waitFor({ state: "visible" });
+    if (await editDialog.getByLabel("Capture scope").inputValue() !== "configured_chat_all") throw new Error("Lark edit mode did not restore capture_scope");
+    if (!await editDialog.getByRole("group", { name: "Agent ingress" }).getByLabel("Async inbox").isChecked()) throw new Error("Lark edit mode did not restore ingress_mode");
+    if (await editDialog.getByLabel("Target Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
+    await editDialog.getByRole("button", { name: "Cancel" }).click();
     await page.screenshot({ path: resolve(outputDir, "lark-goal-connections.png"), fullPage: false, animations: "disabled" });
-    await page.getByRole("button", { name: "关闭 Lark 设置" }).click();
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();
     await page.locator(".personal-object-list").first().waitFor({ state: "visible" });
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Files" }).click();
@@ -1002,11 +1022,16 @@ async function main() {
     await mobile.locator(".personal-home-board").waitFor({ state: "visible" });
     await mobile.close();
     if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "paper") throw new Error("Personal workspace did not start with the default theme");
-    const themeToggle = page.getByRole("button", { name: "切换到野兽主题" });
-    await themeToggle.click();
-    if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "brutal") throw new Error("Theme switch did not enable the beast theme");
-    await page.getByRole("button", { name: "切换到默认主题" }).click();
-    pass(16, "The header theme switch toggles the beast theme and returns to the default theme.");
+    if (await page.getByRole("button", { name: /切换到野兽主题|切换到默认主题/ }).count()) throw new Error("Workspace header still exposes the old theme toggle");
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("button", { name: /外观/ }).click();
+    await page.getByRole("radio", { name: /高对比/ }).click();
+    if (await page.locator(".personal-settings-page").getAttribute("data-pw-theme") !== "brutal") throw new Error("Settings did not enable the high-contrast theme");
+    await page.getByRole("radio", { name: /默认/ }).click();
+    if (await page.locator(".personal-settings-page").getAttribute("data-pw-theme") !== "paper") throw new Error("Settings did not restore the default theme");
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+    if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "paper") throw new Error("Workspace did not apply the Settings theme readback");
+    pass(16, "The Settings appearance tab toggles the high-contrast theme and returns to the default theme.");
     await page.locator(".personal-manager-link").first().click();
     await page.waitForTimeout(600);
     const workerCards = await page.locator(".personal-worker-strip > button").count();

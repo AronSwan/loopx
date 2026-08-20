@@ -23,7 +23,6 @@ import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
-import { LarkSettingsPage } from "./lark-settings-page";
 import { MarkdownText } from "./markdown";
 import type {
   PersonalWorkspaceCallbacks,
@@ -41,6 +40,7 @@ import type {
 } from "./personal-workspace-model";
 import { goalTitleFor, workspaceHomeLaneForGoal, workspaceSessionStatusLabel } from "./personal-workspace-model";
 import { routeWorkspaceInput } from "./personal-workspace-router";
+import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { WorkspaceShell } from "./workspace-shell";
 import "./personal-workspace.css";
 
@@ -577,7 +577,6 @@ export function PersonalWorkspacePage({
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   model,
-  ownerLabel,
   selectedAgentId: controlledAgentId,
   selectedGoalId: controlledGoalId,
 }: {
@@ -691,7 +690,7 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
-  const notificationSettingsOpen = selection?.kind === "notifications";
+  const settingsOpen = selection?.kind === "settings";
   const managerProjectionId = selectedGoalId;
   const items = useMemo(() => {
     const heartbeatSchedules: WorkspaceTimelineItem[] = Object.values(proposals)
@@ -799,8 +798,8 @@ export function PersonalWorkspacePage({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [managerChatItems.length, managerChatOpen, latestMessageTextLength]);
-  const drawerSelection = useMemo<WorkspaceDrawerSelection | null>(() => {
-    if (selection?.kind === "notifications") return null;
+  const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
+    if (selection?.kind === "settings") return null;
     if (selection?.kind !== "run") return selection;
     const currentRun = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
       item.kind === "run" && item.run.runId === selection.item.runId
@@ -1116,7 +1115,7 @@ export function PersonalWorkspacePage({
     },
     onPreviewAction: createPreview,
     onRequestScheduleConfig: (kind, goalId) => prepareScheduleDraft(kind, goalId),
-    onOpenNotificationSettings: (goalId) => setSelection({ goalId, kind: "notifications" }),
+    onOpenNotificationSettings: (goalId) => setSelection({ goalId, kind: "settings", tab: "lark" }),
     onFetchNotificationTargets: () => fetchGoalChannelTargets(),
     onSetupGoalChannel: (options) => setupGoalChannel(options),
     onToggleGoalAutoNotify: (options) => configureGoalChannelAutoNotify(options),
@@ -1160,6 +1159,11 @@ export function PersonalWorkspacePage({
   function selectAgent(agentId: string) {
     setLocalAgentId(agentId);
     callbacks.onSelectAgent?.(agentId);
+  }
+
+  function updateTheme(next: "brutal" | "paper") {
+    setTheme(next);
+    try { window.localStorage.setItem("loopx-pw-theme", next); } catch { /* Keep the in-memory preference. */ }
   }
 
   async function sendMessage(messageOverride?: string) {
@@ -1375,6 +1379,13 @@ export function PersonalWorkspacePage({
     setLarkConnections(connections);
   }
 
+  async function refreshSettingsState() {
+    await Promise.all([
+      refreshLarkState(),
+      callbacks.onRefresh?.(),
+    ]);
+  }
+
   async function refreshWorkspace() {
     if (!callbacks.onRefresh || refreshState === "loading") return;
     setRefreshState("loading");
@@ -1385,6 +1396,21 @@ export function PersonalWorkspacePage({
       setRefreshState("error");
     }
     window.setTimeout(() => setRefreshState("idle"), 1800);
+  }
+
+  if (settingsOpen) {
+    return (
+      <WorkspaceSettingsPage
+        focusGoalConnection={Boolean(selection?.kind === "settings" && selection.goalId)}
+        goals={workspaceGoals}
+        initialGoalId={selection?.kind === "settings" ? selection.goalId ?? selectedGoalId : selectedGoalId}
+        initialTab={selection?.kind === "settings" ? selection.tab ?? "lark" : "lark"}
+        onChanged={() => void refreshSettingsState()}
+        onClose={() => setSelection(null)}
+        onThemeChange={updateTheme}
+        theme={theme}
+      />
+    );
   }
 
   return (
@@ -1403,15 +1429,7 @@ export function PersonalWorkspacePage({
       mobileSidebarOpen={mobileSidebarOpen}
       onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
       theme={theme}
-      main={notificationSettingsOpen ? (
-        <LarkSettingsPage
-          focusGoalConnection={Boolean(selection?.kind === "notifications" && selection.goalId)}
-          goals={workspaceGoals}
-          initialGoalId={selection?.kind === "notifications" ? selection.goalId ?? selectedGoalId : selectedGoalId}
-          onChanged={() => void refreshLarkState()}
-          onClose={() => setSelection(null)}
-        />
-      ) : (
+      main={(
         <div className="personal-channel">
           <ChannelHeader
             agents={agents}
@@ -1437,16 +1455,10 @@ export function PersonalWorkspacePage({
               setManagerConversationReceiptVisible(false);
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
-            onToggleTheme={() => setTheme((current) => {
-              const next = current === "paper" ? "brutal" : "paper";
-              try { window.localStorage.setItem("loopx-pw-theme", next); } catch { /* Keep the in-memory preference. */ }
-              return next;
-            })}
             selectedAgentId={selectedAgentId}
             refreshState={refreshState}
             selectedGoal={selectedGoal}
             selectedGoalTab={selectedGoalTab}
-            theme={theme}
           />
           <div className="personal-channel-scroll" ref={channelScrollRef}>
             {!selectedGoal && !managerChatOpen && digest && (digest.done + digest.failed + digest.attention) > 0 ? (
@@ -1619,9 +1631,8 @@ export function PersonalWorkspacePage({
           goals={workspaceGoals}
           onRequestGoalCreate={requestGoalCreate}
           onRequestGoalLifecycle={(goal, operation) => void requestGoalLifecycle(goal, operation)}
-          onOpenNotifications={() => setSelection({ kind: "notifications" })}
+          onOpenSettings={() => setSelection({ kind: "settings" })}
           onSelectGoal={selectGoal}
-          ownerLabel={ownerLabel}
           selectedGoalId={selectedGoalId}
         />
       )}
