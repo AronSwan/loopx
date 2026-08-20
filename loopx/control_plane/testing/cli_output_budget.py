@@ -634,6 +634,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="explicit provider setup, sync, doctor, and gate-notification command family",
     ),
     CliOutputCommandClassification(
+        command_id="goal-lifecycle",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="explicit operator preview, stop, and resume command family",
+    ),
+    CliOutputCommandClassification(
         command_id="evidence-log",
         qualification="qualified_default",
         surface_id="evidence_log_thin",

@@ -118,6 +118,7 @@ const goalSpecs = [
   },
   {
     id: "showcase-side-agent-self-iteration",
+    displayName: "Showcase peer agent self iteration",
     domain: "side-bypass-fixture",
     status: "state_refreshed",
     waiting_on: "codex",
@@ -369,6 +370,7 @@ const statusFixture = {
     run_count: goalSpecs.length,
     goals: goalSpecs.map((spec) => ({
       id: spec.id,
+      display_name: spec.displayName,
       domain: spec.domain,
       status: spec.status,
       lifecycle_phase: "fixture",
@@ -1217,7 +1219,7 @@ async function main() {
       "需要你",
       "Showcase user gate safe side path",
       "Showcase creator operator",
-      "Showcase side agent self iteration",
+      "Showcase peer agent self iteration",
       "LoopX meta",
       "询问全局待办",
       "汇总所有 Goal 进展",

@@ -93,7 +93,19 @@ function casMatches(current, expected) {
   if (expected.goalId !== undefined && (current?.goalId || "") !== expected.goalId) {
     return false
   }
+  if (expected.autoResume !== undefined && current?.autoResume !== expected.autoResume) {
+    return false
+  }
   return true
+}
+
+// Pi emits only messages created by the just-finished run in agent_end. An
+// assistant message with stopReason=aborted is the durable signal that the
+// owner pressed Escape (or otherwise aborted the active run), so the host
+// adapter must pause before agent_settled can evaluate another continuation.
+export function hasAbortedAssistantMessage(messages) {
+  return Array.isArray(messages) &&
+    messages.some((message) => message?.role === "assistant" && message?.stopReason === "aborted")
 }
 
 // File-backed binding store scoped to one project. Bindings live under the
@@ -381,7 +393,7 @@ export function createGoalLoop(options) {
     // the persisted generation and rejects the stale commit.
     const capturedGen = binding.generation || 0
     const capturedGoalId = binding.goalId
-    const expected = { generation: capturedGen, goalId: capturedGoalId }
+    const expected = { generation: capturedGen, goalId: capturedGoalId, autoResume: true }
 
     let decision
     try {
@@ -549,6 +561,29 @@ export function createGoalLoop(options) {
         if (disposed || epoch !== instanceEpoch) return
         cancelScheduled(key)
       }
+    },
+    async interrupt(key) {
+      if (disposed) return null
+      const instanceEpoch = epoch
+      const services = contexts.get(key)
+      if (!services) return null
+      let binding = null
+      try {
+        binding = await services.store.read(key)
+      } catch {
+        return null
+      }
+      if (disposed || epoch !== instanceEpoch) return null
+      if (!binding || binding.terminal) return binding
+      const expected = { generation: binding.generation || 0, goalId: binding.goalId }
+      const committed = await services.store.write(key, { autoResume: false }, expected)
+      if (!committed || disposed || epoch !== instanceEpoch) return committed
+      cancelScheduled(key)
+      services.notify(
+        `LoopX goal ${committed.goalId} auto-continuation paused after abort; run /loopx resume to continue.`,
+        "info",
+      )
+      return committed
     },
     async resume(key) {
       if (disposed) return null

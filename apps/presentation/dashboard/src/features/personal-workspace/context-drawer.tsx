@@ -33,7 +33,6 @@ import type {
 } from "./personal-workspace-model";
 import type { LarkGoalConnection } from "../../data/chat";
 import { attentionAgeLabel, formatCostUsd, formatDurationMs, formatTokenCount, hasGoalUsage, workspaceSessionStatusLabel } from "./personal-workspace-model";
-import { NotificationSettingsPanel } from "./notification-settings-panel";
 
 const focusableSelector = [
   "a[href]",
@@ -57,6 +56,8 @@ const decisionTransitions = [
   { label: "稍后决定", resolution: "defer" },
 ] as const;
 
+type ContextDrawerSelection = Exclude<WorkspaceDrawerSelection, { kind: "settings" }>;
+
 export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals = [], larkConnections = [], onClose, runs = [], selection }: {
   agents: WorkspaceAgentOption[];
   callbacks: PersonalWorkspaceCallbacks;
@@ -65,7 +66,7 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
   larkConnections?: LarkGoalConnection[];
   onClose: () => void;
   runs?: WorkspaceRun[];
-  selection: WorkspaceDrawerSelection;
+  selection: ContextDrawerSelection;
 }) {
   const [correction, setCorrection] = useState("");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -80,7 +81,6 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
         : selection.kind === "attention" ? `attention:${selection.item.todoId}`
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
-              : selection.kind === "notifications" ? `notifications:${selection.goalId ?? "workspace"}`
                 : `goal:${selection.item.goalId}`;
 
   useEffect(() => {
@@ -126,10 +126,8 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
         : selection.kind === "output" ? "产出详情"
           : selection.kind === "proposal" ? (selection.item.status === "applied" ? "执行结果" : "确认执行")
             : selection.kind === "schedule" ? (selection.item.scheduleKind === "heartbeat" ? "Heartbeat" : "定时检查")
-              : selection.kind === "notifications" ? "通知设置"
                   : "Goal 详情";
   const goalId = selection.kind === "proposal" ? selection.item.goalId ?? "manager"
-    : selection.kind === "notifications" ? "workspace"
       : selection.item.goalId;
   const contextLabel = selection.kind === "attention" ? selection.item.goalTitle ?? "当前 Goal"
     : selection.kind === "todo" ? selection.item.goalTitle
@@ -137,7 +135,6 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
         : selection.kind === "output" ? selection.item.goalTitle ?? "当前 Goal"
           : selection.kind === "goal" ? selection.item.title
             : selection.kind === "schedule" ? "当前 Goal 的自动运行"
-              : selection.kind === "notifications" ? "飞书群通知绑定"
                   : selection.item.goalId ? "当前 Goal 的待确认变更" : "管家待确认变更";
   const selectedGoalRun = selection.kind === "goal"
     ? runs.find((run) => run.goalId === selection.item.goalId && Boolean(run.sessionId))
@@ -546,15 +543,6 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
               ) : <p>暂无执行记录。</p>}
             </section>
           </>
-        ) : null}
-
-        {selection.kind === "notifications" ? (
-          <NotificationSettingsPanel
-            callbacks={callbacks}
-            goalNotifications={goalNotifications}
-            goals={goals}
-            onChanged={() => callbacks.onRefresh?.()}
-          />
         ) : null}
 
         {selection.kind === "run" || selection.kind === "proposal" || selection.kind === "schedule" ? (

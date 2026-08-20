@@ -26,6 +26,12 @@ loopx dashboard
 
 默认访问地址为：`http://127.0.0.1:5179/?statusUrl=%2Fstatus.json`。
 
+> 💡 **两种入口可共存**：`loopx dashboard`（浏览器 / PWA）与 Tauri 原生桌面壳
+> 共享 `8766/8767` 两个本地服务，且都会复用已经在运行的 LoopX 服务。先开
+> dashboard 再开桌面壳，或先开桌面壳再执行 `loopx dashboard`，两种顺序都可以；
+> 当桌面壳已经启动时，也可以直接访问 `http://127.0.0.1:8767/chat/` 使用浏览器 /
+> PWA，无需再启动一套服务。
+
 ---
 
 ## 🧭 2. 控制台核心架构
@@ -34,11 +40,11 @@ loopx dashboard
 graph TD
     A[LoopX 控制台] --> B[LoopX 管家模式 (全局总览)]
     A --> C[Goal 频道模式 (单一目标深度)]
-    
+
     B --> B1[你不在的时候 (离线统计)]
     B --> B2[4 泳道任务流 (需要你 / 执行中 / 观察中 / 已安排)]
     B --> B3[全局快捷问询与创建 Goal]
-    
+
     C --> C1[Tasks 4 列看板]
     C --> C2[Chat 完整对话流]
     C --> C3[Files 产出交付物]

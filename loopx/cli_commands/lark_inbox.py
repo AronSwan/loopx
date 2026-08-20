@@ -44,15 +44,23 @@ from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHook
 from ..control_plane.runtime.goal_project_route import resolve_goal_project_route
 
 
-def _goal_inbox_config(goal: dict[str, object]) -> str | None:
+def _goal_inbox_config(
+    goal: dict[str, object], *, agent_id: str | None = None
+) -> str | None:
     control_plane = (
         goal.get("control_plane") if isinstance(goal.get("control_plane"), dict) else {}
     )
-    inbox = (
-        control_plane.get("lark_event_inbox")
-        if isinstance(control_plane.get("lark_event_inbox"), dict)
+    agent_inboxes = (
+        control_plane.get("lark_event_inboxes")
+        if isinstance(control_plane.get("lark_event_inboxes"), dict)
         else {}
     )
+    inbox = (
+        agent_inboxes.get(agent_id)
+        if agent_id and isinstance(agent_inboxes.get(agent_id), dict)
+        else control_plane.get("lark_event_inbox")
+    )
+    inbox = inbox if isinstance(inbox, dict) else {}
     if inbox.get("enabled") is not True:
         return None
     return str(inbox.get("config_path") or "").strip() or None
@@ -71,7 +79,10 @@ def _inbox_context(
             goal_id=str(args.goal_id),
             project_override=getattr(args, "project", None),
         )
-        return project, _goal_inbox_config(goal)
+        return project, _goal_inbox_config(
+            goal,
+            agent_id=str(getattr(args, "agent_id", None) or "").strip() or None,
+        )
     raise ValueError("lark inbox requires --config or --goal-id")
 
 
@@ -92,6 +103,7 @@ def register_lark_inbox_commands(
     drain.add_argument("--project")
     drain.add_argument("--config")
     drain.add_argument("--goal-id")
+    drain.add_argument("--agent-id")
     drain.add_argument("--limit", type=int, default=20)
     ack = sub.add_parser(
         "ack",
@@ -101,6 +113,7 @@ def register_lark_inbox_commands(
     ack.add_argument("--project")
     ack.add_argument("--config")
     ack.add_argument("--goal-id")
+    ack.add_argument("--agent-id")
     ack.add_argument("--message-id", action="append", required=True)
     ack.add_argument("--execute", action="store_true")
     reply = sub.add_parser(
@@ -114,6 +127,7 @@ def register_lark_inbox_commands(
     reply.add_argument("--project")
     reply.add_argument("--config")
     reply.add_argument("--goal-id")
+    reply.add_argument("--agent-id")
     reply.add_argument("--message-id", required=True)
     reply.add_argument("--text", required=True)
     reply.add_argument("--execute", action="store_true")
@@ -128,6 +142,7 @@ def register_lark_inbox_commands(
     processing.add_argument("--project")
     processing.add_argument("--config")
     processing.add_argument("--goal-id")
+    processing.add_argument("--agent-id")
     processing.add_argument("--message-id", required=True)
     processing.add_argument("--execute", action="store_true")
     reaction_complete = sub.add_parser(
@@ -138,6 +153,7 @@ def register_lark_inbox_commands(
     reaction_complete.add_argument("--project")
     reaction_complete.add_argument("--config")
     reaction_complete.add_argument("--goal-id")
+    reaction_complete.add_argument("--agent-id")
     reaction_complete.add_argument("--message-id", required=True)
     reaction_complete.add_argument("--execute", action="store_true")
     ingest = sub.add_parser(
@@ -151,6 +167,7 @@ def register_lark_inbox_commands(
     ingest.add_argument("--project")
     ingest.add_argument("--config")
     ingest.add_argument("--goal-id")
+    ingest.add_argument("--agent-id")
     ingest.add_argument("--execute", action="store_true")
     collector_plan = sub.add_parser(
         "collector-plan",

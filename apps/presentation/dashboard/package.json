@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && vite build --config vite.chat.config.ts",
+    "build:desktop": "tsc --noEmit && vite build",
     "build:chat": "tsc --noEmit && vite build --config vite.chat.config.ts",
     "dev": "bash ../../../scripts/dashboard-dev.sh",
     "dev:web": "vite --host 127.0.0.1",
@@ -13,7 +14,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "smoke:action-packet": "rm -rf /tmp/loopx-action-packet-smoke && tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --outDir /tmp/loopx-action-packet-smoke smoke/action-packet-smoke.ts src/data/action-packet.ts && node /tmp/loopx-action-packet-smoke/smoke/action-packet-smoke.js",
     "smoke:pwa-bundle": "python3 ../../../examples/dashboard-pwa-bundle-smoke.py",
-    "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
+    "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts src/vite-env.d.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
     "smoke:demo-readiness": "python3 ../../../examples/dashboard-demo-readiness-smoke.py",
     "smoke:frontstage-browser": "node ../../../examples/dashboard-frontstage-browser-smoke.mjs",
     "smoke:frontstage-design-baseline": "node ../../../examples/dashboard-frontstage-design-baseline-smoke.mjs",
@@ -23,8 +24,6 @@
     "smoke:personal-workspace": "node ../../../examples/personal-workspace-browser-smoke.mjs",
     "smoke:personal-workspace-router": "rm -rf /tmp/loopx-personal-workspace-router-smoke && tsc --ignoreConfig --target ES2022 --module commonjs --moduleResolution node --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir /tmp/loopx-personal-workspace-router-smoke smoke/personal-workspace-router-smoke.ts src/features/personal-workspace/personal-workspace-router.ts && node /tmp/loopx-personal-workspace-router-smoke/smoke/personal-workspace-router-smoke.js",
     "smoke:home-route": "rm -rf /tmp/loopx-home-route-smoke && tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir /tmp/loopx-home-route-smoke smoke/home-route-smoke.ts && node /tmp/loopx-home-route-smoke/home-route-smoke.js",
-    "smoke:ops-decision-freshness": "node ../../../examples/dashboard-ops-decision-freshness-smoke.mjs",
-    "smoke:promotion-readiness": "node ../../../examples/dashboard-promotion-readiness-browser-smoke.mjs",
     "smoke:presentation-surface-schema": "rm -rf /tmp/loopx-presentation-surface-schema-smoke && tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --skipLibCheck --strict --resolveJsonModule --esModuleInterop --outDir /tmp/loopx-presentation-surface-schema-smoke smoke/presentation-surface-schema-smoke.ts src/data/status.ts src/data/decision-research.ts src/data/goal-channel-frontstage.ts && NODE_PATH=\"$PWD/node_modules\" node /tmp/loopx-presentation-surface-schema-smoke/apps/presentation/dashboard/smoke/presentation-surface-schema-smoke.js",
     "smoke:usage-progress": "rm -rf /tmp/loopx-usage-progress-smoke && tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --outDir /tmp/loopx-usage-progress-smoke smoke/usage-progress-smoke.ts && node /tmp/loopx-usage-progress-smoke/usage-progress-smoke.js"
   },
@@ -51,6 +50,7 @@
     "vite": "^8.2.1"
   },
   "overrides": {
+    "nanoid": "3.3.18",
     "postcss": "8.5.26"
   }
 }

@@ -313,7 +313,7 @@
     <aside id="quickstart" class="quick-card" aria-label="四步快速开始">
       <div class="quick-head">四步快速开始</div>
       <pre>uv venv .venv
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 
 .venv/bin/loopx-kunluncode connect \
   --project /path/to/project \
@@ -452,7 +452,7 @@ export KUNLUN_AGENT_ID=kunlun</code></pre></div>
       <section id="environment">
         <span class="section-no">04 / ENVIRONMENT</span>
         <h2>安装适配器</h2>
-        <p>普通用户安装发布包；<code>install</code> 会通过 uv 创建 adapter-owned MCP 环境，安装相同版本的 LoopX 与 <code>mcp==1.27.2</code>，不要求源码 checkout。</p>
+        <p>普通用户安装发布包；<code>install</code> 会通过 uv 创建 adapter-owned MCP 环境，安装相同版本的 LoopX 与 <code>mcp==1.28.1</code>，不要求源码 checkout。</p>
         <div class="code-wrap"><pre><code>python3 -m pip install --upgrade loopx
 loopx-kunluncode install
 loopx-kunluncode --help</code></pre></div>
@@ -460,7 +460,7 @@ loopx-kunluncode --help</code></pre></div>
         <div class="code-wrap"><pre><code>export LOOPX_SOURCE=/path/to/loopx
 cd "$LOOPX_SOURCE"
 uv venv .venv
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 export LOOPX_KUNLUN="$LOOPX_SOURCE/.venv/bin/loopx-kunluncode"
 "$LOOPX_KUNLUN" install --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
         <p><code>"$LOOPX_KUNLUN" --help</code> 应列出 <code>connect / install / uninstall / add / run / status</code>；内置 provisioner 不修改系统 Python。</p>
@@ -613,7 +613,7 @@ kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode</code></pre></div>
         <h2>故障排查</h2>
         <div class="cards">
           <div class="card"><h3>找不到 kunluncode</h3><p>运行 <code>command -v kunluncode</code> 和 <code>kunluncode --version</code>，修复 PATH。</p></div>
-          <div class="card"><h3>uv is required</h3><p>安装 uv，或传入已包含 LoopX 与 <code>mcp==1.27.2</code> 的 uv Python。</p></div>
+          <div class="card"><h3>uv is required</h3><p>安装 uv，或传入已包含 LoopX 与 <code>mcp==1.28.1</code> 的 uv Python。</p></div>
           <div class="card"><h3>MCP 无法连接</h3><p>依次 readback 配置、重新 install、从目标项目执行 <code>mcp test</code>。</p></div>
           <div class="card"><h3>身份不匹配</h3><p>用正确 goal/Agent 重新 connect；不要修改请求去冒充另一个 Agent。</p></div>
           <div class="card"><h3>goal-mode 未激活</h3><p>确认当前目录、registry 和 binding，再重新 connect。</p></div>
@@ -623,7 +623,7 @@ kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode</code></pre></div>
         </div>
         <h3>重新同步 Python 环境</h3>
         <div class="code-wrap"><pre><code>cd "$LOOPX_SOURCE"
-uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
+uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 
 "$LOOPX_KUNLUN" install --python "$LOOPX_SOURCE/.venv/bin/python"</code></pre></div>
         <h3><code>should_run=false</code></h3>
@@ -635,7 +635,7 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.27.2'
         <span class="section-no">12 / ACCEPTANCE</span>
         <h2>完整验收清单</h2>
         <ul class="checklist">
-          <li>uv 可用；LoopX 与 <code>mcp==1.27.2</code> 位于同一环境。</li>
+          <li>uv 可用；LoopX 与 <code>mcp==1.28.1</code> 位于同一环境。</li>
           <li>connect 返回成功，goal id 与 Agent id 正确。</li>
           <li><code>.loopx/kunluncode.json</code> 未被 Git 跟踪。</li>
           <li>已有 goal 的其他 registered agents 被保留。</li>

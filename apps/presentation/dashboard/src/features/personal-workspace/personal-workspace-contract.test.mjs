@@ -12,6 +12,7 @@ const shell = source("./workspace-shell.tsx");
 const timeline = source("./channel-timeline.tsx");
 const runRow = source("./cards/run-row.tsx");
 const larkSettings = source("./lark-settings-page.tsx");
+const workspaceSettings = source("./workspace-settings-page.tsx");
 const styles = source("./personal-workspace.css");
 const dashboard = source("../../views/dashboard-page.tsx");
 const tasks = source("./goal-tasks-view.tsx");
@@ -162,7 +163,7 @@ for (const label of ["需要你", "执行中", "观察中", "已安排", "历史
 }
 assert.match(page, /personal-home-board/, "Manager home uses the four-lane workspace board");
 assert.doesNotMatch(page, /personal-worker-strip/, "Manager home omits the redundant Agent worker strip");
-assert.match(header, /切换到野兽主题[\s\S]*切换到默认主题/, "Header exposes an explicit theme switch");
+assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Workspace header does not expose theme switching");
 assert.match(page, /loopx-pw-theme/, "Theme preference persists across reloads");
 assert.match(dashboard, /function isManagerProjectionQuestion[\s\S]*我现在该做什么[\s\S]*哪些 Goal 在等我[\s\S]*Agent 在做什么/, "Manager projection questions use stable intent phrases instead of exact button copy");
 assert.match(dashboard, /targetContextId === "manager" && isManagerProjectionQuestion\(question\)/, "Manager projection questions remain on the cross-Goal manager route when the user adds a read-only boundary");
@@ -245,8 +246,17 @@ assert.match(
   "Initial load and refresh keep the workspace shell visible, while failed authoritative status requests surface recovery",
 );
 
-assert.match(page, /notificationSettingsOpen\s*\?\s*\(/, "Notification settings replace the center workspace");
-assert.match(page, /<LarkSettingsPage/, "Pure configuration mode renders the Lark management page");
+assert.match(page, /if \(settingsOpen\)[\s\S]*<WorkspaceSettingsPage/, "Settings replace the whole workspace shell");
+assert.match(sidebar, />设置</, "The sidebar exposes one general Settings entry");
+assert.doesNotMatch(sidebar, /个人工作区/, "The sidebar footer no longer renders a static personal workspace row");
+assert.doesNotMatch(workspaceSettings, /NotificationSettingsPanel/, "Settings do not render the old per-Goal notification binding panel");
+assert.match(workspaceSettings, /key: "lark"/, "Settings expose a Lark tab");
+assert.match(workspaceSettings, /key: "appearance"/, "Settings expose an appearance tab");
+assert.match(workspaceSettings, /<LarkSettingsPage[\s\S]*embedded/, "Settings embed the Lark management page");
+assert.match(workspaceSettings, /返回工作区/, "Settings page has a clear back action");
+assert.match(styles, /personal-settings-sidebar/, "Settings page owns its own sidebar navigation");
+assert.match(styles, /personal-settings-page\[data-pw-theme="brutal"\]/, "Settings page owns its high-contrast theme styles");
+assert.match(workspaceSettings, /role="radiogroup"/, "Settings expose theme selection as a radio group");
 assert.match(larkSettings, /Lark Apps/, "Lark management exposes reusable Apps");
 assert.match(larkSettings, /Connections/, "Lark management exposes Goal Topic connections");
 for (const label of ["Connect Lark App", "Group chat", "Bind to Goal", "Create Goal topic automatically", "Topic reply"]) {

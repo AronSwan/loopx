@@ -19,13 +19,23 @@ CHAT_SESSION_SCHEMA_VERSION = "loopx_chat_session_state_v1"
 CHAT_TURN_SCHEMA_VERSION = "loopx_chat_turn_state_v1"
 CHAT_EVENT_SCHEMA_VERSION = "loopx_chat_event_v1"
 CHAT_MESSAGE_SCHEMA_VERSION = "loopx_chat_message_v1"
+CHAT_INGRESS_SCHEMA_VERSION = "loopx_chat_ingress_receipt_v1"
 RESUMABLE_SESSION_STATES = {"ready", "busy", "stale", "resuming"}
+SESSION_QUEUE_MAX_PENDING = 20
+SESSION_QUEUE_TTL_SECONDS = 3600
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _instant(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _opaque_id(value: Any, *, field: str) -> str:
@@ -142,6 +152,13 @@ class ChatSessionStore:
 
     def _event_path(self, session_id: str, turn_id: str) -> Path:
         return self._session_dir(session_id) / "turns" / f"{_opaque_id(turn_id, field='turn_id')}.events.jsonl"
+
+    def _ingress_path(self, session_id: str, client_ingress_id: str) -> Path:
+        return (
+            self._session_dir(session_id)
+            / "ingress"
+            / f"{_opaque_id(client_ingress_id, field='client_ingress_id')}.json"
+        )
 
     def create_session(
         self,
@@ -280,6 +297,71 @@ class ChatSessionStore:
     def messages(self, session_id: str) -> list[dict[str, Any]]:
         return _read_jsonl(self._session_dir(session_id) / "messages.jsonl")
 
+    def create_ingress_receipt(
+        self,
+        session_id: str,
+        *,
+        client_ingress_id: str,
+        mode: str,
+        message: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Reserve one idempotent external ingress before provider delivery."""
+
+        if self.load_session(session_id) is None:
+            raise KeyError("chat session was not found")
+        path = self._ingress_path(session_id, client_ingress_id)
+        with exclusive_file_lock(
+            path,
+            agent_id="loopx-chat",
+            operation="create_chat_ingress_receipt",
+        ):
+            existing = _read_json(path)
+            if existing.get("schema_version") == CHAT_INGRESS_SCHEMA_VERSION:
+                return existing, False
+            now = utc_now()
+            payload = {
+                "schema_version": CHAT_INGRESS_SCHEMA_VERSION,
+                "client_ingress_id": _opaque_id(
+                    client_ingress_id,
+                    field="client_ingress_id",
+                ),
+                "session_id": session_id,
+                "mode": _opaque_id(mode, field="mode"),
+                "status": "pending",
+                "message": str(message),
+                "active_turn_id": None,
+                "error_code": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            _atomic_write_json(path, payload)
+            os.chmod(path, 0o600)
+            return payload, True
+
+    def update_ingress_receipt(
+        self,
+        session_id: str,
+        client_ingress_id: str,
+        **changes: Any,
+    ) -> dict[str, Any]:
+        path = self._ingress_path(session_id, client_ingress_id)
+        with exclusive_file_lock(
+            path,
+            agent_id="loopx-chat",
+            operation="update_chat_ingress_receipt",
+        ):
+            payload = _read_json(path)
+            if payload.get("schema_version") != CHAT_INGRESS_SCHEMA_VERSION:
+                raise KeyError("chat ingress receipt was not found")
+            allowed = {"status", "active_turn_id", "error_code"}
+            unknown = set(changes) - allowed
+            if unknown:
+                raise ValueError(f"unsupported chat ingress fields: {sorted(unknown)}")
+            payload.update(changes)
+            payload["updated_at"] = utc_now()
+            _atomic_write_json(path, payload, preserve_mode=True)
+            return payload
+
     def create_turn(
         self,
         session_id: str,
@@ -335,6 +417,138 @@ class ChatSessionStore:
         self.append_event(session_id, turn_id, kind="turn.queued", payload={})
         return payload, True
 
+    def create_queued_turn(
+        self,
+        session_id: str,
+        *,
+        client_turn_id: str,
+        message: str,
+        ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist one bounded follow-up without replacing the active Turn."""
+
+        client_id = _opaque_id(client_turn_id, field="client_turn_id")
+        existing = self.turn_for_client(session_id, client_id)
+        if existing is not None:
+            return existing, False
+        if self.load_session(session_id) is None:
+            raise KeyError("chat session was not found")
+        now = datetime.now(timezone.utc)
+        queued = [
+            turn
+            for turn in self.queued_turns(session_id)
+            if (_instant(turn.get("expires_at")) or now + timedelta(seconds=1)) > now
+        ]
+        if len(queued) >= SESSION_QUEUE_MAX_PENDING:
+            raise RuntimeError("session_queue_full")
+        turn_id = uuid.uuid4().hex
+        payload = {
+            "schema_version": CHAT_TURN_SCHEMA_VERSION,
+            "turn_id": turn_id,
+            "session_id": session_id,
+            "client_turn_id": client_id,
+            "status": "queued",
+            "message": str(message),
+            "upstream_turn_id": None,
+            "response": None,
+            "error_code": None,
+            "error": None,
+            "created_at": now.isoformat().replace("+00:00", "Z"),
+            "expires_at": (now + timedelta(seconds=max(1, ttl_seconds)))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "started_at": None,
+            "first_event_at": None,
+            "completed_at": None,
+            "last_activity_at": now.isoformat().replace("+00:00", "Z"),
+            "delta_count": 0,
+            "sse_reconnect_count": 0,
+        }
+        path = self._turn_path(session_id, turn_id)
+        _atomic_write_json(path, payload)
+        os.chmod(path, 0o600)
+        self.append_message(session_id, role="user", text=message, turn_id=turn_id)
+        self.append_event(
+            session_id,
+            turn_id,
+            kind="turn.queued",
+            payload={"delivery_mode": "session_queue"},
+        )
+        return payload, True
+
+    def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
+        session = self.load_session(session_id)
+        if session is None:
+            raise KeyError("chat session was not found")
+        active_turn_id = str(session.get("active_turn_id") or "")
+        turns_dir = self._session_dir(session_id) / "turns"
+        rows: list[dict[str, Any]] = []
+        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
+            if path.name.endswith(".events.json"):
+                continue
+            payload = _read_json(path)
+            if (
+                payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                and payload.get("status") == "queued"
+                and str(payload.get("turn_id") or "") != active_turn_id
+            ):
+                rows.append(payload)
+        return sorted(
+            rows,
+            key=lambda item: (
+                str(item.get("created_at") or ""),
+                str(item.get("turn_id") or ""),
+            ),
+        )
+
+    def claim_next_queued_turn(self, session_id: str) -> dict[str, Any] | None:
+        """Atomically make the oldest live queued Turn active for its Session."""
+
+        session_path = self._session_path(session_id)
+        with exclusive_file_lock(
+            session_path,
+            agent_id="loopx-chat",
+            operation="claim_session_queue_turn",
+        ):
+            session = self.load_session(session_id)
+            if session is None:
+                raise KeyError("chat session was not found")
+            if session.get("status") == "closed" or session.get("active_turn_id"):
+                return None
+            now = datetime.now(timezone.utc)
+            for turn in self.queued_turns(session_id):
+                turn_id = str(turn["turn_id"])
+                expires_at = _instant(turn.get("expires_at"))
+                if expires_at is not None and expires_at <= now:
+                    completed = utc_now()
+                    self.update_turn(
+                        session_id,
+                        turn_id,
+                        status="timed_out",
+                        error_code="session_queue_expired",
+                        error="Queued Agent ingress expired before dispatch.",
+                        completed_at=completed,
+                        last_activity_at=completed,
+                    )
+                    self.append_event(
+                        session_id,
+                        turn_id,
+                        kind="turn.failed",
+                        payload={"error_code": "session_queue_expired"},
+                    )
+                    continue
+                session.update(
+                    {
+                        "status": "busy",
+                        "active_turn_id": turn_id,
+                        "last_activity_at": utc_now(),
+                        "updated_at": utc_now(),
+                    }
+                )
+                _atomic_write_json(session_path, session, preserve_mode=True)
+                return turn
+            return None
+
     def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
         turns_dir = self._session_dir(session_id) / "turns"
         for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
@@ -358,7 +572,7 @@ class ChatSessionStore:
             allowed = {
                 "status", "upstream_turn_id", "response", "error_code", "error",
                 "started_at", "first_event_at", "completed_at", "last_activity_at",
-                "delta_count", "sse_reconnect_count",
+                "delta_count", "sse_reconnect_count", "expires_at",
             }
             unknown = set(changes) - allowed
             if unknown:
