@@ -24,6 +24,7 @@ import sys
 import time
 
 active_turn = None
+turn_count = 0
 assert "goals" not in sys.argv, sys.argv
 for line in sys.stdin:
     request = json.loads(line)
@@ -42,14 +43,27 @@ for line in sys.stdin:
         }), flush=True)
         continue
     elif method == "turn/start":
-        active_turn = "durable-turn"
+        turn_count += 1
+        active_turn = f"durable-turn-{turn_count}"
         print(json.dumps({"method": "turn/started", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
         print(json.dumps({"id": request_id, "result": {"turn": {"id": active_turn, "status": "running"}}}), flush=True)
-        if "wait for interrupt" in json.dumps(request.get("params") or {}):
+        if "wait for interrupt" in json.dumps(request.get("params") or {}) or "wait for steer" in json.dumps(request.get("params") or {}):
             continue
         response = 'Visible runtime response.\n<loopx-review-json>' + json.dumps({
             "schema_version": "loopx_chat_agent_response_v0",
             "message": "Runtime response.",
+            "proposals": [],
+            "gate": None,
+        }) + '</loopx-review-json>'
+        print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": response}}), flush=True)
+        print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
+        continue
+    elif method == "turn/steer":
+        assert request["params"]["expectedTurnId"] == active_turn, request
+        print(json.dumps({"id": request_id, "result": {"turnId": active_turn}}), flush=True)
+        response = 'Visible steered response.\n<loopx-review-json>' + json.dumps({
+            "schema_version": "loopx_chat_agent_response_v0",
+            "message": "Steered response.",
             "proposals": [],
             "gate": None,
         }) + '</loopx-review-json>'
@@ -169,6 +183,84 @@ def main() -> None:
             timeout_sec=3,
         )
         assert continued["status"] == "completed", continued
+
+        steering_turn, created = second.submit_turn(
+            session_id=session_id,
+            client_turn_id="active-steering-turn",
+            message="wait for steer",
+            work_dir=root,
+            objective="Keep the thread durable.",
+        )
+        assert created is True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            current = store.load_turn(session_id, steering_turn["turn_id"])
+            if current and current.get("upstream_turn_id"):
+                break
+            time.sleep(0.02)
+        steered, delivered = second.steer_active_turn(
+            session_id=session_id,
+            client_ingress_id="lark-steer-one",
+            message="steer this active turn",
+        )
+        assert delivered is True and steered["turn_id"] == steering_turn["turn_id"], steered
+        steered = second.wait_for_turn(
+            session_id=session_id,
+            turn_id=steering_turn["turn_id"],
+            timeout_sec=3,
+        )
+        assert steered["response"]["message"] == "Steered response.", steered
+        duplicate, delivered = second.steer_active_turn(
+            session_id=session_id,
+            client_ingress_id="lark-steer-one",
+            message="steer this active turn",
+        )
+        assert delivered is False and duplicate["turn_id"] == steering_turn["turn_id"]
+
+        blocking, created = second.submit_turn(
+            session_id=session_id,
+            client_turn_id="queue-blocking-turn",
+            message="wait for interrupt",
+            work_dir=root,
+            objective="Keep the thread durable.",
+        )
+        assert created is True
+        queued_one, created = second.enqueue_turn(
+            session_id=session_id,
+            client_turn_id="lark-queue-one",
+            message="queued one",
+            work_dir=root,
+            objective="Keep the thread durable.",
+        )
+        assert created is True and queued_one["status"] == "queued"
+        queued_two, created = second.enqueue_turn(
+            session_id=session_id,
+            client_turn_id="lark-queue-two",
+            message="queued two",
+            work_dir=root,
+            objective="Keep the thread durable.",
+        )
+        assert created is True and queued_two["status"] == "queued"
+        second.interrupt_turn(session_id=session_id, turn_id=blocking["turn_id"])
+        first_queued = second.wait_for_turn(
+            session_id=session_id,
+            turn_id=queued_one["turn_id"],
+            timeout_sec=3,
+        )
+        second_queued = second.wait_for_turn(
+            session_id=session_id,
+            turn_id=queued_two["turn_id"],
+            timeout_sec=3,
+        )
+        assert first_queued["status"] == "completed", first_queued
+        assert second_queued["status"] == "completed", second_queued
+        queue_messages = [
+            item["text"]
+            for item in store.messages(session_id)
+            if item.get("turn_id") in {queued_one["turn_id"], queued_two["turn_id"]}
+            and item.get("role") == "user"
+        ]
+        assert queue_messages == ["queued one", "queued two"], queue_messages
         second.close()
 
     print("loopx-chat-runtime-smoke: ok")

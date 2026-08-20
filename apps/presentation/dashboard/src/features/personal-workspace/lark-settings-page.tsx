@@ -3,7 +3,6 @@ import {
   Bot,
   Check,
   ExternalLink,
-  Link2,
   Loader2,
   MessageSquareText,
   Plus,
@@ -25,12 +24,34 @@ import {
   startLarkAppSetup,
   type LarkApp,
   type LarkAppSetup,
+  type LarkCaptureScope,
   type LarkGoalConnection,
   type LarkGroupChat,
+  type LarkIngressMode,
+  type LarkReplyMode,
 } from "../../data/chat";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type Tab = "apps" | "connections";
+
+const ingressPresentation: Record<LarkIngressMode, { label: string; detail: string }> = {
+  live_steering: {
+    label: "Steering",
+    detail: "投到当前活跃 Turn；没有精确活跃 Turn 时安全拒绝。",
+  },
+  session_queue: {
+    label: "Queuing",
+    detail: "进入同一 Agent Session 的有界 FIFO 队列，当前 Turn 完成后处理。",
+  },
+  async_inbox: {
+    label: "Async inbox",
+    detail: "写入 Agent 私有收件箱，等待后续显式 drain。",
+  },
+  direct_session: {
+    label: "Legacy direct",
+    detail: "旧连接兼容模式；保存时请选择新的三种入站模式之一。",
+  },
+};
 
 function larkConnectionHealth(connection: LarkGoalConnection): { label: string; detail: string; ready: boolean } {
   if (connection.listener_status === "starting") {
@@ -47,6 +68,12 @@ function larkConnectionHealth(connection: LarkGoalConnection): { label: string; 
   }
   if (connection.last_event_status === "processing_failed") {
     return { label: "消息处理失败", detail: "已收到消息事件，但 Agent 处理失败。请查看本地诊断后重试。", ready: false };
+  }
+  if (connection.health_error_code === "invalid_routing_state") {
+    return { label: "路由配置无效", detail: "连接已安全停用，请重新选择处理方式并保存。", ready: false };
+  }
+  if (connection.last_event_status === "queued_for_agent") {
+    return { label: "已进入 Agent 收件箱", detail: `消息由 ${connection.agent_id ?? "目标 Agent"} 异步处理，不会启动通用 Chat Session。`, ready: true };
   }
   if (connection.last_event_status === "ignored" && connection.last_event_reason === "not_addressed") {
     return {
@@ -135,7 +162,10 @@ export function LarkSettingsPage({
   const [chatId, setChatId] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatLoadError, setChatLoadError] = useState<string | null>(null);
-  const [incomingMode, setIncomingMode] = useState<"mentions" | "all">("mentions");
+  const [captureScope, setCaptureScope] = useState<LarkCaptureScope>("addressed_only");
+  const [ingressMode, setIngressMode] = useState<LarkIngressMode>("async_inbox");
+  const [replyMode, setReplyMode] = useState<LarkReplyMode>("topic_reply");
+  const [agentId, setAgentId] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -263,8 +293,13 @@ export function LarkSettingsPage({
   }, [connections, query]);
 
   function openConnect(goal?: WorkspaceGoal) {
+    const nextGoal = goal ?? goals.find((item) => item.goalId === initialGoalId) ?? goals[0];
     setEditingGoalId(null);
-    setGoalId(goal?.goalId ?? initialGoalId ?? goals[0]?.goalId ?? "");
+    setGoalId(nextGoal?.goalId ?? "");
+    setAgentId(nextGoal?.agentId ?? "");
+    setCaptureScope("addressed_only");
+    setIngressMode("async_inbox");
+    setReplyMode("topic_reply");
     setChatQuery("");
     setConnectError(null);
     setModalOpen(true);
@@ -274,7 +309,10 @@ export function LarkSettingsPage({
     setEditingGoalId(connection.goal_id);
     setAppRef(connection.app_ref);
     setGoalId(connection.goal_id);
-    setIncomingMode(connection.incoming_mode);
+    setAgentId(connection.agent_id ?? goals.find((goal) => goal.goalId === connection.goal_id)?.agentId ?? "");
+    setCaptureScope(connection.capture_scope);
+    setIngressMode(connection.ingress_mode === "direct_session" ? "session_queue" : connection.ingress_mode);
+    setReplyMode(connection.reply_mode);
     setChatQuery(connection.chat_name);
     setConnectError(null);
     setModalOpen(true);
@@ -323,11 +361,15 @@ export function LarkSettingsPage({
     setConnectError(null);
     try {
       const input = {
+        agentId,
         appRef,
+        captureScope,
         chatId: selectedChat.chat_id,
         chatName: selectedChat.chat_name,
         goalId,
-        incomingMode,
+        incomingMode: captureScope === "configured_chat_all" ? "all" as const : "mentions" as const,
+        ingressMode,
+        replyMode,
       } as const;
       const preview = await connectLarkGoalTopic({ ...input, execute: false });
       if (!preview.ok) throw new ChatApiError(preview.public_summary ?? preview.blocker ?? "绑定预览失败", { error_code: preview.blocker ?? "provider_api_failed" });
@@ -403,7 +445,7 @@ export function LarkSettingsPage({
             <button className="personal-primary-action" disabled={apps.length === 0 || goals.length === 0} onClick={() => openConnect()} type="button"><Plus size={16} />Connect Lark App</button>
           </div>
           <div className="personal-lark-table" role="table" aria-label="Lark Goal Topic connections">
-            <div className="personal-lark-table-head" role="row"><span>Connection</span><span>Goal</span><span>Trigger</span><span>Reply mode</span><span>Actions</span></div>
+            <div className="personal-lark-table-head" role="row"><span>Connection</span><span>Goal</span><span>Capture</span><span>Processing</span><span>Actions</span></div>
             {filteredConnections.map((connection) => (
               <div className="personal-lark-table-row" key={connection.goal_id} role="row">
                 <span>
@@ -415,8 +457,8 @@ export function LarkSettingsPage({
                   ) : null}
                 </span>
                 <span><strong>{connection.goal_title}</strong><small># {connection.topic_name}</small></span>
-                <span>{connection.incoming_mode === "mentions" ? "Mentions" : "All messages"}</span>
-                <span>Topic reply</span>
+                <span>{connection.capture_scope === "addressed_only" ? "Mentions only" : "All topic messages"}</span>
+                <span><strong>{ingressPresentation[connection.ingress_mode].label}</strong><small>{connection.agent_id ?? ingressPresentation[connection.ingress_mode].detail}</small></span>
                 <span className="personal-lark-row-actions">
                   <button aria-label={`配置 ${connection.goal_title}`} onClick={() => openConnectionEditor(connection)} type="button"><Settings2 size={15} /></button>
                   <button aria-label={`解绑 ${connection.goal_title}`} className={disconnectGoalId === connection.goal_id ? "is-confirm" : ""} onClick={() => void disconnect(connection.goal_id)} type="button"><Unlink size={15} />{disconnectGoalId === connection.goal_id ? "确认" : null}</button>
@@ -442,14 +484,16 @@ export function LarkSettingsPage({
               {!chatLoading && !chatLoadError && chats.length === 0 ? <div className="personal-lark-group-state" role="status">该机器人尚未加入可连接的群。请先在飞书群设置中添加这个机器人，再回来刷新或搜索。</div> : null}
               {!chatLoading && !chatLoadError && chats.length > 0 ? <select aria-label="Group chat" onChange={(event) => setChatId(event.target.value)} value={chatId}>{chats.map((chat) => <option key={chat.chat_id} value={chat.chat_id}>{chat.chat_name}</option>)}</select> : null}
             </label>
-            <label><span>Bind to Goal</span><select aria-label="Bind to Goal" onChange={(event) => setGoalId(event.target.value)} value={goalId}>{goals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title}</option>)}</select></label>
+            <label><span>Bind to Goal</span><select aria-label="Bind to Goal" onChange={(event) => { const nextGoalId = event.target.value; setGoalId(nextGoalId); setAgentId(goals.find((goal) => goal.goalId === nextGoalId)?.agentId ?? ""); }} value={goalId}>{goals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title}</option>)}</select></label>
             <label className="personal-lark-check"><input checked readOnly type="checkbox" /><span><strong>Create Goal topic automatically</strong><small>A dedicated topic will be created for this Goal.</small></span></label>
             <label><span>Topic preview</span><div className="personal-lark-topic-preview"><MessageSquareText size={15} /># {selectedGoal?.title ?? selectedGoal?.goalId ?? "Goal"}</div></label>
-            <label><span>Incoming messages</span><select aria-label="Incoming messages" onChange={(event) => setIncomingMode(event.target.value as "mentions" | "all")} value={incomingMode}><option value="mentions">Someone mentions the Agent</option><option value="all">All messages in this topic</option></select></label>
-            <label><span>Reply mode</span><div className="personal-lark-topic-preview is-locked"><Link2 size={15} />Topic reply</div></label>
+            <label><span>Capture scope</span><select aria-label="Capture scope" onChange={(event) => setCaptureScope(event.target.value as LarkCaptureScope)} value={captureScope}><option value="addressed_only">Only messages that mention or reply to the App</option><option value="configured_chat_all">All messages in this Goal topic</option></select><small>决定哪些 Topic 消息会进入 LoopX；不会扩大 Agent 权限。</small></label>
+            <fieldset aria-label="Agent ingress" className="personal-lark-ingress"><legend>Agent ingress</legend><div>{(["live_steering", "session_queue", "async_inbox"] as const).map((mode) => <label className={ingressMode === mode ? "is-active" : ""} key={mode}><input aria-label={ingressPresentation[mode].label} checked={ingressMode === mode} name="lark-agent-ingress" onChange={() => setIngressMode(mode)} type="radio" value={mode} /><span><strong>{ingressPresentation[mode].label}</strong><small>{ingressPresentation[mode].detail}</small></span></label>)}</div></fieldset>
+            <label><span>Target Agent</span><select aria-label="Target Agent" onChange={(event) => setAgentId(event.target.value)} value={agentId}><option value={selectedGoal?.agentId ?? ""}>{selectedGoal?.agentLabel ?? selectedGoal?.agentId ?? "No Agent configured"}</option></select><small>只能投递给当前 Goal 已注册的 Agent；此选择不授予新权限。Steering 与 Queuing 会绑定该 Goal 当前的精确 Session。</small></label>
+            <label><span>Reply mode</span><select aria-label="Reply mode" onChange={(event) => setReplyMode(event.target.value as LarkReplyMode)} value={replyMode}><option value="topic_reply">Topic reply</option></select><small>当前只支持在来源 Topic 内回复，避免跨群或跨 Goal 投递。</small></label>
             <p className="personal-lark-cardinality"><Check size={15} />One Lark App · many Goals · one topic per Goal</p>
             {connectError ? <p className="personal-notification-error">{connectError}</p> : null}
-            <footer><button className="personal-secondary-action" onClick={() => setModalOpen(false)} type="button">Cancel</button><button className="personal-primary-action" disabled={loading || !appRef || !selectedApp?.reply_ready || !goalId || !chatId || connecting} onClick={() => void connect()} type="button">{connecting ? <Loader2 className="is-spinning" size={15} /> : null}{editingGoalId ? "Save connection" : "Connect"}</button></footer>
+            <footer><button className="personal-secondary-action" onClick={() => setModalOpen(false)} type="button">Cancel</button><button className="personal-primary-action" disabled={loading || !appRef || !selectedApp?.reply_ready || !goalId || !chatId || !agentId || connecting} onClick={() => void connect()} type="button">{connecting ? <Loader2 className="is-spinning" size={15} /> : null}{editingGoalId ? "Save connection" : "Connect"}</button></footer>
           </section>
         </div>
       ) : null}

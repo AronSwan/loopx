@@ -661,6 +661,7 @@ def handle_registry_admin_command(
                     args.clear_issue_fix_reviewer_notification_config
                 ),
                 lark_event_inbox_config=args.lark_event_inbox_config,
+                lark_event_inbox_agent_id=args.lark_event_inbox_agent_id,
                 clear_lark_event_inbox_config=bool(
                     args.clear_lark_event_inbox_config
                 ),
