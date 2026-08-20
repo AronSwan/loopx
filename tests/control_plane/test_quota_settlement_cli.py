@@ -173,6 +173,21 @@ def _configure_read_only_todo(project: Path) -> Path:
     return state_path
 
 
+def _configure_repository_write_todo(project: Path) -> Path:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate "
+            "task_repository=git:github.com/example/read-only-settlement-fixture "
+            "required_capabilities=filesystem_write -->",
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
 def _configure_runtime_capability_reentry_fixture(project: Path) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -485,6 +500,144 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert replay["idempotent_replay"] is True
     assert replay["appended"] is False
     assert _spend_run_count(runtime) == 1
+
+
+def test_material_monitor_writeback_can_add_required_workspace_before_spend(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_repository_write_todo(project)
+    _initialize_git_checkout(project)
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+        "--scan-path",
+        str(project),
+    )
+    assert guard_rc == 0, guard
+    assert guard["heartbeat_receipt"]["delivery_workspace_causality"][
+        "requirement"
+    ] == "required"
+
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    material_monitor = {
+        "generated_at": "2026-01-01T00:01:00+00:00",
+        "goal_id": GOAL_ID,
+        "classification": "quota_monitor_poll",
+        "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "material_change": True,
+        "agent_id": AGENT_ID,
+        "todo_id": TODO_ID,
+        "turn_instance_id": TURN_ID,
+        "settlement_identity": guard["heartbeat_receipt"]["settlement_identity"],
+    }
+    (runs_dir / "index.jsonl").write_text(
+        json.dumps(material_monitor, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    repair_rc, repair = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "material_monitor_receipt_repair",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert repair_rc == 0, repair
+    assert repair["receipt_repaired"] is True
+    assert repair["appended"] is False
+
+    supplement_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "material_monitor_workspace_supplemented",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    supplement_rc, supplement = _run_cli(
+        registry_path,
+        runtime,
+        *supplement_args,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *supplement_args,
+    )
+
+    assert supplement_rc == 0, supplement
+    assert supplement["appended"] is True
+    assert supplement["delivery_workspace"] == {
+        "schema_version": "delivery_workspace_v0",
+        "task_repository": "git:github.com/example/read-only-settlement-fixture",
+        "repository_source": "refresh_state.delivery_workspace_path",
+        "workspace_kind": "canonical_checkout",
+        "peer_independent_worktree_required": False,
+    }
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert _classification_count(
+        runtime, "material_monitor_workspace_supplemented"
+    ) == 1
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["settlement_result"]["ok"] is True
 
 
 def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(

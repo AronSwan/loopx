@@ -16,7 +16,10 @@ from .control_plane.work_items.delivery_outcome import (
     DELIVERY_OUTCOME_CHOICES as DELIVERY_OUTCOME_CHOICES,
     require_delivery_outcome,
 )
-from .control_plane.agents.workspace_guard import capture_delivery_workspace
+from .control_plane.agents.workspace_guard import (
+    capture_delivery_workspace,
+    delivery_workspace_repository,
+)
 from .control_plane.quota.settlement import (
     SettlementIdentity,
     find_settlement_writeback,
@@ -97,6 +100,30 @@ BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
 CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
 ACTIVE_STATE_NEXT_ACTION_UPDATE_SCHEMA_VERSION = "active_state_next_action_update_v0"
 REPAIR_NOOP_SCHEMA_VERSION = "repair_noop_v0"
+
+
+def _delivery_workspace_supplement_required(
+    *,
+    prior_writeback: dict[str, Any],
+    delivery_workspace_path: Path | None,
+    delivery_workspace_causality: dict[str, str] | None,
+) -> bool:
+    """Return whether an idempotent writeback still lacks required causality.
+
+    A material monitor poll is already an accountable writeback. Its matching
+    refresh-state call may therefore arrive after the durable-writeback receipt
+    exists, while the monitor run itself has no delivery workspace snapshot.
+    Keep ordinary replays idempotent, but let an explicit workspace path append
+    one causal refresh record when the original Todo required repository work.
+    """
+
+    if delivery_workspace_path is None:
+        return False
+    if str((delivery_workspace_causality or {}).get("requirement") or "") != "required":
+        return False
+    return delivery_workspace_repository(
+        prior_writeback.get("delivery_workspace")
+    ) is None
 
 
 def now_local() -> str:
@@ -912,33 +939,44 @@ def refresh_state_run(
                 settlement_identity,
             )
             if prior_writeback.failure is None and prior_writeback.value is not None:
-                return {
-                    "ok": True,
-                    "dry_run": False,
-                    "appended": False,
-                    "idempotent_replay": True,
-                    "registry": str(registry_path),
-                    "runtime_root": str(runtime_root),
-                    "goal_id": safe_goal_id,
-                    "classification": prior_writeback.value.get("classification"),
-                    "delivery_batch_scale": prior_writeback.value.get(
-                        "delivery_batch_scale"
-                    ),
-                    "delivery_outcome": prior_writeback.value.get(
-                        "delivery_outcome"
-                    ),
-                    "settlement_identity": settlement_identity.as_dict(),
-                    "settlement_result": settlement_result_payload(
-                        settlement_result.bind(
-                            lambda _identity: prior_writeback
-                        )
-                    ),
-                }
+                if not _delivery_workspace_supplement_required(
+                    prior_writeback=prior_writeback.value,
+                    delivery_workspace_path=delivery_workspace_path,
+                    delivery_workspace_causality=delivery_workspace_causality,
+                ):
+                    return {
+                        "ok": True,
+                        "dry_run": False,
+                        "appended": False,
+                        "idempotent_replay": True,
+                        "registry": str(registry_path),
+                        "runtime_root": str(runtime_root),
+                        "goal_id": safe_goal_id,
+                        "classification": prior_writeback.value.get("classification"),
+                        "delivery_batch_scale": prior_writeback.value.get(
+                            "delivery_batch_scale"
+                        ),
+                        "delivery_outcome": prior_writeback.value.get(
+                            "delivery_outcome"
+                        ),
+                        "settlement_identity": settlement_identity.as_dict(),
+                        "settlement_result": settlement_result_payload(
+                            settlement_result.bind(
+                                lambda _identity: prior_writeback
+                            )
+                        ),
+                    }
             prior_writeback_run = find_settlement_writeback(
                 runtime_root,
                 settlement_identity,
             )
-            if prior_writeback_run is not None:
+            if prior_writeback_run is not None and not (
+                _delivery_workspace_supplement_required(
+                    prior_writeback=prior_writeback_run,
+                    delivery_workspace_path=delivery_workspace_path,
+                    delivery_workspace_causality=delivery_workspace_causality,
+                )
+            ):
                 return {
                     "ok": True,
                     "dry_run": False,
