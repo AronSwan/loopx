@@ -124,10 +124,14 @@ class ReplyRunner:
         *,
         matching_readback: bool = True,
         fail_reaction_delete: bool = False,
+        readback_text: str | None = None,
+        readback_mentions: list[dict[str, Any]] | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
         self.matching_readback = matching_readback
         self.fail_reaction_delete = fail_reaction_delete
+        self.readback_text = readback_text
+        self.readback_mentions = readback_mentions
 
     def __call__(self, args: Sequence[str]) -> dict[str, Any]:
         call = list(args)
@@ -157,21 +161,22 @@ class ReplyRunner:
                 "stderr": "",
             }
         if "+messages-mget" in call:
+            message: dict[str, Any] = {
+                "message_id": "om_reply_fixture",
+                "content": (
+                    self.readback_text
+                    if self.readback_text is not None
+                    else "处理完成"
+                    if self.matching_readback
+                    else "provider returned different text"
+                ),
+            }
+            if self.readback_mentions is not None:
+                message["mentions"] = self.readback_mentions
             return {
                 "returncode": 0,
                 "stdout": json.dumps(
-                    {
-                        "items": [
-                            {
-                                "message_id": "om_reply_fixture",
-                                "content": (
-                                    "处理完成"
-                                    if self.matching_readback
-                                    else "provider returned different text"
-                                ),
-                            }
-                        ]
-                    },
+                    {"items": [message]},
                     ensure_ascii=False,
                 ),
                 "stderr": "",
@@ -411,6 +416,74 @@ def test_verified_reply_removes_processing_reaction(tmp_path: Path) -> None:
         )
         == {}
     )
+
+
+def test_verified_reply_accepts_provider_token_or_rendered_mention_name(
+    tmp_path: Path,
+) -> None:
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    for readback_text in (
+        "@_user_1 please review",
+        "@Public Reviewer please review",
+    ):
+        runner = ReplyRunner(
+            readback_text=readback_text,
+            readback_mentions=[
+                {
+                    "key": "@_user_1",
+                    "name": "Public Reviewer",
+                    "id": {"open_id": "ou_public_reviewer"},
+                }
+            ],
+        )
+
+        result = reply_lark_event_inbox(
+            project=project,
+            config_path=config,
+            message_id="om_reaction_fixture",
+            text=(
+                '<at open_id="ou_public_reviewer">Public Reviewer</at> '
+                "please review"
+            ),
+            execute=True,
+            runner=runner,
+        )
+
+        assert result["ok"] is True
+        assert result["status"] == "sent_verified"
+        assert result["reply_verified"] is True
+
+
+def test_rendered_mention_name_does_not_override_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    runner = ReplyRunner(
+        readback_text="@Public Reviewer please review",
+        readback_mentions=[
+            {
+                "key": "@_user_1",
+                "name": "Public Reviewer",
+                "id": {"open_id": "ou_different_reviewer"},
+            }
+        ],
+    )
+
+    result = reply_lark_event_inbox(
+        project=project,
+        config_path=config,
+        message_id="om_reaction_fixture",
+        text=(
+            '<at open_id="ou_public_reviewer">Public Reviewer</at> '
+            "please review"
+        ),
+        execute=True,
+        runner=runner,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "sent_unverified"
+    assert result["reply_verified"] is False
 
 
 def test_unverified_reply_preserves_processing_reaction(tmp_path: Path) -> None:
