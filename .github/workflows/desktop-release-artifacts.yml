@@ -104,8 +104,8 @@ jobs:
           mkdir -p dist/desktop
           cp apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/dmg/*.dmg dist/desktop/
           ditto -c -k --keepParent \
-            "apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/macos/LoopX.app" \
-            "dist/desktop/LoopX.app.zip"
+            "apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/macos/Loopx.app" \
+            "dist/desktop/Loopx.app.zip"
 
       - name: Collect Windows desktop bundles
         if: runner.os == 'Windows'

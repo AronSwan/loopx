@@ -1,4 +1,4 @@
-import { Bell, Bot, ChevronDown, ChevronRight, CircleUserRound, Pause, Plus, RotateCcw } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Pause, Plus, RotateCcw, Settings2 } from "lucide-react";
 
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -16,19 +16,17 @@ export function GoalSidebar({
   attentionCount,
   goals,
   onRequestGoalCreate,
-  onOpenNotifications,
+  onOpenSettings,
   onRequestGoalLifecycle,
   onSelectGoal,
-  ownerLabel = "个人工作区",
   selectedGoalId,
 }: {
   attentionCount: number;
   goals: WorkspaceGoal[];
   onRequestGoalCreate?: () => void;
-  onOpenNotifications?: () => void;
+  onOpenSettings?: () => void;
   onRequestGoalLifecycle?: (goal: WorkspaceGoal, operation: "stop" | "resume") => void;
   onSelectGoal: (goalId: string | null) => void;
-  ownerLabel?: string;
   selectedGoalId: string | null;
 }) {
   const activeGoals = goals.filter((goal) => goal.activationState !== "stopped");
@@ -103,10 +101,9 @@ export function GoalSidebar({
       </nav>
 
       <div className="personal-sidebar-footer">
-        {onOpenNotifications ? (
-          <button className="personal-sidebar-utility" onClick={onOpenNotifications} type="button"><Bell size={17} /><span>通知设置</span></button>
+        {onOpenSettings ? (
+          <button className="personal-sidebar-utility" onClick={onOpenSettings} type="button"><Settings2 size={17} /><span>设置</span></button>
         ) : null}
-        <div className="personal-owner-row"><CircleUserRound size={22} /><span>{ownerLabel}</span></div>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-# LoopX Desktop
+# Loopx Desktop
 
 This directory contains the experimental Tauri shell for the LoopX personal
 Agent workspace. It reuses the existing React dashboard and LoopX HTTP
