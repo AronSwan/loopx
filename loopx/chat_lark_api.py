@@ -351,7 +351,18 @@ class LarkChatRequestMixin:
             return
         try:
             body = self._read_json()
-            allowed = {"app_ref", "chat_id", "chat_name", "execute", "goal_id", "incoming_mode"}
+            allowed = {
+                "agent_id",
+                "app_ref",
+                "capture_scope",
+                "chat_id",
+                "chat_name",
+                "execute",
+                "goal_id",
+                "incoming_mode",
+                "ingress_mode",
+                "reply_mode",
+            }
             if set(body) - allowed:
                 raise ValueError("unknown Lark connection field")
             goal_id = _compact_text(body.get("goal_id"), limit=160)
@@ -359,6 +370,10 @@ class LarkChatRequestMixin:
             chat_id = _compact_text(body.get("chat_id"), limit=160)
             chat_name = _compact_text(body.get("chat_name"), limit=120)
             incoming_mode = _compact_text(body.get("incoming_mode"), limit=40) or "mentions"
+            agent_id = _compact_text(body.get("agent_id"), limit=160) or None
+            capture_scope = _compact_text(body.get("capture_scope"), limit=40) or None
+            ingress_mode = _compact_text(body.get("ingress_mode"), limit=40) or "direct_session"
+            reply_mode = _compact_text(body.get("reply_mode"), limit=40) or "topic_reply"
             if not goal_id or not app_ref or not chat_id or not chat_name:
                 raise ValueError("goal_id, app_ref, chat_id, and chat_name are required")
             registry, binding_path = self._goal_channel_context(goal_id)
@@ -371,6 +386,11 @@ class LarkChatRequestMixin:
                 chat_id=chat_id,
                 chat_name=chat_name,
                 incoming_mode=incoming_mode,
+                agent_id=agent_id,
+                capture_scope=capture_scope,
+                ingress_mode=ingress_mode,
+                reply_mode=reply_mode,
+                registry_path=binding_path.parent / "registry.json",
                 execute=body.get("execute") is True,
                 runner=self._lark_runner(),
                 cli_bin=cli_bin,

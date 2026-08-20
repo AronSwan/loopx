@@ -311,6 +311,13 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--lark-event-inbox-agent-id",
+        help=(
+            "Bind the Lark event inbox pointer to one registered Agent. "
+            "Without this option the legacy Goal-wide pointer is configured."
+        ),
+    )
+    configure_goal_parser.add_argument(
         "--clear-lark-event-inbox-config",
         action="store_true",
         help="Remove the goal's generic Lark event inbox config pointer.",

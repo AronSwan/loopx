@@ -178,6 +178,88 @@ def test_mention_uses_existing_inbox_reply_and_ack_path(tmp_path: Path) -> None:
     assert projection["processed_count"] == 1
 
 
+def test_agent_scoped_async_inbox_queues_without_chat_reply_or_ack(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import loopx.extensions.lark.goal_topic_connections as connections
+    from loopx.extensions.lark.goal_topic_runtime import process_lark_goal_topic_event
+
+    state: dict[str, Any] = {}
+    configured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        connections,
+        "configure_goal_with_global_sync",
+        lambda **kwargs: configured.append(kwargs) or {"ok": True},
+    )
+    target_path = tmp_path / "runtime" / "goal-channel-targets.json"
+    binding_path = tmp_path / ".loopx" / "goal-channel.json"
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry = {
+        "goals": [
+            {
+                "id": "goal-alpha",
+                "repo": str(tmp_path),
+                "objective": "Alpha delivery",
+                "coordination": {"registered_agents": ["agent-alpha"]},
+            }
+        ]
+    }
+    connected = connect_lark_goal_topic(
+        registry=registry,
+        registry_path=registry_path,
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        target_path=target_path,
+        binding_path=binding_path,
+        app_ref="mew",
+        chat_id="oc_public_fixture",
+        chat_name="Product group",
+        incoming_mode="mentions",
+        ingress_mode="async_inbox",
+        runner=_connection_runner(state),
+        cli_bin="fake-lark",
+    )
+
+    assert connected["ok"] is True
+    assert configured[0]["lark_event_inbox_agent_id"] == "agent-alpha"
+    binding = read_goal_channel_binding(binding_path)["bindings"]["goal-alpha"]
+    assert binding["agent_id"] == "agent-alpha"
+    assert binding["routing"]["capture_scope"] == "addressed_only"
+    assert binding["routing"]["ingress_mode"] == "async_inbox"
+    config_ref = Path(binding["routing"]["inbox_config_ref"])
+    assert (tmp_path / config_ref).is_file()
+
+    result = process_lark_goal_topic_event(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        event={
+            "event_id": "evt_async",
+            "message_id": "om_async",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-20T10:00:00Z",
+            "content": "@linkmacbot please continue",
+        },
+        runtime_root=tmp_path / "runtime",
+        goal_contexts={"goal-alpha": {"work_dir": str(tmp_path)}},
+        answer=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("async inbox must not start a Chat turn")
+        ),
+        reply_runner=lambda _args: (_ for _ in ()).throw(
+            AssertionError("async inbox must not reply before the Agent effect")
+        ),
+    )
+
+    assert result["status"] == "queued_for_agent"
+    assert result["agent_id"] == "agent-alpha"
+    projection = inspect_lark_event_inbox(
+        project=tmp_path,
+        config_path=config_ref,
+    )
+    assert projection["pending_count"] == 1
+    assert projection["processed_count"] == 0
+
+
 def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 

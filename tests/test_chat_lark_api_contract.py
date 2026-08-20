@@ -383,11 +383,13 @@ def test_connect_refreshes_the_app_level_event_consumer(monkeypatch: Any, tmp_pa
     import loopx.chat_lark_api as api
 
     refreshed: list[bool] = []
+    connect_calls: list[dict[str, Any]] = []
     responses: list[dict[str, Any]] = []
     monkeypatch.setattr(
         api,
         "connect_lark_goal_topic",
-        lambda **_kwargs: {"ok": True, "status": "connected"},
+        lambda **kwargs: connect_calls.append(kwargs)
+        or {"ok": True, "status": "connected"},
     )
 
     class Handler(LarkChatRequestMixin):
@@ -403,6 +405,10 @@ def test_connect_refreshes_the_app_level_event_consumer(monkeypatch: Any, tmp_pa
                 "chat_id": "oc_public_fixture",
                 "chat_name": "Product",
                 "incoming_mode": "mentions",
+                "agent_id": "agent-alpha",
+                "capture_scope": "addressed_only",
+                "ingress_mode": "async_inbox",
+                "reply_mode": "topic_reply",
                 "execute": True,
             }
 
@@ -424,4 +430,8 @@ def test_connect_refreshes_the_app_level_event_consumer(monkeypatch: Any, tmp_pa
     Handler()._lark_connect()
 
     assert refreshed == [True]
+    assert connect_calls[0]["agent_id"] == "agent-alpha"
+    assert connect_calls[0]["capture_scope"] == "addressed_only"
+    assert connect_calls[0]["ingress_mode"] == "async_inbox"
+    assert connect_calls[0]["registry_path"] == tmp_path / "registry.json"
     assert responses == [{"ok": True, "status": "connected", "http_status": 200}]

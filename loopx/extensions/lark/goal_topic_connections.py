@@ -15,7 +15,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ...agent_registry import registered_agent_ids_for_goal
+from ...control_plane.goals.configure_goal_service import (
+    configure_goal_with_global_sync,
+)
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...control_plane.todos.contract import normalize_todo_claimed_by
 from .goal_channel_contracts import (
     binding_for_goal,
     goal_from_registry,
@@ -46,10 +51,17 @@ from .goal_channel_transport import (
     lark_args,
     message_readback_verified,
 )
-from .presentation.kanban import CommandRunner, DEFAULT_CLI_BIN, default_subprocess_runner
-
+from .presentation.kanban import (
+    DEFAULT_CLI_BIN,
+    CommandRunner,
+    default_subprocess_runner,
+)
+from .private_json import write_private_json_atomic
 
 INCOMING_MODES = {"mentions", "all"}
+CAPTURE_SCOPES = {"addressed_only", "configured_chat_all"}
+INGRESS_MODES = {"direct_session", "async_inbox"}
+REPLY_MODES = {"topic_reply"}
 
 
 class LarkGroupChatLookupError(RuntimeError):
@@ -219,6 +231,42 @@ def _target_name(app_ref: str, chat_id: str) -> str:
     return f"{prefix[:48]}-{digest}"
 
 
+def _write_agent_inbox_config(
+    *,
+    goal: Mapping[str, Any],
+    agent_id: str,
+    app_ref: str,
+    chat_id: str,
+    bot_display_name: str,
+) -> str:
+    project = Path(str(goal.get("repo") or "")).expanduser().resolve()
+    if not project.is_dir():
+        raise ValueError("Goal repository is unavailable for Agent-scoped inbox setup")
+    digest = hashlib.sha256(
+        f"{goal.get('id')}\0{agent_id}\0{app_ref}\0{chat_id}".encode()
+    ).hexdigest()[:20]
+    config_ref = f".loopx/config/lark-goal-topics/{digest}.json"
+    config_path = project / config_ref
+    payload = {
+        "schema_version": "lark_event_inbox_config_v0",
+        "enabled": True,
+        "inbox_dir": f".loopx/inbox/lark-goal-topics/{digest}",
+        # Goal Topic routing has already applied capture_scope before ingestion.
+        # The generic inbox must accept every routed event so its reply contract
+        # remains valid without reinterpreting provider mentions.
+        "capture_scope": "configured_chat_all",
+        "reply": {
+            "enabled": True,
+            "sender_profile": app_ref,
+            "sender_identity": "bot",
+            "bot_display_name": bot_display_name,
+            "chat_id": chat_id,
+        },
+    }
+    write_private_json_atomic(config_path, payload)
+    return config_ref
+
+
 def connect_lark_goal_topic(
     *,
     registry: Mapping[str, Any],
@@ -229,17 +277,43 @@ def connect_lark_goal_topic(
     chat_id: str,
     chat_name: str,
     incoming_mode: str = "mentions",
+    agent_id: str | None = None,
+    capture_scope: str | None = None,
+    ingress_mode: str = "direct_session",
+    reply_mode: str = "topic_reply",
+    registry_path: Path | None = None,
     execute: bool = True,
     runner: CommandRunner = default_subprocess_runner,
     cli_bin: str = DEFAULT_CLI_BIN,
 ) -> dict[str, Any]:
     goal = goal_from_registry(registry, goal_id)
+    normalized_agent_id = normalize_todo_claimed_by(agent_id)
+    if agent_id and not normalized_agent_id:
+        raise ValueError("agent_id must be a public-safe registered Agent id")
+    if normalized_agent_id and normalized_agent_id not in registered_agent_ids_for_goal(goal):
+        raise ValueError("agent_id must name an Agent registered for the Goal")
+    if ingress_mode not in INGRESS_MODES:
+        raise ValueError("ingress_mode must be direct_session or async_inbox")
+    if ingress_mode == "async_inbox" and not normalized_agent_id:
+        raise ValueError("async_inbox requires a registered agent_id")
+    if reply_mode not in REPLY_MODES:
+        raise ValueError("reply_mode must be topic_reply")
     profile = _profile_ref(app_ref)
     safe_chat_id = str(chat_id or "").strip()
     if not CHAT_ID_PATTERN.fullmatch(safe_chat_id):
         raise ValueError("Lark group chat id must begin with oc_")
     if incoming_mode not in INCOMING_MODES:
         raise ValueError("incoming_mode must be mentions or all")
+    effective_capture_scope = capture_scope or (
+        "configured_chat_all" if incoming_mode == "all" else "addressed_only"
+    )
+    if effective_capture_scope not in CAPTURE_SCOPES:
+        raise ValueError(
+            "capture_scope must be addressed_only or configured_chat_all"
+        )
+    effective_incoming_mode = (
+        "all" if effective_capture_scope == "configured_chat_all" else "mentions"
+    )
     target_payload = read_goal_channel_targets(target_path)
     matched = _target_for_connection(
         target_payload,
@@ -280,8 +354,11 @@ def connect_lark_goal_topic(
                 "app_ref": profile,
                 "chat_name": public_safe_compact_text(chat_name, limit=60),
                 "topic_name": goal_objective(goal),
-                "incoming_mode": incoming_mode,
-                "reply_mode": "topic_reply",
+                "incoming_mode": effective_incoming_mode,
+                "capture_scope": effective_capture_scope,
+                "ingress_mode": ingress_mode,
+                "reply_mode": reply_mode,
+                "agent_id": normalized_agent_id,
             },
         )
     if not chat_verified(
@@ -397,6 +474,38 @@ def connect_lark_goal_topic(
             external_write_performed=True,
         )
 
+    inbox_config_ref: str | None = None
+    if ingress_mode == "async_inbox":
+        if registry_path is None:
+            raise ValueError("async_inbox requires the source registry path")
+        inbox_config_ref = _write_agent_inbox_config(
+            goal=goal,
+            agent_id=str(normalized_agent_id),
+            app_ref=profile,
+            chat_id=safe_chat_id,
+            bot_display_name=str(identity["label"]),
+        )
+        configured = configure_goal_with_global_sync(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            runtime_root_override=None,
+            execute=True,
+            lark_event_inbox_config=inbox_config_ref,
+            lark_event_inbox_agent_id=normalized_agent_id,
+        )
+        if not configured.get("ok"):
+            return operation_packet(
+                ok=False,
+                goal_id=goal_id,
+                operation="connect_topic",
+                execute=True,
+                status="sent_verified_registration_failed",
+                blocker="agent_inbox_registration_failed",
+                public_summary="the Agent-scoped inbox could not be registered",
+                external_write_performed=True,
+                readback_verified=True,
+            )
+
     payload = read_goal_channel_binding(binding_path)
     existing = binding_for_goal(payload, goal_id) or {}
     receipts = dict(existing.get("receipts") or {})
@@ -412,6 +521,7 @@ def connect_lark_goal_topic(
         binding={
             **existing,
             "goal_id": goal_id,
+            "agent_id": normalized_agent_id,
             "provider": "lark",
             "enabled": True,
             "target_ref": target_name,
@@ -422,8 +532,15 @@ def connect_lark_goal_topic(
                 "created_automatically": True,
             },
             "routing": {
-                "incoming_mode": incoming_mode,
-                "reply_mode": "topic_reply",
+                "incoming_mode": effective_incoming_mode,
+                "capture_scope": effective_capture_scope,
+                "ingress_mode": ingress_mode,
+                "reply_mode": reply_mode,
+                **(
+                    {"inbox_config_ref": inbox_config_ref}
+                    if inbox_config_ref
+                    else {}
+                ),
             },
             "automation": dict(existing.get("automation") or {}),
             "receipts": receipts,
@@ -444,8 +561,11 @@ def connect_lark_goal_topic(
             "chat_name": public_safe_compact_text(chat_name, limit=60),
             "target_ref": target_name,
             "topic_name": objective,
-            "incoming_mode": incoming_mode,
-            "reply_mode": "topic_reply",
+            "incoming_mode": effective_incoming_mode,
+            "capture_scope": effective_capture_scope,
+            "ingress_mode": ingress_mode,
+            "reply_mode": reply_mode,
+            "agent_id": normalized_agent_id,
         },
     )
 
@@ -574,7 +694,17 @@ def list_lark_connections(
                 "enabled": binding.get("enabled") is True,
                 "goal_id": goal_id,
                 "goal_title": goal_objective(goal),
+                "agent_id": str(binding.get("agent_id") or "") or None,
                 "incoming_mode": str(routing.get("incoming_mode") or "mentions"),
+                "capture_scope": str(
+                    routing.get("capture_scope")
+                    or (
+                        "configured_chat_all"
+                        if routing.get("incoming_mode") == "all"
+                        else "addressed_only"
+                    )
+                ),
+                "ingress_mode": str(routing.get("ingress_mode") or "direct_session"),
                 "reply_mode": str(routing.get("reply_mode") or "topic_reply"),
                 "target_ref": target_ref,
                 "topic_name": public_safe_compact_text(topic.get("name") or goal_objective(goal), limit=120),
@@ -700,10 +830,18 @@ def decide_lark_topic_event(
         matched_topic = True
         if str(event.get("sender_id") or "") == str(identity.get("bot_app_id") or ""):
             return {"matched": False, "reason": "self_message", "route": None}
-        incoming_mode = str(routing.get("incoming_mode") or "mentions").strip().lower()
-        if incoming_mode != "all":
-            if not is_event_addressed_to_bot(event, identity):
-                return {"matched": False, "reason": "not_addressed", "route": None}
+        capture_scope = str(
+            routing.get("capture_scope")
+            or (
+                "configured_chat_all"
+                if routing.get("incoming_mode") == "all"
+                else "addressed_only"
+            )
+        ).strip().lower()
+        if capture_scope != "configured_chat_all" and not is_event_addressed_to_bot(
+            event, identity
+        ):
+            return {"matched": False, "reason": "not_addressed", "route": None}
         route = {
             "app_ref": str(identity.get("sender_profile") or "default"),
             "goal_id": goal_id,
@@ -712,6 +850,16 @@ def decide_lark_topic_event(
             "target_ref": target_ref,
             "topic_root_message_id": topic_root,
         }
+        ingress_mode = str(routing.get("ingress_mode") or "direct_session")
+        if ingress_mode != "direct_session" or binding.get("agent_id"):
+            route.update(
+                {
+                    "agent_id": str(binding.get("agent_id") or ""),
+                    "capture_scope": capture_scope,
+                    "ingress_mode": ingress_mode,
+                    "inbox_config_ref": str(routing.get("inbox_config_ref") or ""),
+                }
+            )
         return {"matched": True, "reason": "matched", "route": route}
     reason = (
         "binding_unavailable"

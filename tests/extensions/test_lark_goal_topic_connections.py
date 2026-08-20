@@ -164,6 +164,104 @@ def test_group_chat_lookup_failure_is_not_silently_reported_as_empty() -> None:
     assert getattr(error.value, "error_code", None) == "lark_group_lookup_failed"
 
 
+def test_async_inbox_requires_one_registered_agent(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+
+    with pytest.raises(ValueError, match="requires a registered agent_id"):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=tmp_path / ".loopx" / "registry.json",
+            goal_id="goal-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=False,
+        )
+
+    with pytest.raises(ValueError, match="registered for the Goal"):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=tmp_path / ".loopx" / "registry.json",
+            goal_id="goal-alpha",
+            agent_id="agent-other",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=False,
+        )
+
+    preview = connect_lark_goal_topic(
+        registry=registry,
+        registry_path=tmp_path / ".loopx" / "registry.json",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        incoming_mode="mentions",
+        capture_scope="configured_chat_all",
+        ingress_mode="async_inbox",
+        execute=False,
+        runner=_runner({}),
+        cli_bin="fake-lark",
+    )
+
+    assert preview["details"]["capture_scope"] == "configured_chat_all"
+    assert preview["details"]["incoming_mode"] == "all"
+
+
+def test_async_inbox_registration_failure_preserves_verified_write_receipt(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+    state: dict[str, Any] = {}
+
+    def fail_registration(**_kwargs: Any) -> dict[str, Any]:
+        assert any("+messages-send" in call for call in state["calls"])
+        return {"ok": False}
+
+    monkeypatch.setattr(
+        "loopx.extensions.lark.goal_topic_connections.configure_goal_with_global_sync",
+        fail_registration,
+    )
+
+    result = connect_lark_goal_topic(
+        registry=registry,
+        registry_path=tmp_path / ".loopx" / "registry.json",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        ingress_mode="async_inbox",
+        runner=_runner(state),
+        cli_bin="fake-lark",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "sent_verified_registration_failed"
+    assert result["external_write_performed"] is True
+    assert result["readback_verified"] is True
+    assert not (tmp_path / "binding.json").exists()
+
+
 def test_two_goals_share_one_connection_with_distinct_topics(tmp_path: Path) -> None:
     state: dict[str, Any] = {}
     runner = _runner(state)
@@ -194,6 +292,8 @@ def test_two_goals_share_one_connection_with_distinct_topics(tmp_path: Path) -> 
     assert bindings["goal-beta"]["topic"]["root_message_id"] == "om_topic_beta"
     assert bindings["goal-alpha"]["routing"] == {
         "incoming_mode": "mentions",
+        "capture_scope": "addressed_only",
+        "ingress_mode": "direct_session",
         "reply_mode": "topic_reply",
     }
 
@@ -531,8 +631,9 @@ def test_routes_bound_topic_messages_and_replies_in_thread(tmp_path: Path) -> No
     )
     assert unmentioned is None
 
-    # When incoming_mode is 'all', unmentioned messages in the bound topic are matched
+    # Legacy bindings without capture_scope still derive it from incoming_mode.
     all_binding = read_goal_channel_binding(binding_path)
+    all_binding["bindings"]["goal-alpha"]["routing"].pop("capture_scope")
     all_binding["bindings"]["goal-alpha"]["routing"]["incoming_mode"] = "all"
     unmentioned_all_mode = route_lark_topic_event(
         target_payload=read_goal_channel_targets(target_path),
