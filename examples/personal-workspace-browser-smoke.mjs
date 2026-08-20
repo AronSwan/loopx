@@ -591,6 +591,10 @@ async function main() {
 
     const goalButton = page.locator(".personal-goal-link").first();
     await goalButton.click();
+    const goalNavigation = page.getByRole("navigation", { name: "Goal 视图" });
+    const defaultTasksTab = goalNavigation.getByRole("button", { name: "Tasks" });
+    if (await defaultTasksTab.getAttribute("aria-current") !== "page") throw new Error("Selecting a Goal did not prioritize its Tasks view");
+    await page.locator(".personal-object-list").first().waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Goal 详情" }).click();
     await page.getByText("Repository", { exact: true }).waitFor({ state: "visible" });
     await page.getByText("Execution Session", { exact: true }).waitFor({ state: "visible" });
@@ -805,7 +809,7 @@ async function main() {
     if (monitorCreate.normalized_parameters.target !== "复盘是否包含已完成、阻塞、下周计划") throw new Error(`Monitor target drifted: ${JSON.stringify(monitorCreate.normalized_parameters)}`);
     await page.getByRole("button", { name: "关闭", exact: true }).click();
 
-    await goalButton.click();
+    await goalNavigation.getByRole("button", { name: "Chat" }).click();
     const schedule = page.locator(".personal-schedule-row").first();
     for (const [label, operation] of [["立即运行", "run_now"], ["暂停", "pause"], ["改为每 2 小时", "edit"], ["停止定时检查", "stop"]]) {
       await schedule.click();
@@ -822,6 +826,7 @@ async function main() {
         if (api.durableWriteCount !== writesBeforeApply + 1) throw new Error("Monitor confirmation did not produce exactly one durable write");
         if (!api.actionApplies.includes(monitorUpdate.proposalId)) throw new Error("Monitor confirmation did not apply the previewed proposal");
         await page.getByRole("button", { name: "查看更新后的 Goal", exact: true }).click();
+        await goalNavigation.getByRole("button", { name: "Chat" }).click();
       } else {
         await page.getByRole("button", { name: "关闭", exact: true }).click();
       }
@@ -878,7 +883,7 @@ async function main() {
     await needsYouCard.click();
     await page.getByRole("heading", { name: needsYouSource }).waitFor({ state: "visible" }).catch(() => {});
     await page.getByText(needsYouAction, { exact: true }).first().waitFor({ state: "visible" });
-    await page.locator(".personal-attention-row").first().click();
+    await page.locator(".personal-object-list").first().getByRole("button").first().click();
     await page.getByText("需要你", { exact: true }).last().waitFor({ state: "visible" });
     await page.getByText("更多决定").click();
     await page.getByRole("button", { name: "稍后决定", exact: true }).click();
@@ -892,6 +897,7 @@ async function main() {
     await page.locator(".personal-manager-link").first().click();
     const sourceGoalCard = page.locator(".personal-home-goal-card").first();
     await sourceGoalCard.click();
+    await goalNavigation.getByRole("button", { name: "Chat" }).click();
     if (!(await page.locator(".personal-run-row").count())) throw new Error("Source Goal did not expose its execution row after direct navigation");
     pass(3, "Needs-you and running cards navigate directly to their source Goal and expose typed details.");
 
@@ -904,6 +910,7 @@ async function main() {
     pass(13, "Manager cards retain Goal source lineage and Goal views retain Agent, schedule, and execution lineage.");
 
     await page.locator(".personal-goal-link").first().click();
+    await goalNavigation.getByRole("button", { name: "Chat" }).click();
     await page.locator(".personal-run-row").first().click();
     await page.getByRole("tab", { name: "详情与操作" }).click();
     await page.getByLabel("输入纠偏信息").fill("保持运行，用于验证刷新恢复。 ");
@@ -919,6 +926,7 @@ async function main() {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();
+      await goalNavigation.getByRole("button", { name: "Chat" }).click();
       await page.getByText("保持运行，用于验证刷新恢复。").waitFor({ state: "visible", timeout: 10_000 });
       await page.getByText("正在整理…").waitFor({ state: "hidden", timeout: 10_000 });
       const recovered = page.__loopxRuntime.sessions.get(recoveryTurn.sessionId);
