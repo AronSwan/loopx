@@ -260,6 +260,60 @@ def test_agent_scoped_async_inbox_queues_without_chat_reply_or_ack(
     assert projection["processed_count"] == 0
 
 
+def test_invalid_persisted_routing_state_never_answers_replies_or_acknowledges(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import process_lark_goal_topic_event
+
+    state: dict[str, Any] = {}
+    target_path = tmp_path / "goal-channel-targets.json"
+    binding_path = tmp_path / "goal-channel.json"
+    connected = connect_lark_goal_topic(
+        registry={
+            "goals": [
+                {
+                    "id": "goal-alpha",
+                    "repo": str(tmp_path),
+                    "objective": "Alpha delivery",
+                }
+            ]
+        },
+        goal_id="goal-alpha",
+        target_path=target_path,
+        binding_path=binding_path,
+        app_ref="mew",
+        chat_id="oc_public_fixture",
+        chat_name="Product group",
+        runner=_connection_runner(state),
+        cli_bin="fake-lark",
+    )
+    assert connected["ok"] is True
+    binding = read_goal_channel_binding(binding_path)
+    binding["bindings"]["goal-alpha"]["routing"]["ingress_mode"] = "async-inbox"
+
+    result = process_lark_goal_topic_event(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": binding},
+        event={
+            "event_id": "evt_invalid_routing",
+            "message_id": "om_invalid_routing",
+            "chat_id": "oc_public_fixture",
+            "root_id": "om_topic_alpha",
+            "content": "@linkmacbot please continue",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("invalid routing must not start a Chat turn")
+        ),
+        reply_runner=lambda _args: (_ for _ in ()).throw(
+            AssertionError("invalid routing must not reply")
+        ),
+    )
+
+    assert result == {"ok": True, "status": "ignored"}
+    assert not (tmp_path / "runtime" / ".loopx").exists()
+
+
 def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 

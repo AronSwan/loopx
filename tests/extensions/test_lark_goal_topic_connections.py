@@ -262,6 +262,40 @@ def test_async_inbox_registration_failure_preserves_verified_write_receipt(
     assert not (tmp_path / "binding.json").exists()
 
 
+@pytest.mark.parametrize("missing_prerequisite", ["registry_path", "goal_repository"])
+def test_async_inbox_preflights_local_state_before_provider_write(
+    tmp_path: Path,
+    missing_prerequisite: str,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {"registered_agents": ["agent-alpha"]}
+    registry_path: Path | None = tmp_path / ".loopx" / "registry.json"
+    if missing_prerequisite == "registry_path":
+        registry_path = None
+    else:
+        registry["goals"][0]["repo"] = str(tmp_path / "missing-project")
+    state: dict[str, Any] = {}
+
+    with pytest.raises(ValueError):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id="goal-alpha",
+            agent_id="agent-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=True,
+            runner=_runner(state),
+            cli_bin="fake-lark",
+        )
+
+    assert not any("+messages-send" in call for call in state.get("calls", []))
+
+
 def test_two_goals_share_one_connection_with_distinct_topics(tmp_path: Path) -> None:
     state: dict[str, Any] = {}
     runner = _runner(state)
@@ -630,6 +664,24 @@ def test_routes_bound_topic_messages_and_replies_in_thread(tmp_path: Path) -> No
         event={"chat_id": CHAT_ID, "root_id": "om_topic_alpha", "message_id": "om_incoming", "mentioned": False},
     )
     assert unmentioned is None
+
+    invalid_binding = read_goal_channel_binding(binding_path)
+    invalid_binding["bindings"]["goal-alpha"]["routing"]["ingress_mode"] = "async-inbox"
+    invalid = decide_lark_topic_event(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": invalid_binding},
+        event={
+            "chat_id": CHAT_ID,
+            "root_id": "om_topic_alpha",
+            "message_id": "om_invalid_routing",
+            "content": "@LoopX Mew hello",
+        },
+    )
+    assert invalid == {
+        "matched": False,
+        "reason": "invalid_routing_state",
+        "route": None,
+    }
 
     # Legacy bindings without capture_scope still derive it from incoming_mode.
     all_binding = read_goal_channel_binding(binding_path)
