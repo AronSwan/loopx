@@ -64,6 +64,43 @@ def connected_registries(tmp_path: Path) -> tuple[Path, Path]:
     return source_registry, runtime_root / "registry.global.json"
 
 
+def _orphaned_global_registry(
+    tmp_path: Path,
+    *,
+    source_status: str = "registry_missing",
+    activation_state: str = "active",
+) -> tuple[Path, Path]:
+    source_registry = tmp_path / "removed-project" / ".loopx" / "registry.json"
+    if source_status == "goal_missing":
+        _write_json(source_registry, {"schema_version": "0.1", "goals": []})
+    elif source_status == "registry_unreadable":
+        source_registry.parent.mkdir(parents=True, exist_ok=True)
+        source_registry.write_text("not-json\n", encoding="utf-8")
+    elif source_status != "registry_missing":
+        raise ValueError(f"unsupported source status fixture: {source_status}")
+    global_registry = tmp_path / "runtime" / "registry.global.json"
+    _write_json(
+        global_registry,
+        {
+            "schema_version": "0.1",
+            "registry_role": "global-local",
+            "goals": [
+                {
+                    "id": "orphaned-goal",
+                    "display_name": "Orphaned Goal",
+                    "source_registry": str(source_registry),
+                    "activation": build_goal_activation(
+                        state=activation_state,
+                        updated_at="2026-08-20T00:00:00+00:00",
+                        reason="Fixture setup",
+                    ),
+                }
+            ],
+        },
+    )
+    return source_registry, global_registry
+
+
 def test_activation_contract_defaults_active_and_rejects_unknown_state() -> None:
     assert goal_activation_state({}) is GoalActivationState.ACTIVE
     assert goal_activation_state({"activation_state": "stopped"}) is GoalActivationState.STOPPED
@@ -89,6 +126,90 @@ def test_stop_preview_is_zero_write(connected_registries: tuple[Path, Path]) -> 
     assert result["written"] is False
     assert source_registry.read_bytes() == before_source
     assert global_registry.read_bytes() == before_global
+
+
+@pytest.mark.parametrize(
+    "source_status",
+    ["registry_missing", "registry_unreadable", "goal_missing"],
+)
+def test_stop_orphaned_global_goal_uses_fail_safe_fallback(
+    tmp_path: Path,
+    source_status: str,
+) -> None:
+    source_registry, global_registry = _orphaned_global_registry(
+        tmp_path,
+        source_status=source_status,
+    )
+
+    result = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="orphaned-goal",
+        state="stopped",
+        execute=True,
+    )
+
+    assert result["ok"] is True
+    assert result["written"] is True
+    assert result["readback"]["verified"] is True
+    assert result["authority_route"] == {
+        "schema_version": "loopx_goal_activation_authority_route_v1",
+        "mode": "orphaned_global_stop_fallback",
+        "source_status": source_status,
+        "resume_requires_source_repair": True,
+    }
+    assert (
+        goal_activation_state(_goal(global_registry, "orphaned-goal"))
+        is GoalActivationState.STOPPED
+    )
+    if source_status == "registry_missing":
+        assert source_registry.exists() is False
+
+
+def test_resume_orphaned_global_goal_fails_closed(tmp_path: Path) -> None:
+    _source_registry, global_registry = _orphaned_global_registry(
+        tmp_path,
+        activation_state="stopped",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="repair the source route before resuming",
+    ):
+        set_goal_activation_state(
+            registry_path=global_registry,
+            goal_id="orphaned-goal",
+            state="active",
+            execute=True,
+        )
+
+    assert (
+        goal_activation_state(_goal(global_registry, "orphaned-goal"))
+        is GoalActivationState.STOPPED
+    )
+
+
+def test_stop_does_not_fallback_for_non_global_registry(tmp_path: Path) -> None:
+    _source_registry, projected_registry = _orphaned_global_registry(tmp_path)
+    project_registry = tmp_path / "project" / ".loopx" / "registry.json"
+    payload = load_registry(projected_registry)
+    payload.pop("registry_role", None)
+    _write_json(project_registry, payload)
+
+    with pytest.raises(
+        ValueError,
+        match="repair the source route before changing",
+    ):
+        set_goal_activation_state(
+            registry_path=project_registry,
+            goal_id="orphaned-goal",
+            state="stopped",
+            execute=True,
+        )
+
+    assert (
+        goal_activation_state(_goal(project_registry, "orphaned-goal"))
+        is GoalActivationState.ACTIVE
+    )
 
 
 def test_stop_and_resume_sync_source_global_and_quota(
@@ -283,3 +404,36 @@ def test_owner_confirmed_typed_action_stops_goal(
     assert applied["proposal"]["receipt"]["projection_verified"] is True
     assert applied["proposal"]["receipt"]["outcome"] == "goal_stopped"
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
+
+
+def test_owner_confirmed_typed_action_stops_orphaned_global_goal(
+    tmp_path: Path,
+) -> None:
+    _source_registry, global_registry = _orphaned_global_registry(tmp_path)
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"),
+        registry_path=global_registry,
+    )
+    proposal = service.preview(
+        {
+            "action_kind": "goal.lifecycle",
+            "summary": "Stop an orphaned Goal",
+            "normalized_parameters": {
+                "goal_id": "orphaned-goal",
+                "operation": "stop",
+                "reason": "Owner confirmed from the workspace",
+            },
+            "context": {"kind": "goal_directory"},
+            "idempotency_key": "stop-orphaned-goal",
+        }
+    )
+
+    applied = service.apply(str(proposal["proposal_id"]))
+
+    assert applied["proposal"]["status"] == "applied"
+    assert applied["proposal"]["receipt"]["projection_verified"] is True
+    assert applied["proposal"]["receipt"]["outcome"] == "goal_stopped"
+    assert (
+        goal_activation_state(_goal(global_registry, "orphaned-goal"))
+        is GoalActivationState.STOPPED
+    )
