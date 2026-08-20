@@ -55,6 +55,11 @@ assert.match(header, /personal-goal-tabs/, "Goal Chat, Tasks, and Files stay one
 for (const view of ["Chat", "Tasks", "Files"]) {
   assert.match(header, new RegExp(`\"${view.toLowerCase()}\"|>${view}<`), `Goal header exposes ${view}`);
 }
+assert.match(
+  page,
+  /function selectGoal\(goalId: string \| null\)[\s\S]*?setSelectedGoalTab\("tasks"\)/,
+  "Selecting a Goal opens its Tasks view first",
+);
 assert.match(model, /onOpenGoalView\??:/, "Goal detail can switch the center workspace view");
 for (const label of ["执行中", "已安排", "等待条件", "可继续"]) {
   assert.match(model + drawer + page, new RegExp(label), `Session and Run status language includes ${label}`);
