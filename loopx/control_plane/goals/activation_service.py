@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,42 @@ from .configure_goal_service import resolve_configure_goal_sync_target
 
 GOAL_ACTIVATION_TRANSITION_SCHEMA_VERSION = "loopx_goal_activation_transition_v1"
 GOAL_ACTIVATION_READBACK_SCHEMA_VERSION = "loopx_goal_activation_readback_v1"
+GOAL_ACTIVATION_AUTHORITY_ROUTE_SCHEMA_VERSION = (
+    "loopx_goal_activation_authority_route_v1"
+)
+
+
+class GoalActivationAuthorityRouteMode(str, Enum):
+    SOURCE_TO_GLOBAL = "source_to_global"
+    REQUESTED_TO_GLOBAL = "requested_to_global"
+    ORPHANED_GLOBAL_STOP_FALLBACK = "orphaned_global_stop_fallback"
+
+
+class GoalActivationSourceStatus(str, Enum):
+    AVAILABLE = "available"
+    REGISTRY_MISSING = "registry_missing"
+    REGISTRY_UNREADABLE = "registry_unreadable"
+    GOAL_MISSING = "goal_missing"
+
+
+@dataclass(frozen=True, slots=True)
+class GoalActivationAuthorityRoute:
+    source_registry: Path
+    target_registry: Path
+    sync_runtime_root: str | None
+    mode: GoalActivationAuthorityRouteMode
+    source_status: GoalActivationSourceStatus
+
+    def public_summary(self) -> dict[str, Any]:
+        orphaned = (
+            self.mode is GoalActivationAuthorityRouteMode.ORPHANED_GLOBAL_STOP_FALLBACK
+        )
+        return {
+            "schema_version": GOAL_ACTIVATION_AUTHORITY_ROUTE_SCHEMA_VERSION,
+            "mode": self.mode.value,
+            "source_status": self.source_status.value,
+            "resume_requires_source_repair": orphaned,
+        }
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -43,30 +81,97 @@ def _goal(payload: dict[str, Any], goal_id: str) -> dict[str, Any]:
     return goal
 
 
+def _goal_or_none(
+    payload: dict[str, Any],
+    goal_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in registry_goals(payload)
+            if str(item.get("id") or "") == goal_id
+        ),
+        None,
+    )
+
+
+def _is_global_registry(path: Path, payload: dict[str, Any]) -> bool:
+    role = str(payload.get("registry_role") or payload.get("role") or "")
+    return role == "global-local" or path.name == "registry.global.json"
+
+
+def _source_status(
+    source_registry: Path,
+    *,
+    goal_id: str,
+) -> GoalActivationSourceStatus:
+    if not source_registry.exists():
+        return GoalActivationSourceStatus.REGISTRY_MISSING
+    try:
+        source_payload = load_registry(source_registry)
+    except (OSError, UnicodeError, ValueError):
+        return GoalActivationSourceStatus.REGISTRY_UNREADABLE
+    if _goal_or_none(source_payload, goal_id) is None:
+        return GoalActivationSourceStatus.GOAL_MISSING
+    return GoalActivationSourceStatus.AVAILABLE
+
+
 def _source_and_target(
     *,
     registry_path: Path,
     goal_id: str,
+    target_state: GoalActivationState,
     runtime_root_override: str | None,
-) -> tuple[Path, Path, str | None]:
+) -> GoalActivationAuthorityRoute:
     requested_registry = registry_path.expanduser().resolve()
-    requested_goal = _goal(load_registry(requested_registry), goal_id)
+    requested_payload = load_registry(requested_registry)
+    requested_goal = _goal(requested_payload, goal_id)
     source_ref = str(requested_goal.get("source_registry") or "").strip()
     if source_ref:
         source_registry = Path(source_ref).expanduser().resolve()
-        _goal(load_registry(source_registry), goal_id)
-        return source_registry, requested_registry, str(requested_registry.parent)
+        source_status = _source_status(source_registry, goal_id=goal_id)
+        if source_status is GoalActivationSourceStatus.AVAILABLE:
+            return GoalActivationAuthorityRoute(
+                source_registry=source_registry,
+                target_registry=requested_registry,
+                sync_runtime_root=str(requested_registry.parent),
+                mode=GoalActivationAuthorityRouteMode.SOURCE_TO_GLOBAL,
+                source_status=source_status,
+            )
+        if target_state is GoalActivationState.STOPPED and _is_global_registry(
+            requested_registry, requested_payload
+        ):
+            return GoalActivationAuthorityRoute(
+                source_registry=requested_registry,
+                target_registry=requested_registry,
+                sync_runtime_root=None,
+                mode=GoalActivationAuthorityRouteMode.ORPHANED_GLOBAL_STOP_FALLBACK,
+                source_status=source_status,
+            )
+        if target_state is GoalActivationState.ACTIVE:
+            raise ValueError(
+                "Goal source registry is unavailable; repair the source route "
+                "before resuming this Goal"
+            )
+        raise ValueError(
+            "Goal source registry is unavailable; repair the source route "
+            "before changing this Goal"
+        )
 
     resolution = resolve_configure_goal_sync_target(
         registry_path=requested_registry,
         goal_id=goal_id,
         runtime_root_override=runtime_root_override,
     )
-    target_registry = Path(str(resolution["target_global_registry"])).expanduser().resolve()
-    return (
-        requested_registry,
-        target_registry,
-        str(resolution["target_runtime_root"]),
+    target_registry = (
+        Path(str(resolution["target_global_registry"])).expanduser().resolve()
+    )
+    return GoalActivationAuthorityRoute(
+        source_registry=requested_registry,
+        target_registry=target_registry,
+        sync_runtime_root=str(resolution["target_runtime_root"]),
+        mode=GoalActivationAuthorityRouteMode.REQUESTED_TO_GLOBAL,
+        source_status=GoalActivationSourceStatus.AVAILABLE,
     )
 
 
@@ -110,11 +215,15 @@ def set_goal_activation_state(
     if not normalized_goal_id:
         raise ValueError("goal id is required")
     target_state = normalize_goal_activation_state(state)
-    source_registry, target_registry, sync_runtime_root = _source_and_target(
+    authority_route = _source_and_target(
         registry_path=registry_path,
         goal_id=normalized_goal_id,
+        target_state=target_state,
         runtime_root_override=runtime_root_override,
     )
+    source_registry = authority_route.source_registry
+    target_registry = authority_route.target_registry
+    sync_runtime_root = authority_route.sync_runtime_root
     source_goal = _goal(load_registry(source_registry), normalized_goal_id)
     before_state = goal_activation_state(source_goal)
     changed = before_state is not target_state
@@ -142,6 +251,7 @@ def set_goal_activation_state(
         "partial_write": False,
         "source_registry": str(source_registry),
         "target_global_registry": str(target_registry),
+        "authority_route": authority_route.public_summary(),
         "activation": proposed_activation,
         "readback": {
             "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
@@ -151,6 +261,14 @@ def set_goal_activation_state(
     }
     if not execute:
         return payload
+
+    if (
+        authority_route.mode
+        is GoalActivationAuthorityRouteMode.ORPHANED_GLOBAL_STOP_FALLBACK
+    ):
+        payload["recommended_action"] = (
+            "Repair the Goal source registry route before resuming this Goal."
+        )
 
     registries_are_distinct = not _same_path(source_registry, target_registry)
     if registries_are_distinct:
