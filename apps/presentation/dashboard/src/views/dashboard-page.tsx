@@ -15,6 +15,7 @@ import {
   exampleStatusPayload,
   formatStatusError,
   parseStatusPayload,
+  withGoalActivationState,
 } from "../data/status";
 import {
   ChatApiError,
@@ -1097,7 +1098,9 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
 }
 function PersonalGoalHome({
   isLoading,
+  onGoalActivationStateChange,
   onSelectGoal,
+  onReconcileStatus,
   onRefresh,
   payload,
   rows,
@@ -1107,7 +1110,9 @@ function PersonalGoalHome({
   toggleTheme,
 }: {
   isLoading: boolean;
+  onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onSelectGoal: (goalId: string) => void;
+  onReconcileStatus: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
   payload: StatusPayload;
   rows: GoalDirectoryRow[];
@@ -2263,6 +2268,8 @@ function PersonalGoalHome({
             });
           },
           onOpenOutput: (output) => openGoalChat(output.goalId),
+          onGoalActivationStateChange,
+          onReconcileStatus,
           onExportOutput: async (output) => {
             const contents = [
               `# ${output.title}`,
@@ -2391,6 +2398,7 @@ export function DashboardPage() {
   );
   const [exampleModeRequested, setExampleModeRequested] = useState(false);
   const suppressedStatusUrlRef = useRef<string | null>(null);
+  const statusProjectionRevisionRef = useRef(0);
   const routeStatusRequestUrl = !exampleModeRequested && source.kind === "example"
     ? search.statusUrl.trim()
     : "";
@@ -2404,23 +2412,33 @@ export function DashboardPage() {
     [runHistory.goals, queue.items],
   );
 
-  async function loadFromUrl(url: string) {
+  async function loadFromUrl(url: string, options: { background?: boolean } = {}) {
     const trimmed = url.trim();
+    const background = options.background === true;
+    const projectionRevision = statusProjectionRevisionRef.current;
     if (!trimmed) {
-      setLoadError("状态地址不能为空");
+      if (!background) setLoadError("状态地址不能为空");
       return;
     }
-    suppressedStatusUrlRef.current = null;
-    setExampleModeRequested(false);
-    setRequestedStatusUrl(trimmed);
-    setIsLoading(true);
-    setLoadError(null);
+    if (!background) {
+      statusProjectionRevisionRef.current += 1;
+      suppressedStatusUrlRef.current = null;
+      setExampleModeRequested(false);
+      setRequestedStatusUrl(trimmed);
+      setIsLoading(true);
+      setLoadError(null);
+    }
     try {
       const response = await fetch(trimmed, { cache: "no-store" });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} while loading ${trimmed}`);
       }
       const nextPayload = parseStatusPayload(await response.json());
+      if (background) {
+        if (statusProjectionRevisionRef.current !== projectionRevision) return;
+        setPayload(nextPayload);
+        return;
+      }
       const nextSource: DataSource = { kind: "url", label: trimmed };
       setPayload(nextPayload);
       setSource(nextSource);
@@ -2433,13 +2451,14 @@ export function DashboardPage() {
       });
       setRequestedStatusUrl(null);
     } catch (error) {
-      setLoadError(formatStatusError(error));
+      if (!background) setLoadError(formatStatusError(error));
     } finally {
-      setIsLoading(false);
+      if (!background) setIsLoading(false);
     }
   }
 
   function resetToExample() {
+    statusProjectionRevisionRef.current += 1;
     suppressedStatusUrlRef.current = search.statusUrl.trim() || null;
     setExampleModeRequested(true);
     setPayload(exampleStatusPayload);
@@ -2527,7 +2546,15 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       isLoading={isLoading}
+      onGoalActivationStateChange={(goalId, activationState) => {
+        statusProjectionRevisionRef.current += 1;
+        setPayload((current) => withGoalActivationState(current, goalId, activationState));
+      }}
       onSelectGoal={selectGoal}
+      onReconcileStatus={() => loadFromUrl(
+        source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl),
+        { background: true },
+      )}
       onRefresh={() => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl))}
       payload={payload}
       rows={goalRows}
