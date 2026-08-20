@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...agent_registry import registered_agent_ids_for_goal
+from ..agents.agent_scope import agent_scope_item_matches_agent_or_unclaimed
+from ..agents.identity import build_quota_agent_identity
 from ..goals.goal_frontier import (
     build_goal_frontier_projection_context_from_status,
 )
 from ..status.autonomous_replan_projection import (
+    AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS,
     autonomous_replan_obligation_from_runs,
 )
 from ..todos.active_state_todo_parser import parse_active_state_todos
+from ..todos.quota_summary import (
+    select_quota_todo_source_items,
+    select_quota_todo_summary,
+)
 from ..todos.succession_warning import todo_succession_gap_items
 from .progress_observation import semantic_delta_from_writeback
 from .work_lane_context import build_work_lane_context_contract
@@ -19,7 +27,8 @@ from .work_lane_context import build_work_lane_context_contract
 def _obligation_was_created_by_current_completion(
     obligation: dict[str, Any],
     *,
-    agent_todos: dict[str, Any] | None,
+    agent_todo_items: list[dict[str, Any]] | None,
+    agent_id: str,
     completion_todo_id: str | None,
     completion_turn_key: str | None,
 ) -> bool:
@@ -39,7 +48,11 @@ def _obligation_was_created_by_current_completion(
 
     safe_todo_id = str(completion_todo_id or "").strip()
     safe_turn_key = str(completion_turn_key or "").strip()
-    if not safe_todo_id or not safe_turn_key or not isinstance(agent_todos, dict):
+    if (
+        not safe_todo_id
+        or not safe_turn_key
+        or not isinstance(agent_todo_items, list)
+    ):
         return False
     triggers = obligation.get("triggers")
     if not isinstance(triggers, list) or not triggers:
@@ -51,13 +64,13 @@ def _obligation_was_created_by_current_completion(
         for trigger in triggers
     ):
         return False
-    items = agent_todos.get("items")
     return any(
         isinstance(item, dict)
+        and agent_scope_item_matches_agent_or_unclaimed(item, agent_id=agent_id)
         and str(item.get("todo_id") or "").strip() == safe_todo_id
         and item.get("status") == "done"
         and str(item.get("completion_turn_key") or "").strip() == safe_turn_key
-        for item in items or []
+        for item in agent_todo_items
     )
 
 
@@ -84,7 +97,41 @@ def qualify_replan_writeback(
     if not safe_agent_id:
         return None, None
     todo_projection = parse_active_state_todos(state_text, item_limit=None)
-    agent_todos = todo_projection.get("agent_todos")
+    registered_agent_ids = registered_agent_ids_for_goal(registry_goal)
+    agent_identity = (
+        build_quota_agent_identity(registry_goal, agent_id=safe_agent_id)
+        if registered_agent_ids
+        else {
+            "agent_id": safe_agent_id,
+            "registered_agents": [safe_agent_id],
+        }
+    )
+    raw_user_todos = todo_projection.get("user_todos")
+    raw_agent_todos = todo_projection.get("agent_todos")
+    user_todos = select_quota_todo_summary(
+        raw_user_todos,
+        None,
+        agent_identity=agent_identity,
+        filter_user_gate_blocks_agent=True,
+    )
+    agent_todos = select_quota_todo_summary(
+        raw_agent_todos,
+        None,
+        agent_identity=agent_identity,
+    )
+    agent_todo_source_items = select_quota_todo_source_items(
+        raw_agent_todos,
+        None,
+    )
+    agent_todo_completion_items = (
+        [
+            item
+            for item in raw_agent_todos.get("items", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(raw_agent_todos, dict)
+        else []
+    )
     run_obligation = autonomous_replan_obligation_from_runs(
         newest_first_runs,
         agent_todos=agent_todos,
@@ -112,23 +159,31 @@ def qualify_replan_writeback(
             )
         },
         project_asset=None,
-        user_todo_summary=todo_projection.get("user_todos"),
+        user_todo_summary=user_todos,
         agent_todo_summary=agent_todos,
+        agent_todo_source_items=agent_todo_source_items,
         work_lane_contract=build_work_lane_context_contract(
             {"progress_scope": "primary_goal"},
             agent_todo_summary=agent_todos,
         ),
-        neutral_replan_ack_classifications=set(),
-        registered_agent_ids=[safe_agent_id],
+        neutral_replan_ack_classifications=(
+            AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS
+        ),
+        registered_agent_ids=list(agent_identity["registered_agents"]),
         goal_status=str((registry_goal or {}).get("status") or "active"),
-        agent_profile=None,
+        agent_profile=(
+            agent_identity.get("agent_profile")
+            if isinstance(agent_identity.get("agent_profile"), dict)
+            else None
+        ),
     )
     obligation = context.get("replan_obligation")
     if not obligation:
         return None, None
     if _obligation_was_created_by_current_completion(
         obligation,
-        agent_todos=agent_todos,
+        agent_todo_items=agent_todo_completion_items,
+        agent_id=safe_agent_id,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
     ):
