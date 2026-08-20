@@ -74,10 +74,14 @@ class CodexAppServerAdapter:
             "streaming": True,
             "resume": True,
             "interrupt": True,
+            "steering": True,
         }
 
     def start_turn(self, message: str, event_sink: EventSink) -> dict[str, Any]:
         return self.session.send(message, on_event=event_sink)
+
+    def steer_turn(self, message: str, expected_turn_id: str) -> str:
+        return self.session.steer(message, expected_turn_id=expected_turn_id)
 
     def start_turn_with_attachments(
         self,
@@ -175,7 +179,7 @@ class _TurnEventBuffer:
                 payload=payload,
                 buffered=True,
             )
-            self._checkpoint_locked()
+            self._checkpoint_locked(force=kind == "turn.started")
 
     def close(self) -> None:
         with self.lock:
@@ -214,6 +218,9 @@ class ChatRuntimeController:
         self.turn_done_events: dict[tuple[str, str], threading.Event] = {}
         self.lock = threading.RLock()
         self.session_open_locks: dict[tuple[str, str, str], threading.Lock] = {}
+        self.session_queue_workers: set[str] = set()
+        self.session_queue_threads: dict[str, threading.Thread] = {}
+        self.closed = threading.Event()
 
     def capabilities(self) -> list[dict[str, Any]]:
         builtins = [
@@ -525,6 +532,211 @@ class ChatRuntimeController:
         worker.start()
         return turn, True
 
+    def steer_active_turn(
+        self,
+        *,
+        session_id: str,
+        client_ingress_id: str,
+        message: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Steer the exact active Codex Turn with durable ingress deduplication."""
+
+        session = self.store.load_session(session_id)
+        if session is None or session.get("status") == "closed":
+            raise KeyError("chat session was not found")
+        receipt, created = self.store.create_ingress_receipt(
+            session_id,
+            client_ingress_id=client_ingress_id,
+            mode="live_steering",
+            message=message,
+        )
+        if not created:
+            if receipt.get("status") == "delivered":
+                delivered_turn_id = str(receipt.get("active_turn_id") or "")
+                turn = self.store.load_turn(session_id, delivered_turn_id)
+                if turn is None:
+                    raise RuntimeError("live_steering_turn_missing")
+                return turn, False
+            raise RuntimeError("live_steering_delivery_unresolved")
+        active_turn_id = str(session.get("active_turn_id") or "")
+        if not active_turn_id:
+            self.store.update_ingress_receipt(
+                session_id,
+                client_ingress_id,
+                status="failed",
+                error_code="live_steering_requires_active_turn",
+            )
+            raise RuntimeError("live_steering_requires_active_turn")
+        with self.lock:
+            adapter = self.adapters.get(session_id)
+        if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
+            self.store.update_ingress_receipt(
+                session_id,
+                client_ingress_id,
+                status="failed",
+                error_code="live_steering_session_not_attached",
+            )
+            raise RuntimeError("live_steering_session_not_attached")
+        upstream_turn_id = ""
+        deadline = time.monotonic() + min(5.0, self.startup_timeout_sec)
+        while time.monotonic() < deadline:
+            turn = self.store.load_turn(session_id, active_turn_id)
+            upstream_turn_id = str((turn or {}).get("upstream_turn_id") or "")
+            if upstream_turn_id:
+                break
+            time.sleep(0.02)
+        if not upstream_turn_id:
+            self.store.update_ingress_receipt(
+                session_id,
+                client_ingress_id,
+                status="failed",
+                error_code="live_steering_turn_not_started",
+            )
+            raise RuntimeError("live_steering_turn_not_started")
+        try:
+            adapter.steer_turn(message, upstream_turn_id)
+        except Exception:
+            self.store.update_ingress_receipt(
+                session_id,
+                client_ingress_id,
+                status="failed",
+                error_code="live_steering_rejected",
+            )
+            raise
+        self.store.append_message(
+            session_id,
+            role="user",
+            text=message,
+            turn_id=active_turn_id,
+        )
+        self.store.append_event(
+            session_id,
+            active_turn_id,
+            kind="turn.steered",
+            payload={"client_ingress_id": client_ingress_id},
+        )
+        self.store.update_ingress_receipt(
+            session_id,
+            client_ingress_id,
+            status="delivered",
+            active_turn_id=active_turn_id,
+            error_code=None,
+        )
+        turn = self.store.load_turn(session_id, active_turn_id)
+        if turn is None:
+            raise RuntimeError("live_steering_turn_missing")
+        return turn, True
+
+    def enqueue_turn(
+        self,
+        *,
+        session_id: str,
+        client_turn_id: str,
+        message: str,
+        work_dir: Path,
+        objective: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist a bounded same-Session Turn and dispatch it in FIFO order."""
+
+        session = self.store.load_session(session_id)
+        if session is None or session.get("status") == "closed":
+            raise KeyError("chat session was not found")
+        turn, created = self.store.create_queued_turn(
+            session_id,
+            client_turn_id=client_turn_id,
+            message=message,
+        )
+        self.resume_session_queue(
+            session_id=session_id,
+            work_dir=work_dir,
+            objective=objective,
+        )
+        return turn, created
+
+    def resume_session_queue(
+        self,
+        *,
+        session_id: str,
+        work_dir: Path,
+        objective: str,
+    ) -> None:
+        if self.closed.is_set():
+            return
+        with self.lock:
+            if session_id in self.session_queue_workers:
+                return
+            self.session_queue_workers.add(session_id)
+        worker = threading.Thread(
+            target=self._drain_session_queue,
+            kwargs={
+                "session_id": session_id,
+                "work_dir": work_dir,
+                "objective": objective,
+            },
+            daemon=True,
+        )
+        with self.lock:
+            self.session_queue_threads[session_id] = worker
+        worker.start()
+
+    def _drain_session_queue(
+        self,
+        *,
+        session_id: str,
+        work_dir: Path,
+        objective: str,
+    ) -> None:
+        try:
+            while not self.closed.is_set():
+                session = self.store.load_session(session_id)
+                if session is None or session.get("status") == "closed":
+                    return
+                active_turn_id = str(session.get("active_turn_id") or "")
+                if active_turn_id:
+                    with self.lock:
+                        attached = self.adapters.get(session_id)
+                    if attached is None or not attached.healthcheck():
+                        self._ensure_adapter(
+                            session,
+                            work_dir=work_dir,
+                            objective=objective,
+                        )
+                        continue
+                    active = self.store.load_turn(session_id, active_turn_id)
+                    if active and active.get("status") not in TERMINAL_TURN_STATES:
+                        self.closed.wait(0.05)
+                        continue
+                    self.store.update_session(
+                        session_id,
+                        status="ready",
+                        active_turn_id=None,
+                    )
+                refreshed = self.store.load_session(session_id)
+                if refreshed is None:
+                    return
+                adapter = self._ensure_adapter(
+                    refreshed,
+                    work_dir=work_dir,
+                    objective=objective,
+                )
+                turn = self.store.claim_next_queued_turn(session_id)
+                if turn is None:
+                    return
+                turn_id = str(turn["turn_id"])
+                with self.lock:
+                    self.turn_done_events[(session_id, turn_id)] = threading.Event()
+                self._run_turn(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    message=str(turn.get("message") or ""),
+                    attachments=[],
+                    adapter=adapter,
+                )
+        finally:
+            with self.lock:
+                self.session_queue_workers.discard(session_id)
+                self.session_queue_threads.pop(session_id, None)
+
     def _run_turn(
         self,
         *,
@@ -760,10 +972,12 @@ class ChatRuntimeController:
         return restored
 
     def close(self) -> None:
+        self.closed.set()
         with self.lock:
             adapters = list(self.adapters.values())
             event_buffers = list(self.turn_event_buffers.values())
             done_events = list(self.turn_done_events.values())
+            queue_threads = list(self.session_queue_threads.values())
             self.adapters.clear()
             self.turn_event_buffers.clear()
         for done_event in done_events:
@@ -774,3 +988,5 @@ class ChatRuntimeController:
             adapter.close_session()
         for done_event in done_events:
             done_event.wait(timeout=1.0)
+        for queue_thread in queue_threads:
+            queue_thread.join(timeout=1.0)

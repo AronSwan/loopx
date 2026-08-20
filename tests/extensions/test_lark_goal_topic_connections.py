@@ -164,6 +164,183 @@ def test_group_chat_lookup_failure_is_not_silently_reported_as_empty() -> None:
     assert getattr(error.value, "error_code", None) == "lark_group_lookup_failed"
 
 
+def test_async_inbox_requires_one_registered_agent(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+
+    with pytest.raises(ValueError, match="requires a registered agent_id"):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=tmp_path / ".loopx" / "registry.json",
+            goal_id="goal-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=False,
+        )
+
+    with pytest.raises(ValueError, match="registered for the Goal"):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=tmp_path / ".loopx" / "registry.json",
+            goal_id="goal-alpha",
+            agent_id="agent-other",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=False,
+        )
+
+    preview = connect_lark_goal_topic(
+        registry=registry,
+        registry_path=tmp_path / ".loopx" / "registry.json",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        incoming_mode="mentions",
+        capture_scope="configured_chat_all",
+        ingress_mode="async_inbox",
+        execute=False,
+        runner=_runner({}),
+        cli_bin="fake-lark",
+    )
+
+    assert preview["details"]["capture_scope"] == "configured_chat_all"
+    assert preview["details"]["incoming_mode"] == "all"
+
+
+@pytest.mark.parametrize("ingress_mode", ["live_steering", "session_queue"])
+def test_session_ingress_modes_require_and_persist_exact_session(
+    tmp_path: Path,
+    ingress_mode: str,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+    with pytest.raises(ValueError, match="exact active Agent session"):
+        connect_lark_goal_topic(
+            registry=registry,
+            goal_id="goal-alpha",
+            agent_id="agent-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode=ingress_mode,
+            execute=False,
+        )
+
+    connected = connect_lark_goal_topic(
+        registry=registry,
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        session_id="session-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        ingress_mode=ingress_mode,
+        runner=_runner({}),
+        cli_bin="fake-lark",
+    )
+
+    assert connected["ok"] is True
+    binding = read_goal_channel_binding(tmp_path / "binding.json")["bindings"]["goal-alpha"]
+    assert binding["agent_id"] == "agent-alpha"
+    assert binding["session_id"] == "session-alpha"
+    assert binding["routing"]["ingress_mode"] == ingress_mode
+
+
+def test_async_inbox_registration_failure_preserves_verified_write_receipt(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+    state: dict[str, Any] = {}
+
+    def fail_registration(**_kwargs: Any) -> dict[str, Any]:
+        assert any("+messages-send" in call for call in state["calls"])
+        return {"ok": False}
+
+    monkeypatch.setattr(
+        "loopx.extensions.lark.goal_topic_connections.configure_goal_with_global_sync",
+        fail_registration,
+    )
+
+    result = connect_lark_goal_topic(
+        registry=registry,
+        registry_path=tmp_path / ".loopx" / "registry.json",
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        ingress_mode="async_inbox",
+        runner=_runner(state),
+        cli_bin="fake-lark",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "sent_verified_registration_failed"
+    assert result["external_write_performed"] is True
+    assert result["readback_verified"] is True
+    assert not (tmp_path / "binding.json").exists()
+
+
+@pytest.mark.parametrize("missing_prerequisite", ["registry_path", "goal_repository"])
+def test_async_inbox_preflights_local_state_before_provider_write(
+    tmp_path: Path,
+    missing_prerequisite: str,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {"registered_agents": ["agent-alpha"]}
+    registry_path: Path | None = tmp_path / ".loopx" / "registry.json"
+    if missing_prerequisite == "registry_path":
+        registry_path = None
+    else:
+        registry["goals"][0]["repo"] = str(tmp_path / "missing-project")
+    state: dict[str, Any] = {}
+
+    with pytest.raises(ValueError):
+        connect_lark_goal_topic(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id="goal-alpha",
+            agent_id="agent-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode="async_inbox",
+            execute=True,
+            runner=_runner(state),
+            cli_bin="fake-lark",
+        )
+
+    assert not any("+messages-send" in call for call in state.get("calls", []))
+
+
 def test_two_goals_share_one_connection_with_distinct_topics(tmp_path: Path) -> None:
     state: dict[str, Any] = {}
     runner = _runner(state)
@@ -194,6 +371,8 @@ def test_two_goals_share_one_connection_with_distinct_topics(tmp_path: Path) -> 
     assert bindings["goal-beta"]["topic"]["root_message_id"] == "om_topic_beta"
     assert bindings["goal-alpha"]["routing"] == {
         "incoming_mode": "mentions",
+        "capture_scope": "addressed_only",
+        "ingress_mode": "direct_session",
         "reply_mode": "topic_reply",
     }
 
@@ -531,8 +710,27 @@ def test_routes_bound_topic_messages_and_replies_in_thread(tmp_path: Path) -> No
     )
     assert unmentioned is None
 
-    # When incoming_mode is 'all', unmentioned messages in the bound topic are matched
+    invalid_binding = read_goal_channel_binding(binding_path)
+    invalid_binding["bindings"]["goal-alpha"]["routing"]["ingress_mode"] = "async-inbox"
+    invalid = decide_lark_topic_event(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": invalid_binding},
+        event={
+            "chat_id": CHAT_ID,
+            "root_id": "om_topic_alpha",
+            "message_id": "om_invalid_routing",
+            "content": "@LoopX Mew hello",
+        },
+    )
+    assert invalid == {
+        "matched": False,
+        "reason": "invalid_routing_state",
+        "route": None,
+    }
+
+    # Legacy bindings without capture_scope still derive it from incoming_mode.
     all_binding = read_goal_channel_binding(binding_path)
+    all_binding["bindings"]["goal-alpha"]["routing"].pop("capture_scope")
     all_binding["bindings"]["goal-alpha"]["routing"]["incoming_mode"] = "all"
     unmentioned_all_mode = route_lark_topic_event(
         target_payload=read_goal_channel_targets(target_path),
