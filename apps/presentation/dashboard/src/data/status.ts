@@ -909,6 +909,7 @@ export const rewardDryRunResponseSchema = z.object({
 });
 
 export type StatusPayload = z.infer<typeof statusPayloadSchema>;
+export type GoalActivationState = "active" | "stopped";
 export type StatusContract = NonNullable<z.infer<typeof statusContractSchema>>;
 export type QueueItem = z.infer<typeof queueItemSchema>;
 export type HumanReward = z.infer<typeof humanRewardSchema>;
@@ -923,6 +924,35 @@ export type ProjectAsset = z.infer<typeof projectAssetSchema>;
 export type ProjectAssetTodoSummary = z.infer<typeof projectAssetTodoSummarySchema>;
 export type ProjectAssetLatestValidation = z.infer<typeof projectAssetLatestValidationSchema>;
 export type ProjectAssetHandoffReadiness = z.infer<typeof projectAssetHandoffReadinessSchema>;
+
+export function withGoalActivationState(
+  payload: StatusPayload,
+  goalId: string,
+  activationState: GoalActivationState,
+): StatusPayload {
+  const goals = payload.run_history.goals.map((goal) =>
+    goal.id === goalId && goal.activation_state !== activationState
+      ? { ...goal, activation_state: activationState }
+      : goal
+  );
+  const queueItems = payload.attention_queue.items.map((item) =>
+    item.goal_id === goalId && item.activation_state !== activationState
+      ? { ...item, activation_state: activationState }
+      : item
+  );
+  const goalsChanged = goals.some((goal, index) => goal !== payload.run_history.goals[index]);
+  const queueChanged = queueItems.some((item, index) => item !== payload.attention_queue.items[index]);
+  if (!goalsChanged && !queueChanged) return payload;
+  return {
+    ...payload,
+    attention_queue: queueChanged
+      ? { ...payload.attention_queue, items: queueItems }
+      : payload.attention_queue,
+    run_history: goalsChanged
+      ? { ...payload.run_history, goals }
+      : payload.run_history,
+  };
+}
 export type TodoGroup = z.infer<typeof todoGroupSchema>;
 export type TodoItem = z.infer<typeof todoItemSchema>;
 export type TodoIndexItem = z.infer<typeof todoIndexItemSchema>;

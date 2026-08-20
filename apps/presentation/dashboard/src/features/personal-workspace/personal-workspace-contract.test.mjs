@@ -126,6 +126,12 @@ assert.match(page, /执行边界（可选）：/, "Goal creation asks for an exp
 assert.match(page, /不支持精确到星期或时刻的日历计划/, "Unsupported calendar schedules fail closed before preview");
 assert.match(page, /function monitorTargetFromMessage/, "Monitor creation preserves the user's requested check target");
 assert.match(page, /onOpenGoal: async \(goalId\)[\s\S]*await callbacks\.onRefresh\?\.\(\);[\s\S]*selectGoal\(goalId\)/, "A created Goal refreshes before navigation");
+assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
+assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");
+assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
+assert.match(page, /Promise\.resolve\(\)\.then\(\(\) => reconcile\?\.\(\)\)/, "Successful Goal lifecycle apply reconciles the full status payload without blocking the sidebar");
+assert.match(dashboard, /onReconcileStatus=\{\(\) => loadFromUrl\([\s\S]*\{ background: true \}/, "Lifecycle reconciliation uses the non-fatal background status path");
+assert.match(dashboard, /statusProjectionRevisionRef\.current !== projectionRevision/, "A stale background response cannot overwrite a newer optimistic transition");
 assert.match(page, /activityTimeLabel\(item\.output\.createdAt\)/, "Files render human-readable output timestamps");
 assert.match(drawer, /selection\.kind === "run" \|\| selection\.kind === "proposal" \|\| selection\.kind === "schedule"/, "Advanced diagnostics only appears on objects with actionable runtime details");
 

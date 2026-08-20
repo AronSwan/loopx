@@ -61,28 +61,45 @@ async function installApi(page) {
     actionPreviews: [],
     durableResources: new Set(),
     durableWriteCount: 0,
+    failNextLifecycleApply: false,
+    failNextStatusRequest: false,
+    goalActivationStates: new Map([
+      ["product-release", "active"],
+      ["research-monitor", "active"],
+      ["legacy-benchmark", "stopped"],
+      ["archived-notes", "stopped"],
+    ]),
     interrupts: [],
     larkWrites: [],
     actionTransitions: [],
+    nextLifecycleApplyDelayMs: 0,
+    nextStatusDelayMs: 0,
+    statusRequestCount: 0,
     turnRequests: [],
     get larkConnections() { return runtime.larkConnections; },
   };
   await page.route(`http://127.0.0.1:${port}/status.json`, async (route) => {
-    const fixture = require(resolve(repoRoot, "examples/status.example.json"));
+    state.statusRequestCount += 1;
+    const fixture = structuredClone(require(resolve(repoRoot, "examples/status.example.json")));
     const directoryFixtures = [
-      { id: "product-release", display_name: "Product Release", activation_state: "active" },
-      { id: "research-monitor", display_name: "Research Monitor", activation_state: "active" },
-      { id: "legacy-benchmark", display_name: "Legacy Benchmark", activation_state: "stopped" },
-      { id: "archived-notes", display_name: "Archived Notes", activation_state: "stopped" },
+      { id: "product-release", display_name: "Product Release" },
+      { id: "research-monitor", display_name: "Research Monitor" },
+      { id: "legacy-benchmark", display_name: "Legacy Benchmark" },
+      { id: "archived-notes", display_name: "Archived Notes" },
     ];
     for (const directoryGoal of directoryFixtures) {
-      if (fixture.run_history.goals.some((goal) => goal.id === directoryGoal.id)) continue;
+      const activation_state = state.goalActivationStates.get(directoryGoal.id) ?? "active";
+      const existingGoal = fixture.run_history.goals.find((goal) => goal.id === directoryGoal.id);
+      if (existingGoal) {
+        existingGoal.activation_state = activation_state;
+        continue;
+      }
       fixture.run_history.goals.push({
-        ...directoryGoal,
+        ...directoryGoal, activation_state,
         status: "active-read-only", registry_member: true,
         legacy_runtime_goal: false, adapter_kind: "generic_project_goal_v0", adapter_status: "connected",
         lifecycle_phase: "registered", lifecycle_flags: ["registered"],
-        quota: { compute: 1, window_hours: 24, slot_minutes: 1, allowed_slots: 1440, spent_slots: 0, state: directoryGoal.activation_state === "stopped" ? "paused" : "waiting" },
+        quota: { compute: 1, window_hours: 24, slot_minutes: 1, allowed_slots: 1440, spent_slots: 0, state: activation_state === "stopped" ? "paused" : "waiting" },
         index_exists: false, raw_index_records: 0, unique_runs: 0, latest_runs: [],
       });
     }
@@ -102,6 +119,14 @@ async function installApi(page) {
         source_section: "User Todo",
         total_count: 1,
       };
+    }
+    const delayMs = state.nextStatusDelayMs;
+    state.nextStatusDelayMs = 0;
+    if (delayMs > 0) await new Promise((resolveWait) => setTimeout(resolveWait, delayMs));
+    if (state.failNextStatusRequest) {
+      state.failNextStatusRequest = false;
+      await route.fulfill({ contentType: "application/json", json: { error: "temporary status failure" }, status: 503 });
+      return;
     }
     await route.fulfill({ contentType: "application/json", json: fixture, status: 200 });
   });
@@ -322,6 +347,24 @@ async function installApi(page) {
       }
       const actionKind = actionKinds.get(apply[1]) ?? "goal.create";
       const preview = state.actionPreviews.find((item) => item.proposalId === apply[1]);
+      const lifecycleDelayMs = actionKind === "goal.lifecycle" ? state.nextLifecycleApplyDelayMs : 0;
+      state.nextLifecycleApplyDelayMs = 0;
+      if (lifecycleDelayMs > 0) await new Promise((resolveWait) => setTimeout(resolveWait, lifecycleDelayMs));
+      if (actionKind === "goal.lifecycle" && state.failNextLifecycleApply) {
+        state.failNextLifecycleApply = false;
+        await route.fulfill({
+          contentType: "application/json",
+          json: {
+            error: "Lifecycle gate changed before apply",
+            error_code: "protected_action",
+            gate: { kind: "goal_lifecycle_gate", summary: "Goal 状态已变化，请重新确认。" },
+            ok: false,
+            write_attempted: false,
+          },
+          status: 409,
+        });
+        return;
+      }
       let acceptedTurn = null;
       if (actionKind === "run.correct" && preview) {
         const sessionId = preview.normalized_parameters.session_id;
@@ -343,6 +386,12 @@ async function installApi(page) {
         const sessionMessages = messages.get(sessionId) ?? [];
         sessionMessages.push({ message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: preview.normalized_parameters.message, created_at: "2026-08-13T01:00:01Z" });
         messages.set(sessionId, sessionMessages);
+      }
+      if (actionKind === "goal.lifecycle" && preview) {
+        state.goalActivationStates.set(
+          preview.normalized_parameters.goal_id,
+          preview.normalized_parameters.operation === "stop" ? "stopped" : "active",
+        );
       }
       const resourceKey = `${actionKind}:${apply[1]}`;
       if (!state.durableResources.has(resourceKey)) {
@@ -459,20 +508,67 @@ async function main() {
     const stopPreview = api.actionPreviews.findLast((preview) => preview.action_kind === "goal.lifecycle" && preview.normalized_parameters.operation === "stop");
     if (!stopPreview || stopPreview.normalized_parameters.goal_id !== "product-release") throw new Error("Goal stop did not create the expected typed preview");
     if (api.durableWriteCount !== writesBeforeLifecyclePreview) throw new Error("Goal stop preview wrote state before owner confirmation");
-    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    const statusRequestsBeforeStop = api.statusRequestCount;
+    api.nextLifecycleApplyDelayMs = 900;
+    api.nextStatusDelayMs = 900;
+    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".personal-goal-list:not(.is-stopped) .personal-goal-row").length === 2,
+      null,
+      { timeout: 600 },
+    );
+    if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 2) throw new Error("Optimistic Goal stop did not update the active sidebar immediately");
+    await page.waitForTimeout(2_000);
+    if (api.statusRequestCount <= statusRequestsBeforeStop) throw new Error("Successful Goal stop did not start background full-status reconciliation");
+    if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 2) throw new Error("Full-status reconciliation reverted a successful Goal stop");
     await stoppedDirectory.locator("summary").click();
-    await page.getByRole("button", { name: "恢复 Legacy Benchmark", exact: true }).click();
+    await page.getByRole("button", { name: "恢复 Product Release", exact: true }).click();
     await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
     const resumePreview = api.actionPreviews.findLast((preview) => preview.action_kind === "goal.lifecycle" && preview.normalized_parameters.operation === "resume");
-    if (!resumePreview || resumePreview.normalized_parameters.goal_id !== "legacy-benchmark") throw new Error("Goal resume did not create the expected typed preview");
-    if (api.durableWriteCount !== writesBeforeLifecyclePreview) throw new Error("Goal resume preview wrote state before owner confirmation");
-    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    if (!resumePreview || resumePreview.normalized_parameters.goal_id !== "product-release") throw new Error("Goal resume did not create the expected typed preview");
+    if (api.durableWriteCount !== writesBeforeLifecyclePreview + 1) throw new Error("Goal resume preview wrote state before owner confirmation");
+    api.nextLifecycleApplyDelayMs = 900;
+    await page.getByRole("button", { name: "恢复 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).waitFor({ state: "attached", timeout: 600 });
+    await page.waitForTimeout(1_100);
+    if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 3) throw new Error("Full-status reconciliation reverted a successful Goal resume");
+
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
+    api.nextStatusDelayMs = 1_600;
+    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "恢复 Product Release", exact: true }).waitFor({ state: "attached" });
+    await page.getByRole("button", { name: "恢复 Product Release", exact: true }).click();
+    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "恢复 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).waitFor({ state: "attached" });
+    await page.waitForTimeout(1_800);
+    if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 3) throw new Error("A stale background response overwrote a newer optimistic Goal transition");
+
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
+    api.failNextLifecycleApply = true;
+    api.nextLifecycleApplyDelayMs = 900;
+    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "恢复 Product Release", exact: true }).waitFor({ state: "attached", timeout: 600 });
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).waitFor({ state: "attached", timeout: 2_000 });
+    if (api.goalActivationStates.get("product-release") !== "active") throw new Error("Rejected Goal stop mutated the durable fixture state");
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
+    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
+    api.failNextStatusRequest = true;
+    api.nextStatusDelayMs = 400;
+    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.waitForTimeout(900);
+    if (await page.getByText("无法读取状态", { exact: false }).count()) throw new Error("Background lifecycle reconciliation replaced the workspace with a fatal status error");
+    if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 2) throw new Error("Background reconciliation failure reverted the successful optimistic Goal state");
+    const closeLifecycleDrawer = page.getByRole("button", { name: "关闭", exact: true });
+    if (await closeLifecycleDrawer.count()) await closeLifecycleDrawer.click();
     await page.emulateMedia({ reducedMotion: "reduce" });
     const stoppedChevronTransition = await stoppedDirectory.locator("summary svg").evaluate((element) => getComputedStyle(element).transitionDuration);
     if (stoppedChevronTransition !== "0s") throw new Error(`Stopped Goals disclosure ignores reduced motion: ${stoppedChevronTransition}`);
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.screenshot({ path: resolve(outputDir, "goal-lifecycle-directory.png"), fullPage: false, animations: "disabled" });
-    pass(1, "Active Goals stay concise; reversible stop/resume uses typed previews and a collapsed Stopped Goals section.");
+    pass(1, "Goal stop/resume updates the sidebar optimistically, rolls back a rejected apply, and still reconciles the full status payload in the background.");
     if (await page.locator(".personal-timeline-row").filter({ hasText: /纠偏/u }).count()) throw new Error("Browse rows expose repeated correction actions");
     pass(2, "Browse rows are full-row click targets and Session rows state that they open execution progress and results.");
     await page.screenshot({ path: resolve(outputDir, "desktop-first-screen.png"), fullPage: false, animations: "disabled" });
@@ -549,6 +645,7 @@ async function main() {
     await page.getByRole("button", { name: "移除图片 loopx-pasted.png" }).click();
     pass(19, "Pasting a clipboard PNG attaches through the same validated composer path.");
 
+    const writesBeforeGoalCreate = api.durableWriteCount;
     await page.getByRole("button", { name: "创建新 Goal" }).click();
     const goalDraft = await page.getByLabel("向 LoopX 发送消息").inputValue();
     for (const field of ["目标：", "完成标准：", "执行边界（可选）：", "关联仓库（可选）：", "通知方式（可选）："]) {
@@ -575,7 +672,7 @@ async function main() {
     if (goalPreview?.normalized_parameters.execution_boundary !== "不调用外部工具，不修改仓库") throw new Error(`Goal execution boundary was not preserved structurally: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
     if (goalPreview?.normalized_parameters.permission !== "read_only") throw new Error(`Goal execution boundary did not remain read-only: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
     if (JSON.stringify(goalPreview?.normalized_parameters.initial_todos).includes("推进首个可验证结果")) throw new Error(`Goal preview kept unrelated generic Todos: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
-    if (api.durableWriteCount !== 0) throw new Error("Goal preview wrote durable state before confirmation");
+    if (api.durableWriteCount !== writesBeforeGoalCreate) throw new Error("Goal preview wrote durable state before confirmation");
     pass(7, "Goal preview includes Goal, Agent, workspace, permissions, Todos, heartbeat, and stop condition fields.");
     await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).click();
     try {
@@ -584,11 +681,11 @@ async function main() {
       await page.screenshot({ path: resolve(outputDir, "goal-apply-failed.png"), fullPage: true, animations: "disabled" });
       throw new Error(`${error.message}; applies=${JSON.stringify(api.actionApplies)}; errors=${pageErrors.join(" | ")}; body=${(await page.locator("body").innerText()).slice(0, 3000)}`);
     }
-    if (api.durableWriteCount !== 1) throw new Error("Goal apply did not create exactly one durable resource");
+    if (api.durableWriteCount !== writesBeforeGoalCreate + 1) throw new Error("Goal apply did not create exactly one durable resource");
     await page.evaluate(async (proposalId) => {
       await fetch(`/api/actions/${proposalId}/apply`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     }, goalPreview.proposalId);
-    if (api.durableWriteCount !== 1) throw new Error("Repeated proposal apply duplicated durable state");
+    if (api.durableWriteCount !== writesBeforeGoalCreate + 1) throw new Error("Repeated proposal apply duplicated durable state");
     pass(9, "A repeated apply request kept one durable resource and one first-turn resource key.");
     await page.getByRole("button", { name: /关闭详情/ }).click();
 

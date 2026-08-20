@@ -4,6 +4,7 @@ import {
   parsePresentationSurfaceCollectionResponse,
   presentationSurfaceCollectionSchema,
   presentationSurfaceSchema,
+  withGoalActivationState,
 } from "../src/data/status.js";
 import {
   fetchPresentationProjection,
@@ -117,6 +118,28 @@ const legacyParsed = parseStatusPayload(legacyPayload);
 assert(
   legacyParsed.presentation_surfaces.count === 0,
   "missing presentation surfaces must default to an empty collection",
+);
+
+const activationBase = structuredClone(exampleStatusPayload);
+const activationGoal = activationBase.run_history.goals[0]!;
+activationGoal.activation_state = "active";
+activationBase.attention_queue.items[0] = {
+  ...activationBase.attention_queue.items[0]!,
+  activation_state: "active",
+  goal_id: activationGoal.id,
+};
+const stoppedProjection = withGoalActivationState(activationBase, activationGoal.id, "stopped");
+assert(
+  activationBase.run_history.goals[0]!.activation_state === "active",
+  "optimistic activation projection must not mutate the parsed source payload",
+);
+assert(
+  stoppedProjection.run_history.goals[0]!.activation_state === "stopped",
+  "optimistic activation projection must update the goal directory source",
+);
+assert(
+  stoppedProjection.attention_queue.items[0]!.activation_state === "stopped",
+  "optimistic activation projection must keep the attention row aligned",
 );
 
 // An inline `view` on a ready surface must fail closed: status is index-only.

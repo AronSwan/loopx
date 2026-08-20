@@ -1012,9 +1012,22 @@ export function PersonalWorkspacePage({
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: async (proposal) => {
+      const lifecycleChange = proposal.actionKind === "goal.lifecycle"
+        && proposal.goalId
+        && proposal.lifecycleOperation
+        ? {
+            goalId: proposal.goalId,
+            next: proposal.lifecycleOperation === "stop" ? "stopped" as const : "active" as const,
+            previous: model.goals.find((goal) => goal.goalId === proposal.goalId)?.activationState
+              ?? (proposal.lifecycleOperation === "stop" ? "active" as const : "stopped" as const),
+          }
+        : null;
       setActionFeedback(`正在执行：${proposal.title}`);
       setProposals((current) => ({ ...current, [proposal.previewId]: { ...proposal, status: "applying" } }));
       setSelection({ item: { ...proposal, status: "applying" }, kind: "proposal" });
+      if (lifecycleChange) {
+        callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.next);
+      }
       try {
         if (callbacks.onApplyProposal) {
           await callbacks.onApplyProposal(proposal);
@@ -1023,8 +1036,9 @@ export function PersonalWorkspacePage({
           setSelection({ item: applied, kind: "proposal" });
           setActionFeedback(`已完成：${proposal.title}`);
           if (proposal.actionKind === "goal.lifecycle") {
-            await callbacks.onRefresh?.();
             if (proposal.lifecycleOperation === "stop") selectGoal(null);
+            const reconcile = callbacks.onReconcileStatus ?? callbacks.onRefresh;
+            void Promise.resolve().then(() => reconcile?.()).catch(() => undefined);
           }
           return;
         }
@@ -1035,13 +1049,20 @@ export function PersonalWorkspacePage({
         setActionFeedback(`已完成：${applied.title}`);
         // Keep the success receipt visible. Refresh and navigation happen when
         // the user chooses the explicit "进入 Goal" action in the drawer.
-        if (applied.actionKind === "todo.create" || applied.actionKind === "goal.lifecycle") {
+        if (applied.actionKind === "todo.create") {
           await callbacks.onRefresh?.();
         }
         if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "stop") {
           selectGoal(null);
         }
+        if (applied.actionKind === "goal.lifecycle") {
+          const reconcile = callbacks.onReconcileStatus ?? callbacks.onRefresh;
+          void Promise.resolve().then(() => reconcile?.()).catch(() => undefined);
+        }
       } catch (error) {
+        if (lifecycleChange) {
+          callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
+        }
         if (error instanceof ChatApiError && error.payload.error_code === "protected_action") {
           const rawGate = error.payload.gate;
           const gate = rawGate && typeof rawGate === "object" ? rawGate as Record<string, unknown> : {};
