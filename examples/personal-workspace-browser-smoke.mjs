@@ -611,7 +611,10 @@ async function main() {
     await connectDialog.getByRole("option", { name: "Product group" }).waitFor({ state: "attached" });
     await connectDialog.getByLabel("Group chat").selectOption({ label: "Product group" });
     await connectDialog.getByLabel("Capture scope").selectOption("configured_chat_all");
-    await connectDialog.getByLabel("Processing mode").selectOption("async_inbox");
+    const ingressGroup = connectDialog.getByRole("group", { name: "Agent ingress" });
+    const ingressOptions = await ingressGroup.locator("input[type=radio]").evaluateAll((options) => options.map((option) => option.value));
+    if (JSON.stringify(ingressOptions) !== JSON.stringify(["live_steering", "session_queue", "async_inbox"])) throw new Error(`Lark Agent ingress modes drifted: ${JSON.stringify(ingressOptions)}`);
+    await ingressGroup.getByLabel("Async inbox").check();
     await connectDialog.getByLabel("Target Agent").waitFor({ state: "visible" });
     await connectDialog.getByLabel("Reply mode").selectOption("topic_reply");
     await page.screenshot({ path: resolve(outputDir, "lark-routing-modes.png"), fullPage: false, animations: "disabled" });
@@ -657,7 +660,7 @@ async function main() {
     const editDialog = page.getByRole("dialog", { name: "Edit Lark Connection" });
     await editDialog.waitFor({ state: "visible" });
     if (await editDialog.getByLabel("Capture scope").inputValue() !== "configured_chat_all") throw new Error("Lark edit mode did not restore capture_scope");
-    if (await editDialog.getByLabel("Processing mode").inputValue() !== "async_inbox") throw new Error("Lark edit mode did not restore ingress_mode");
+    if (!await editDialog.getByRole("group", { name: "Agent ingress" }).getByLabel("Async inbox").isChecked()) throw new Error("Lark edit mode did not restore ingress_mode");
     if (await editDialog.getByLabel("Target Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
     await editDialog.getByRole("button", { name: "Cancel" }).click();
     await page.screenshot({ path: resolve(outputDir, "lark-goal-connections.png"), fullPage: false, animations: "disabled" });

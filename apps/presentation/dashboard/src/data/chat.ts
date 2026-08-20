@@ -993,7 +993,7 @@ export async function cancelLarkAppSetup(setupId: string) {
 
 export type LarkGroupChat = { chat_id: string; chat_name: string };
 export type LarkCaptureScope = "addressed_only" | "configured_chat_all";
-export type LarkIngressMode = "direct_session" | "async_inbox";
+export type LarkIngressMode = "live_steering" | "session_queue" | "async_inbox" | "direct_session";
 export type LarkReplyMode = "topic_reply";
 
 const larkGroupChatsSchema = z.object({
@@ -1029,6 +1029,7 @@ export type LarkGoalConnection = {
   replied_count: number;
   reply_ready: boolean;
   reply_mode: LarkReplyMode;
+  session_bound: boolean;
   target_ref: string;
   topic_name: string;
   topic_setup_required: boolean;
@@ -1047,7 +1048,7 @@ const larkConnectionsSchema = z.object({
     goal_title: z.string(),
     health_error_code: z.string().nullable().default(null),
     incoming_mode: z.enum(["mentions", "all"]),
-    ingress_mode: z.enum(["direct_session", "async_inbox"]).default("direct_session"),
+    ingress_mode: z.enum(["live_steering", "session_queue", "async_inbox", "direct_session"]).default("async_inbox"),
     event_count: z.number().int().nonnegative().default(0),
     last_event_reason: z.string().nullable().default(null),
     last_event_status: z.string().nullable().default(null),
@@ -1056,6 +1057,7 @@ const larkConnectionsSchema = z.object({
     replied_count: z.number().int().nonnegative().default(0),
     reply_ready: z.boolean().default(false),
     reply_mode: z.literal("topic_reply"),
+    session_bound: z.boolean().default(false),
     target_ref: z.string(),
     topic_name: z.string(),
     topic_setup_required: z.boolean(),

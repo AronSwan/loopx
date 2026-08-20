@@ -305,6 +305,15 @@
 .personal-lark-check span { display: grid; gap: 2px; }
 .personal-lark-check strong { color: var(--pw-text); }
 .personal-lark-check small { font-weight: 400; }
+.personal-lark-ingress { display: grid; gap: 7px; margin: 0; padding: 0; border: 0; color: var(--pw-muted); }
+.personal-lark-ingress legend { margin-bottom: 1px; font-size: 11px; font-weight: 650; }
+.personal-lark-ingress > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.personal-lark-ingress label { position: relative; display: block; min-height: 84px; padding: 11px; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; cursor: pointer; }
+.personal-lark-ingress label.is-active { border-color: var(--pw-blue); background: rgb(47 105 235 / 6%); box-shadow: 0 0 0 1px rgb(47 105 235 / 14%); }
+.personal-lark-ingress input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.personal-lark-ingress span { display: grid; gap: 5px; }
+.personal-lark-ingress strong { color: var(--pw-text); font-size: 11px; }
+.personal-lark-ingress small { color: var(--pw-faint); font-size: 9px; font-weight: 450; line-height: 1.35; }
 .personal-lark-topic-preview { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 11px; border: 1px solid var(--pw-line); border-radius: 9px; background: #f7f7f4; color: var(--pw-text); font-size: 12px; font-weight: 500; }
 .personal-lark-topic-preview.is-locked { color: var(--pw-muted); }
 .personal-lark-cardinality { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 9px; background: var(--pw-blue-soft); color: var(--pw-blue-ink); font-size: 11px; }

@@ -34,6 +34,25 @@ import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type Tab = "apps" | "connections";
 
+const ingressPresentation: Record<LarkIngressMode, { label: string; detail: string }> = {
+  live_steering: {
+    label: "Steering",
+    detail: "投到当前活跃 Turn；没有精确活跃 Turn 时安全拒绝。",
+  },
+  session_queue: {
+    label: "Queuing",
+    detail: "进入同一 Agent Session 的有界 FIFO 队列，当前 Turn 完成后处理。",
+  },
+  async_inbox: {
+    label: "Async inbox",
+    detail: "写入 Agent 私有收件箱，等待后续显式 drain。",
+  },
+  direct_session: {
+    label: "Legacy direct",
+    detail: "旧连接兼容模式；保存时请选择新的三种入站模式之一。",
+  },
+};
+
 function larkConnectionHealth(connection: LarkGoalConnection): { label: string; detail: string; ready: boolean } {
   if (connection.listener_status === "starting") {
     return { label: "正在启动", detail: "LoopX 正在启动该 App 的消息事件监听。", ready: false };
@@ -142,7 +161,7 @@ export function LarkSettingsPage({
   const [chatLoading, setChatLoading] = useState(false);
   const [chatLoadError, setChatLoadError] = useState<string | null>(null);
   const [captureScope, setCaptureScope] = useState<LarkCaptureScope>("addressed_only");
-  const [ingressMode, setIngressMode] = useState<LarkIngressMode>("direct_session");
+  const [ingressMode, setIngressMode] = useState<LarkIngressMode>("async_inbox");
   const [replyMode, setReplyMode] = useState<LarkReplyMode>("topic_reply");
   const [agentId, setAgentId] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -277,7 +296,7 @@ export function LarkSettingsPage({
     setGoalId(nextGoal?.goalId ?? "");
     setAgentId(nextGoal?.agentId ?? "");
     setCaptureScope("addressed_only");
-    setIngressMode("direct_session");
+    setIngressMode("async_inbox");
     setReplyMode("topic_reply");
     setChatQuery("");
     setConnectError(null);
@@ -290,7 +309,7 @@ export function LarkSettingsPage({
     setGoalId(connection.goal_id);
     setAgentId(connection.agent_id ?? goals.find((goal) => goal.goalId === connection.goal_id)?.agentId ?? "");
     setCaptureScope(connection.capture_scope);
-    setIngressMode(connection.ingress_mode);
+    setIngressMode(connection.ingress_mode === "direct_session" ? "session_queue" : connection.ingress_mode);
     setReplyMode(connection.reply_mode);
     setChatQuery(connection.chat_name);
     setConnectError(null);
@@ -340,7 +359,7 @@ export function LarkSettingsPage({
     setConnectError(null);
     try {
       const input = {
-        ...(ingressMode === "async_inbox" ? { agentId } : {}),
+        agentId,
         appRef,
         captureScope,
         chatId: selectedChat.chat_id,
@@ -435,7 +454,7 @@ export function LarkSettingsPage({
                 </span>
                 <span><strong>{connection.goal_title}</strong><small># {connection.topic_name}</small></span>
                 <span>{connection.capture_scope === "addressed_only" ? "Mentions only" : "All topic messages"}</span>
-                <span><strong>{connection.ingress_mode === "async_inbox" ? "Agent inbox" : "Direct session"}</strong><small>{connection.ingress_mode === "async_inbox" ? connection.agent_id ?? "Agent required" : "Topic reply"}</small></span>
+                <span><strong>{ingressPresentation[connection.ingress_mode].label}</strong><small>{connection.agent_id ?? ingressPresentation[connection.ingress_mode].detail}</small></span>
                 <span className="personal-lark-row-actions">
                   <button aria-label={`配置 ${connection.goal_title}`} onClick={() => openConnectionEditor(connection)} type="button"><Settings2 size={15} /></button>
                   <button aria-label={`解绑 ${connection.goal_title}`} className={disconnectGoalId === connection.goal_id ? "is-confirm" : ""} onClick={() => void disconnect(connection.goal_id)} type="button"><Unlink size={15} />{disconnectGoalId === connection.goal_id ? "确认" : null}</button>
@@ -465,12 +484,12 @@ export function LarkSettingsPage({
             <label className="personal-lark-check"><input checked readOnly type="checkbox" /><span><strong>Create Goal topic automatically</strong><small>A dedicated topic will be created for this Goal.</small></span></label>
             <label><span>Topic preview</span><div className="personal-lark-topic-preview"><MessageSquareText size={15} /># {selectedGoal?.title ?? selectedGoal?.goalId ?? "Goal"}</div></label>
             <label><span>Capture scope</span><select aria-label="Capture scope" onChange={(event) => setCaptureScope(event.target.value as LarkCaptureScope)} value={captureScope}><option value="addressed_only">Only messages that mention or reply to the App</option><option value="configured_chat_all">All messages in this Goal topic</option></select><small>决定哪些 Topic 消息会进入 LoopX；不会扩大 Agent 权限。</small></label>
-            <label><span>Processing mode</span><select aria-label="Processing mode" onChange={(event) => setIngressMode(event.target.value as LarkIngressMode)} value={ingressMode}><option value="direct_session">Direct session — answer and acknowledge now</option><option value="async_inbox">Agent inbox — queue without inline reply or ACK</option></select><small>{ingressMode === "async_inbox" ? "消息会进入指定 Agent 的私有收件箱，由后续 Agent effect 处理。" : "复用该 Goal Topic 的会话，处理完成后在原消息下回复。"}</small></label>
-            {ingressMode === "async_inbox" ? <label><span>Target Agent</span><select aria-label="Target Agent" onChange={(event) => setAgentId(event.target.value)} value={agentId}><option value={selectedGoal?.agentId ?? ""}>{selectedGoal?.agentLabel ?? selectedGoal?.agentId ?? "No Agent configured"}</option></select><small>只能投递给当前 Goal 已注册的 Agent；此选择不授予新权限。</small></label> : null}
+            <fieldset aria-label="Agent ingress" className="personal-lark-ingress"><legend>Agent ingress</legend><div>{(["live_steering", "session_queue", "async_inbox"] as const).map((mode) => <label className={ingressMode === mode ? "is-active" : ""} key={mode}><input aria-label={ingressPresentation[mode].label} checked={ingressMode === mode} name="lark-agent-ingress" onChange={() => setIngressMode(mode)} type="radio" value={mode} /><span><strong>{ingressPresentation[mode].label}</strong><small>{ingressPresentation[mode].detail}</small></span></label>)}</div></fieldset>
+            <label><span>Target Agent</span><select aria-label="Target Agent" onChange={(event) => setAgentId(event.target.value)} value={agentId}><option value={selectedGoal?.agentId ?? ""}>{selectedGoal?.agentLabel ?? selectedGoal?.agentId ?? "No Agent configured"}</option></select><small>只能投递给当前 Goal 已注册的 Agent；此选择不授予新权限。Steering 与 Queuing 会绑定该 Goal 当前的精确 Session。</small></label>
             <label><span>Reply mode</span><select aria-label="Reply mode" onChange={(event) => setReplyMode(event.target.value as LarkReplyMode)} value={replyMode}><option value="topic_reply">Topic reply</option></select><small>当前只支持在来源 Topic 内回复，避免跨群或跨 Goal 投递。</small></label>
             <p className="personal-lark-cardinality"><Check size={15} />One Lark App · many Goals · one topic per Goal</p>
             {connectError ? <p className="personal-notification-error">{connectError}</p> : null}
-            <footer><button className="personal-secondary-action" onClick={() => setModalOpen(false)} type="button">Cancel</button><button className="personal-primary-action" disabled={loading || !appRef || !selectedApp?.reply_ready || !goalId || !chatId || (ingressMode === "async_inbox" && !agentId) || connecting} onClick={() => void connect()} type="button">{connecting ? <Loader2 className="is-spinning" size={15} /> : null}{editingGoalId ? "Save connection" : "Connect"}</button></footer>
+            <footer><button className="personal-secondary-action" onClick={() => setModalOpen(false)} type="button">Cancel</button><button className="personal-primary-action" disabled={loading || !appRef || !selectedApp?.reply_ready || !goalId || !chatId || !agentId || connecting} onClick={() => void connect()} type="button">{connecting ? <Loader2 className="is-spinning" size={15} /> : null}{editingGoalId ? "Save connection" : "Connect"}</button></footer>
           </section>
         </div>
       ) : null}
