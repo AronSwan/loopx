@@ -11,6 +11,7 @@ from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
 )
 from loopx.control_plane.work_items.semantic_replan_writeback import (
+    _obligation_was_created_by_current_completion,
     qualify_replan_writeback,
 )
 from loopx.state_refresh import (
@@ -326,6 +327,44 @@ def test_writeback_scopes_other_agent_user_gate_like_quota() -> None:
         "vision_acceptance_gap",
         "vision_outcome_checkpoint_required",
     ]
+
+
+def test_current_completion_source_identity_exempts_new_todo_obligation() -> None:
+    obligation, semantic_delta = qualify_replan_writeback(
+        newest_first_runs=[],
+        state_text=_completed_advancement_without_successor_state(),
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        completion_todo_id="todo_unsettled_completion",
+        completion_turn_key="turn-unsettled",
+    )
+
+    assert obligation is None
+    assert semantic_delta is None
+
+
+def test_current_completion_exemption_rejects_peer_owned_source_item() -> None:
+    assert not _obligation_was_created_by_current_completion(
+        {
+            "triggers": [
+                {
+                    "kind": "completed_advancement_without_successor",
+                    "todo_id": "todo_peer_completion",
+                }
+            ]
+        },
+        agent_todo_items=[
+            {
+                "todo_id": "todo_peer_completion",
+                "status": "done",
+                "claimed_by": OTHER_AGENT_ID,
+                "completion_turn_key": "turn-peer",
+            }
+        ],
+        agent_id=AGENT_ID,
+        completion_todo_id="todo_peer_completion",
+        completion_turn_key="turn-peer",
+    )
 
 
 def test_rotated_vision_obligation_rejects_first_maintenance_writeback() -> None:

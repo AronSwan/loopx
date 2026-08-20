@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
+from ..agents.agent_scope import agent_scope_item_matches_agent_or_unclaimed
 from ..agents.identity import build_quota_agent_identity
 from ..goals.goal_frontier import (
     build_goal_frontier_projection_context_from_status,
@@ -26,7 +27,8 @@ from .work_lane_context import build_work_lane_context_contract
 def _obligation_was_created_by_current_completion(
     obligation: dict[str, Any],
     *,
-    agent_todos: dict[str, Any] | None,
+    agent_todo_items: list[dict[str, Any]] | None,
+    agent_id: str,
     completion_todo_id: str | None,
     completion_turn_key: str | None,
 ) -> bool:
@@ -46,7 +48,11 @@ def _obligation_was_created_by_current_completion(
 
     safe_todo_id = str(completion_todo_id or "").strip()
     safe_turn_key = str(completion_turn_key or "").strip()
-    if not safe_todo_id or not safe_turn_key or not isinstance(agent_todos, dict):
+    if (
+        not safe_todo_id
+        or not safe_turn_key
+        or not isinstance(agent_todo_items, list)
+    ):
         return False
     triggers = obligation.get("triggers")
     if not isinstance(triggers, list) or not triggers:
@@ -58,13 +64,13 @@ def _obligation_was_created_by_current_completion(
         for trigger in triggers
     ):
         return False
-    items = agent_todos.get("items")
     return any(
         isinstance(item, dict)
+        and agent_scope_item_matches_agent_or_unclaimed(item, agent_id=agent_id)
         and str(item.get("todo_id") or "").strip() == safe_todo_id
         and item.get("status") == "done"
         and str(item.get("completion_turn_key") or "").strip() == safe_turn_key
-        for item in items or []
+        for item in agent_todo_items
     )
 
 
@@ -117,6 +123,15 @@ def qualify_replan_writeback(
         raw_agent_todos,
         None,
     )
+    agent_todo_completion_items = (
+        [
+            item
+            for item in raw_agent_todos.get("items", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(raw_agent_todos, dict)
+        else []
+    )
     run_obligation = autonomous_replan_obligation_from_runs(
         newest_first_runs,
         agent_todos=agent_todos,
@@ -167,7 +182,8 @@ def qualify_replan_writeback(
         return None, None
     if _obligation_was_created_by_current_completion(
         obligation,
-        agent_todos=agent_todos,
+        agent_todo_items=agent_todo_completion_items,
+        agent_id=safe_agent_id,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
     ):
