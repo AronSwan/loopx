@@ -1152,7 +1152,7 @@ export function PersonalWorkspacePage({
     setGoalConversationReceiptVisible(false);
     setActiveSessionRun(null);
     setSelection(null);
-    setSelectedGoalTab("chat");
+    setSelectedGoalTab("tasks");
     setMobileSidebarOpen(false);
     callbacks.onSelectGoal?.(goalId);
   }
