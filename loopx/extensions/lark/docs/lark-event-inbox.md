@@ -324,11 +324,12 @@ enabling this capability does not grant reviewer-notification or other
 outbound authority.
 
 For text replies containing Lark `<at user_id="...">...</at>` mentions, provider
-readback may replace the markup with tokens such as `@_user_1`. Verification
-therefore compares the normalized visible-text template and requires every
-mention token to resolve to the identity requested at send time. A missing,
-extra, or differently resolved mention remains `sent_unverified`; display-name
-or raw-markup similarity alone is not accepted.
+readback may replace the markup with tokens such as `@_user_1` or render the
+visible body as `@Display Name` while retaining the token in structured mention
+metadata. Verification therefore compares the normalized visible-text template
+and requires every mention to resolve to the identity requested at send time.
+A missing, extra, ambiguous, or differently resolved mention remains
+`sent_unverified`; display-name or raw-markup similarity alone is not accepted.
 
 ## Bounded history reconciliation
 

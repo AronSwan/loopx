@@ -140,7 +140,7 @@ def _canonical_expected_text(text: str) -> tuple[str, dict[str, str]]:
     def replace(match: re.Match[str]) -> str:
         identity = match.group("identity").strip()
         token = identity_tokens.setdefault(
-            identity, f"\x1fmention:{len(identity_tokens)}\x1f"
+            identity, f"\x00mention:{len(identity_tokens)}\x00"
         )
         return token
 
@@ -161,6 +161,10 @@ def _readback_matches_reply(
     if not isinstance(mentions, list):
         return False
     matched_identities: set[str] = set()
+    keys_by_identity: dict[str, set[str]] = {}
+    display_text_by_identity: dict[str, set[str]] = {}
+    key_owners: dict[str, set[str]] = {}
+    display_text_owners: dict[str, set[str]] = {}
     for mention in mentions:
         if not isinstance(mention, Mapping):
             return False
@@ -169,12 +173,38 @@ def _readback_matches_reply(
         if not key or len(matches) != 1:
             return False
         identity = next(iter(matches))
-        actual_text = actual_text.replace(key, identity_tokens[identity])
         matched_identities.add(identity)
-    return (
-        matched_identities == set(identity_tokens)
-        and " ".join(actual_text.split()) == expected_text
-    )
+        keys_by_identity.setdefault(identity, set()).add(key)
+        key_owners.setdefault(key, set()).add(identity)
+        display_name = str(mention.get("name") or "").strip()
+        if display_name:
+            display_text = f"@{display_name}"
+            display_text_by_identity.setdefault(identity, set()).add(display_text)
+            display_text_owners.setdefault(display_text, set()).add(identity)
+    if matched_identities != set(identity_tokens):
+        return False
+    if any(len(owners) != 1 for owners in key_owners.values()):
+        return False
+
+    for identity, token in identity_tokens.items():
+        expected_count = expected_text.count(token)
+        for key in sorted(keys_by_identity.get(identity, ()), key=len, reverse=True):
+            actual_text = actual_text.replace(key, token)
+        remaining_count = expected_count - actual_text.count(token)
+        if remaining_count < 0:
+            return False
+        if remaining_count == 0:
+            continue
+        rendered_candidates = [
+            display_text
+            for display_text in display_text_by_identity.get(identity, ())
+            if display_text_owners.get(display_text) == {identity}
+            and actual_text.count(display_text) == remaining_count
+        ]
+        if len(rendered_candidates) != 1:
+            return False
+        actual_text = actual_text.replace(rendered_candidates[0], token)
+    return " ".join(actual_text.split()) == expected_text
 
 
 def _result(
