@@ -435,3 +435,66 @@ def test_connect_refreshes_the_app_level_event_consumer(monkeypatch: Any, tmp_pa
     assert connect_calls[0]["ingress_mode"] == "async_inbox"
     assert connect_calls[0]["registry_path"] == tmp_path / "registry.json"
     assert responses == [{"ok": True, "status": "connected", "http_status": 200}]
+
+
+def test_session_ingress_resolves_the_exact_goal_agent_session(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    import loopx.chat_lark_api as api
+
+    connect_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        api,
+        "connect_lark_goal_topic",
+        lambda **kwargs: connect_calls.append(kwargs)
+        or {"ok": True, "status": "connected"},
+    )
+    latest_calls: list[dict[str, Any]] = []
+
+    class Handler(LarkChatRequestMixin):
+        server = SimpleNamespace(
+            chat_store=SimpleNamespace(
+                latest_session=lambda **kwargs: latest_calls.append(kwargs)
+                or {"session_id": "session-alpha"}
+            ),
+            lark_goal_topic_runtime=SimpleNamespace(refresh=lambda: None),
+        )
+
+        def _read_json(self) -> dict[str, Any]:
+            return {
+                "goal_id": "goal-alpha",
+                "app_ref": "mew",
+                "chat_id": "oc_public_fixture",
+                "chat_name": "Product",
+                "agent_id": "agent-alpha",
+                "ingress_mode": "session_queue",
+                "execute": True,
+            }
+
+        def _goal_channel_context(self, _goal_id: str):
+            return ({"goals": [{"id": "goal-alpha"}]}, tmp_path / "goal-channel.json")
+
+        def _goal_channel_target_path(self) -> Path:
+            return tmp_path / "goal-channel-targets.json"
+
+        def _lark_runner(self):
+            return lambda *_args: {"returncode": 0, "stdout": "{}", "stderr": ""}
+
+        def _send_json(self, _payload: dict[str, Any], *, status: int = 200) -> None:
+            assert status == 200
+
+        def _send_error(self, message: str, **_kwargs: Any) -> None:
+            raise AssertionError(message)
+
+    Handler()._lark_connect()
+
+    assert latest_calls == [
+        {
+            "goal_id": "goal-alpha",
+            "agent_id": "agent-alpha",
+            "channel_id": "goal.goal-alpha",
+        }
+    ]
+    assert connect_calls[0]["session_id"] == "session-alpha"
+    assert connect_calls[0]["ingress_mode"] == "session_queue"

@@ -221,6 +221,51 @@ def test_async_inbox_requires_one_registered_agent(tmp_path: Path) -> None:
     assert preview["details"]["incoming_mode"] == "all"
 
 
+@pytest.mark.parametrize("ingress_mode", ["live_steering", "session_queue"])
+def test_session_ingress_modes_require_and_persist_exact_session(
+    tmp_path: Path,
+    ingress_mode: str,
+) -> None:
+    registry = _registry(tmp_path)
+    registry["goals"][0]["coordination"] = {
+        "registered_agents": ["agent-alpha"]
+    }
+    with pytest.raises(ValueError, match="exact active Agent session"):
+        connect_lark_goal_topic(
+            registry=registry,
+            goal_id="goal-alpha",
+            agent_id="agent-alpha",
+            target_path=tmp_path / "targets.json",
+            binding_path=tmp_path / "binding.json",
+            app_ref="mew",
+            chat_id=CHAT_ID,
+            chat_name="Product group",
+            ingress_mode=ingress_mode,
+            execute=False,
+        )
+
+    connected = connect_lark_goal_topic(
+        registry=registry,
+        goal_id="goal-alpha",
+        agent_id="agent-alpha",
+        session_id="session-alpha",
+        target_path=tmp_path / "targets.json",
+        binding_path=tmp_path / "binding.json",
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        ingress_mode=ingress_mode,
+        runner=_runner({}),
+        cli_bin="fake-lark",
+    )
+
+    assert connected["ok"] is True
+    binding = read_goal_channel_binding(tmp_path / "binding.json")["bindings"]["goal-alpha"]
+    assert binding["agent_id"] == "agent-alpha"
+    assert binding["session_id"] == "session-alpha"
+    assert binding["routing"]["ingress_mode"] == ingress_mode
+
+
 def test_async_inbox_registration_failure_preserves_verified_write_receipt(
     monkeypatch: Any,
     tmp_path: Path,

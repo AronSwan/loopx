@@ -515,7 +515,40 @@ class LarkGoalTopicRuntimeService:
         self._update_health(profile, status="stopped", error_code=None)
 
     def refresh(self) -> None:
-        desired = set(_active_profile_configs(self.snapshot_provider()))
+        snapshot = self.snapshot_provider()
+        desired = set(_active_profile_configs(snapshot))
+        binding_payloads = snapshot.get("binding_payloads")
+        contexts = snapshot.get("goal_contexts")
+        if isinstance(binding_payloads, Mapping) and isinstance(contexts, Mapping):
+            for goal_id, payload in binding_payloads.items():
+                if not isinstance(payload, Mapping):
+                    continue
+                binding = binding_for_goal(payload, str(goal_id))
+                if not isinstance(binding, Mapping):
+                    continue
+                raw_routing = binding.get("routing")
+                routing: Mapping[str, Any] = (
+                    raw_routing if isinstance(raw_routing, Mapping) else {}
+                )
+                if routing.get("ingress_mode") != "session_queue":
+                    continue
+                context = contexts.get(str(goal_id))
+                context = context if isinstance(context, Mapping) else {}
+                session_id = str(binding.get("session_id") or "")
+                work_dir = str(context.get("work_dir") or "")
+                try:
+                    has_queued_turns = bool(
+                        session_id
+                        and self.runtime_controller.store.queued_turns(session_id)
+                    )
+                except KeyError:
+                    has_queued_turns = False
+                if has_queued_turns and work_dir:
+                    self.runtime_controller.resume_session_queue(
+                        session_id=session_id,
+                        work_dir=Path(work_dir).expanduser().resolve(),
+                        objective=str(context.get("objective") or goal_id),
+                    )
         with self._lock:
             stale = set(self._workers) - desired
             missing = desired - set(self._workers)
@@ -564,38 +597,72 @@ def answer_lark_goal_topic(
     objective: str,
     runtime_controller: Any,
 ) -> str:
-    """Run one addressed Topic message through the durable Goal Chat session."""
+    """Deliver one Topic message using its exact Agent ingress contract."""
 
     goal_id = str(route.get("goal_id") or "")
-    channel_id = "lark." + _opaque_digest(
-        route.get("app_ref"),
-        route.get("target_ref"),
-        route.get("topic_root_message_id"),
-    )
-    session, _resumed = runtime_controller.open_session(
-        goal_id=goal_id,
-        agent_id=str(route.get("agent_id") or "codex"),
-        work_dir=Path(work_dir).expanduser().resolve(),
-        objective=str(objective or goal_id),
-        mode="resume_latest",
-        channel_id=channel_id,
-        agent_goal_id=goal_id,
-    )
+    ingress_mode = str(route.get("ingress_mode") or "direct_session")
+    session_id = str(route.get("session_id") or "")
+    agent_id = str(route.get("agent_id") or "codex")
+    resolved_work_dir = Path(work_dir).expanduser().resolve()
     message = (
         "这是来自已绑定 Lark Goal Topic 的用户消息。请直接回答当前问题；"
         "任何 Goal、Todo 或其他持久状态修改只生成预览，等待用户在 LoopX 明确确认后应用。\n\n"
         f"用户消息：{str(text or '').strip()}"
     )
-    turn, _created = runtime_controller.submit_turn(
-        session_id=str(session["session_id"]),
-        client_turn_id="lark."
-        + _opaque_digest(route.get("message_id"), route.get("topic_root_message_id")),
-        message=message,
-        work_dir=Path(work_dir).expanduser().resolve(),
-        objective=str(objective or goal_id),
+    client_turn_id = "lark." + _opaque_digest(
+        route.get("message_id"),
+        route.get("topic_root_message_id"),
     )
+    if ingress_mode in {"live_steering", "session_queue"}:
+        session = runtime_controller.store.load_session(session_id)
+        if (
+            session is None
+            or session.get("goal_id") != goal_id
+            or session.get("agent_id") != agent_id
+            or session.get("channel_id") != f"goal.{goal_id}"
+            or session.get("status") == "closed"
+        ):
+            raise RuntimeError("bound Agent session is unavailable or no longer matches")
+        if ingress_mode == "live_steering":
+            turn, _created = runtime_controller.steer_active_turn(
+                session_id=session_id,
+                client_ingress_id=client_turn_id,
+                message=message,
+            )
+        else:
+            turn, _created = runtime_controller.enqueue_turn(
+                session_id=session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                work_dir=resolved_work_dir,
+                objective=str(objective or goal_id),
+            )
+    else:
+        # Compatibility path for bindings created before the three ingress modes.
+        channel_id = "lark." + _opaque_digest(
+            route.get("app_ref"),
+            route.get("target_ref"),
+            route.get("topic_root_message_id"),
+        )
+        session, _resumed = runtime_controller.open_session(
+            goal_id=goal_id,
+            agent_id=agent_id,
+            work_dir=resolved_work_dir,
+            objective=str(objective or goal_id),
+            mode="resume_latest",
+            channel_id=channel_id,
+            agent_goal_id=goal_id,
+        )
+        session_id = str(session["session_id"])
+        turn, _created = runtime_controller.submit_turn(
+            session_id=session_id,
+            client_turn_id=client_turn_id,
+            message=message,
+            work_dir=resolved_work_dir,
+            objective=str(objective or goal_id),
+        )
     completed = runtime_controller.wait_for_turn(
-        session_id=str(session["session_id"]),
+        session_id=session_id,
         turn_id=str(turn["turn_id"]),
     )
     if completed.get("status") != "completed":

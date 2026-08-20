@@ -68,6 +68,9 @@ class CaptureScope(str, Enum):
 
 
 class IngressMode(str, Enum):
+    LIVE_STEERING = "live_steering"
+    SESSION_QUEUE = "session_queue"
+    # Read compatibility for bindings created by the first Goal Topic slice.
     DIRECT_SESSION = "direct_session"
     ASYNC_INBOX = "async_inbox"
 
@@ -319,6 +322,7 @@ def connect_lark_goal_topic(
     chat_name: str,
     incoming_mode: str = "mentions",
     agent_id: str | None = None,
+    session_id: str | None = None,
     capture_scope: str | None = None,
     ingress_mode: str = "direct_session",
     reply_mode: str = "topic_reply",
@@ -339,8 +343,14 @@ def connect_lark_goal_topic(
         default=IngressMode.DIRECT_SESSION.value,
         field="ingress_mode",
     )
-    if ingress_mode == "async_inbox" and not normalized_agent_id:
-        raise ValueError("async_inbox requires a registered agent_id")
+    if ingress_mode != IngressMode.DIRECT_SESSION.value and not normalized_agent_id:
+        raise ValueError(f"{ingress_mode} requires a registered agent_id")
+    normalized_session_id = str(session_id or "").strip()
+    if ingress_mode in {
+        IngressMode.LIVE_STEERING.value,
+        IngressMode.SESSION_QUEUE.value,
+    } and not normalized_session_id:
+        raise ValueError(f"{ingress_mode} requires an exact active Agent session")
     reply_mode = _routing_value(
         ReplyMode,
         reply_mode,
@@ -424,13 +434,13 @@ def connect_lark_goal_topic(
             },
         )
     if inbox_config is not None:
-        config_path, inbox_config_ref, inbox_payload = inbox_config
+        config_path, preflight_config_ref, inbox_payload = inbox_config
         reply = inbox_payload.get("reply")
         if isinstance(reply, dict):
             reply["bot_display_name"] = str(identity["label"])
         _write_agent_inbox_config(
             config_path=config_path,
-            config_ref=inbox_config_ref,
+            config_ref=preflight_config_ref,
             payload=inbox_payload,
         )
     if not chat_verified(
@@ -586,6 +596,7 @@ def connect_lark_goal_topic(
             **existing,
             "goal_id": goal_id,
             "agent_id": normalized_agent_id,
+            **({"session_id": normalized_session_id} if normalized_session_id else {}),
             "provider": "lark",
             "enabled": True,
             "target_ref": target_name,
@@ -630,6 +641,7 @@ def connect_lark_goal_topic(
             "ingress_mode": ingress_mode,
             "reply_mode": reply_mode,
             "agent_id": normalized_agent_id,
+            **({"session_id": normalized_session_id} if normalized_session_id else {}),
         },
     )
 
@@ -789,6 +801,7 @@ def list_lark_connections(
                 "goal_id": goal_id,
                 "goal_title": goal_objective(goal),
                 "agent_id": str(binding.get("agent_id") or "") or None,
+                "session_bound": bool(binding.get("session_id")),
                 "incoming_mode": str(routing.get("incoming_mode") or "mentions"),
                 "capture_scope": capture_scope,
                 "ingress_mode": ingress_mode,
@@ -959,6 +972,7 @@ def decide_lark_topic_event(
             route.update(
                 {
                     "agent_id": str(binding.get("agent_id") or ""),
+                    "session_id": str(binding.get("session_id") or ""),
                     "capture_scope": capture_scope,
                     "ingress_mode": ingress_mode,
                     "inbox_config_ref": str(routing.get("inbox_config_ref") or ""),
