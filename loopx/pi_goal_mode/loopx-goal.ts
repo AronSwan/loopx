@@ -31,6 +31,7 @@ import {
   createBindingStore,
   createEphemeralSessionIdentity,
   createGoalLoop,
+  hasAbortedAssistantMessage,
   sessionKey,
 } from "./pi-goal-loop-runtime.mjs";
 
@@ -235,6 +236,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", async (_event, ctx) => {
     const { key } = bindContext(ctx);
     await loop.settle(key);
+  });
+
+  // Escape aborts the active Pi run with an assistant stopReason of
+  // "aborted". Persist the pause during agent_end, before agent_settled can
+  // ask LoopX for another continuation. The owner must explicitly run
+  // `/loopx resume` (or activate a goal again) to re-arm the loop.
+  pi.on("agent_end", async (event, ctx) => {
+    if (!hasAbortedAssistantMessage(event.messages)) return;
+    const { key } = bindContext(ctx);
+    await loop.interrupt(key);
   });
 
   // User-driven prompts pause the auto loop; only prompts we injected for the
