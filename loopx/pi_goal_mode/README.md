@@ -10,7 +10,8 @@ into a LoopX-governed visible goal loop.
   and shows the packet as a widget plus a transcript entry. With a goal text
   argument, runs `loopx start-goal --guided --project . --goal-text "<text>"
   --host-surface pi` and places the returned packet in the editor for review.
-  `/loopx resume` re-arms auto-continuation after a user-driven pause.
+  `/loopx resume` re-arms auto-continuation after a user-driven pause or an
+  aborted run.
 - **`loopx_goal_activate`** — agent-callable tool. Binds the current session to
   a LoopX goal (`goalId`, heartbeat `objective`/task_body, optional `agentId`,
   `registryPath`, `availableCapabilities`), then starts the quota-gated loop.
@@ -20,6 +21,11 @@ into a LoopX-governed visible goal loop.
   follow-up), wait with scheduler-hint backoff (unchanged-poll limits apply), or
   stop at a validated terminal no-follow-up. Probe failures fail closed with a
   bounded retry; the extension never self-declares closure.
+- **Abort boundary** — pressing Escape while Pi is running persists
+  `autoResume: false` before `agent_settled`, cancels any pending backoff timer,
+  and fences an in-flight quota probe. For persistent sessions, the loop stays
+  paused across Pi restarts until `/loopx resume` or a fresh goal activation
+  explicitly re-arms it.
 
 ## Install / uninstall
 
@@ -56,9 +62,9 @@ previous run's goal and must activate again through `loopx_goal_activate`.
 
 The extension reads only LoopX public-safe state and never copies raw
 transcripts, credentials, or local session paths. Continuation is governed by
-LoopX quota; user prompts pause auto-resume; `/loopx resume` or re-activation
-re-arms it. No external writes happen without the active LoopX state or owner
-authorization.
+LoopX quota; user prompts and aborted runs pause auto-resume; `/loopx resume`
+or re-activation re-arms it. No external writes happen without the active
+LoopX state or owner authorization.
 
 On `session_shutdown` (session switch, fork, or reload) the extension instance
 is atomically disposed: every timer is cancelled and an in-flight quota probe

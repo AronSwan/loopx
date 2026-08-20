@@ -11,6 +11,7 @@ import {
   createEphemeralSessionIdentity,
   createGoalLoop,
   createMemoryBindingStore,
+  hasAbortedAssistantMessage,
   sanitizedKey,
   sessionKey,
   waitPlan,
@@ -34,6 +35,9 @@ function memoryBindingStore() {
           return null
         }
         if (expected.goalId !== undefined && (current.goalId || "") !== expected.goalId) {
+          return null
+        }
+        if (expected.autoResume !== undefined && current.autoResume !== expected.autoResume) {
           return null
         }
       }
@@ -282,6 +286,65 @@ test("a user-driven prompt pauses auto-resume and cancels the scheduled timer", 
 })
 
 
+test("an aborted Pi run pauses durably and cancels the scheduled timer", async () => {
+  const fixture = harness(backoffDecision())
+  fixture.loop.bind("session-abort", fixture.services)
+  await fixture.activate("session-abort")
+  await fixture.loop.settle("session-abort")
+  assert.equal(fixture.scheduled.length, 1)
+
+  await fixture.loop.interrupt("session-abort")
+
+  const binding = await fixture.store.read("session-abort")
+  assert.equal(binding.autoResume, false)
+  assert.equal(fixture.scheduled[0].cleared, true)
+
+  const probesBefore = fixture.calls.quota
+  await fixture.loop.settle("session-abort")
+  assert.equal(fixture.calls.quota, probesBefore)
+
+  fixture.setDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await fixture.loop.resume("session-abort")
+  await fixture.loop.settle("session-abort")
+  assert.equal(fixture.calls.quota, probesBefore + 1)
+  assert.equal(fixture.calls.send, 1)
+})
+
+
+test("agent_end abort detection ignores non-aborted and non-assistant messages", () => {
+  assert.equal(hasAbortedAssistantMessage(null), false)
+  assert.equal(hasAbortedAssistantMessage([{ role: "assistant", stopReason: "stop" }]), false)
+  assert.equal(hasAbortedAssistantMessage([{ role: "user", stopReason: "aborted" }]), false)
+  assert.equal(
+    hasAbortedAssistantMessage([
+      { role: "toolResult", content: [] },
+      { role: "assistant", stopReason: "aborted" },
+    ]),
+    true,
+  )
+})
+
+
+test("auto-resume compare-and-swap rejects a continuation write after pause", async () => {
+  const store = createMemoryBindingStore()
+  await store.write("session-cas-pause", {
+    goalId: "goal-cas-pause",
+    generation: 1,
+    autoResume: true,
+  })
+  await store.write("session-cas-pause", { autoResume: false })
+
+  const committed = await store.write(
+    "session-cas-pause",
+    { lastInjectedPrompt: "must-not-send" },
+    { generation: 1, goalId: "goal-cas-pause", autoResume: true },
+  )
+
+  assert.equal(committed, null)
+  assert.equal((await store.read("session-cas-pause")).lastInjectedPrompt, "")
+})
+
+
 test("an injected follow-up prompt keeps auto-resume armed", async () => {
   const fixture = harness({ should_run: true, scheduler_hint: { action: "run_now" } })
   fixture.loop.bind("session-injected", fixture.services)
@@ -362,6 +425,30 @@ test("user intervention during an in-flight probe stops continuation", async () 
 })
 
 
+test("abort during an in-flight probe fences the pending continuation", async () => {
+  let releaseDecision
+  const pendingDecision = new Promise((resolve) => {
+    releaseDecision = resolve
+  })
+  const fixture = harness(pendingDecision)
+  fixture.loop.bind("session-abort-race", fixture.services)
+  await fixture.activate("session-abort-race")
+  const settled = fixture.loop.settle("session-abort-race")
+  for (let index = 0; index < 5 && fixture.calls.quota === 0; index += 1) {
+    await Promise.resolve()
+  }
+  assert.equal(fixture.calls.quota, 1)
+
+  await fixture.loop.interrupt("session-abort-race")
+  releaseDecision({ should_run: true, scheduler_hint: { action: "run_now" } })
+  await settled
+
+  assert.equal(fixture.calls.send, 0)
+  assert.equal(fixture.scheduled.length, 0)
+  assert.equal((await fixture.store.read("session-abort-race")).autoResume, false)
+})
+
+
 test("coalesces concurrent settles into one quota decision", async () => {
   let releaseDecision
   const pendingDecision = new Promise((resolve) => {
@@ -434,6 +521,38 @@ test("binding store round-trips through the filesystem and retires cleanly", asy
     await store.remove(key)
     assert.equal(await store.read(key), null)
     await store.remove(key)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+
+test("an abort pause survives runtime replacement for a persistent session", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-goal-loop-abort-"))
+  try {
+    const store = createBindingStore(root)
+    const first = harness({ should_run: true, scheduler_hint: { action: "run_now" } })
+    first.loop.bind("session-persisted-abort", {
+      ...first.services,
+      store,
+    })
+    await first.loop.activate("session-persisted-abort", {
+      goalId: "goal-persisted-abort",
+      taskBody: "persisted body",
+    })
+    await first.loop.interrupt("session-persisted-abort")
+    first.loop.dispose()
+
+    const second = harness({ should_run: true, scheduler_hint: { action: "run_now" } })
+    second.loop.bind("session-persisted-abort", {
+      ...second.services,
+      store,
+    })
+    await second.loop.settle("session-persisted-abort")
+
+    assert.equal(second.calls.quota, 0)
+    assert.equal(second.calls.send, 0)
+    assert.equal((await store.read("session-persisted-abort")).autoResume, false)
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }

@@ -506,6 +506,8 @@ def test_pi_install_writes_self_contained_extension_into_project(
     assert 'pi.registerCommand("loopx"' in text
     assert "loopx_goal_activate" in text
     assert "agent_settled" in text
+    assert 'pi.on("agent_end"' in text
+    assert "hasAbortedAssistantMessage" in text
     assert "pi.on(\"session_shutdown\"" in text
     assert "loop.dispose()" in text
     # The quota/wait/store loop core lives in the sibling runtime module so it
