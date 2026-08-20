@@ -601,10 +601,12 @@ async function main() {
     if (!(await page.getByText("loopx-ai/loopx", { exact: true }).isVisible())) throw new Error("Goal drawer did not show the read-only repository context");
     await page.getByRole("button", { name: /关闭详情/ }).click();
 
-    await page.getByRole("button", { name: "通知设置", exact: true }).click();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("heading", { name: "Lark", exact: true }).waitFor({ state: "visible" });
-    if (await page.locator(".personal-channel-composer").count()) throw new Error("Pure Lark configuration mode left the chat composer visible");
-    if (await page.locator("[data-context-drawer]").count()) throw new Error("Pure Lark configuration mode left the context drawer visible");
+    if (await page.locator(".personal-workspace-shell").count()) throw new Error("Workspace Settings did not replace the workspace shell");
+    if (await page.locator(".personal-channel-composer").count()) throw new Error("Workspace Settings left the chat composer visible");
+    if (await page.locator("[data-context-drawer]").count()) throw new Error("Workspace Settings left the context drawer visible");
+    await page.screenshot({ path: resolve(outputDir, "workspace-settings.png"), fullPage: false, animations: "disabled" });
     await page.getByRole("button", { name: /Connect Lark App/ }).click();
     const connectDialog = page.getByRole("dialog", { name: "Connect Lark App" });
     await connectDialog.waitFor({ state: "visible" });
@@ -645,10 +647,10 @@ async function main() {
     if (mismatchReadback.connections?.[0]?.last_event_reason !== "topic_mismatch") {
       throw new Error(`Lark route mismatch API readback mismatch: ${JSON.stringify(mismatchReadback)}`);
     }
-    await page.getByRole("button", { name: "关闭 Lark 设置" }).click();
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "通知设置", exact: true }).click();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
     const routeMismatchRow = page.locator(".personal-lark-table-row", { hasText: "Product group" });
     try {
       await routeMismatchRow.getByText("消息未匹配当前 Goal Topic", { exact: false }).waitFor({ state: "visible" });
@@ -664,7 +666,7 @@ async function main() {
     if (await editDialog.getByLabel("Target Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
     await editDialog.getByRole("button", { name: "Cancel" }).click();
     await page.screenshot({ path: resolve(outputDir, "lark-goal-connections.png"), fullPage: false, animations: "disabled" });
-    await page.getByRole("button", { name: "关闭 Lark 设置" }).click();
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();
     await page.locator(".personal-object-list").first().waitFor({ state: "visible" });
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Files" }).click();
@@ -1012,11 +1014,16 @@ async function main() {
     await mobile.locator(".personal-home-board").waitFor({ state: "visible" });
     await mobile.close();
     if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "paper") throw new Error("Personal workspace did not start with the default theme");
-    const themeToggle = page.getByRole("button", { name: "切换到野兽主题" });
-    await themeToggle.click();
-    if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "brutal") throw new Error("Theme switch did not enable the beast theme");
-    await page.getByRole("button", { name: "切换到默认主题" }).click();
-    pass(16, "The header theme switch toggles the beast theme and returns to the default theme.");
+    if (await page.getByRole("button", { name: /切换到野兽主题|切换到默认主题/ }).count()) throw new Error("Workspace header still exposes the old theme toggle");
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("button", { name: /外观/ }).click();
+    await page.getByRole("radio", { name: /高对比/ }).click();
+    if (await page.locator(".personal-settings-page").getAttribute("data-pw-theme") !== "brutal") throw new Error("Settings did not enable the high-contrast theme");
+    await page.getByRole("radio", { name: /默认/ }).click();
+    if (await page.locator(".personal-settings-page").getAttribute("data-pw-theme") !== "paper") throw new Error("Settings did not restore the default theme");
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+    if (await page.locator(".personal-workspace-shell").getAttribute("data-pw-theme") !== "paper") throw new Error("Workspace did not apply the Settings theme readback");
+    pass(16, "The Settings appearance tab toggles the high-contrast theme and returns to the default theme.");
     await page.locator(".personal-manager-link").first().click();
     await page.waitForTimeout(600);
     const workerCards = await page.locator(".personal-worker-strip > button").count();

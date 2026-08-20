@@ -249,12 +249,43 @@
 .personal-goal-notification h3 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .personal-connection-status { padding: 2px 8px; border-radius: 99px; background: var(--pw-green-bg); color: var(--pw-green); font-size: 10px; font-weight: 650; }
 
+.personal-settings-page { --pw-bg: #fbfaf7; --pw-card: #ffffff; --pw-line: #eceae3; --pw-line-strong: #e0ddd4; --pw-muted: #82889a; --pw-faint: #aab0bf; --pw-text: #23262e; --pw-blue: #2f66e9; --pw-blue-ink: #2456c8; --pw-blue-soft: #ebf1fe; --pw-red: #c2402f; --pw-red-bg: #fcecea; --pw-green: #2e7d5b; --pw-green-bg: #e6f3ec; display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 100vh; background: var(--pw-bg); color: var(--pw-text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.personal-settings-sidebar { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 18px 14px; border-right: 1px solid var(--pw-line); background: #f5f3ee; }
+.personal-settings-back { display: inline-flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: 13px; font-weight: 650; text-align: left; }
+.personal-settings-back:hover { background: rgb(255 255 255 / 65%); color: var(--pw-text); }
+.personal-settings-title { display: grid; gap: 3px; padding: 8px 10px 10px; border-bottom: 1px solid var(--pw-line); }
+.personal-settings-title small { color: var(--pw-faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.personal-settings-title strong { font-size: 18px; letter-spacing: -.02em; }
+.personal-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.personal-settings-header small { color: var(--pw-blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.personal-settings-header h1 { margin: 4px 0 2px; font-size: 28px; letter-spacing: -.035em; }
+.personal-settings-header p { margin: 0; color: var(--pw-muted); font-size: 13px; }
+.personal-settings-tabs { display: grid; gap: 3px; }
+.personal-settings-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 9px; width: 100%; min-height: 54px; padding: 8px 10px; border: 0; border-radius: 11px; background: transparent; color: var(--pw-muted); cursor: pointer; text-align: left; }
+.personal-settings-tabs button:hover { background: rgb(255 255 255 / 65%); color: var(--pw-text); }
+.personal-settings-tabs button[aria-current="page"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 10%); }
+.personal-settings-tabs button > span { display: grid; gap: 2px; min-width: 0; }
+.personal-settings-tabs strong { font-size: 13px; }
+.personal-settings-tabs small { overflow: hidden; color: var(--pw-muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.personal-settings-body { min-width: 0; padding: 30px clamp(24px, 5vw, 72px); }
+.personal-appearance-settings { max-width: 680px; }
+.personal-settings-choice-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.personal-settings-choice-group button { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 10px; min-height: 74px; padding: 13px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; }
+.personal-settings-choice-group button:hover { border-color: var(--pw-line-strong); box-shadow: 0 2px 8px rgb(30 28 20 / 6%); }
+.personal-settings-choice-group button[aria-checked="true"] { border-color: #9fb9f4; background: #f7f9ff; box-shadow: 0 0 0 3px rgb(47 102 233 / 10%); }
+.personal-settings-choice-group strong { align-self: end; font-size: 13px; }
+.personal-settings-choice-group small { grid-column: 2; color: var(--pw-muted); font-size: 11px; line-height: 1.45; }
+.personal-settings-theme-swatch { grid-row: 1 / span 2; display: block; width: 34px; height: 34px; border: 1px solid var(--pw-line-strong); border-radius: 10px; }
+.personal-settings-theme-swatch.is-paper { background: linear-gradient(135deg, #fbfaf7 0 48%, #2f66e9 48% 58%, #ffffff 58%); }
+.personal-settings-theme-swatch.is-brutal { border: 2px solid #141414; border-radius: 5px; background: linear-gradient(135deg, #ffd91a 0 45%, #ff8fd0 45% 70%, #8fdcff 70%); box-shadow: 2px 2px 0 #141414; }
 .personal-lark-settings { position: relative; min-height: 100vh; padding: 30px clamp(24px, 5vw, 72px); background: var(--pw-bg); color: var(--pw-text); }
+.personal-lark-settings.is-embedded { min-height: 0; padding: 0; background: transparent; }
 .personal-lark-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; max-width: 1180px; margin: 0 auto; }
 .personal-lark-header small { color: var(--pw-blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .personal-lark-header h1 { margin: 4px 0 2px; font-size: 28px; letter-spacing: -.035em; }
 .personal-lark-header p { margin: 0; color: var(--pw-muted); font-size: 13px; }
 .personal-lark-tabs { display: flex; gap: 24px; max-width: 1180px; margin: 28px auto 20px; border-bottom: 1px solid var(--pw-line); }
+.personal-lark-settings.is-embedded .personal-lark-tabs { margin-top: 0; }
 .personal-lark-tabs button { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--pw-muted); cursor: pointer; font-weight: 650; }
 .personal-lark-tabs button[aria-current="page"] { border-color: var(--pw-blue); color: var(--pw-text); }
 .personal-lark-tabs span { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; background: #efeee9; color: var(--pw-muted); font-size: 10px; }
@@ -690,6 +721,17 @@
   .personal-session-record { grid-template-columns: 1fr; }
   .personal-session-record dl { grid-template-columns: 1fr; }
   .personal-session-record > .personal-secondary-action { grid-column: 1; grid-row: auto; }
+  .personal-settings-page { grid-template-columns: 1fr; }
+  .personal-settings-sidebar { gap: 10px; padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--pw-line); }
+  .personal-settings-title { display: none; }
+  .personal-settings-tabs { display: flex; overflow-x: auto; }
+  .personal-settings-tabs button { flex: 0 0 180px; }
+  .personal-settings-body { padding: 20px 14px; }
+  .personal-settings-header { align-items: center; gap: 14px; }
+  .personal-settings-header h1 { font-size: 24px; }
+  .personal-settings-choice-group { grid-template-columns: 1fr; }
+  .personal-lark-settings.is-embedded .personal-lark-tabs { overflow-x: auto; }
+  .personal-lark-settings.is-embedded .personal-lark-tabs button { flex: 0 0 auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -698,7 +740,8 @@
 }
 
 /* ===== 野兽主题：slock 式新野兽主义（黑边 / 硬阴影 / 高饱和色块） ===== */
-.personal-workspace-shell[data-pw-theme="brutal"] {
+.personal-workspace-shell[data-pw-theme="brutal"],
+.personal-settings-page[data-pw-theme="brutal"] {
   --pw-bg: #fdf8e7;
   --pw-card: #ffffff;
   --pw-line: #141414;
@@ -716,7 +759,8 @@
   --pw-green: #141414;
   --pw-green-bg: #8fe6a4;
 }
-.personal-workspace-shell[data-pw-theme="brutal"] :focus-visible:not(textarea):not(input) { outline-color: #141414; }
+.personal-workspace-shell[data-pw-theme="brutal"] :focus-visible:not(textarea):not(input),
+.personal-settings-page[data-pw-theme="brutal"] :focus-visible:not(textarea):not(input) { outline-color: #141414; }
 
 /* 侧栏：亮黄底 + 黑边，选中项热粉硬阴影 */
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-workspace-sidebar { border-right: 2px solid #141414; background: #ffd91a; }
@@ -729,6 +773,33 @@
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-sidebar-section-title { color: #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-sidebar-title-actions button:hover { border: 2px solid #141414; background: #fff; box-shadow: none; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-sidebar-footer { border-top: 2px solid #141414; }
+
+/* 设置页：独立页面也完整跟随高对比主题 */
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-sidebar { border-right: 2px solid #141414; background: #ffd91a; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-title { border-bottom: 2px solid #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-title small,
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-header small { color: #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-back,
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-tabs button { color: #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-back:hover,
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-tabs button:hover { background: rgb(255 255 255 / 55%); }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-tabs button[aria-current="page"] { border: 2px solid #141414; border-radius: 4px; background: #ff8fd0; color: #141414; box-shadow: 3px 3px 0 #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-detail-card,
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-app-card,
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-table,
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-topic-panel { border: 2px solid #141414; border-radius: 4px; background: #fff; box-shadow: 3px 3px 0 #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-choice-group button { border: 2px solid #141414; border-radius: 4px; background: #fff; box-shadow: 2px 2px 0 #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-choice-group button:hover { border-color: #141414; background: #fff8d6; box-shadow: 4px 4px 0 #141414; transform: translate(-1px, -1px); }
+.personal-settings-page[data-pw-theme="brutal"] .personal-settings-choice-group button[aria-checked="true"] { border-color: #141414; background: #ffe23f; box-shadow: 3px 3px 0 #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-primary-action,
+.personal-settings-page[data-pw-theme="brutal"] .personal-secondary-action,
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-toolbar label { border: 2px solid #141414; border-radius: 4px; background: #fff; color: #141414; box-shadow: 2px 2px 0 #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-primary-action { background: #ffe23f; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-tabs { border-bottom: 2px solid #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-tabs button[aria-current="page"] { border-color: #141414; color: #141414; }
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-tabs span,
+.personal-settings-page[data-pw-theme="brutal"] .personal-lark-app-card em,
+.personal-settings-page[data-pw-theme="brutal"] .personal-connection-status { border: 1.5px solid #141414; border-radius: 3px; background: #ffe23f; color: #141414; }
 
 /* 频道头部：黑边块式页签 */
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-header { border-bottom: 2px solid #141414; background: #fdf8e7; }

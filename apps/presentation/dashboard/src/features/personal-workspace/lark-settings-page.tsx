@@ -134,12 +134,14 @@ function larkErrorMessage(cause: unknown, fallback: string): string {
 }
 
 export function LarkSettingsPage({
+  embedded = false,
   focusGoalConnection = false,
   goals,
   initialGoalId,
   onChanged,
   onClose,
 }: {
+  embedded?: boolean;
   focusGoalConnection?: boolean;
   goals: WorkspaceGoal[];
   initialGoalId?: string | null;
@@ -399,15 +401,17 @@ export function LarkSettingsPage({
   }
 
   return (
-    <section className="personal-lark-settings" aria-label="Lark configuration">
-      <header className="personal-lark-header">
-        <div>
-          <small>Goal connections</small>
-          <h1>Lark</h1>
-          <p>管理可复用的 Lark App，并用独立 Topic 将群聊连接到 Goal。</p>
-        </div>
-        <button aria-label="关闭 Lark 设置" className="personal-icon-button" onClick={onClose} type="button"><X size={18} /></button>
-      </header>
+    <section className={`personal-lark-settings${embedded ? " is-embedded" : ""}`} aria-label="Lark configuration">
+      {embedded ? null : (
+        <header className="personal-lark-header">
+          <div>
+            <small>Goal connections</small>
+            <h1>Lark</h1>
+            <p>管理可复用的 Lark App，并用独立 Topic 将群聊连接到 Goal。</p>
+          </div>
+          <button aria-label="关闭 Lark 设置" className="personal-icon-button" onClick={onClose} type="button"><X size={18} /></button>
+        </header>
+      )}
 
       <nav className="personal-lark-tabs" aria-label="Lark management sections">
         <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">Lark Apps <span>{loading ? "…" : apps.length}</span></button>
