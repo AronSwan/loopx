@@ -21,11 +21,10 @@ _API_CLAUSE = re.compile(r"^(>=|<=|==|>|<)?\s*(\d+)$")
 _EXTENSION_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _PROTOCOL_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}_v\d+$")
 _OPERATION_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_TARGET_KEY_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 _PYTHON_MODULE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
-_EXTERNAL_CAPABILITY_EFFECT_CLASS = "read_only"
-_PYTHON_CALLABLE_RE = re.compile(
-    r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$"
-)
+_EXTERNAL_CAPABILITY_EFFECT_CLASSES = {"read_only", "external_write"}
+_PYTHON_CALLABLE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
 _SURFACE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _SURFACE_KIND_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _PRESENTATION_SURFACE_KEYS = {
@@ -126,14 +125,10 @@ def _presentation_surfaces(
             raise ValueError(f"{item_context} must be a TOML table")
         unsupported = sorted(set(item) - _PRESENTATION_SURFACE_KEYS)
         if unsupported:
-            raise ValueError(
-                f"{item_context} contains unsupported keys {unsupported}"
-            )
+            raise ValueError(f"{item_context} contains unsupported keys {unsupported}")
         surface_id = _required_string(item, "id", context=item_context)
         if not _SURFACE_ID_RE.fullmatch(surface_id):
-            raise ValueError(
-                f"{item_context} id must be a bounded lower-kebab token"
-            )
+            raise ValueError(f"{item_context} id must be a bounded lower-kebab token")
         if surface_id in seen_ids:
             raise ValueError(
                 f"{context} has duplicate presentation surface id `{surface_id}`"
@@ -142,9 +137,7 @@ def _presentation_surfaces(
 
         kind = _required_string(item, "kind", context=item_context)
         if not _SURFACE_KIND_RE.fullmatch(kind):
-            raise ValueError(
-                f"{item_context} kind must be a bounded lower_snake token"
-            )
+            raise ValueError(f"{item_context} kind must be a bounded lower_snake token")
         view_schema = _required_string(item, "view_schema", context=item_context)
         if not _PROTOCOL_RE.fullmatch(view_schema):
             raise ValueError(
@@ -273,7 +266,9 @@ def _integration_profile(
     context: str,
 ) -> tuple[dict[str, Any], str]:
     if runtime is None:
-        raise ValueError(f"{context} integration_profile requires an executable runtime")
+        raise ValueError(
+            f"{context} integration_profile requires an executable runtime"
+        )
     ref = str(profile_ref or "").strip()
     if not ref:
         raise ValueError(f"{context} integration_profile must be a relative JSON path")
@@ -299,7 +294,9 @@ def _integration_profile(
     try:
         value = json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{context} integration_profile must be a JSON object") from exc
+        raise ValueError(
+            f"{context} integration_profile must be a JSON object"
+        ) from exc
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} integration_profile must be a JSON object")
     allowed_profile_fields = {
@@ -346,12 +343,12 @@ def _integration_profile(
             "required_permission",
             "request_schema",
             "result_schema",
+            "todo_contract",
         }
         unknown_operation_fields = sorted(set(item) - allowed_operation_fields)
         if unknown_operation_fields:
             raise ValueError(
-                f"{operation_context} has unsupported fields "
-                f"{unknown_operation_fields}"
+                f"{operation_context} has unsupported fields {unknown_operation_fields}"
             )
         operation_id = _required_string(item, "id", context=operation_context)
         if not _OPERATION_RE.fullmatch(operation_id):
@@ -363,13 +360,60 @@ def _integration_profile(
                 f"{context} integration_profile has duplicate operation `{operation_id}`"
             )
         operation_ids.add(operation_id)
-        effect_class = _required_string(
-            item, "effect_class", context=operation_context
-        )
-        if effect_class != _EXTERNAL_CAPABILITY_EFFECT_CLASS:
+        effect_class = _required_string(item, "effect_class", context=operation_context)
+        if effect_class not in _EXTERNAL_CAPABILITY_EFFECT_CLASSES:
             raise ValueError(
-                f"{operation_context} effect_class must be "
-                f"`{_EXTERNAL_CAPABILITY_EFFECT_CLASS}` in the v0 profile"
+                f"{operation_context} effect_class must be one of "
+                f"{sorted(_EXTERNAL_CAPABILITY_EFFECT_CLASSES)}"
+            )
+        todo_contract = item.get("todo_contract")
+        if effect_class == "external_write":
+            if not isinstance(todo_contract, Mapping):
+                raise ValueError(
+                    f"{operation_context} external_write requires todo_contract"
+                )
+            if set(todo_contract) != {"action_kinds", "target_key_prefixes"}:
+                raise ValueError(
+                    f"{operation_context} todo_contract fields are invalid"
+                )
+            action_kinds = _string_list(
+                todo_contract,
+                "action_kinds",
+                context=f"{operation_context} todo_contract",
+            )
+            target_key_prefixes = _string_list(
+                todo_contract,
+                "target_key_prefixes",
+                context=f"{operation_context} todo_contract",
+            )
+            if (
+                not 1 <= len(action_kinds) <= 32
+                or len(action_kinds) != len(set(action_kinds))
+                or any(not _OPERATION_RE.fullmatch(value) for value in action_kinds)
+            ):
+                raise ValueError(
+                    f"{operation_context} todo_contract action_kinds are invalid"
+                )
+            if (
+                not 1 <= len(target_key_prefixes) <= 32
+                or len(target_key_prefixes) != len(set(target_key_prefixes))
+                or any(
+                    not _TARGET_KEY_PREFIX_RE.fullmatch(value)
+                    for value in target_key_prefixes
+                )
+            ):
+                raise ValueError(
+                    f"{operation_context} todo_contract target_key_prefixes are "
+                    "invalid"
+                )
+            todo_contract = {
+                "action_kinds": action_kinds,
+                "target_key_prefixes": target_key_prefixes,
+            }
+        elif todo_contract is not None:
+            raise ValueError(
+                f"{operation_context} todo_contract is only valid for "
+                "external_write"
             )
         permission = _required_string(
             item, "required_permission", context=operation_context
@@ -398,6 +442,8 @@ def _integration_profile(
             "request_schema": request_schema,
             "result_schema": result_schema,
         }
+        if todo_contract is not None:
+            normalized_operation["todo_contract"] = todo_contract
         normalized_operations.append(normalized_operation)
     normalized = {
         "schema_version": EXTERNAL_CAPABILITY_PROFILE_SCHEMA_VERSION,
@@ -464,9 +510,7 @@ def load_extension_manifest(path: str | Path) -> dict[str, Any]:
             f"{context} has unsupported schema_version `{schema_version}`; "
             f"expected `{EXTENSION_MANIFEST_SCHEMA_VERSION}`"
         )
-    extension_id = validate_extension_id(
-        _required_string(raw, "id", context=context)
-    )
+    extension_id = validate_extension_id(_required_string(raw, "id", context=context))
     version = _required_string(raw, "version", context=context)
     requires_loopx_api = _required_string(raw, "requires_loopx_api", context=context)
     _require_compatible_loopx_api(requires_loopx_api, context=context)
