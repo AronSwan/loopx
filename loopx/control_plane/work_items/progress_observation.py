@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any
 
+from ...turn_identity import normalize_turn_instance_id
 from ..goals.goal_vision_state import normalize_goal_vision_state
 from ..todos.contract import (
     normalize_todo_task_domain,
@@ -200,6 +201,26 @@ def progress_observation_from_run(run: Mapping[str, Any]) -> dict[str, Any] | No
         return None
 
 
+def _progress_turn_instance_id(run: Mapping[str, Any]) -> str | None:
+    """Return a trustworthy logical-turn id for retry de-duplication."""
+
+    def normalize(value: Any) -> str | None:
+        try:
+            return normalize_turn_instance_id(
+                str(value) if value is not None else None
+            )
+        except ValueError:
+            return None
+
+    direct = normalize(run.get("turn_instance_id"))
+    settlement_value = run.get("settlement_identity")
+    settlement = settlement_value if isinstance(settlement_value, Mapping) else {}
+    settled = normalize(settlement.get("turn_instance_id"))
+    if direct and settled and direct != settled:
+        return None
+    return direct or settled or None
+
+
 def typed_progress_repeat_trigger(
     newest_first_runs: Iterable[Mapping[str, Any]],
     *,
@@ -211,9 +232,13 @@ def typed_progress_repeat_trigger(
     required_count = max(2, int(threshold))
     normalized_agent_id = str(agent_id or "").strip()
     observations: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
+    observed_turn_instance_ids: set[str] = set()
     for run in newest_first_runs:
         run_agent_id = str(run.get("agent_id") or "").strip()
         if normalized_agent_id and run_agent_id not in {"", normalized_agent_id}:
+            continue
+        turn_instance_id = _progress_turn_instance_id(run)
+        if turn_instance_id and turn_instance_id in observed_turn_instance_ids:
             continue
         observation = progress_observation_from_run(run)
         if observation is None:
@@ -221,6 +246,8 @@ def typed_progress_repeat_trigger(
                 break
             continue
         observations.append((run, observation))
+        if turn_instance_id:
+            observed_turn_instance_ids.add(turn_instance_id)
         if len(observations) >= required_count:
             break
     if len(observations) < required_count:
