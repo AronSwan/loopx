@@ -408,10 +408,36 @@ the solving agent's evidence boundary.
 
 ## Post-run case insight monitor
 
-Benchmark startup should create one `continuous_monitor` todo. Whenever a case
-reaches a new material scored state, that monitor runs a post-run analyst brief and
-writes one private `benchmark_case_insight_v0` artifact. This monitor is part of the
-benchmark lifecycle, not an optional cleanup pass.
+Benchmark startup should create one `continuous_monitor` todo that owns both the
+campaign score update and the post-run case analysis. Whenever a case reaches a new
+material scored state, the monitor first reads the public-safe experiment-board
+projection and refreshes the countable baseline, treatment, and matched-pair totals.
+It then reports material aggregate changes to the user and, after the solver is
+terminal, runs a post-run analyst brief and writes one private
+`benchmark_case_insight_v0` artifact. A bounded periodic review while a campaign is
+active prevents a long run from silently accumulating results. This monitor is part
+of the benchmark lifecycle, not an optional cleanup pass. The catalog entry is a
+guidance template rather than a scheduler: the benchmark startup provider creates
+the todo, and the registered monitor runtime owns its cadence.
+
+A material user update should include the current countable arm and pair coverage,
+aggregate primary metric by arm, binary outcomes when the benchmark exposes them,
+improved/flat/regressed pair counts, and the new causal insight or next probe. Derive
+these score fields from the experiment board or benchmark-owned scoring projection,
+not from raw private evidence. Do not send a repetitive update when no score,
+coverage, direction, insight, or material runner state changed.
+Only public-safe conclusions from the private post-run insight may enter that user
+update; raw evaluation evidence remains private.
+
+During an active-campaign review, distinguish a clean worktree from a lack of
+solver progress. `git status` observes only uncommitted changes. Bind the readback
+to the exact job, compare its current `HEAD` with the start revision recorded at
+admission, and combine that committed delta with the current worktree status.
+Correlate those facts with Goal/event freshness, typed runner errors, and the
+solver's trajectory phase. A clean worktree or a high raw log-error count alone is
+not evidence that a run is stuck. The provider-owned classifier may mark a run
+stalled only when committed and uncommitted progress are both absent and either the
+trajectory is stale or typed fatal runner evidence is present.
 
 Use this analyst hint:
 
@@ -424,6 +450,10 @@ The solver and analyst are separate roles. The solver remains unable to access
 hidden tests, evaluator sources, expected answers, or official feedback. Only the
 post-run analyst may read the complete private evaluation evidence, and only after
 the solver is terminal and scoring is complete.
+
+The active-campaign monitor may inspect the solver-owned trajectory and exact-job
+runtime while the solver is active, but it must not read hidden evaluator evidence
+or send its findings back into the solving arm.
 
 Record the result in this compact shape:
 

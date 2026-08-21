@@ -116,16 +116,58 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
     analysis = capability["post_run_case_analysis"]
 
     assert "continuous_monitor" in analysis["benchmark_start_hint"]
-    assert analysis["monitor_todo_template"] == {
+    monitor_template = analysis["monitor_todo_template"]
+    assert {
         "task_class": "continuous_monitor",
         "action_kind": "benchmark_case_insight_monitor",
         "trigger": "material_scored_case_transition",
-        "text": (
-            "On each material scored-case transition, read the complete private "
-            "evaluation evidence, write one benchmark_case_insight_v0, and report "
-            "only new reusable insight."
-        ),
+        "active_campaign_review": "bounded_periodic",
+    }.items() <= monitor_template.items()
+    assert monitor_template["delivery_contract"] == {
+        "catalog_role": "guidance_template",
+        "creation_owner": "benchmark_startup_provider",
+        "scheduler_owner": "registered_monitor_runtime",
     }
+    assert "benchmark_case_insight_v0" in monitor_template["text"]
+    reporting = analysis["aggregate_reporting"]
+    assert reporting["score_source"] == "experiment_board_public_safe_projection"
+    assert "never copy raw private evidence" in reporting["insight_boundary"]
+    assert reporting["report_on"] == [
+        "new_countable_terminal",
+        "countability_or_pairing_change",
+        "aggregate_score_or_direction_change",
+        "new_reusable_case_insight",
+        "systematic_runner_or_treatment_fidelity_issue",
+    ]
+    assert reporting["report_fields"] == [
+        "countable_baseline_cases",
+        "countable_treatment_cases",
+        "matched_pair_count",
+        "aggregate_primary_metric_by_arm",
+        "binary_outcome_by_arm_when_available",
+        "improved_flat_regressed_pair_counts",
+        "new_case_insights_and_next_probe",
+    ]
+    assert "Do not send a repetitive" in reporting["unchanged_policy"]
+    active = analysis["active_progress_readback"]
+    assert active["workspace_basis"] == [
+        "recorded_start_revision_to_current_head",
+        "current_worktree_status",
+    ]
+    assert active["runtime_basis"] == [
+        "goal_state_and_event_freshness",
+        "typed_runner_error_category",
+    ]
+    assert "solver_trajectory_phase" in active["trajectory_basis"]
+    assert active["classification_owner"] == "benchmark_monitor_provider"
+    assert active["stalled_when"] == {
+        "all": ["no_committed_progress", "no_uncommitted_progress"],
+        "any": ["trajectory_stale", "typed_fatal_runner_error"],
+    }
+    assert active["non_signals"] == [
+        "clean_worktree_alone",
+        "raw_log_error_count_alone",
+    ]
     hint = analysis["hint"]
     for evidence_name in (
         "real trajectory",
@@ -136,6 +178,10 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
         assert evidence_name in hint
 
     assert "must not access" in analysis["role_boundary"]["solver"]
+    active_monitor = analysis["role_boundary"]["active_campaign_monitor"]
+    assert "exact-job runtime" in active_monitor
+    assert "must not read hidden evaluator evidence" in active_monitor
+    assert "send findings back" in active_monitor
     assert "only after" in analysis["role_boundary"]["post_run_analyst"]
     artifact = analysis["artifact_template"]
     assert artifact["schema_version"] == "benchmark_case_insight_v0"
