@@ -193,6 +193,13 @@ def ensure_replan_novelty_policy(
             str(normalized.get("recommended_action") or "run a bounded autonomous replan")
         )
         normalized["replan_novelty_policy"] = build_replan_novelty_policy()
+    rearmed_after_obligation_id = normalize_todo_replan_obligation_id(
+        normalized.get("rearmed_after_obligation_id")
+    )
+    if rearmed_after_obligation_id:
+        normalized["rearmed_after_obligation_id"] = rearmed_after_obligation_id
+    else:
+        normalized.pop("rearmed_after_obligation_id", None)
     trigger_identity = [
         {
             key: trigger.get(key)
@@ -212,6 +219,7 @@ def ensure_replan_novelty_policy(
         "schema_version": normalized.get("schema_version"),
         "agent_id": normalized.get("agent_id"),
         "frontier_identity": normalized.get("frontier_identity"),
+        "rearmed_after_obligation_id": rearmed_after_obligation_id,
         "trigger_identity": trigger_identity,
     }
     normalized["obligation_id"] = "replan-" + hashlib.sha256(
@@ -717,6 +725,7 @@ def build_autonomous_replan_obligation_payload(
     recommended_action: str,
     agent_id: str | None = None,
     include_agent_id: bool = False,
+    rearmed_after_obligation_id: str | None = None,
     extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -734,6 +743,8 @@ def build_autonomous_replan_obligation_payload(
         payload["agent_id"] = agent_id
     if extra_fields:
         payload.update(extra_fields)
+    if rearmed_after_obligation_id is not None:
+        payload["rearmed_after_obligation_id"] = rearmed_after_obligation_id
     return ensure_replan_novelty_policy(payload)
 
 
