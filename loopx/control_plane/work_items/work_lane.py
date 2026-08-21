@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from ..todos.contract import TODO_TASK_CLASS_MONITOR, normalize_todo_id
@@ -7,16 +8,29 @@ from ..todos.projection import todo_priority_label, todo_priority_rank
 
 
 WORK_LANE_CONTRACT_SCHEMA_VERSION = "work_lane_contract_v1"
+WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLEMENT_OBLIGATION = (
+    "settle_receipt_bound_monitor"
+)
 WORK_LANE_CURRENT_AGENT_MONITOR_REPAIR_OBLIGATIONS = {
     "attempt_due_monitor",
     "repair_monitor_schedule_metadata",
     "repair_resume_gate_or_close_standing_monitor",
+    WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLEMENT_OBLIGATION,
 }
 WORK_LANE_EXTERNAL_EVIDENCE_OBSERVATION_OBLIGATION = (
     "observe_external_evidence_or_blocker"
 )
 WORK_LANE_LARK_INBOX_REPLY_DUE_OBLIGATION = "drain_lark_inbox_reply_due"
 WORK_LANE_TODO_MONITOR_DUE_KIND = "todo_monitor_due"
+
+
+class ReceiptBoundMonitorPhase(StrEnum):
+    """Same-turn phase of a monitor selected by a heartbeat receipt."""
+
+    POLL_DUE = "poll_due"
+    SETTLEMENT_PENDING = "settlement_pending"
+
+
 WORK_LANE_TODO_ITEM_FIELDS = (
     "index",
     "text",
@@ -119,9 +133,7 @@ def preserve_heartbeat_receipt_bound_work_lane(
 ) -> dict[str, Any] | None:
     """Keep a committed same-turn Todo binding ahead of a newly due monitor."""
 
-    if not isinstance(contract, dict) or not work_lane_contract_is_due_monitor_attempt(
-        contract
-    ):
+    if not isinstance(contract, dict):
         return contract
     if not isinstance(selected_todo, dict):
         return contract
@@ -129,6 +141,41 @@ def preserve_heartbeat_receipt_bound_work_lane(
     if not todo_id or selected_todo.get("selection_binding") != "heartbeat_receipt":
         return contract
     if selected_todo.get("task_class") == TODO_TASK_CLASS_MONITOR:
+        try:
+            monitor_phase = ReceiptBoundMonitorPhase(
+                selected_todo.get("receipt_bound_monitor_phase")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "receipt-bound monitor selection requires an explicit monitor phase"
+            ) from exc
+        if monitor_phase is ReceiptBoundMonitorPhase.SETTLEMENT_PENDING:
+            return {
+                **contract,
+                "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
+                "lane": "continuous_monitor",
+                "obligation": (
+                    WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLEMENT_OBLIGATION
+                ),
+                "must_attempt_work": True,
+                "selection_binding": "heartbeat_receipt",
+                "selected_todo_id": todo_id,
+                "monitor_due_count": 0,
+                "monitor_due_items": [],
+                "receipt_bound_monitor_item": selected_todo,
+                "reason_codes": [
+                    "heartbeat_receipt_bound_replay",
+                    "monitor_poll_already_recorded",
+                    "same_turn_settlement_identity",
+                ],
+                "monitor_policy": "settle_receipt_bound_monitor_without_repoll",
+                "deferred_work_lane": contract,
+                "action": (
+                    "finish refresh and quota settlement for the already-polled "
+                    "monitor bound to this heartbeat turn; do not poll again; "
+                    "reconsider its successor on the next turn"
+                ),
+            }
         return {
             **contract,
             "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
@@ -150,6 +197,8 @@ def preserve_heartbeat_receipt_bound_work_lane(
                 "reconsider newly runnable monitor priority on the next turn"
             ),
         }
+    if not work_lane_contract_is_due_monitor_attempt(contract):
+        return contract
     return {
         "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
         "lane": "advancement_task",

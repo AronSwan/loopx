@@ -13,6 +13,7 @@ from ..todos.projection import todo_item_is_due_monitor
 from ..todos.summary_item import compact_todo_summary_item
 from ..work_items.primary_action import protocol_action_text
 from ..work_items.work_lane import (
+    ReceiptBoundMonitorPhase,
     work_lane_contract_is_due_monitor_attempt,
     work_lane_contract_is_lark_inbox_reply_due,
 )
@@ -42,7 +43,12 @@ def build_receipt_bound_monitor_next_action(
     available_capabilities: Any,
     receipt_bound_todo_id: str | None,
 ) -> dict[str, Any] | None:
-    """Recover an exact due monitor omitted by priority-limited hot lanes."""
+    """Recover an exact receipt-bound monitor omitted by compact hot lanes.
+
+    A monitor remains the same-turn settlement identity after a successful poll
+    reschedules it into the future.  That replay must preserve the parent Todo
+    without asking the agent to observe the target again.
+    """
 
     if not isinstance(agent_identity, dict):
         return None
@@ -53,13 +59,16 @@ def build_receipt_bound_monitor_next_action(
     for item in agent_todo_items:
         if normalize_todo_id(item.get("todo_id")) != todo_id:
             continue
+        monitor_due = todo_item_is_due_monitor(item)
         if (
             not _todo_item_is_actionable_open(item)
             or _todo_task_class(item) != TODO_TASK_CLASS_MONITOR
-            or not todo_item_is_due_monitor(item)
-            or missing_required_capabilities(
-                item,
-                available_capabilities=available_capabilities,
+            or (
+                monitor_due
+                and missing_required_capabilities(
+                    item,
+                    available_capabilities=available_capabilities,
+                )
             )
             or not agent_scope_item_claimed_by_agent_or_unclaimed(
                 item,
@@ -80,6 +89,11 @@ def build_receipt_bound_monitor_next_action(
                 "confidence": "selected",
                 "preserves_goal_next_action": True,
                 "selection_binding": "heartbeat_receipt",
+                "receipt_bound_monitor_phase": (
+                    ReceiptBoundMonitorPhase.POLL_DUE
+                    if monitor_due
+                    else ReceiptBoundMonitorPhase.SETTLEMENT_PENDING
+                ).value,
             }
         )
         if not agent_scope_item_claimed_by(item):

@@ -17,6 +17,9 @@ from loopx.control_plane.testing.canary_harness import (
     write_fixture_registry,
 )
 from loopx.control_plane.todos.contract import resolve_next_user_task_class
+from loopx.control_plane.work_items.work_lane import (
+    preserve_heartbeat_receipt_bound_work_lane,
+)
 from loopx.quota import build_quota_should_run, record_quota_monitor_poll
 from loopx.status import collect_status
 from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
@@ -364,6 +367,23 @@ def test_turn_scoped_monitor_poll_preserves_receipt_todo_after_capability_reentr
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == admitted[
         "todo_id"
     ]
+    guard_replay = run_json_cli(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert guard_replay["agent_lane_next_action"][
+        "receipt_bound_monitor_phase"
+    ] == "poll_due"
 
     command = (
         "quota",
@@ -437,6 +457,133 @@ def test_turn_scoped_monitor_poll_preserves_receipt_todo_after_capability_reentr
     assert returncode == 1
     assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     assert admitted["todo_id"] in conflict["reason"]
+
+
+def test_same_turn_should_run_settles_polled_monitor_before_successor_reselection(
+    tmp_path: Path,
+) -> None:
+    registry, runtime, _state = _write_fixture(tmp_path)
+    admitted = _add_monitor(
+        registry,
+        text="[P1] Poll the admitted public release target.",
+        target_key="public-release:receipt-settlement",
+        next_due_at="2000-01-01T00:00:00+00:00",
+    )
+    turn_id = "2026-08-21T09:48:02.405Z"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    guard = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert guard["selected_todo"]["todo_id"] == admitted["todo_id"]
+
+    poll = run_json_cli(
+        "quota",
+        "monitor-poll",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--runtime-profile",
+        "generic_cli",
+        "--turn-instance-id",
+        turn_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--todo-id",
+        admitted["todo_id"],
+        "--target-key",
+        "public-release:receipt-settlement",
+        "--result-hash",
+        "merged-receipt-settlement",
+        "--material-change",
+        "--next-agent-todo",
+        "Validate the exact merged release head.",
+        "--next-action-kind",
+        "validate_release_head",
+        "--next-task-repository",
+        "git:github.com/huangruiteng/loopx",
+        "--next-required-capability",
+        "network",
+        "--next-continuation-policy",
+        "same_agent_non_delivery",
+        "--next-target-key",
+        "release-head:receipt-settlement",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--execute",
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    successor_id = poll["successor_todo_ids"][0]
+    assert poll["after"]["selected_todo"]["todo_id"] == admitted["todo_id"]
+
+    replay = run_json_cli(
+        *guard_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert replay["selected_todo"]["todo_id"] == admitted["todo_id"]
+    assert replay["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == (
+        "settlement_pending"
+    )
+    assert replay["work_lane_contract"]["obligation"] == (
+        "settle_receipt_bound_monitor"
+    )
+    assert replay["work_lane_contract"]["selected_todo_id"] == admitted["todo_id"]
+    assert replay["work_lane_contract"]["deferred_work_lane"]["lane"] == (
+        "advancement_task"
+    )
+    assert "do not poll again" in replay["work_lane_contract"]["action"]
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+
+    next_turn_args = list(guard_args)
+    next_turn_args[next_turn_args.index(turn_id)] = "2026-08-21T09:51:02.405Z"
+    next_turn = run_json_cli(
+        *next_turn_args,
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    assert next_turn["selected_todo"]["todo_id"] == successor_id
+
+
+def test_receipt_bound_monitor_replay_requires_an_explicit_phase() -> None:
+    with pytest.raises(
+        ValueError,
+        match="receipt-bound monitor selection requires an explicit monitor phase",
+    ):
+        preserve_heartbeat_receipt_bound_work_lane(
+            {
+                "schema_version": "work_lane_contract_v1",
+                "lane": "continuous_monitor",
+                "must_attempt_work": True,
+            },
+            selected_todo={
+                "todo_id": "todo_monitor_without_phase",
+                "task_class": "continuous_monitor",
+                "selection_binding": "heartbeat_receipt",
+            },
+        )
 
 
 def test_turn_scoped_monitor_poll_requires_committed_receipt(tmp_path: Path) -> None:
