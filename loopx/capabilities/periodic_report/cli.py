@@ -4,20 +4,21 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...extensions.runtime import (
+    execute_extension_runtime_binding,
+)
 from .core import build_periodic_report_run
 from .extension_envelope import build_openviking_archive_execution_envelope
-from .profile import build_periodic_report_activation
 from .presets import (
     PERIODIC_REPORT_PROFILE_PRESET_ALIASES,
     build_periodic_report_preset_activation,
 )
+from .profile import build_periodic_report_activation
 from .triggers import build_periodic_report_trigger_decision
-from ...extensions.runtime import execute_extension_runtime_binding
-
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -25,6 +26,11 @@ PrintPayload = Callable[
 ]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
+ProviderCommandRegistrar = Callable[
+    [argparse._SubParsersAction, AddFormat],
+    None,
+]
+ProviderCommandHandler = Callable[..., int | None]
 
 
 def _load_json_object(path_text: str) -> dict[str, Any]:
@@ -40,6 +46,8 @@ def _load_json_object(path_text: str) -> dict[str, Any]:
 def register_periodic_report_commands(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_subcommand_format: AddFormat,
+    *,
+    provider_command_registrars: Sequence[ProviderCommandRegistrar] = (),
 ) -> None:
     parser = subparsers.add_parser(
         "periodic-report",
@@ -111,6 +119,8 @@ def register_periodic_report_commands(
         help="Environment variable containing the API key; never pass the key itself.",
     )
     archive.add_argument("--execute", action="store_true")
+    for register_provider_commands in provider_command_registrars:
+        register_provider_commands(commands, add_subcommand_format)
 
 
 def _archive_openviking(
@@ -221,6 +231,20 @@ def render_periodic_report_markdown(payload: dict[str, object]) -> str:
                 "",
             ]
         )
+    if payload.get("schema_version") == "periodic_report_miaoda_delivery_result_v0":
+        sink = payload.get("sink_result")
+        normalized_sink = sink if isinstance(sink, dict) else {}
+        return "\n".join(
+            [
+                "# Periodic Report Miaoda Delivery",
+                "",
+                f"- status: `{payload.get('status')}`",
+                f"- intent_satisfied: `{payload.get('intent_satisfied')}`",
+                f"- sink_status: `{normalized_sink.get('status')}`",
+                f"- readback_verified: `{normalized_sink.get('readback_verified')}`",
+                "",
+            ]
+        )
     run_state = payload.get("run_state")
     retry = payload.get("retry")
     state = run_state if isinstance(run_state, dict) else {}
@@ -241,11 +265,22 @@ def render_periodic_report_markdown(payload: dict[str, object]) -> str:
 def handle_periodic_report_command(
     args: argparse.Namespace,
     *,
+    runtime_root_arg: str | None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
+    provider_command_handlers: Sequence[ProviderCommandHandler] = (),
 ) -> int | None:
     if args.command != "periodic-report":
         return None
+    for handle_provider_command in provider_command_handlers:
+        result = handle_provider_command(
+            args,
+            runtime_root_arg=runtime_root_arg,
+            output_format=output_format,
+            print_payload=print_payload,
+        )
+        if result is not None:
+            return result
     try:
         if args.periodic_report_command == "archive-openviking":
             payload = _archive_openviking(

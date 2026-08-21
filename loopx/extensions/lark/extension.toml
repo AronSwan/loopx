@@ -1,6 +1,6 @@
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-lark"
-version = "1.4.0"
+version = "1.5.0"
 requires_loopx_api = ">=1,<2"
 permissions = [
   "lark.inbox.read",
@@ -86,12 +86,23 @@ entry_command = "loopx explore feishu-sync --goal-id <goal-id>"
 next_real_step = "Install or upgrade and explicitly enable the bundled provider before configuring a Lark Explore sink."
 
 [[provides]]
+id = "lark-periodic-report-announcement"
+kind = "delivery_sink"
+title = "Audience-aware periodic report announcement"
+status = "active-preview"
+visibility = "public"
+real_world_anchor = "a periodic report delivered to a configured Lark chat with only relevant recipients mentioned"
+user_value = "Deliver one report while mentioning only symbolic recipients selected by normalized domains or explicit typed routing rules."
+entry_command = "loopx periodic-report inspect-profile --profile-json <profile.json>"
+next_real_step = "Configure a profile-owned audience policy, preview the announcement plan, then execute through an explicitly enabled Lark sink."
+
+[[provides]]
 id = "lark-miaoda-html-report"
 kind = "delivery_sink"
 title = "Miaoda HTML report publication"
 status = "active-preview"
 visibility = "public"
-real_world_anchor = "a self-contained LoopX report published to a profile-owned Miaoda HTML app"
-user_value = "Publish the generated HTML artifact without re-rendering it, with bounded size preflight and exact app, URL, and access-scope readback."
-entry_command = "loopx periodic-report inspect-profile --profile-json <path>"
-next_real_step = "Enable the bundled Lark provider and bind a profile-owned Miaoda app before executing the delivery sink."
+real_world_anchor = "a self-contained LoopX report published to an operator-selected existing Miaoda HTML app"
+user_value = "Publish the generated HTML artifact without re-rendering it, with bounded size preflight and exact app, URL, and published-state readback."
+entry_command = "loopx periodic-report publish-miaoda --request-json <request.json>"
+next_real_step = "Enable the bundled Lark provider, select an existing Miaoda app in the typed delivery intent, preview it, and then execute it explicitly."

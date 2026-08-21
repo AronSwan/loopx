@@ -93,6 +93,31 @@ cadence, collect repository and discussion signals, render a team card, archive
 the artifact, and deliver it to a configured channel. None of those choices
 becomes an invariant of the shared core or the in-session preset.
 
+## Audience relevance and Lark announcements
+
+A custom profile may declare a `periodic_report_audience_policy_v0`. Recipients
+use stable symbolic ids and must declare at least one owned domain or typed
+routing rule. Report items may carry normalized `domains`; routing rules may
+also select explicit source ids, section ids, content kinds, tags, or domains.
+Every declared selector in one rule must match the same normalized item.
+
+`build_periodic_report_announcement_plan` compiles those facts into a
+provider-neutral `periodic_report_announcement_plan_v0`. A recipient is
+mentioned only when at least one eligible report item intersects an owned
+domain or matches an explicit rule. Primary items are eligible by default;
+supporting evidence is excluded unless the profile opts it in. The default for
+an unrelated recipient is omission. Titles, summaries, authored mention text,
+provider identities, and external lookups never participate in selection.
+
+The Lark delivery adapter may consume the exact normalized document and policy
+alongside the rendered artifact. Preview returns the announcement plan without
+resolving an identity or sending a message. On execute, the extension resolves
+only the selected symbolic ids through an injected provider adapter and places
+those verified `<at>` elements before the report. A match without a renderer,
+a mismatched document/artifact digest, or provider mention markup embedded in
+the artifact, title, or footer fails before send. The core therefore owns
+relevance while the Lark extension owns provider identity and wire rendering.
+
 This is a built-in capability, not an extension: callers need the trigger,
 idempotency, retry, and receipt contract even when no provider is installed.
 Optional or independently versioned collectors, renderers, archive stores, and
@@ -238,7 +263,8 @@ reusable, project-neutral report.
 
 The bundled `loopx-lark` extension provides an opt-in `miaoda_html` delivery
 sink for the self-contained `html_artifact_v0` output. The sink publishes the
-already-rendered artifact to a profile-owned Miaoda HTML app; it does not
+already-rendered artifact to a project-owned existing Miaoda HTML app selected
+by the delivery request; it does not
 rebuild the document or choose an audience. Before any external effect it
 checks the single HTML, compressed archive, and uncompressed payload limits.
 After publication it requires exact readback of the same app id, published
@@ -260,7 +286,7 @@ external writes remain disabled by default:
   },
   "extension": {
     "extension_id": "loopx-lark",
-    "extension_version": "1.4.0",
+    "extension_version": "1.5.0",
     "protocol": "periodic_report_sink_v0"
   }
 }
@@ -271,6 +297,59 @@ and access policy. A preview delivery performs validation only and never calls
 the injected publish or readback effects. Repeated publication should reuse the
 same app id and delivery idempotency key instead of creating a new app for each
 report.
+
+The public CLI makes that boundary executable. A
+`periodic_report_miaoda_delivery_request_v0` contains the full normalized
+profile, its `periodic_report_generation_bundle_v0`, and one typed
+`periodic_report_delivery_intent_v0`:
+
+```json
+{
+  "schema_version": "periodic_report_miaoda_delivery_request_v0",
+  "profile": { "schema_version": "periodic_report_profile_v0" },
+  "generation_bundle": {
+    "schema_version": "periodic_report_generation_bundle_v0"
+  },
+  "delivery_intent": {
+    "schema_version": "periodic_report_delivery_intent_v0",
+    "kind": "hosted",
+    "sink_id": "miaoda_html_delivery",
+    "sink_kind": "miaoda_html",
+    "app_id": "app_example123",
+    "idempotency_key": "weekly-report-2026-29"
+  }
+}
+```
+
+The abbreviated profile and generation objects above must be replaced by their
+complete normalized receipts. Preview the exact request first:
+
+```bash
+loopx periodic-report publish-miaoda \
+  --request-json periodic-report-miaoda-request.json \
+  --format json
+```
+
+Preview performs size, profile, binding, extension, and artifact checks but
+returns `status=pending_execution` and `intent_satisfied=false`. Local HTML
+generation is therefore useful output, not proof that a hosted-report request
+was delivered. Publish only after the operator authorizes the external write:
+
+```bash
+loopx periodic-report publish-miaoda \
+  --request-json periodic-report-miaoda-request.json \
+  --execute \
+  --format json
+```
+
+The command resolves the installed, enabled, doctor-verified `loopx-lark`
+revision and its `lark.miaoda_html.publish` permission. Authentication remains
+inside `lark-cli`; the request accepts no token or credential. The provider
+publishes a temporary `index.html`, reads the exact app back, and sets
+`intent_satisfied=true` only when the same app id, online URL, and published
+state agree. It does not create an app, change the app's audience, or change its
+access scope. Disable or roll back the bundled extension to remove the provider
+without affecting already-generated local artifacts.
 
 ## Default editorial contract
 
