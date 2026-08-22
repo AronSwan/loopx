@@ -563,9 +563,10 @@ def restart_managed_loopx_services() -> list[str]:
             continue
         labels.append(plist.stem)
     restarted: list[str] = []
+    uid = os.getuid() if hasattr(os, "getuid") else 0
     for label in labels:
         result = subprocess.run(
-            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
             capture_output=True,
             text=True,
             timeout=30,
