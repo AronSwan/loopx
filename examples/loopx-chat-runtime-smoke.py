@@ -84,6 +84,24 @@ for line in sys.stdin:
 '''
 
 
+def wait_for_active_turn(
+    store: ChatSessionStore,
+    *,
+    session_id: str,
+    turn_id: str,
+    require_upstream: bool = False,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 5
+    current: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        current = store.load_turn(session_id, turn_id)
+        if current and current.get("status") == "running":
+            if not require_upstream or current.get("upstream_turn_id"):
+                return current
+        time.sleep(0.02)
+    raise AssertionError(f"turn did not become active: {current}")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-chat-runtime-") as raw_tmp:
         root = Path(raw_tmp)
@@ -157,12 +175,11 @@ def main() -> None:
             objective="Keep the thread durable.",
         )
         assert created is True
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            current = store.load_turn(session_id, slow["turn_id"])
-            if current and current.get("status") == "running":
-                break
-            time.sleep(0.02)
+        wait_for_active_turn(
+            store,
+            session_id=session_id,
+            turn_id=slow["turn_id"],
+        )
         interrupted = second.interrupt_turn(session_id=session_id, turn_id=slow["turn_id"])
         assert interrupted["status"] == "interrupted", interrupted
         assert second.turn_event_buffers == {}, second.turn_event_buffers
@@ -193,12 +210,12 @@ def main() -> None:
             objective="Keep the thread durable.",
         )
         assert created is True
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            current = store.load_turn(session_id, steering_turn["turn_id"])
-            if current and current.get("upstream_turn_id"):
-                break
-            time.sleep(0.02)
+        wait_for_active_turn(
+            store,
+            session_id=session_id,
+            turn_id=steering_turn["turn_id"],
+            require_upstream=True,
+        )
         steered, delivered = second.steer_active_turn(
             session_id=session_id,
             client_ingress_id="lark-steer-one",

@@ -266,6 +266,39 @@ class ChatSessionStore:
             _atomic_write_json(path, payload, preserve_mode=True)
             return payload
 
+    def release_active_turn(
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        last_activity_at: str,
+        last_error_code: str | None,
+    ) -> bool:
+        """Make a Session ready only while the completing Turn still owns it."""
+
+        path = self._session_path(session_id)
+        with exclusive_file_lock(
+            path,
+            agent_id="loopx-chat",
+            operation="release_active_chat_turn",
+        ):
+            payload = self.load_session(session_id)
+            if payload is None:
+                raise KeyError("chat session was not found")
+            if payload.get("active_turn_id") != turn_id:
+                return False
+            payload.update(
+                {
+                    "status": "ready",
+                    "active_turn_id": None,
+                    "last_activity_at": last_activity_at,
+                    "last_error_code": last_error_code,
+                    "updated_at": utc_now(),
+                }
+            )
+            _atomic_write_json(path, payload, preserve_mode=True)
+            return True
+
     def latest_session(
         self,
         *,
@@ -793,15 +826,12 @@ class ChatSessionStore:
                             "completion_id": normalized_completion_id,
                         },
                     )
-            current_session = self.load_session(session_id)
-            if current_session and current_session.get("active_turn_id") == turn_id:
-                self.update_session(
-                    session_id,
-                    status="ready",
-                    active_turn_id=None,
-                    last_activity_at=completed_at,
-                    last_error_code=None,
-                )
+            self.release_active_turn(
+                session_id,
+                turn_id,
+                last_activity_at=completed_at,
+                last_error_code=None,
+            )
             return turn, created
 
     def close_attached_session(self, session_id: str) -> bool:

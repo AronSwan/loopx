@@ -836,10 +836,9 @@ class ChatRuntimeController:
                 turn_id,
                 response=response,
             )
-            self.store.update_session(
+            self.store.release_active_turn(
                 session_id,
-                status="ready",
-                active_turn_id=None,
+                turn_id,
                 last_activity_at=completed,
                 last_error_code=None,
             )
@@ -899,10 +898,9 @@ class ChatRuntimeController:
             payload["gate"] = gate
         self.store.append_event(session_id, turn_id, kind="turn.failed", payload=payload)
         self.store.append_message(session_id, role="error", text=message, turn_id=turn_id)
-        self.store.update_session(
+        self.store.release_active_turn(
             session_id,
-            status="ready",
-            active_turn_id=None,
+            turn_id,
             last_activity_at=completed,
             last_error_code=error_code,
         )
@@ -956,7 +954,12 @@ class ChatRuntimeController:
             text="已中断。你可以在当前会话继续发送消息。",
             turn_id=turn_id,
         )
-        self.store.update_session(session_id, status="ready", active_turn_id=None, last_activity_at=completed)
+        self.store.release_active_turn(
+            session_id,
+            turn_id,
+            last_activity_at=completed,
+            last_error_code=None,
+        )
         return updated
 
     def wait_for_turn(self, *, session_id: str, turn_id: str, timeout_sec: float = 920.0) -> dict[str, Any]:
