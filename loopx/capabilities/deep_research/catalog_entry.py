@@ -58,8 +58,8 @@ DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "command": "loopx deepresearch close [--note <text>]",
-            "purpose": "Terminal transition closing this run so the next question can start.",
-            "write_boundary": "marks and archives this project's research run",
+            "purpose": "Terminal transition marking this run closed and its ledger immutable; the next start archives it.",
+            "write_boundary": "marks the run closed; the next start performs the archive rotation",
         },
         {
             "command": "loopx deepresearch report",

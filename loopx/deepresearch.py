@@ -61,6 +61,24 @@ def _require_state(project: Path) -> dict[str, Any]:
     return state
 
 
+def _require_active_state(project: Path) -> dict[str, Any]:
+    """Single, unbypassable precondition for every ledger mutation.
+
+    `closed` is a terminal receipt: a closed run's ledger is immutable, so a
+    mutation after close would silently diverge the archived audit trail from
+    the close summary. Enforced here in the domain owner — not in argparse —
+    so Python callers cannot bypass it.
+    """
+    state = _require_state(project)
+    if state.get("status", "active") == "closed":
+        raise ValueError(
+            "research run is closed"
+            + (f" (closed_at {state.get('closed_at')})" if state.get("closed_at") else "")
+            + "; the ledger is immutable after close — start a new run instead"
+        )
+    return state
+
+
 def _next_id(items: list[dict[str, Any]], prefix: str) -> str:
     used = {str(item.get("id", "")) for item in items}
     n = 1
@@ -202,7 +220,7 @@ def add_source(
     # agent-host shape, and an unlocked read-modify-write loses updates even
     # when the atomic rename itself succeeds.
     with exclusive_file_lock(state_path(project), operation="deepresearch_add_source"):
-        state = _require_state(project)
+        state = _require_active_state(project)
         url_or_path = url_or_path.strip()
         tool = tool.strip() or "unspecified"
         if not url_or_path:
@@ -301,7 +319,7 @@ def add_subquestion(
     from_claim: str | None,
 ) -> dict[str, Any]:
     with exclusive_file_lock(state_path(project), operation="deepresearch_add_subquestion"):
-        state = _require_state(project)
+        state = _require_active_state(project)
         text = text.strip()
         if not text:
             raise ValueError("--text must be non-empty")
@@ -349,7 +367,7 @@ def resolve_question(
     contradiction_resolutions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     with exclusive_file_lock(state_path(project), operation="deepresearch_resolve_question"):
-        state = _require_state(project)
+        state = _require_active_state(project)
         return _resolve_question_unlocked(
             project,
             state,
@@ -447,7 +465,7 @@ def resolve_contradiction(
     with exclusive_file_lock(
         state_path(project), operation="deepresearch_resolve_contradiction"
     ):
-        state = _require_state(project)
+        state = _require_active_state(project)
         contradiction = next(
             (x for x in state["contradictions"] if x["id"] == contradiction_id), None
         )
@@ -689,14 +707,20 @@ def render_report(state: dict[str, Any]) -> str:
 
 
 def write_report(project: Path) -> dict[str, Any]:
-    state = _require_state(project)
-    content = render_report(state)
-    path = report_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    # Snapshot, render, and write share the lifecycle lock with close/start
+    # rotation: otherwise a report that read the previous run can land next to
+    # the next run's state file — a cross-run citation mismatch the archive
+    # cannot explain.
+    with exclusive_file_lock(state_path(project), operation="deepresearch_report"):
+        state = _require_state(project)
+        content = render_report(state)
+        path = report_path(project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        stop = evaluate_stop(state)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "path": str(path),
         "content": content,
-        "stop_conditions": evaluate_stop(state),
+        "stop_conditions": stop,
     }

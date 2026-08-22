@@ -660,6 +660,166 @@ def test_deep_research_is_a_registered_capability() -> None:
     assert entry["next_real_step"]
 
 
+def test_closed_run_rejects_every_ledger_mutation(tmp_path: Path) -> None:
+    # Reviewer probe: `start -> close -> add-source` used to return ok=true and
+    # silently mutate a terminal run's ledger. Every mutation must fail closed.
+    _start(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "docs/before-close.md",
+            "--tool",
+            "local_read",
+            "--claims-json",
+            json.dumps(
+                [
+                    {"text": "seed claim", "stance": "supports"},
+                    {"text": "seed claim two", "stance": "neutral"},
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    _payload(_run_cli("deepresearch", "close", "--project", ".", cwd=tmp_path))
+
+    mutations = [
+        ("deepresearch", "add-source", "--project", ".",
+         "--url-or-path", "docs/after-close.md", "--tool", "local_read",
+         "--claims-json", json.dumps([{"text": "late claim", "stance": "neutral"}])),
+        ("deepresearch", "add-subquestion", "--project", ".",
+         "--text", "late question", "--from-claim", "c1"),
+        ("deepresearch", "resolve-question", "--project", ".",
+         "--question-id", "q1", "--answer", "late answer", "--evidence-claims", "c1"),
+        ("deepresearch", "resolve-contradiction", "--project", ".",
+         "--contradiction-id", "x1", "--sides-with", "c1", "--rationale", "late"),
+    ]
+    for args in mutations:
+        result = _run_cli(*args, cwd=tmp_path)
+        data = json.loads(result.stdout)
+        assert data["ok"] is False, args
+        assert "closed" in data["error"], args
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["status"] == "closed"
+    assert len(state["sources"]) == 1
+    assert len(state["claims"]) == 2
+    assert state["questions"][0]["status"] == "open"
+
+
+def test_report_generation_is_serialized_with_run_rotation(tmp_path: Path) -> None:
+    # Reviewer barrier probe: a report that read the previous run must never
+    # land next to the next run's state file. Report and close/start rotation
+    # share one lifecycle lock, so the paused-report interleaving resolves by
+    # serialization, not by luck.
+    import threading
+
+    from loopx import deepresearch
+    from loopx.deepresearch import start_research, write_report
+
+    _start(tmp_path, question="old question")
+    # Make the old run stopped so the interleaved start (--new-run) can rotate
+    # it once the report releases the lifecycle lock.
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "docs/old.md",
+            "--tool",
+            "local_read",
+            "--claims-json",
+            json.dumps([{"text": "old claim", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-question",
+            "--project",
+            ".",
+            "--question-id",
+            "q1",
+            "--answer",
+            "Old answer.",
+            "--evidence-claims",
+            "c1",
+            cwd=tmp_path,
+        )
+    )
+
+    render_entered = threading.Event()
+    release_render = threading.Event()
+    original_render = deepresearch.render_report
+
+    def paused_render(state: dict) -> str:
+        if state["question"] == "old question":
+            render_entered.set()
+            assert release_render.wait(timeout=10)
+        return original_render(state)
+
+    deepresearch.render_report = paused_render
+    try:
+        report_done: list[dict] = []
+
+        def run_report() -> None:
+            report_done.append(write_report(tmp_path))
+
+        thread = threading.Thread(target=run_report)
+        thread.start()
+        assert render_entered.wait(timeout=10)
+
+        # While the paused report holds the lifecycle lock, rotation must wait.
+        start_done: list[dict] = []
+
+        def run_start() -> None:
+            start_done.append(
+                start_research(
+                    tmp_path,
+                    question="new question",
+                    max_sources=12,
+                    max_subquestions=8,
+                    new_run=True,
+                )
+            )
+
+        starter = threading.Thread(target=run_start)
+        starter.start()
+        starter.join(timeout=1.5)
+        assert not start_done, "rotation completed while the report held the lifecycle lock"
+
+        release_render.set()
+        thread.join(timeout=10)
+        starter.join(timeout=10)
+        assert report_done and start_done
+    finally:
+        deepresearch.render_report = original_render
+
+    root_state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert root_state["question"] == "new question"
+    # The serialized outcome: the paused report — rendered from the old run —
+    # travelled WITH the old run into the archive. The root never shows a
+    # report from a different run than its state (here: no report at all
+    # until the new run generates one).
+    root_report = tmp_path / ".loopx" / "deepresearch" / "report.md"
+    if root_report.exists():
+        assert "new question" in root_report.read_text(encoding="utf-8")
+        assert "old question" not in root_report.read_text(encoding="utf-8")
+    archive_dirs = list((tmp_path / ".loopx" / "deepresearch" / "archive").iterdir())
+    assert len(archive_dirs) == 1
+    archived_report = (archive_dirs[0] / "report.md").read_text(encoding="utf-8")
+    assert "old question" in archived_report
+
+
 def test_skill_facade_installs_for_skill_facade_surfaces(tmp_path: Path) -> None:
     from loopx.slash_command_install import install_slash_commands
 
