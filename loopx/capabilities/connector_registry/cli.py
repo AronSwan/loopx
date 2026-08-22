@@ -47,14 +47,20 @@ def _render_rank_markdown(payload: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _add_registry_path(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--path", type=Path)
+
+
 def register_connector_commands(sub, add_subcommand_format: AddFormat) -> None:
     parser = sub.add_parser("connector", help="Unified public-connector registry")
     actions = parser.add_subparsers(dest="connector_action", required=True)
 
     p_list = actions.add_parser("list", help="List connectors with status, layer, value, usage")
+    _add_registry_path(p_list)
     add_subcommand_format(p_list)
 
     p_rank = actions.add_parser("rank", help="Show the value-priority ranking")
+    _add_registry_path(p_rank)
     add_subcommand_format(p_rank)
 
     p_reg = actions.add_parser("register", help="Register or update a connector")
@@ -67,7 +73,7 @@ def register_connector_commands(sub, add_subcommand_format: AddFormat) -> None:
     p_reg.add_argument("--value-tier", choices=["P0", "P1", "P2"])
     p_reg.add_argument("--purpose")
     p_reg.add_argument("--blocker")
-    p_reg.add_argument("--path", type=Path)
+    _add_registry_path(p_reg)
     add_subcommand_format(p_reg)
 
     p_use = actions.add_parser("use", help="Record a connector call")
@@ -75,7 +81,7 @@ def register_connector_commands(sub, add_subcommand_format: AddFormat) -> None:
     p_use.add_argument("--fail", action="store_true")
     p_use.add_argument("--ms", type=int, default=0)
     p_use.add_argument("--note")
-    p_use.add_argument("--path", type=Path)
+    _add_registry_path(p_use)
     add_subcommand_format(p_use)
 
 

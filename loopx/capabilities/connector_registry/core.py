@@ -117,15 +117,24 @@ def load_connector_registry(path: Path | None = None) -> dict[str, Any]:
                 state = raw
         except (OSError, ValueError):
             pass
-    # Re-sync against the builtin catalog, preserving any stored usage.
+    # Re-sync against the builtin catalog while preserving local operator state.
+    stored_connectors = {
+        str(c.get("id")): dict(c)
+        for c in state.get("connectors", [])
+        if isinstance(c, Mapping) and c.get("id")
+    }
     merged_connectors: list[dict[str, Any]] = []
     usage = state.get("usage") if isinstance(state.get("usage"), dict) else {}
     merged_usage: dict[str, dict[str, Any]] = {}
     for c in BUILTIN_CONNECTOR_CATALOG:
-        merged_connectors.append(dict(c))
-        merged_usage[c["id"]] = {**(_fresh_usage(c)), **(usage.get(c["id"]) or {})}
+        connector_id = c["id"]
+        merged = {**dict(c), **(stored_connectors.get(connector_id) or {}), "id": connector_id}
+        merged_connectors.append(merged)
+        merged_usage[connector_id] = {**(_fresh_usage(merged)), **(usage.get(connector_id) or {})}
     seen = {c["id"] for c in BUILTIN_CONNECTOR_CATALOG}
     for stored in state.get("connectors", []):
+        if not isinstance(stored, Mapping):
+            continue
         cid = str(stored.get("id") or "")
         if cid and cid not in seen:
             merged_connectors.append(dict(stored))

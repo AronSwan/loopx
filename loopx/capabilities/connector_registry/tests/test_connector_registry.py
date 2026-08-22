@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from loopx.capabilities.connector_registry.core import (
@@ -45,3 +47,91 @@ def test_register_use_rank_persists(tmp_path: Path) -> None:
     packet = list_connectors(reloaded)
     assert packet["summary"]["supported"] >= 1
     assert json.dumps(packet, ensure_ascii=False)
+
+
+def test_builtin_connector_updates_survive_catalog_resync(tmp_path: Path) -> None:
+    path = tmp_path / "connector-registry.json"
+    state = load_connector_registry(path)
+    result = register_connector(
+        state,
+        "cninfo-announcement",
+        status="supported",
+        blocker="",
+    )
+    save_connector_registry(
+        {**state, "connectors": result["connectors"], "usage": result["usage_map"]},
+        path,
+    )
+
+    reloaded = load_connector_registry(path)
+    entry = next(c for c in reloaded["connectors"] if c["id"] == "cninfo-announcement")
+    assert entry["status"] == "supported"
+    assert entry.get("blocker") == ""
+
+
+def test_cli_path_override_reads_the_registry_it_writes(tmp_path: Path) -> None:
+    path = tmp_path / "connector-registry.json"
+    register = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "connector",
+            "register",
+            "probe-cli",
+            "--status",
+            "supported",
+            "--value-tier",
+            "P0",
+            "--layer",
+            "L1",
+            "--path",
+            str(path),
+            "--format",
+            "json",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(register.stdout)["ok"] is True
+
+    listed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "connector",
+            "list",
+            "--path",
+            str(path),
+            "--format",
+            "json",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(listed.stdout)
+    assert any(row["id"] == "probe-cli" for row in payload["ranked"])
+
+    ranked = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "connector",
+            "rank",
+            "--path",
+            str(path),
+            "--format",
+            "json",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+    assert any(row["id"] == "probe-cli" for row in json.loads(ranked.stdout)["ranked"])
