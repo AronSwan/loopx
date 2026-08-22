@@ -112,6 +112,37 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "command": (
+                "loopx benchmark concurrency-configure --goal-id <goal-id> "
+                "--max-active-cases <n> --target-active-cases <n> "
+                "--max-baseline-cases <n> --max-test-cases <n> "
+                "--reserved-test-cases <n> --execute --format json"
+            ),
+            "purpose": (
+                "Configure one combined capacity envelope across baseline, control, "
+                "treatment, and explore runs."
+            ),
+            "write_boundary": (
+                "explicit project-local admission state; grants no runner or model "
+                "launch authority"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark concurrency-admit --goal-id <goal-id> "
+                "--run-id <run-id> --case-id <case-id> --arm-role <role> "
+                "--execute --format json"
+            ),
+            "purpose": (
+                "Atomically reserve a baseline or test-group slot immediately "
+                "before an independently authorized runner launch."
+            ),
+            "write_boundary": (
+                "compact project-local run identities only; launch, liveness, and "
+                "termination remain runner-owned"
+            ),
+        },
+        {
+            "command": (
                 "loopx benchmark integrity-qualification "
                 "--trajectory-json <private.json> "
                 "--runtime-attestation-json <attestation.json> "
@@ -159,17 +190,23 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
     ],
     "agent_usage": {
         "benchmark_start_hint": (
-            "At benchmark start, read the experiment board before selecting or "
-            "launching a case; update the same stable row at every material run "
-            "transition. Providers that keep separate board shards reconcile them "
+            "At benchmark start, read the experiment board and concurrency envelope "
+            "before selecting or launching a case; update the same stable board row "
+            "and capacity reservation at every material run transition. "
+            "Providers that keep separate board shards reconcile them "
             "into the canonical board before agent readback."
         ),
         "required_sequence": [
             "read_experiment_board_before_launch_or_case_selection",
+            "configure_or_read_concurrency_envelope_before_launch",
+            "reconcile_admission_ledger_with_real_runner_liveness",
+            "backfill_when_concurrency_status_reports_underfilled",
             "qualify_source_revision_before_each_new_run_admission",
+            "atomically_admit_case_slot_before_runner_launch",
             "upsert_preregistered_or_running_row_when_a_run_starts",
             "classify_exact_runtime_observation_during_active_monitor_cycles",
             "upsert_terminal_score_countability_effort_and_insight_status",
+            "release_case_slot_after_terminal_or_runner_invalid_transition",
             "read_matched_comparisons_before_selecting_the_next_arm",
         ],
         "board_commands": {
@@ -190,9 +227,58 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "--source-ledger <provider-board.jsonl> --execute --format json"
             ),
         },
+        "concurrency_commands": {
+            "status": (
+                "loopx benchmark concurrency-status --goal-id <goal-id> --format json"
+            ),
+            "configure": (
+                "loopx benchmark concurrency-configure --goal-id <goal-id> "
+                "--max-active-cases <n> --target-active-cases <n> "
+                "--max-baseline-cases <n> --max-test-cases <n> "
+                "--reserved-test-cases <n> --execute --format json"
+            ),
+            "admit": (
+                "loopx benchmark concurrency-admit --goal-id <goal-id> "
+                "--run-id <run-id> --case-id <case-id> --arm-role <role> "
+                "--execute --format json"
+            ),
+            "release": (
+                "loopx benchmark concurrency-release --goal-id <goal-id> "
+                "--run-id <run-id> --execute --format json"
+            ),
+        },
+        "concurrency_boundary": (
+            "The envelope owns capacity admission only. A benchmark runner remains "
+            "responsible for launch, liveness, termination, and score transitions."
+        ),
         "selection_rule": (
             "Keep diagnostic-only explore rows separate and make paired claims "
             "only from matched_pair_countable comparisons."
+        ),
+    },
+    "concurrency_occupancy": {
+        "benchmark_start_hint": (
+            "When starting a benchmark, add one continuous_monitor todo that "
+            "reconciles the admission ledger with exact runner liveness and "
+            "backfills any safe target-occupancy gap."
+        ),
+        "monitor_todo_template": {
+            "task_class": "continuous_monitor",
+            "action_kind": "benchmark_concurrency_occupancy_monitor",
+            "trigger": "launch_terminal_invalid_or_periodic_liveness_transition",
+            "text": (
+                "Classify exact-job receipt and runner-owner facts through the typed "
+                "runtime observation on each launch, terminal or runner-invalid "
+                "transition and a bounded cadence. Apply its terminal or runner-invalid "
+                "transition before releasing that reservation; then read "
+                "concurrency-status and, when launch authority already exists, admit "
+                "and start up to missing_cases without exceeding caps."
+            ),
+        },
+        "authority_boundary": (
+            "The monitor may launch replacements only under separately granted "
+            "runner authority; the envelope grants no model, verifier, upload, or "
+            "submission authority."
         ),
     },
     "post_run_case_analysis": {
@@ -347,6 +433,11 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
     },
     "implemented_protocols": [
         {
+            "schema_version": "benchmark_concurrency_envelope_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.concurrency_envelope",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
             "schema_version": "benchmark_source_revision_fence_v0",
             "module": "loopx.capabilities.benchmark_toolkit.source_revision_fence",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
@@ -395,6 +486,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
     "smokes": [
         (
             "python -m pytest tests/capabilities/test_benchmark_toolkit.py "
+            "tests/capabilities/test_benchmark_concurrency_envelope.py "
             "tests/capabilities/test_benchmark_experiment_board.py "
             "tests/capabilities/test_benchmark_source_revision_fence.py -q"
         )
@@ -409,11 +501,12 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         "Admission-ledger occupancy never proves runner liveness; active health requires a resolved exact-job receipt and a live exact runner owner after startup grace.",
         "Integrity qualification establishes countability eligibility only; an independent official result and matched experiment contract are still required.",
         "Post-run analyst access never widens the solving agent's evidence boundary or grants feedback reuse in another scored run.",
+        "Concurrency reservations are not runtime liveness: runners must reconcile exact processes before release or backfill.",
         "The experiment board is a compact projection, not a score authority: benchmark-family runners and scoring adapters remain outside the active capability.",
     ],
     "next_real_step": (
-        "Use the board before launch, classify exact runtime during active monitor "
-        "cycles, and advance one bounded trajectory review even without a terminal "
-        "case while keeping solver integrity separate from private analysis."
+        "Use the board and concurrency envelope before launch, classify exact runtime "
+        "during active monitor cycles, and after each scored case advance one bounded "
+        "trajectory review while keeping solver integrity separate from private analysis."
     ),
 }

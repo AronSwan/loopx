@@ -1,9 +1,9 @@
 # Benchmark Toolkit
 
-`benchmark-toolkit` is LoopX's built-in, provider-neutral surface for permission,
-artifact, integrity, and reusable agent-runtime boundaries around benchmark
-experiments. It does not own benchmark-family runners, result ledgers, or scoring
-adapters.
+`benchmark-toolkit` is LoopX's built-in, provider-neutral surface for concurrency
+admission, permission, artifact, integrity, and reusable agent-runtime boundaries
+around benchmark experiments. It does not own benchmark-family runners, result
+ledgers, or scoring adapters.
 
 ## Source revision admission
 
@@ -363,25 +363,94 @@ receipt.
 A countable experiment uses the toolkit in this order:
 
 1. Read the project experiment board before selecting or launching another case.
-2. Declare a `run_permission_policy_v0` and preflight the runner boundary.
-3. Upsert the planned or running row, then launch one frozen case/arm; do not expose
+2. Read or configure the concurrency envelope, then reconcile its reservations with
+   exact runner liveness.
+3. Declare a `run_permission_policy_v0` and preflight the runner boundary.
+4. Atomically admit a case slot immediately before the independently authorized
+   runner launch.
+5. Upsert the planned or running row, then launch one frozen case/arm; do not expose
    evaluator sources or official feedback.
-4. Capture ATIF tool evidence and a runner-owned runtime attestation.
-5. During active monitoring, classify exact-job runtime evidence; do not infer
+6. Capture ATIF tool evidence and a runner-owned runtime attestation.
+7. During active monitoring, classify exact-job runtime evidence; do not infer
    liveness from an occupied admission slot.
-6. Run `integrity-qualification`; stop on any blocker.
-7. Run the independent verifier only after the agent phase.
-8. Reduce the official result through the benchmark-owned scoring path.
-9. Upsert terminal score, countability, effort, treatment fidelity, and insight
-   status, then read the matched-comparison projection.
-10. Apply attempt-countability, treatment-fidelity, and matched-pair gates before any
-   comparison claim.
+8. Run `integrity-qualification`; stop on any blocker.
+9. Run the independent verifier only after the agent phase.
+10. Reduce the official result through the benchmark-owned scoring path.
+11. Upsert terminal score, countability, effort, treatment fidelity, and insight
+    status; release its reservation; then read the matched-comparison projection.
+12. Apply attempt-countability, treatment-fidelity, and matched-pair gates before any
+    comparison claim.
 
 Integrity qualification is necessary but not sufficient for a score claim. It does
 not establish task correctness, official score authority, experiment parity, or a
 LoopX advantage. `score_claim_eligible=true` only permits the official score and
 matched-pair gates to run; `score_claim_countable` and `matched_pair_countable` stay
 false in this receipt. Those remain separate verifier and comparison contracts.
+
+## Concurrency envelope
+
+Configure one goal-scoped envelope before launching parallel cases. The total cap
+is shared by baseline and test-group runs; `control`, `treatment`, and `explore`
+consume test-group capacity. A reserved test count prevents baseline work from
+starving the comparison lane, while a lower target permits a staged ramp below the
+hard maximum.
+
+```bash
+loopx benchmark concurrency-configure \
+  --goal-id <goal-id> \
+  --max-active-cases 8 \
+  --target-active-cases 6 \
+  --max-baseline-cases 7 \
+  --max-test-cases 4 \
+  --reserved-test-cases 1 \
+  --execute \
+  --format json
+
+loopx benchmark concurrency-status \
+  --goal-id <goal-id> \
+  --format json
+```
+
+Before each runner launch, atomically reserve a slot. If admission returns
+`ok=false`, do not launch. Release the exact run only after it is confirmed terminal
+or runner-invalid:
+
+```bash
+loopx benchmark concurrency-admit \
+  --goal-id <goal-id> \
+  --run-id <run-id> \
+  --case-id <case-id> \
+  --arm-role <baseline|control|treatment|explore> \
+  --execute \
+  --format json
+
+loopx benchmark concurrency-release \
+  --goal-id <goal-id> \
+  --run-id <run-id> \
+  --execute \
+  --format json
+```
+
+Configuration, admission, and release are project-local, locked, and atomic.
+`max-active-cases` is the hard ceiling; `target-active-cases` is desired occupancy.
+Below target, status reports the exact gap, a preferred arm group, and
+`next_action=backfill_to_target`. `active_counts` is an admission ledger, not
+runtime proof. On each launch, terminal or runner-invalid transition, and a bounded
+periodic cadence, pass exact-job receipt and runner-owner facts through
+`runtime-observation`. Apply its typed terminal or runner-invalid transition before
+releasing that reservation, then backfill the reported gap.
+
+Every participant must resolve the same goal repository and envelope file on a
+filesystem that supports LoopX's inter-process lock and atomic replacement. Separate
+checkouts or host-local copies do not share capacity; this envelope is not a
+distributed semaphore. A multi-host campaign must route admission through one
+shared authority instead of configuring one envelope per host.
+
+At campaign startup, create the capability packet's
+`concurrency_occupancy.monitor_todo_template` as one goal-scoped
+`continuous_monitor` todo. This preserves the obligation to notice and fill safe
+capacity without granting launch authority. The runner still owns launch, liveness,
+termination, credentials, verifier ordering, scoring, upload, and submission.
 
 ## Experiment board
 
