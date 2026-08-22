@@ -256,6 +256,11 @@ def _recover_after_writeback(root: Path) -> dict[str, Any]:
     phases: list[str] = []
     kwargs, effect_path, count_path = _common(root=root, calls=calls, phases=phases)
     healthy_spend = kwargs["spend"]
+    spend_readbacks: list[str] = []
+
+    def absent_spend_readback(effect_ref: str) -> dict[str, Any]:
+        spend_readbacks.append(effect_ref)
+        return {"kind": "absent"}
 
     def interrupted_spend() -> dict[str, Any]:
         calls["spend"] += 1
@@ -278,12 +283,18 @@ def _recover_after_writeback(root: Path) -> dict[str, Any]:
     )
     recovered = run_loopx_turn_once(
         resumed_plan,
-        **{**kwargs, "spend": healthy_spend},
+        **{
+            **kwargs,
+            "spend": healthy_spend,
+            "spend_resolver": absent_spend_readback,
+        },
     )
 
     assert recovered["status"] == "committed"
     assert calls == {"writeback": 1, "spend": 2, "scheduler": 1}
     assert phases == ["writeback", "spend-interrupted", "spend", "scheduler"]
+    assert len(spend_readbacks) == 1
+    assert spend_readbacks[0].endswith("#quota_spend")
     assert count_path.read_text(encoding="utf-8") == "1"
     assert json.loads(effect_path.read_text(encoding="utf-8"))["task"] == (
         "synthetic_public_fixture"
@@ -292,6 +303,7 @@ def _recover_after_writeback(root: Path) -> dict[str, Any]:
         "resumed_after_writeback": True,
         "host_not_repeated": True,
         "writeback_not_repeated": True,
+        "prepared_spend_resolved_absent_before_retry": True,
         "task_effect_not_repeated": True,
         "remaining_effects": ["spend", "scheduler"],
     }

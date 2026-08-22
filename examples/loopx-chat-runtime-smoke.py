@@ -71,11 +71,12 @@ for line in sys.stdin:
         print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn}}}), flush=True)
         continue
     elif method == "turn/interrupt":
+        interrupted_turn = active_turn
         result = {}
         print(json.dumps({"id": request_id, "result": result}), flush=True)
         time.sleep(0.15)
-        if active_turn:
-            print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": active_turn, "status": "interrupted"}}}), flush=True)
+        if interrupted_turn:
+            print(json.dumps({"method": "turn/completed", "params": {"threadId": "durable-thread", "turn": {"id": interrupted_turn, "status": "interrupted"}}}), flush=True)
         continue
     else:
         result = {}
