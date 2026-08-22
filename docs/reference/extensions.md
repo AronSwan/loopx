@@ -40,6 +40,85 @@ Agent -> Capability -> Provider -> external system
 Provider readback -> Capability transition proposal -> LoopX Kernel
 ```
 
+### Agent-scoped external event connectors
+
+`loopx.extensions.external_connector_runtime` defines the provider-neutral
+binding shared by interactive group messages and document-comment streams. It
+keeps source and cursor references owner-local while exposing a content-free
+status projection with source kind, capture policy, ingress policy, response
+policy, lifecycle, and declared operations.
+
+The contract separates three independent decisions:
+
+- capture: addressed events, all events from one configured source, or an
+  incremental source stream;
+- ingress: live steering, the same session's ordered queue, or an Agent-scoped
+  asynchronous inbox; and
+- response: no response, source-thread response, topic response, or a
+  configured mirror.
+
+Live steering and session queue bindings require one exact Agent session;
+asynchronous inbox bindings require one owner-local inbox. History catch-up
+requires a cursor reference. A response-capable provider must declare both
+write and readback support.
+
+Acknowledgement is a separate fail-closed decision. LoopX permits ACK and
+cursor advancement only after a committed durable effect (including an
+explicit no-follow-up effect) and, when a response is required, verified
+provider readback. For an ordered working-session delivery, the completed and
+persisted session Turn is the minimum effect receipt; an asynchronous inbox
+requires its own accepted writeback or explicit no-follow-up receipt. Raw event
+bodies, author identities, source references, cursor values, and provider
+payloads do not enter the status projection.
+
+The Agent-bound Lark Goal Topic path is the first caller. Legacy Goal-only
+bindings remain readable, while new live, queued, and asynchronous Agent
+bindings persist the generic Connector contract alongside their
+provider-specific routing data. This runtime contract is not itself a new
+capability registry entry; providers advertise stable caller outcomes through
+their existing extension and capability surfaces.
+
+For asynchronous sources, the same module provides an owner-local incremental
+inbox runtime. A provider translates a bounded page into
+`agent_external_connector_event_v0` envelopes and calls the capture operation
+with the exact previously committed cursor. Capture deduplicates stable event
+ids, applies the declared addressed/all-source filter, preserves document
+anchors and reply-chain references in private storage, and assigns a restart-
+safe order. The page cursor remains pending until every accepted event from
+that page is settled; a fully filtered page may checkpoint immediately because
+it contains no accepted Agent input.
+
+The bound Agent drains pending events in that order. Settlement rejects an
+out-of-order event and calls the common ACK decision, so a missing durable
+effect or required provider readback leaves both the event and cursor pending.
+Only a successful settlement records the event as acknowledged, and only the
+last accepted event from a captured page advances its cursor. After that state
+is durably committed, the processed private event body is removed; its
+content-free identity remains available for replay deduplication. Provider
+failures are stored as content-free error codes. The public inbox projection
+exposes only pending count, oldest age, failure count, and freshness; event ids,
+bodies, anchors, reply chains, source references, and cursor values remain
+owner-local.
+
+`loopx.extensions.external_connector_provider` adds the fail-closed provider
+call boundary for document comments. A document-comment registration must
+reference material that was registered separately; the comment stream remains
+`external_input_only` and cannot promote itself to project authority. Exact
+provider identities, scopes, publication requirements, and official HTTPS
+repair URLs stay in owner-local permission guidance. Status exposes only
+content-free readiness and operation counts. Guidance must match the exact
+requirements persisted with the Connector, and those requirements must cover
+history capture plus response write and readback when the response policy needs
+them.
+
+The provider call sequence is permission evaluation, bounded page read,
+durable inbox capture, Agent effect, provider response with readback, then ACK.
+The runtime does not call the page reader until the registered permissions are
+ready, does not call the response writer before a committed effect receipt, and
+does not advance the cursor until an event-bound response receipt and provider
+readback succeed. Concrete provider adapters supply the page reader and response
+writer; LoopX does not own their credentials or raw payloads.
+
 `Provider` is an implementation role. When it implements a LoopX capability,
 it is registered under that capability; a standalone extension provider may
 instead expose only its own bounded command. A provider may be built into LoopX
