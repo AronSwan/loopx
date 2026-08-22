@@ -127,23 +127,37 @@ impl ServiceSet {
     fn ensure(&mut self, kind: ServiceKind) -> Result<(), ServiceError> {
         let executable = loopx_executable();
         let expected_runtime_identity = runtime_identity_for_executable(&executable);
-        match probe(kind, expected_runtime_identity.as_ref()) {
-            Probe::Matching => return Ok(()),
-            Probe::Foreign => {
-                return Err(ServiceError(format!(
-                    "port {} is occupied by a service that is not LoopX {}",
-                    kind.port(),
-                    kind.label()
-                )));
+        let mut stale_retries = 0;
+        loop {
+            match probe(kind, expected_runtime_identity.as_ref()) {
+                Probe::Matching => return Ok(()),
+                Probe::Foreign => {
+                    return Err(ServiceError(format!(
+                        "port {} is occupied by a service that is not LoopX {}",
+                        kind.port(),
+                        kind.label()
+                    )));
+                }
+                Probe::Stale => {
+                    // Self-heal: the port is owned by a LoopX service from a
+                    // different installed release (for example before a
+                    // `loopx update` restarted it). Terminate that stale
+                    // listener and retry so the current release's service is
+                    // started; unknown (Foreign) processes keep the hard error.
+                    stale_retries += 1;
+                    if stale_retries > 3 {
+                        return Err(ServiceError(format!(
+                            "port {} is serving LoopX {} from a different installed runtime and could not be restarted",
+                            kind.port(),
+                            kind.label()
+                        )));
+                    }
+                    terminate_listener(kind.port());
+                    thread::sleep(Duration::from_millis(400));
+                    continue;
+                }
+                Probe::Unavailable => break,
             }
-            Probe::Stale => {
-                return Err(ServiceError(format!(
-                    "port {} is serving LoopX {} from a different installed runtime; stop the old `loopx dashboard` or desktop app, then reopen LoopX",
-                    kind.port(),
-                    kind.label()
-                )));
-            }
-            Probe::Unavailable => {}
         }
 
         let mut command = Command::new(&executable);
@@ -199,6 +213,26 @@ impl ServiceSet {
 impl Drop for ServiceSet {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+fn terminate_listener(port: u16) {
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("lsof")
+            .args(["-tiTCP", &format!(":{port}"), "-sTCP:LISTEN"])
+            .output();
+        if let Ok(output) = output {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Ok(pid) = line.trim().parse::<i32>() {
+                    let _ = Command::new("kill").arg(pid.to_string()).status();
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Windows keeps the owner-facing error path; no process is terminated.
     }
 }
 

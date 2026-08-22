@@ -10,7 +10,7 @@ from unittest import mock
 from loopx import __version__
 import pytest
 
-from loopx.self_update import build_update_plan, execute_update_plan
+from loopx.self_update import build_update_plan, execute_update_plan, restart_managed_loopx_services
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -201,6 +201,36 @@ def test_cli_rejects_installed_doctor_snapshot_outside_check(tmp_path: Path) -> 
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["error"] == "--installed-doctor-json requires update --check"
+
+
+def test_restart_managed_loopx_services_restarts_only_loopx_launchagents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("loopx.self_update.sys.platform", "darwin")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    agents = tmp_path / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    for name in (
+        "com.loopx.status.plist",
+        "com.loopx.chat.plist",
+        "com.goal-harness.status.plist",
+        "unrelated.plist",
+    ):
+        (agents / name).write_text("<plist/>", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr("loopx.self_update.subprocess.run", fake_run)
+
+    restarted = restart_managed_loopx_services()
+    assert set(restarted) == {"com.loopx.status", "com.loopx.chat", "com.goal-harness.status"}
+    assert len(calls) == 3
+    assert all(call[0] == "launchctl" for call in calls)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows update boundary")

@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -540,6 +541,40 @@ def build_update_plan(
     }
 
 
+def restart_managed_loopx_services() -> list[str]:
+    """Best-effort restart of user LaunchAgent-managed LoopX services on macOS.
+
+    After ``loopx update`` replaces the installed release, running status/chat
+    services still belong to the previous release. Restarting the managed
+    LaunchAgents makes them run the new ``loopx`` immediately, so the dashboard
+    and desktop shell keep working without a release-identity mismatch.
+    """
+    if sys.platform != "darwin":
+        return []
+    agents_dir = Path.home() / "Library" / "LaunchAgents"
+    if not agents_dir.is_dir():
+        return []
+    labels: list[str] = []
+    for plist in sorted(agents_dir.glob("*.plist")):
+        stem = plist.stem.lower()
+        if "loopx" not in stem and "goal-harness" not in stem:
+            continue
+        if not (stem.endswith(".status") or stem.endswith(".chat")):
+            continue
+        labels.append(plist.stem)
+    restarted: list[str] = []
+    for label in labels:
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            restarted.append(label)
+    return restarted
+
+
 def execute_update_plan(payload: dict[str, Any], *, timeout_seconds: int = 600) -> dict[str, Any]:
     if os.name == "nt":
         updated = dict(payload)
@@ -592,6 +627,8 @@ def execute_update_plan(payload: dict[str, Any], *, timeout_seconds: int = 600) 
     updated["ok"] = install_result.returncode == 0 and doctor_result.returncode == 0
     if not updated["ok"]:
         updated["recommended_action"] = "inspect update execution tails and restore from rollback plan if needed"
+        return updated
+    execution["restarted_services"] = restart_managed_loopx_services()
     return updated
 
 
