@@ -11,7 +11,16 @@ from ...todos.contract import (
     replan_successor_semantic_binding,
 )
 from ...todos.projection import todo_item_is_actionable_open, todo_item_task_class
-from ...work_items.progress_observation import required_semantic_outcomes
+from ...work_items.progress_observation import (
+    replan_obligation_trigger_checkpoints,
+    replan_obligation_trigger_kinds,
+    required_semantic_outcomes,
+)
+from .long_todo_chain import (
+    LONG_TODO_CHAIN_TRIGGER,
+    long_todo_chain_source_checkpoint,
+    long_todo_chain_transition_is_fresh,
+)
 
 
 def autonomous_replan_ack_has_frontier_delta(ack: dict[str, Any] | None) -> bool:
@@ -91,6 +100,17 @@ def replan_successor_transition_ack(
         source_items = [
             item for item in agent_todo_items if isinstance(item, dict)
         ]
+    trigger_kinds = replan_obligation_trigger_kinds(replan_obligation or {})
+    long_chain_checkpoint: dict[str, str] | None = None
+    long_chain_frontier_updated_at: str | None = None
+    if LONG_TODO_CHAIN_TRIGGER in trigger_kinds:
+        source_checkpoint = long_todo_chain_source_checkpoint(
+            source_items,
+            agent_id=safe_agent_id,
+        )
+        if source_checkpoint is None:
+            return None
+        long_chain_checkpoint, long_chain_frontier_updated_at = source_checkpoint
     successor = next(
         (
             item
@@ -110,6 +130,13 @@ def replan_successor_transition_ack(
                 target_key=item.get("target_key"),
                 explore_result_node_refs=item.get("explore_result_node_refs"),
             )
+            and (
+                LONG_TODO_CHAIN_TRIGGER not in trigger_kinds
+                or long_todo_chain_transition_is_fresh(
+                    frontier_updated_at=long_chain_frontier_updated_at,
+                    transition_generated_at=item.get("updated_at"),
+                )
+            )
         ),
         None,
     )
@@ -123,12 +150,24 @@ def replan_successor_transition_ack(
     )
     if successor_binding is None:
         return None
+    trigger_checkpoints = replan_obligation_trigger_checkpoints(
+        replan_obligation or {}
+    )
+    if LONG_TODO_CHAIN_TRIGGER in trigger_kinds:
+        assert long_chain_checkpoint is not None
+        trigger_checkpoints = [
+            checkpoint
+            for checkpoint in trigger_checkpoints
+            if checkpoint.get("kind") != LONG_TODO_CHAIN_TRIGGER
+        ] + [long_chain_checkpoint]
     semantic_delta = {
         "schema_version": "replan_semantic_delta_v0",
         "accepted": True,
         "outcomes": ["new_runnable_successor"],
         "satisfying_outcomes": ["new_runnable_successor"],
         "required_any_of": required_semantic_outcomes(replan_obligation or {}),
+        "trigger_kinds": trigger_kinds,
+        "trigger_checkpoints": trigger_checkpoints,
         "obligation_id": obligation_id,
         "successor_todo_id": successor_todo_id,
         "successor_binding": successor_binding,
