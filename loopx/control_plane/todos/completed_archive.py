@@ -9,6 +9,7 @@ from .active_state_editing import (
     section_bounds,
     todo_blocks,
 )
+from .contract import TODO_STATUS_DONE, normalize_todo_status
 from .decision_scope import is_standing_decision_receipt_item
 
 DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE = 12
@@ -23,6 +24,29 @@ def completed_todo_archive_command_template(max_active_done: int) -> str:
     return COMPLETED_TODO_ARCHIVE_COMMAND_TEMPLATE.format(max_active_done=max_active_done)
 
 
+def completed_todo_count(todo_summary: dict[str, Any] | None) -> int:
+    """Decode explicit completions from the v0 terminal-count projection.
+
+    ``todo_summary_v0.done_count`` intentionally includes deferred Todos because
+    both states are terminal for scheduling.  Completed-work compaction has a
+    narrower contract and must remove the deferred lane before applying archive
+    pressure.
+    """
+
+    if not isinstance(todo_summary, dict):
+        return 0
+    try:
+        terminal_count = int(todo_summary["done_count"])
+        deferred_count = int(todo_summary["deferred_count"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+    return max(0, terminal_count - deferred_count)
+
+
+def _is_explicitly_completed_todo(block: dict[str, Any]) -> bool:
+    return bool(normalize_todo_status(block.get("status")) == TODO_STATUS_DONE)
+
+
 def completed_todo_archive_warning(
     agent_todos: dict[str, Any] | None,
     *,
@@ -30,10 +54,7 @@ def completed_todo_archive_warning(
 ) -> dict[str, Any] | None:
     if not isinstance(agent_todos, dict):
         return None
-    try:
-        done_count = int(agent_todos.get("done_count") or 0)
-    except (TypeError, ValueError):
-        done_count = 0
+    done_count = completed_todo_count(agent_todos)
     if done_count <= max_active_done_todos:
         return None
     try:
@@ -82,7 +103,11 @@ def archive_completed_todo_lines(
 
     if bounds:
         blocks = todo_blocks(updated_lines, bounds[0], bounds[1], role=role, source_section=section)
-        done_blocks = [block for block in blocks if block.get("done") is True]
+        done_blocks = [
+            block
+            for block in blocks
+            if _is_explicitly_completed_todo(block)
+        ]
         active_done_count = len(done_blocks)
         standing_receipts = (
             [block for block in done_blocks if is_standing_decision_receipt_item(block)]
