@@ -11,7 +11,6 @@ from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
     SettlementStepKind,
-    build_codex_app_settlement_plan,
     settlement_binding_args,
     settlement_step_command,
 )
@@ -37,6 +36,7 @@ from .autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
     todo_lifecycle_settlement_obligation,
 )
+from .accountable_settlement import build_accountable_work_item_settlement_plan
 from .primary_action import (
     build_primary_action_projection,
     protocol_action_label as _protocol_action_label,
@@ -230,6 +230,7 @@ def finalize_user_gate_notification_cooldown(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    turn_instance_id: str | None = None,
 ) -> None:
     scheduler_hint = payload.get("scheduler_hint")
     cooldown = (
@@ -249,6 +250,7 @@ def finalize_user_gate_notification_cooldown(
         payload,
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id,
     )
     attach_user_action_compat_fields(payload)
 
@@ -569,21 +571,15 @@ def _scoped_cli_args(
     return f" --agent-id {agent_id}{capability_args}"
 
 
-def _codex_app_settlement_plan(
+def _turn_scoped_cli_settlement_plan(
     payload: dict[str, Any],
     *,
     available_capabilities: Any,
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any] | None:
-    if (
-        scheduler_runtime_profile_for_execution_context(
-            scheduler_execution_context
-        )
-        is not SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
-    ):
-        return None
     agent_identity = (
         payload.get("agent_identity")
         if isinstance(payload.get("agent_identity"), dict)
@@ -608,14 +604,19 @@ def _codex_app_settlement_plan(
         agent_identity,
         available_capabilities=available_capabilities,
     )
-    return build_codex_app_settlement_plan(
+    plan = build_accountable_work_item_settlement_plan(
+        runtime_profile=scheduler_runtime_profile_for_execution_context(
+            scheduler_execution_context
+        ),
         goal_id=goal_id,
         agent_id=agent_id,
         todo_id=todo_id,
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=f" --agent-id {shlex.quote(agent_id)}",
-    ).as_dict()
+        turn_instance_id=turn_instance_id,
+    )
+    return plan.as_dict() if plan is not None else None
 
 
 def _terminal_cli_actions(
@@ -673,6 +674,7 @@ def interaction_next_cli_actions(
     ) = None,
     capability_reentry: dict[str, Any] | None = None,
     settlement_plan: Mapping[str, Any] | None = None,
+    turn_instance_id: str | None = None,
 ) -> list[str]:
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     agent_identity = (
@@ -690,10 +692,11 @@ def interaction_next_cli_actions(
         else ""
     )
     if settlement_plan is None:
-        settlement_plan = _codex_app_settlement_plan(
+        settlement_plan = _turn_scoped_cli_settlement_plan(
             payload,
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id,
         )
     settlement_args = settlement_binding_args(settlement_plan)
     try:
@@ -1231,6 +1234,7 @@ def _build_interaction_cli_channel(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     capability_reentry: dict[str, Any] | None = None,
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     if capability_reentry is None:
         capability_reentry = build_runtime_capability_reentry_packet(
@@ -1238,10 +1242,11 @@ def _build_interaction_cli_channel(
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
         )
-    settlement_plan = _codex_app_settlement_plan(
+    settlement_plan = _turn_scoped_cli_settlement_plan(
         payload,
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id,
     )
     channel = {
         "next_cli_actions": interaction_next_cli_actions(
@@ -1251,6 +1256,7 @@ def _build_interaction_cli_channel(
             scheduler_execution_context=scheduler_execution_context,
             capability_reentry=capability_reentry,
             settlement_plan=settlement_plan,
+            turn_instance_id=turn_instance_id,
         ),
         "spend_allowed_now": False,
         "spend_after_validation": spend_after_validation,
@@ -1386,6 +1392,7 @@ def build_interaction_contract(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    turn_instance_id: str | None = None,
 ) -> InteractionContractPacket:
     execution_obligation = (
         payload.get("execution_obligation")
@@ -1469,6 +1476,7 @@ def build_interaction_contract(
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
             capability_reentry=capability_reentry,
+            turn_instance_id=turn_instance_id,
         ),
     }
     response_plan = _build_interaction_response_plan(

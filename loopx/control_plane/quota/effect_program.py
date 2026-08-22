@@ -34,6 +34,7 @@ __all__ = [
     "SettlementStep",
     "SettlementStepKind",
     "build_codex_app_settlement_plan",
+    "build_turn_scoped_cli_settlement_plan",
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
@@ -56,19 +57,40 @@ def build_codex_app_settlement_plan(
     lifecycle_actor_args: str,
     turn_instance_id_ref: str = "${LOOPX_TURN:?}",
 ) -> SettlementPlan:
+    return build_turn_scoped_cli_settlement_plan(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=todo_id,
+        replan_obligation_id=replan_obligation_id,
+        scoped_cli_args=scoped_cli_args,
+        lifecycle_actor_args=lifecycle_actor_args,
+        turn_instance_id=turn_instance_id_ref,
+    )
+
+
+def build_turn_scoped_cli_settlement_plan(
+    *,
+    goal_id: str,
+    agent_id: str,
+    todo_id: str | None = None,
+    replan_obligation_id: str | None = None,
+    scoped_cli_args: str,
+    lifecycle_actor_args: str,
+    turn_instance_id: str,
+) -> SettlementPlan:
     if bool(todo_id) == bool(replan_obligation_id):
         raise ValueError(
-            "Codex App settlement requires exactly one Todo or autonomous "
+            "turn-scoped CLI settlement requires exactly one Todo or autonomous "
             "replan obligation binding"
         )
     identity = SettlementIdentity(
         goal_id=goal_id,
         agent_id=agent_id,
         todo_id=todo_id,
-        turn_instance_id=turn_instance_id_ref,
+        turn_instance_id=turn_instance_id,
         replan_obligation_id=replan_obligation_id,
     )
-    quoted_turn = _quoted_turn_ref(turn_instance_id_ref)
+    quoted_turn = _quoted_turn_ref(turn_instance_id)
     binding_arg = (
         f" --todo-id {shlex.quote(todo_id)}"
         if todo_id
