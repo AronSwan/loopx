@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .agy_goal_mode import agy_home as _agy_home
 from .opencode_goal_mode import plugin_source, runtime_source
 from .pi_goal_mode import extension_source as pi_extension_source
 from .pi_goal_mode import runtime_source as pi_runtime_source
@@ -207,7 +208,7 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
             "argument_hint": "[--fine-grained] [--capability-route issue-fix] [task text]",
             "instructions": [
                 "Visible command arguments: `$ARGUMENTS`.",
-                "Identify the exact current host surface (codex-app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, deepseek-harness, or ark-managed-agent).",
+                "Identify the exact current host surface (codex-app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, agy, deepseek-harness, or ark-managed-agent).",
                 _loopx_start_goal_arguments_instruction(
                     cli_bin=cli_bin,
                     host_surface=None,
@@ -656,6 +657,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["cursor"]
         elif surface in {"zcode", "z-code"}:
             candidates = ["zcode"]
+        elif surface in {"agy", "antigravity", "antigravity-cli"}:
+            candidates = ["agy"]
         else:
             candidates = [surface]
         for candidate in candidates:
@@ -842,6 +845,7 @@ def install_slash_commands(
     cursor_home: str | None = None,
     zcode_home: str | None = None,
     zcode_agents_home: str | None = None,
+    agy_home: str | None = None,
     pi_project: str | None = None,
 ) -> dict[str, Any]:
     specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=include_legacy_aliases)
@@ -852,6 +856,7 @@ def install_slash_commands(
     gemini_root = _gemini_home(gemini_home)
     cursor_root = _cursor_home(cursor_home)
     zcode_root = _zcode_home(zcode_home or zcode_agents_home)
+    agy_root = _agy_home(agy_home)
     pi_project_root = Path(pi_project or ".").expanduser().resolve()
     installed: list[dict[str, Any]] = []
 
@@ -1104,6 +1109,19 @@ def install_slash_commands(
             surface="gemini",
             host_surfaces=["gemini-cli"],
             mechanism="gemini_cli_skills",
+        )
+
+    if "agy" in effective_surfaces:
+        # Antigravity CLI discovers user skills from AGY_CLI_HOME/skills
+        # (default ~/.gemini/antigravity-cli/skills) using the same directory
+        # per skill + SKILL.md layout. That root belongs to agy alone — Gemini
+        # CLI reads ~/.gemini/skills, ZCode reads ~/.agents/skills — so the
+        # three skill-facade installs never collide.
+        _install_skill_facade(
+            skills_dir=agy_root / "skills",
+            surface="agy",
+            host_surfaces=["agy"],
+            mechanism="agy_cli_skills",
         )
 
     if "cursor" in effective_surfaces:
@@ -1432,6 +1450,7 @@ def install_slash_commands(
             "cursor_skill_dir": str(cursor_root / "skills") if "cursor" in effective_surfaces else None,
             "cursor_mcp_path": str(cursor_root / "mcp.json") if "cursor" in effective_surfaces else None,
             "zcode_skill_dir": str(zcode_root / "skills") if "zcode" in effective_surfaces else None,
+            "agy_skill_dir": str(agy_root / "skills") if "agy" in effective_surfaces else None,
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,
             "opencode_command_dir": str(opencode_root / "commands") if "opencode" in effective_surfaces else None,
             "opencode_plugin_path": str(opencode_root / "plugins" / "loopx-goal.js") if "opencode" in effective_surfaces and with_goal_bridge else None,
@@ -1453,6 +1472,7 @@ def install_slash_commands(
             "Gemini CLI discovers user skills from GEMINI_HOME/skills with the same SKILL.md front matter; files are written directly because `gemini skills install` copies from a git URL or an existing local path and hands the copy to the host, which would lose the managed marker, per-file status and dry-run reporting every other surface has.",
             "Cursor discovers skills from CURSOR_HOME/skills and has no user-defined slash commands, so the cursor surface installs the skill facade and registers the LoopX MCP server in CURSOR_HOME/mcp.json; run `cursor-agent mcp enable loopx` once to approve it.",
             "ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills) and exposes each skill for invocation via `$skill-name` or Settings -> Skills.",
+            "Antigravity CLI (agy) discovers user skills from AGY_CLI_HOME/skills (default ~/.gemini/antigravity-cli/skills); the agy surface is opt-in and writes the same managed skill facades into that host-owned root.",
             "OpenCode discovers global skills from OPENCODE_CONFIG_DIR/skills in addition to the static command facade; a command is typed by the user, a skill can be reached by the model itself.",
             "The default all surface installs only OpenCode's static command facade; the executable goal bridge requires --with-goal-bridge.",
             "The Pi surface is opt-in and installs the self-contained goal extension and its loop runtime into the project's .pi/extensions/; it is not part of the default all surface.",

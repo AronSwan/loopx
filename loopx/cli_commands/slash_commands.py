@@ -66,12 +66,14 @@ def register_slash_commands_command(
             "cursor-agent",
             "zcode",
             "z-code",
+            "agy",
+            "antigravity",
             "pi",
         ],
         help=(
             "Host surface to install. Repeatable. Defaults to static command facades "
             "for Codex, Claude Code, and OpenCode. `gemini`, `cursor`, `zcode` and "
-            "`pi` are opt-in: they write into those hosts' own homes only when "
+            "`agy`, `pi` are opt-in: they write into those hosts' own homes only when "
             "requested."
         ),
     )
@@ -108,6 +110,13 @@ def register_slash_commands_command(
         "--zcode-agents-home",
         dest="zcode_home",
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--agy-cli-home",
+        help=(
+            "Antigravity CLI home for skill installation. Defaults to AGY_CLI_HOME "
+            "or ~/.gemini/antigravity-cli."
+        ),
     )
     parser.add_argument(
         "--opencode-home",
@@ -147,6 +156,7 @@ def handle_slash_commands_command(
             gemini_home=args.gemini_home,
             cursor_home=args.cursor_home,
             zcode_home=getattr(args, "zcode_home", None),
+            agy_home=args.agy_cli_home,
             pi_project=args.pi_project,
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)
