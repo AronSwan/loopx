@@ -13,12 +13,14 @@ from ..deepresearch import (
     add_source,
     add_subquestion,
     build_packet,
+    close_research,
     load_state,
     resolve_contradiction,
     resolve_question,
     start_research,
     write_report,
 )
+from ..file_lock import LockAcquireTimeoutError, lock_timeout_error_fields
 
 PrintPayload = Callable[..., None]
 FormatSelector = Callable[[argparse.Namespace], str]
@@ -30,6 +32,7 @@ _ACTIONS = (
     "add-subquestion",
     "resolve-question",
     "resolve-contradiction",
+    "close",
     "report",
 )
 
@@ -114,6 +117,15 @@ def register_deepresearch_command(
         default=DEFAULT_MAX_SUBQUESTIONS,
         help=f"Subquestion budget. Defaults to {DEFAULT_MAX_SUBQUESTIONS}.",
     )
+    start.add_argument(
+        "--new-run",
+        action="store_true",
+        help=(
+            "When the current run has already stopped, close and archive it, then start "
+            "fresh. An active (not stopped) run still requires an explicit "
+            "`deepresearch close` first."
+        ),
+    )
 
     action("status", "Emit the expedition packet: contract, ledgers, next expedition, stop conditions.")
 
@@ -167,6 +179,15 @@ def register_deepresearch_command(
     )
     contradiction_parser.add_argument("--rationale", required=True)
 
+    close_parser = action(
+        "close",
+        "Terminal transition: close this research run so the next question can start.",
+    )
+    close_parser.add_argument(
+        "--note",
+        help="Optional close rationale (budget blown, abandoned, complete, ...).",
+    )
+
     action("report", "Render the citation-auditable markdown report and write it next to the state.")
 
 
@@ -194,6 +215,7 @@ def handle_deepresearch_command(
                 question=args.question,
                 max_sources=args.max_sources,
                 max_subquestions=args.max_subquestions,
+                new_run=bool(getattr(args, "new_run", False)),
             )
             return emit(
                 {
@@ -202,6 +224,17 @@ def handle_deepresearch_command(
                     "question": state["question"],
                     "state_path": str(project / ".loopx" / "deepresearch" / "research.json"),
                     "packet": build_packet(state, cli_bin="loopx", project=project),
+                }
+            )
+        if action == "close":
+            result = close_research(project, note=args.note)
+            return emit(
+                {
+                    "ok": True,
+                    "schema_version": "loopx_deepresearch_closed_v0",
+                    "run_status": result["status"],
+                    "closed_at": result["closed_at"],
+                    "packet": build_packet(result["state"], cli_bin="loopx", project=project),
                 }
             )
         if action == "status":
@@ -297,8 +330,12 @@ def handle_deepresearch_command(
                 }
             )
         raise ValueError(f"unknown deepresearch action: {action}")
-    except ValueError as error:
-        return emit({"ok": False, "error": str(error), "action": action})
+    except (ValueError, LockAcquireTimeoutError) as error:
+        payload: dict[str, Any] = {"ok": False, "error": str(error), "action": action}
+        # Lock contention is an operational condition, not a crash: the JSON
+        # contract must stay machine-consumable instead of leaking a traceback.
+        payload.update(lock_timeout_error_fields(error))
+        return emit(payload)
 
 
 def _render_markdown(payload: dict[str, Any]) -> str:

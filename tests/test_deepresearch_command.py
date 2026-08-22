@@ -505,6 +505,161 @@ def test_concurrent_add_source_keeps_every_update(tmp_path: Path) -> None:
     assert len(state["claims"]) == 8
 
 
+def test_second_run_lifecycle_close_then_start(tmp_path: Path) -> None:
+    # Reviewer repro: after one completed run, a second start used to demand
+    # deleting internal state files by hand. The typed lifecycle must keep the
+    # capability runnable per project forever.
+    _start(tmp_path, question="first question")
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "docs/one.md",
+            "--tool",
+            "local_read",
+            "--claims-json",
+            json.dumps([{"text": "first claim", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-question",
+            "--project",
+            ".",
+            "--question-id",
+            "q1",
+            "--answer",
+            "First answer.",
+            "--evidence-claims",
+            "c1",
+            cwd=tmp_path,
+        )
+    )
+    _payload(_run_cli("deepresearch", "report", "--project", ".", cwd=tmp_path))
+    state_file = tmp_path / ".loopx" / "deepresearch" / "research.json"
+    assert state_file.is_file()
+
+    # While stopped-but-open, a plain start is refused with a typed pointer…
+    blocked = _run_cli(
+        "deepresearch", "start", "--project", ".", "--question", "second question", cwd=tmp_path
+    )
+    blocked_data = json.loads(blocked.stdout)
+    assert blocked_data["ok"] is False
+    assert "deepresearch close" in blocked_data["error"]
+
+    # …while an ACTIVE run points at closing first, not at deleting files.
+    second = _run_cli(
+        "deepresearch",
+        "start",
+        "--project",
+        ".",
+        "--question",
+        "second question",
+        "--new-run",
+        cwd=tmp_path,
+    )
+    assert json.loads(second.stdout)["ok"] is True
+    fresh = json.loads(state_file.read_text(encoding="utf-8"))
+    assert fresh["question"] == "second question"
+    assert fresh["status"] == "active"
+    archive_dirs = list((tmp_path / ".loopx" / "deepresearch" / "archive").iterdir())
+    assert len(archive_dirs) == 1
+    assert (archive_dirs[0] / "research.json").is_file()
+    assert (archive_dirs[0] / "report.md").is_file()
+
+    # An active (not stopped) run requires an explicit close.
+    active = _run_cli(
+        "deepresearch",
+        "start",
+        "--project",
+        ".",
+        "--question",
+        "third question",
+        "--new-run",
+        cwd=tmp_path,
+    )
+    active_data = json.loads(active.stdout)
+    assert active_data["ok"] is False
+    assert "active research run exists" in active_data["error"]
+
+    closed = _payload(
+        _run_cli(
+            "deepresearch", "close", "--project", ".", "--note", "moving on", cwd=tmp_path
+        )
+    )
+    assert closed["run_status"] == "closed"
+    restart = _payload(
+        _run_cli(
+            "deepresearch",
+            "start",
+            "--project",
+            ".",
+            "--question",
+            "third question",
+            cwd=tmp_path,
+        )
+    )
+    assert restart["packet"]["run_status"] == "active"
+    assert len(list((tmp_path / ".loopx" / "deepresearch" / "archive").iterdir())) == 2
+
+
+def test_lock_contention_returns_typed_json_not_traceback(tmp_path: Path) -> None:
+    # Reviewer probe: holding the state lock made the CLI print a traceback
+    # under --format json. The JSON contract must survive lock timeouts.
+    from loopx.deepresearch import state_path
+    from loopx.file_lock import exclusive_file_lock
+
+    _start(tmp_path)
+    with exclusive_file_lock(state_path(tmp_path)):
+        result = _run_cli(
+            "deepresearch",
+            "status",
+            "--project",
+            ".",
+            cwd=tmp_path,
+        )
+        contended = _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://locked.example/a",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            "[]",
+            cwd=tmp_path,
+        )
+    # status is a read-only path and stays usable; the mutation hits the lock.
+    assert json.loads(result.stdout)["ok"] is True
+    data = json.loads(contended.stdout)
+    assert data["ok"] is False
+    assert data["error_code"] == "lock_acquire_timeout"
+    assert "Traceback" not in contended.stdout
+    assert "Traceback" not in contended.stderr
+
+
+def test_deep_research_is_a_registered_capability() -> None:
+    from loopx.capabilities.catalog import BUILTIN_CAPABILITIES
+
+    entry = next(
+        (item for item in BUILTIN_CAPABILITIES if item["id"] == "deep-research"), None
+    )
+    assert entry is not None
+    assert entry["entry_command"] == "loopx deepresearch start --question <text>"
+    boundaries = " ".join(entry["boundaries"])
+    # The ownership question the reviewer asked must be answered in the catalog
+    # itself: how this capability differs from auto-research.
+    assert "auto-research" in boundaries
+    assert entry["next_real_step"]
+
+
 def test_skill_facade_installs_for_skill_facade_surfaces(tmp_path: Path) -> None:
     from loopx.slash_command_install import install_slash_commands
 

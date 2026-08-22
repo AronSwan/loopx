@@ -73,12 +73,61 @@ def _normalize_source_ref(ref: str) -> str:
     return ref.strip().rstrip("/").lower()
 
 
+def archive_root(project: Path) -> Path:
+    return project / ".loopx" / "deepresearch" / "archive"
+
+
+def _archive_current_run(project: Path, state: dict[str, Any]) -> Path:
+    """Move the closed run's state (and report) under archive/<closed_at>/.
+
+    A typed terminal rotation — the only path besides uninstall that removes
+    research.json, so a finished run never blocks the next question and the
+    audit trail stays on disk.
+    """
+    stamp = str(state.get("closed_at") or state.get("updated_at") or _now_iso())
+    safe = "".join(ch if ch.isalnum() or ch in "-+" else "-" for ch in stamp)
+    target = archive_root(project) / safe
+    suffix = 2
+    while target.exists():  # same-second closes must not overwrite each other
+        target = archive_root(project) / f"{safe}-{suffix}"
+        suffix += 1
+    target.mkdir(parents=True, exist_ok=True)
+    state_path(project).rename(target / _STATE_FILENAME)
+    report = report_path(project)
+    if report.exists():
+        report.rename(target / _REPORT_FILENAME)
+    return target
+
+
+def close_research(project: Path, *, note: str | None = None) -> dict[str, Any]:
+    """Terminal transition: an explicit operator decision to end this run.
+
+    Closing is allowed at any point (budget blown, question abandoned, or
+    research complete) because it is the run owner saying "done" — unlike
+    stop_conditions, which the packet computes from ledger state. A closed run
+    never blocks `start`; the next start archives it and begins fresh.
+    """
+    with exclusive_file_lock(state_path(project), operation="deepresearch_close"):
+        state = _require_state(project)
+        if state.get("status", "active") == "closed":
+            raise ValueError("research run is already closed")
+        state["status"] = "closed"
+        state["closed_at"] = _now_iso()
+        if note and note.strip():
+            state["close_note"] = note.strip()
+        stop = evaluate_stop(state)
+        state["close_summary"] = stop
+        _save_state(project, state)
+    return {"status": "closed", "closed_at": state["closed_at"], "state": state}
+
+
 def start_research(
     project: Path,
     *,
     question: str,
     max_sources: int,
     max_subquestions: int,
+    new_run: bool = False,
 ) -> dict[str, Any]:
     question = question.strip()
     if not question:
@@ -90,13 +139,29 @@ def start_research(
     with exclusive_file_lock(state_path(project), operation="deepresearch_start"):
         existing = load_state(project)
         if existing is not None:
-            raise ValueError(
-                "deepresearch state already exists for this project "
-                f"(question: {existing['question']!r}); run `status`/`report`, or remove "
-                f"{state_path(project)} to start over"
-            )
+            if existing.get("status", "active") == "closed":
+                _archive_current_run(project, existing)
+            elif new_run and evaluate_stop(existing)["stopped"]:
+                existing["status"] = "closed"
+                existing["closed_at"] = _now_iso()
+                existing["close_note"] = "auto-closed by start --new-run"
+                _save_state(project, existing)
+                _archive_current_run(project, existing)
+            else:
+                if evaluate_stop(existing)["stopped"]:
+                    raise ValueError(
+                        "a finished research run exists for this project; close it with "
+                        "`loopx deepresearch close` (or rerun start with --new-run) "
+                        "before starting a new question"
+                    )
+                raise ValueError(
+                    f"an active research run exists for this project (question: "
+                    f"{existing['question']!r}); finish and `loopx deepresearch close` it "
+                    "before starting a new question"
+                )
         state = {
             "schema_version": STATE_SCHEMA_VERSION,
+            "status": "active",
             "question": question,
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
@@ -491,6 +556,7 @@ def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[
         "schema_version": PACKET_SCHEMA_VERSION,
         "command": COMMAND,
         "question": state["question"],
+        "run_status": state.get("status", "active"),
         "research_contract": {
             "question": state["question"],
             "budget": state["budget"],
