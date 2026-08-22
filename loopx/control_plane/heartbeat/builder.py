@@ -462,6 +462,11 @@ def build_heartbeat_prompt(
     if thin:
         payload.pop("compact_prompt_command", None)
         payload.pop("brief_prompt_command", None)
+        # Thin heartbeat consumers can distinguish an unresolved state path
+        # by absence. Keeping a null placeholder spends hot-path budget while
+        # conveying no additional routing or execution authority.
+        if payload.get("resolved_active_state") is None:
+            payload.pop("resolved_active_state", None)
         for key in (
             "agent_profile",
             "agent_role",

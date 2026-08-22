@@ -460,6 +460,12 @@ path, and canary route rather than as a user-facing release baseline.
   previews, first-class DeepSeek Harness packaging, botmux Goal Channel turns,
   three Agent-scoped Lark ingress modes, and fixes Goal lifecycle, Todo defer,
   quota settlement, replan closeout, and event-sourced freshness paths.
+- `v0.5.2` on 2026-08-23: transaction and multi-source workspace reliability
+  release at the matching `v0.5.2` tag. LoopX moves the core Turn settlement
+  path behind typed effect transactions, makes local/SSH source changes
+  generation-fenced, adds a native DeepSeek Harness Goal workspace and
+  Agent-scoped external Connector providers, and hardens long Todo chains,
+  prepared-effect recovery, benchmark admission, and public-smoke release gates.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

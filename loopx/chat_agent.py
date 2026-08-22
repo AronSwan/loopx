@@ -179,6 +179,7 @@ class CodexChatAgentSession:
     _write_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _request_id_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _response_waiters_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _message_dispatch_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @classmethod
     def start(
@@ -327,14 +328,15 @@ class CodexChatAgentSession:
 
     def _next_event(self, *, deadline: float) -> dict[str, Any]:
         while True:
-            try:
-                return self._pending_events.get_nowait()
-            except queue.Empty:
-                pass
-            message = self._next_message(deadline=deadline)
-            if self._route_response(message):
-                continue
-            return message
+            with self._message_dispatch_lock:
+                try:
+                    return self._pending_events.get_nowait()
+                except queue.Empty:
+                    pass
+                message = self._next_message(deadline=deadline)
+                if self._route_response(message):
+                    continue
+                return message
 
     def _check_server_gate(self, message: dict[str, Any]) -> None:
         if message.get("id") is not None and message.get("method"):
@@ -364,31 +366,41 @@ class CodexChatAgentSession:
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise self._runtime_error("Codex app-server timed out.")
-                    try:
-                        raw = self.messages.get(timeout=min(0.1, remaining))
-                    except queue.Empty:
-                        continue
-                    if isinstance(raw, EOFError):
-                        raise self._runtime_error(
-                            "Codex app-server closed before completing the request."
-                        )
-                    if isinstance(raw, Exception):
-                        raise self._runtime_error(
-                            "Codex app-server returned an unreadable response."
-                        )
-                    message = raw
-                    if message.get("id") != request_id and self._route_response(message):
-                        continue
+                    with self._message_dispatch_lock:
+                        try:
+                            message = waiter.get_nowait()
+                        except queue.Empty:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise self._runtime_error("Codex app-server timed out.")
+                            try:
+                                raw = self.messages.get(timeout=min(0.1, remaining))
+                            except queue.Empty:
+                                continue
+                            if isinstance(raw, EOFError):
+                                raise self._runtime_error(
+                                    "Codex app-server closed before completing the request."
+                                )
+                            if isinstance(raw, Exception):
+                                raise self._runtime_error(
+                                    "Codex app-server returned an unreadable response."
+                                )
+                            message = raw
+                            if (
+                                message.get("id") != request_id
+                                and self._route_response(message)
+                            ):
+                                continue
+                            if message.get("id") != request_id:
+                                self._check_server_gate(message)
+                                self._pending_events.put(message)
+                                continue
                 if message.get("id") == request_id:
                     if message.get("error"):
                         raise self._runtime_error(f"Codex app-server rejected {method}.")
                     result = message.get("result")
                     return result if isinstance(result, dict) else {}
-                self._check_server_gate(message)
-                self._pending_events.put(message)
+                raise self._runtime_error("Codex app-server returned an unexpected response.")
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
