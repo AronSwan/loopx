@@ -98,16 +98,19 @@ test("Todo lifecycle reentry preserves exact completion identities", () => {
           kind: "completed_advancement_without_successor",
           todo_id: "todo_111111111111",
           completion_turn_key: "turn-implement",
+          completion_identity_source: "turn_settlement",
         },
         {
           kind: "completed_advancement_without_successor",
           todo_id: "todo_222222222222",
-          completion_turn_key: null,
+          completion_turn_key:
+            "local_completion_2fdda7fd139a77f97e72ca43d6e6a72a",
+          completion_identity_source: "unscoped_completion",
         },
       ],
       next_cli_actions: [
         "when no real successor remains for completed Todo todo_111111111111: loopx todo complete --goal-id goal-example --todo-id todo_111111111111 --turn-instance-id turn-implement --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
-        "when no real successor remains for completed Todo todo_222222222222: loopx todo complete --goal-id goal-example --todo-id todo_222222222222 --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
+        "when no real successor remains for completed Todo todo_222222222222: loopx todo complete --goal-id goal-example --todo-id todo_222222222222 --completion-identity-key local_completion_2fdda7fd139a77f97e72ca43d6e6a72a --agent-id current-agent --no-follow-up --note '<public-safe no-follow-up rationale>'",
         "otherwise link or create one real runnable successor for the exact completed Todo; do not create lifecycle-only filler",
         "loopx --format json quota should-run --goal-id goal-example --agent-id current-agent --available-capability shell",
       ],
@@ -125,6 +128,30 @@ test("Todo lifecycle reentry rejects untyped succession triggers", () => {
       quota_scoped_args: [],
     }),
     /kind is unsupported/,
+  );
+});
+
+test("local-shaped turn identities remain turn-scoped unless exactly derived", () => {
+  const projection = projectTodoLifecycleSettlementReentry({
+    schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+    goal_id: "goal-example",
+    triggers: [{
+      kind: "completed_advancement_without_successor",
+      todo_id: "todo_333333333333",
+      completion_turn_key: "local_completion_00000000000000000000000000000000",
+    }],
+    lifecycle_actor_args: [],
+    quota_scoped_args: [],
+  });
+
+  assert.equal(
+    (projection.triggers as Record<string, unknown>[])[0]
+      ?.completion_identity_source,
+    "turn_settlement",
+  );
+  assert.match(
+    (projection.next_cli_actions as string[])[0] ?? "",
+    /--turn-instance-id local_completion_0{32}/,
   );
 });
 
