@@ -39,24 +39,32 @@ jobs:
   sonar:
     name: SonarCloud analysis (non-blocking)
     runs-on: ubuntu-latest
-    # Skip until maintainers provision SONAR_TOKEN so this is never a blocker.
-    if: ${{ secrets.SONAR_TOKEN != '' }}
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
+      - name: Skip analysis when the token is unavailable
+        if: env.SONAR_TOKEN == ''
+        run: echo "SONAR_TOKEN is unavailable; non-blocking analysis skipped."
+
       - name: Check out repository
+        if: env.SONAR_TOKEN != ''
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
+        if: env.SONAR_TOKEN != ''
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install test dependencies
+        if: env.SONAR_TOKEN != ''
         run: python -m pip install --disable-pip-version-check -e ".[test]"
 
       - name: Run fast tests with coverage XML
+        if: env.SONAR_TOKEN != ''
         run: >-
           python -m pytest -q -n 2
           --cov=loopx
@@ -64,6 +72,7 @@ jobs:
           --cov-report=xml:coverage.xml
 
       - name: SonarCloud scan
+        if: env.SONAR_TOKEN != ''
         # Analysis-only: findings are reported to the PR/dashboard but never
         # block merge. Remove this flag only if the quality gate becomes a
         # required check.
@@ -71,4 +80,3 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v8.2.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
