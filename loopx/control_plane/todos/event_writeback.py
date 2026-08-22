@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ...event_sourced_state import (
     AppendOnlyStateEventStore,
+    StateEventError,
     TODO_ADDED,
     TODO_CLAIMED,
     TODO_COMPLETED,
+    build_state_projection,
     make_state_event,
 )
 from ...history import load_registry
@@ -18,6 +20,7 @@ from ..goals.active_state_event_projection import (
     state_event_log_candidates,
 )
 from ..goals.path_resolution import resolve_goal_local_path
+from ..runtime.validation_command import CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION
 from .active_state_todo_parser import parse_active_state_todos
 from .contract import (
     TODO_CONTINUATION_POLICY_VALUES,
@@ -59,6 +62,130 @@ def _registry_goal(registry_path: Path, goal_id: str) -> dict[str, Any] | None:
         if isinstance(goal, dict) and str(goal.get("id") or "") == goal_id:
             return goal
     return None
+
+
+def _raw_event_projection_todo_item(
+    *,
+    projection: Mapping[str, Any],
+    todo_id: str,
+    roles: list[str],
+) -> dict[str, Any] | None:
+    for item_role in roles:
+        if item_role not in TODO_SECTION_HEADINGS:
+            continue
+        summary = projection.get(f"{item_role}_todos")
+        items = summary.get("items") if isinstance(summary, dict) else []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if normalize_todo_id(item.get("todo_id")) == todo_id:
+                return dict(item)
+    return None
+
+
+def _canonical_event_projection_source(
+    *,
+    goal: dict[str, Any],
+    state_path: Path,
+    projection_authority: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any]] | None:
+    """Resolve the exact log whose fingerprint produced the public projection."""
+    authority_keys = (
+        "source_event_count",
+        "source_checksum",
+        "last_event_id",
+        "last_append_sequence",
+        "projection_version",
+    )
+    goal_id = str(goal.get("id") or "").strip()
+    for event_log_path in state_event_log_candidates(
+        goal,
+        state_path=state_path,
+        resolve_goal_local_path=resolve_goal_local_path,
+    ):
+        if not event_log_path.exists():
+            continue
+        try:
+            events = AppendOnlyStateEventStore(event_log_path).load()
+            if not events:
+                continue
+            projection = build_state_projection(events, goal_id=goal_id or None)
+        except (OSError, StateEventError):
+            return None
+        if all(
+            projection.get(key) == projection_authority.get(key)
+            for key in authority_keys
+        ):
+            return event_log_path, projection
+    return None
+
+
+def event_projection_source_authority(context: Mapping[str, Any]) -> dict[str, Any]:
+    fields = context.get("fields") if isinstance(context.get("fields"), dict) else {}
+    projection = (
+        fields.get("state_event_projection")
+        if isinstance(fields, dict)
+        else None
+    )
+    projection = projection if isinstance(projection, dict) else {}
+    return {
+        "projection_source": "event_log",
+        "event_log_path": str(context.get("event_log_path") or ""),
+        "source_checksum": projection.get("source_checksum"),
+        "last_event_id": projection.get("last_event_id"),
+        "last_append_sequence": projection.get("last_append_sequence"),
+    }
+
+
+def event_projection_source_matches(
+    context: Mapping[str, Any],
+    source_authority: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(source_authority, Mapping):
+        return True
+    if source_authority.get("projection_source") != "event_log":
+        return True
+    current = event_projection_source_authority(context)
+    return all(
+        current.get(key) == source_authority.get(key)
+        for key in (
+            "event_log_path",
+            "source_checksum",
+            "last_event_id",
+            "last_append_sequence",
+        )
+    )
+
+
+def _completion_validation_source_drift_failure(
+    *,
+    goal_id: str,
+    todo_id: str,
+    dry_run: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": dry_run,
+        "completed": False,
+        "goal_id": goal_id,
+        "todo_id": todo_id,
+        "changed": False,
+        "validation": {
+            "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+            "command_label": "todo completion validation",
+            "exit_code": None,
+            "passed": False,
+            "status": "source_drift",
+            "summary": (
+                "event-log validation source changed before completion append; "
+                "retry the completion against the current canonical source"
+            ),
+            "stdout_captured": False,
+            "stderr_captured": False,
+            "local_path_captured": False,
+        },
+        "validation_blocked_completion": True,
+    }
 
 
 def event_projection_todo_context(
@@ -103,26 +230,31 @@ def event_projection_todo_context(
             break
     if not matched_item or matched_role is None:
         return None
-    event_log_path = next(
-        (
-            path
-            for path in state_event_log_candidates(
-                goal,
-                state_path=state_path,
-                resolve_goal_local_path=resolve_goal_local_path,
-            )
-            if path.exists()
+    projection_authority = fields.get("state_event_projection")
+    source = _canonical_event_projection_source(
+        goal=goal,
+        state_path=state_path,
+        projection_authority=(
+            projection_authority
+            if isinstance(projection_authority, Mapping)
+            else {}
         ),
-        None,
     )
-    if event_log_path is None:
+    if source is None:
         return None
+    event_log_path, raw_projection = source
+    raw_item = _raw_event_projection_todo_item(
+        projection=raw_projection,
+        todo_id=normalized_todo_id,
+        roles=roles,
+    )
     return {
         "goal": goal,
         "fields": fields,
         "event_log_path": event_log_path,
         "role": matched_role,
         "item": matched_item,
+        "raw_item": raw_item or matched_item,
     }
 
 
@@ -328,12 +460,22 @@ def complete_event_projected_goal_todo(
     completion_turn_key: str | None = None,
     actor_agent_id: str | None = None,
     completion_fence: dict[str, Any] | None = None,
+    completion_validation_source_authority: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     item = dict(context["item"])
     role = str(context["role"])
     todo_id = normalize_todo_id(item.get("todo_id"))
     if not todo_id:
         raise ValueError("event-projected todo has no stable todo_id")
+    if not event_projection_source_matches(
+        context,
+        completion_validation_source_authority,
+    ):
+        return _completion_validation_source_drift_failure(
+            goal_id=goal_id,
+            todo_id=todo_id,
+            dry_run=dry_run,
+        )
     if clear_claim and item.get("claimed_by"):
         item.pop("claimed_by", None)
     effective_claimed_by = claimed_by or normalize_todo_claimed_by(item.get("claimed_by"))

@@ -74,10 +74,7 @@ from .control_plane.todos.completion_policy import (
     resolve_completion_policy,
 )
 from .control_plane.todos.completion_fence import completed_todo_replay
-from .control_plane.todos.completion_validation import (
-    COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS,
-    run_completion_validation_gate,
-)
+from .control_plane.todos import completion_validation as completion_validation_module
 from .control_plane.todos.event_writeback import (
     complete_event_projected_goal_todo,
     event_projection_todo_context,
@@ -663,11 +660,11 @@ def add_todo_to_lines(
         if not (
             1
             <= validation_timeout_seconds
-            <= COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS
+            <= completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS
         ):
             raise ValueError(
                 "--validation-timeout-seconds must be between 1 and "
-                f"{COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS} (the outer "
+                f"{completion_validation_module.COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS} (the outer "
                 "CLI/MCP subprocess budget is 30s, and a timed-out "
                 "validation must still produce a typed receipt)"
             )
@@ -1313,7 +1310,7 @@ def update_goal_todo(
                 role=role,
             )
             if update_block_match and (role or update_block_match[0]) != "agent":
-                validation_failure = run_completion_validation_gate(
+                validation_failure = completion_validation_module.run_completion_validation_gate(
                     state_file=resolved_state_file,
                     todo_id=todo_id,
                     role=role,
@@ -1689,18 +1686,19 @@ def complete_goal_todo(
         project=project,
         state_file=state_file,
     )
-    # Run caller-approved validation BEFORE acquiring the mutation lock so a
-    # slow validation command does not block concurrent todo operations on the
-    # same goal (the MUTATION lock deadline is 5s). Returns a typed failure
-    # payload (ok=False) when validation blocks; otherwise None.
-    validation_failure = run_completion_validation_gate(
+    # Run caller-approved validation before locking so slow commands do not
+    # hold the 5s mutation lock; return typed failure payloads unchanged.
+    validation_gate = completion_validation_module.run_completion_validation_gate_with_source(
         state_file=resolved_state_file,
         todo_id=todo_id,
         role=role,
         registry_path=registry_path,
         goal_id=goal_id,
         dry_run=dry_run,
+        no_followup=no_followup,
+        completion_turn_key=completion_turn_key,
     )
+    validation_failure = validation_gate.get("failure")
     if validation_failure is not None:
         return validation_failure
     with exclusive_file_lock(
@@ -1866,6 +1864,7 @@ def complete_goal_todo(
                     updated_at=updated_at,
                     dry_run=dry_run,
                     actor_agent_id=mutation_authority.get("actor_agent_id"),
+                    completion_validation_source_authority=validation_gate.get("source_authority"),
                 )
                 event_result["linked_successor_id"] = completion_policy.linked_successor_id
                 event_result["mutation_authority"] = mutation_authority

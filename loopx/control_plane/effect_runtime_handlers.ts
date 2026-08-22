@@ -55,6 +55,7 @@ import {
   selectTodoCompletionContinuation,
   selectTodoCompletionState,
 } from "./todos/completion_state.ts";
+import { evaluateTodoCompletionValidationPlan } from "./todos/completion_validation_plan.ts";
 import { transitionTodoNextAction } from "./todos/next_action.ts";
 import { evaluateSchedulerStateTransition } from "./scheduler/state_transition_rules.ts";
 import {
@@ -272,6 +273,7 @@ export function createEffectRuntimeHandlers(
     ["todo.completion_state.continuation_for_write", selectTodoCompletionContinuation],
     ["todo.completion_state.evaluate", selectTodoCompletionState],
     ["todo.completion_state.metadata_updates", buildTodoCompletionMetadataUpdates],
+    ["todo.completion_validation.plan", evaluateTodoCompletionValidationPlan],
     ["todo.next_action.transition", transitionTodoNextAction],
     ["scheduler.state_transition.evaluate", evaluateSchedulerStateTransition],
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],

@@ -116,6 +116,21 @@ def compact_text(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+def _copy_todo_added_validation_fields(
+    source: dict[str, Any], target: dict[str, Any]
+) -> None:
+    """Copy caller-approved completion validation fields from a TODO_ADDED payload."""
+    for key in (
+        "validation_command",
+        "validation_label",
+        "validation_timeout_seconds",
+    ):
+        if key in source and source.get(key) is not None:
+            target[key] = source[key]
+    if "validation_command_argv" in source:
+        target["validation_command_argv"] = source.get("validation_command_argv")
+
+
 def _redact_public_backfill_text(value: Any, *, privacy: str) -> str:
     text = compact_text(value)
     if privacy != PUBLIC_PRIVACY:
@@ -326,6 +341,17 @@ def backfill_todo_events_from_markdown(
             payload["global_gate"] = global_gate
         if excluded_agents:
             payload["excluded_agents"] = excluded_agents
+        _copy_todo_added_validation_fields(record, payload)
+        if privacy == PUBLIC_PRIVACY:
+            for key in (
+                "validation_command",
+                "validation_command_argv",
+                "validation_label",
+            ):
+                if key in payload:
+                    payload[key] = _redact_public_backfill_text(
+                        payload[key], privacy=privacy
+                    )
         events.append(
             make_state_event(
                 event_id=_backfill_event_id(goal_id=normalized_goal_id, todo_id=todo_id, suffix="add"),
@@ -701,6 +727,7 @@ def _todo_from_added_event(event: dict[str, Any]) -> dict[str, Any]:
         todo["claimed_by"] = claimed_by
     if actor_agent_id:
         todo["created_by"] = actor_agent_id
+    _copy_todo_added_validation_fields(payload, todo)
     return todo
 
 
@@ -951,6 +978,22 @@ def render_todo_markdown(item: dict[str, Any]) -> list[str]:
         **monitor_metadata,
         note=item.get("note"),
         evidence=item.get("evidence"),
+        validation_command=item.get("validation_command"),
+        validation_command_argv=(
+            json.dumps(
+                item.get("validation_command_argv"),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            if isinstance(item.get("validation_command_argv"), list)
+            else item.get("validation_command_argv")
+        ),
+        validation_label=item.get("validation_label"),
+        validation_timeout_seconds=(
+            str(item.get("validation_timeout_seconds"))
+            if item.get("validation_timeout_seconds") is not None
+            else None
+        ),
         completion_turn_key=item.get("completion_turn_key"),
         reason=item.get("reason"),
         completed_at=item.get("completed_at"),
