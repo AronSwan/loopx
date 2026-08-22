@@ -246,6 +246,18 @@ multi-helper bridge. The remaining fine-grained settlement facade can be
 deleted after quota, host-adapter, and task-lease callers move to their own
 coarse transactions.
 
+Quota delivery routing is the next bounded payoff cutover. TypeScript now owns
+continuity-versus-fallback selection and the selected Todo's settlement boundary
+behind one request. Python still prepares the normal fallback candidate and
+projects the typed result into the legacy quota packet, but it no longer composes
+two leaf decisions. The in-flight path moves from two cross-runtime calls to one;
+no-anchor paths with a fallback candidate and preempted paths remain at one,
+while an empty no-anchor candidate set remains at zero through a projection-layer
+short circuit. The Python facade exits when the
+quota route and CLI caller move into the native TypeScript transaction. Vision
+checkpointing remains a separate refresh/writeback transaction because it does
+not share the delivery-selection lifecycle phase.
+
 ### Stage 3 — CLI and App convergence
 
 Ship a native TS CLI that imports the kernel in-process. Keep one automatically
