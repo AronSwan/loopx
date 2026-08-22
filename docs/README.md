@@ -77,6 +77,8 @@ a longer onboarding path.
 - [Licensing and the v0.4.8 transition](project/licensing.md)
 - [Project history](project/history.md)
 - [Name and marks](project/trademarks.md)
+- [Brand guide for external use](project/brand-guide.md) ([中文：对外品牌使用指南](project/brand-guide.zh-CN.md))
+- [ADOPTERS](../ADOPTERS.md): voluntary self-attested adoption directory
 
 ## Documentation Policy
 
