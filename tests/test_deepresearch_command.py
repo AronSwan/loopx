@@ -1,0 +1,521 @@
+"""Host contract for the /loopx-deepresearch command.
+
+Deep research drifts exactly the way long-horizon coding work does: the
+question blurs, "I read it somewhere" replaces evidence, and nothing says when
+to stop. These tests pin the three guards the command exists to enforce: claims
+must come from recorded sources, answers must cite recorded claims, and the
+stop decision belongs to the packet, not the model's mood.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", *args],
+        cwd=cwd,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _payload(result: subprocess.CompletedProcess[str]) -> dict:
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["ok"] is True, data.get("error")
+    return data
+
+
+def _start(tmp_path: Path, *, question: str = "How does loopx gate agent loops?") -> None:
+    result = _run_cli(
+        "deepresearch", "start", "--project", ".", "--question", question, cwd=tmp_path
+    )
+    assert _payload(result)["packet"]["next_expedition"]["question_id"] == "q1"
+
+
+def test_full_round_trip_resolves_question_and_writes_report(tmp_path: Path) -> None:
+    _start(tmp_path)
+    added = _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "docs/quota.md",
+            "--tool",
+            "local_read",
+            "--claims-json",
+            json.dumps(
+                [
+                    {"text": "every continuation enters through quota should-run", "stance": "supports"},
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    assert added["source_id"] == "s1"
+    assert added["claim_ids"] == ["c1"]
+
+    resolved = _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-question",
+            "--project",
+            ".",
+            "--question-id",
+            "q1",
+            "--answer",
+            "Every agent-loop continuation is admitted by quota should-run.",
+            "--evidence-claims",
+            "c1",
+            cwd=tmp_path,
+        )
+    )
+    stop = resolved["packet"]["stop_conditions"]
+    assert stop["stopped"] is True
+    assert "all questions answered" in stop["reasons"]
+
+    report = _payload(_run_cli("deepresearch", "report", "--project", ".", cwd=tmp_path))
+    report_path = Path(report["report_path"])
+    assert report_path.is_file()
+    content = report_path.read_text(encoding="utf-8")
+    assert "docs/quota.md" in content
+    assert "`c1`" in content
+
+
+def test_status_without_state_reports_exact_gate(tmp_path: Path) -> None:
+    result = _run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path)
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "deepresearch start" in data["error"]
+
+
+def test_duplicate_source_is_rejected_so_claims_are_reused(tmp_path: Path) -> None:
+    _start(tmp_path)
+    args = (
+        "deepresearch",
+        "add-source",
+        "--project",
+        ".",
+        "--url-or-path",
+        "https://example.com/a/",
+        "--tool",
+        "web_fetch",
+    )
+    _payload(_run_cli(*args, "--claims-json", "[]", cwd=tmp_path))
+    duplicate = _run_cli(*args, "--claims-json", "[]", cwd=tmp_path)
+    data = json.loads(duplicate.stdout)
+    assert data["ok"] is False
+    assert "already recorded as s1" in data["error"]
+
+
+def test_answers_without_ledger_evidence_are_rejected(tmp_path: Path) -> None:
+    _start(tmp_path)
+    result = _run_cli(
+        "deepresearch",
+        "resolve-question",
+        "--project",
+        ".",
+        "--question-id",
+        "q1",
+        "--answer",
+        "I remember reading something once.",
+        "--evidence-claims",
+        "c99",
+        cwd=tmp_path,
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "not recorded" in data["error"]
+
+
+def test_subquestions_must_derive_from_recorded_claims(tmp_path: Path) -> None:
+    _start(tmp_path)
+    free_roam = _run_cli(
+        "deepresearch",
+        "add-subquestion",
+        "--project",
+        ".",
+        "--text",
+        "something unrelated I got curious about",
+        "--priority",
+        "P1",
+        "--from-claim",
+        "c7",
+        cwd=tmp_path,
+    )
+    assert "not a recorded claim" in json.loads(free_roam.stdout)["error"]
+
+    # Omitting --from-claim must fail too: the argparse layer must not offer a
+    # lineage bypass the domain layer rejects.
+    omitted = _run_cli(
+        "deepresearch",
+        "add-subquestion",
+        "--project",
+        ".",
+        "--text",
+        "no lineage provided",
+        "--priority",
+        "P1",
+        cwd=tmp_path,
+    )
+    assert omitted.returncode != 0
+
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "docs/skills.md",
+            "--tool",
+            "local_read",
+            "--claims-json",
+            json.dumps([{"text": "skills are discovered from host roots", "stance": "neutral"}]),
+            cwd=tmp_path,
+        )
+    )
+    derived = _payload(
+        _run_cli(
+            "deepresearch",
+            "add-subquestion",
+            "--project",
+            ".",
+            "--text",
+            "which roots exist per host?",
+            "--priority",
+            "P1",
+            "--from-claim",
+            "c1",
+            cwd=tmp_path,
+        )
+    )
+    assert derived["question_id"] == "q2"
+
+    # Python callers must hit the same wall, not just argparse users.
+    from loopx.deepresearch import add_subquestion as domain_add_subquestion
+
+    try:
+        domain_add_subquestion(tmp_path, text="bypass attempt", priority="P1", from_claim=None)
+    except ValueError as error:
+        assert "from_claim is required" in str(error)
+    else:
+        raise AssertionError("domain layer accepted a subquestion without lineage")
+
+
+def test_contradiction_blocks_resolution_until_sides_with_rationale(tmp_path: Path) -> None:
+    _start(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://a.example/x",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://b.example/y",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps(
+                [
+                    {
+                        "text": "gate runs per hour only",
+                        "stance": "contradicts",
+                        "relates_claim": "c1",
+                    }
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
+    assert status["packet"]["ledger_summary"]["open_contradictions"] == 1
+
+    blocked = _run_cli(
+        "deepresearch",
+        "resolve-question",
+        "--project",
+        ".",
+        "--question-id",
+        "q1",
+        "--answer",
+        "something",
+        "--evidence-claims",
+        "c1",
+        "c2",
+        cwd=tmp_path,
+    )
+    assert "open contradiction x1" in json.loads(blocked.stdout)["error"]
+
+    resolved = _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-question",
+            "--project",
+            ".",
+            "--question-id",
+            "q1",
+            "--answer",
+            "The gate runs per turn; the hourly source described a different cadence.",
+            "--evidence-claims",
+            "c1",
+            "c2",
+            "--contradiction-resolution",
+            "contradiction-id=x1 sides-with=c1 rationale='primary source shows per-turn admission'",
+            cwd=tmp_path,
+        )
+    )
+    assert resolved["packet"]["ledger_summary"]["open_contradictions"] == 0
+
+
+def test_coverage_stop_when_recent_sources_add_no_claims(tmp_path: Path) -> None:
+    _start(tmp_path)
+    for n in range(3):
+        _payload(
+            _run_cli(
+                "deepresearch",
+                "add-source",
+                "--project",
+                ".",
+                "--url-or-path",
+                f"https://empty.example/{n}",
+                "--tool",
+                "web_fetch",
+                "--claims-json",
+                "[]",
+                cwd=tmp_path,
+            )
+        )
+    status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
+    stop = status["packet"]["stop_conditions"]
+    assert stop["stopped"] is True
+    assert any("coverage stop" in reason for reason in stop["reasons"])
+    assert status["packet"]["next_expedition"] is None
+
+
+def test_open_contradiction_blocks_completion_until_resolved(tmp_path: Path) -> None:
+    # Reviewer repro: c1, a claim contradicting it (c2), then an unrelated c3;
+    # resolving q1 with c3 only must NOT let the packet claim completion.
+    _start(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://a.example/x",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://b.example/y",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps(
+                [
+                    {
+                        "text": "gate runs per hour only",
+                        "stance": "contradicts",
+                        "relates_claim": "c1",
+                    }
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://c.example/z",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps([{"text": "unrelated detail", "stance": "neutral"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-question",
+            "--project",
+            ".",
+            "--question-id",
+            "q1",
+            "--answer",
+            "Something answered on unrelated evidence.",
+            "--evidence-claims",
+            "c3",
+            cwd=tmp_path,
+        )
+    )
+    status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
+    stop = status["packet"]["stop_conditions"]
+    assert stop["stopped"] is False
+    assert any("open contradiction" in reason for reason in stop["reasons"])
+    expedition = status["packet"]["next_expedition"]
+    assert expedition is not None
+    assert expedition["kind"] == "contradiction_resolution"
+
+    resolved = _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-contradiction",
+            "--project",
+            ".",
+            "--contradiction-id",
+            "x1",
+            "--sides-with",
+            "c1",
+            "--rationale",
+            "primary source shows per-turn admission",
+            cwd=tmp_path,
+        )
+    )
+    assert resolved["packet"]["stop_conditions"]["stopped"] is True
+
+
+def test_self_contradiction_is_rejected(tmp_path: Path) -> None:
+    _start(tmp_path)
+    result = _run_cli(
+        "deepresearch",
+        "add-source",
+        "--project",
+        ".",
+        "--url-or-path",
+        "https://self.example/a",
+        "--tool",
+        "web_fetch",
+        "--claims-json",
+        json.dumps(
+            [{"text": "claims contradiction with itself", "stance": "contradicts", "relates_claim": "c1"}]
+        ),
+        cwd=tmp_path,
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "not a recorded claim" in data["error"]
+
+
+def test_invalid_batch_persists_nothing(tmp_path: Path) -> None:
+    _start(tmp_path)
+    result = _run_cli(
+        "deepresearch",
+        "add-source",
+        "--project",
+        ".",
+        "--url-or-path",
+        "https://partial.example/a",
+        "--tool",
+        "web_fetch",
+        "--claims-json",
+        json.dumps(
+            [
+                {"text": "valid claim first", "stance": "supports"},
+                {"text": "invalid stance second", "stance": "sideways"},
+            ]
+        ),
+        cwd=tmp_path,
+    )
+    assert json.loads(result.stdout)["ok"] is False
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["sources"] == []
+    assert state["claims"] == []
+
+
+def test_concurrent_add_source_keeps_every_update(tmp_path: Path) -> None:
+    # The reviewer's probe: unlocked read-modify-write lost 17/20 concurrent
+    # updates. Under the project lock every source must survive.
+    _start(tmp_path, question="concurrency contract")
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "deepresearch",
+                "add-source",
+                "--project",
+                ".",
+                "--url-or-path",
+                f"https://race.example/{index}",
+                "--tool",
+                "web_fetch",
+                "--claims-json",
+                json.dumps([{"text": f"claim {index}", "stance": "neutral"}]),
+            ],
+            cwd=tmp_path,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for index in range(8)
+    ]
+    outputs = [process.communicate()[0] for process in processes]
+    for process, output in zip(processes, outputs):
+        assert process.returncode == 0, output
+        assert json.loads(output)["ok"] is True
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert len(state["sources"]) == 8
+    assert len(state["claims"]) == 8
+
+
+def test_skill_facade_installs_for_skill_facade_surfaces(tmp_path: Path) -> None:
+    from loopx.slash_command_install import install_slash_commands
+
+    # The facade spec is host-generic: every skill-facade surface (gemini,
+    # cursor, and agy once its surface PR merges) installs it from the same
+    # specs list, so proving one surface proves the wiring.
+    home = tmp_path / "gemini-home"
+    payload = install_slash_commands(execute=True, surfaces=["gemini"], gemini_home=str(home))
+    assert payload["ok"] is True
+    skill = home / "skills" / "loopx-deepresearch" / "SKILL.md"
+    assert skill.is_file()
+    body = skill.read_text(encoding="utf-8")
+    assert "deepresearch status" in body
+    assert "never fabricate URLs" in body
