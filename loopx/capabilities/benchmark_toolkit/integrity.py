@@ -112,6 +112,9 @@ _SENSITIVE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{12,}"
 _PATH_LIKE_LABEL_PATTERN = re.compile(
     r"(?i)^(?:[~/\\]|[a-z]:[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\\/]"
 )
+_NAMESPACED_PUBLIC_IDENTIFIER_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}/[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$"
+)
 _NETWORK_COMMAND_PATTERN = re.compile(r"(?is)\b(?:curl|wget)\b|\bgit\s+clone\b")
 _HTTP_URL_PATTERN = re.compile(r"(?is)https?://[^\s\"'<>]+")
 _GIT_CLONE_COMMAND_PATTERN = re.compile(r"(?is)\bgit\s+clone\b")
@@ -160,11 +163,16 @@ def _public_identifier(
     field: str,
     structural_failures: list[str],
     limit: int,
+    allow_namespaced: bool = False,
 ) -> str:
-    if _path_like_label(value):
+    text = str(value or "").strip()
+    namespaced = allow_namespaced and bool(
+        _NAMESPACED_PUBLIC_IDENTIFIER_PATTERN.fullmatch(text)
+    )
+    if _path_like_label(text) and not namespaced:
         structural_failures.append(f"{field}_path_like")
         return "redacted"
-    return _safe_label(value, limit=limit)
+    return _safe_label(text, limit=limit)
 
 
 def _marker_present(text: str, marker: str) -> bool:
@@ -424,6 +432,7 @@ def build_benchmark_integrity_qualification(
         field="runtime_attestation_case_id",
         structural_failures=structural_failures,
         limit=120,
+        allow_namespaced=True,
     )
     schema_version = str(trajectory.get("schema_version") or "")
     if not schema_version.startswith("ATIF-v1."):
