@@ -84,6 +84,7 @@ from ..todos.user_gate import (
 from ..work_items.capability_monitor_fallback import (
     build_capability_gate_with_monitor_fallback,
 )
+from ..effect_program import ReceiptBoundMonitorPhase
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
 from ..work_items.work_lane import (
     lark_inbox_reply_due_work_lane_contract,
@@ -112,6 +113,7 @@ class _QuotaDecisionPreparation:
     effective_available_capabilities: Any
     runtime_available_capabilities: Any
     receipt_bound_todo_id: str | None
+    receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
     agent_scoped_user_todo_override: dict[str, Any] | None
@@ -406,6 +408,7 @@ def _prepare_quota_should_run_item(
     item: dict[str, Any],
     health_items: list[Any],
     receipt_bound_todo_id: str | None,
+    receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None,
     receipt_bound_replan_obligation_id: str | None,
 ) -> _QuotaDecisionPreparation:
     quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
@@ -643,6 +646,7 @@ def _prepare_quota_should_run_item(
                 agent_todo_items=agent_todo_source_items,
                 available_capabilities=effective_available_capabilities,
                 receipt_bound_todo_id=receipt_bound_todo_id,
+                receipt_bound_monitor_phase=receipt_bound_monitor_phase,
             )
         if (
             isinstance(candidate, dict)
@@ -730,6 +734,7 @@ def _prepare_quota_should_run_item(
         effective_available_capabilities=effective_available_capabilities,
         runtime_available_capabilities=available_capabilities,
         receipt_bound_todo_id=receipt_bound_todo_id,
+        receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
         agent_scoped_user_todo_override=agent_scoped_user_todo_override,

@@ -18,6 +18,7 @@ from .control_plane.quota.heartbeat_recommendation import (
 from .control_plane.quota.decision_summary import (
     goal_status_health_ok as _goal_status_health_ok,
 )
+from .control_plane.effect_program import ReceiptBoundMonitorPhase
 from .control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from .control_plane.quota.goal_boundary import registry_goal_by_id as _registry_goal_by_id
 from .control_plane.quota.policy_constants import (
@@ -824,6 +825,7 @@ def build_quota_should_run(
     ) = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     receipt_bound_todo_id: str | None = None,
+    receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
@@ -842,6 +844,7 @@ def build_quota_should_run(
         scheduler_execution_context=scheduler_execution_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         receipt_bound_todo_id=receipt_bound_todo_id,
+        receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
     )
@@ -855,6 +858,9 @@ def build_quota_slot_preview(
     agent_id: str | None = None,
     workspace_path: Path | None = None,
     available_capabilities: Any = None,
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     todo_id: str | None = None,
     replan_obligation_id: str | None = None,
@@ -867,7 +873,9 @@ def build_quota_slot_preview(
         status_payload,
         goal_id=safe_goal_id,
         agent_id=agent_id,
-        available_capabilities=available_capabilities, operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+        available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context,
+        operator_inbox_urgency_projector=operator_inbox_urgency_projector,
     )
     preview = build_quota_slot_preview_for_decision(
         status_payload,
@@ -880,7 +888,9 @@ def build_quota_slot_preview(
             after_status,
             goal_id=safe_goal_id,
             agent_id=agent_id,
-            available_capabilities=available_capabilities, operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+            available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
+            operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         ),
         quota_status_builder=quota_status,
         self_repair_spend_actions=SELF_REPAIR_SPEND_ACTIONS,
@@ -1122,6 +1132,9 @@ def spend_quota_slot(
     agent_id: str | None = None,
     workspace_path: Path | None = None,
     available_capabilities: Any = None,
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     todo_id: str | None = None,
     replan_obligation_id: str | None = None,
@@ -1294,6 +1307,7 @@ def spend_quota_slot(
         agent_id=agent_id,
         workspace_path=workspace_path,
         available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         todo_id=todo_id,
         replan_obligation_id=replan_obligation_id,
