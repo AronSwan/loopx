@@ -108,7 +108,7 @@ def _canonical_event_projection_source(
                 continue
             projection = build_state_projection(events, goal_id=goal_id or None)
         except (OSError, StateEventError):
-            return None
+            continue
         if all(
             projection.get(key) == projection_authority.get(key)
             for key in authority_keys

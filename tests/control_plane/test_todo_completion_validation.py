@@ -927,6 +927,39 @@ def test_empty_earlier_candidate_does_not_replace_canonical_validation_source(
     assert empty_candidate.read_text(encoding="utf-8") == ""
 
 
+def test_corrupted_earlier_candidate_does_not_block_canonical_completion_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, state = _write_fixture(tmp_path)
+    todo_id = _add_event_only_todo(
+        state,
+        todo_id="todo_event_after_corrupted_candidate",
+        validation_command=_PASS_COMMAND,
+    )
+    canonical = state.with_name("events.jsonl")
+    corrupted_candidate = state.with_name("corrupted-events.jsonl")
+    corrupted_candidate.write_text("{not-json\n", encoding="utf-8")
+    _set_registry_event_log(registry, corrupted_candidate)
+    calls = _spy_validation_runner(monkeypatch)
+
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=todo_id,
+        agent_id=AGENT,
+        evidence="canonical source remains usable",
+        no_followup=True,
+    )
+
+    assert calls["count"] == 1
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["source"] == "event_log"
+    assert _event_todo_completed_count(canonical) == 1
+    assert corrupted_candidate.read_text(encoding="utf-8") == "{not-json\n"
+
+
 @pytest.mark.parametrize("timeout_value", [0, 30, "not-int", {"seconds": 5}])
 def test_event_projected_invalid_timeout_rejects_without_running_command(
     tmp_path: Path,

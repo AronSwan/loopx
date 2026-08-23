@@ -427,6 +427,63 @@ def test_run_once_resumes_session_observed_by_recoverable_failed_turn(
     assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
+@pytest.mark.parametrize("host_recovery", ["corrupted", {}])
+def test_run_once_rejects_corrupted_failed_turn_recovery_before_host_retry(
+    tmp_path: Path,
+    host_recovery: object,
+) -> None:
+    plan = _codex_plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        if calls["host"] == 1:
+            raise BuiltInHostError(
+                "codex_cli_timeout",
+                recovery_kind="resume_session",
+            )
+        return _host_result(plan)
+
+    common = {
+        "host_runner": host,
+        "session_binding_resolver": lambda _turn_envelope: {
+            "schema_version": "loopx_turn_session_binding_v0",
+            "goal_id": "fixture-goal",
+            "agent_id": "codex-fixture",
+            "todo_id": "todo_fixture0001",
+        },
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+
+    failed = run_loopx_turn_once(plan, **common)
+    journal_paths = [
+        path
+        for path in (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob(
+            "*.json"
+        )
+        if not path.name.endswith(".lock.holder.json")
+    ]
+    assert len(journal_paths) == 1
+    journal = json.loads(journal_paths[0].read_text(encoding="utf-8"))
+    journal["host_recovery"] = host_recovery
+    journal_paths[0].write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="host recovery"):
+        run_loopx_turn_once(plan, retry_failed=True, **common)
+
+    assert failed["reason"] == "codex_cli_timeout"
+    assert calls == {"host": 1, "writeback": 0, "spend": 0, "scheduler": 0}
+
+
 def test_run_once_recoverable_failed_turn_rejects_session_identity_drift(
     tmp_path: Path,
 ) -> None:

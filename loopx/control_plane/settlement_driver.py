@@ -12,12 +12,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .effect_program import (
-    SettlementFailure,
-    SettlementFailureKind,
     SettlementIdentity,
     SettlementReceipt,
     SettlementResult,
     SettlementStepKind,
+    decode_settlement_receipt_payload,
+    decode_settlement_result_payload,
 )
 from .effect_runtime import effect_runtime_result
 
@@ -26,44 +26,13 @@ def _identity_payload(identity: SettlementIdentity) -> dict[str, Any]:
     return identity.as_dict()
 
 
-def _receipt_from_payload(payload: Mapping[str, Any]) -> SettlementReceipt:
-    return SettlementReceipt(
-        step_kind=SettlementStepKind(str(payload["step_kind"])),
-        status=str(payload["status"]),
-        effect_id=str(payload["effect_id"]),
-        source_ref=str(payload.get("source_ref") or "") or None,
-    )
-
-
 def decode_settlement_result(
     payload: Any,
     *,
     value_decoder: Callable[[Any], Any] | None = None,
     projection_payload: Mapping[str, Any] | None = None,
 ) -> SettlementResult[Any]:
-    if not isinstance(payload, Mapping):
-        raise RuntimeError("TypeScript settlement result shape mismatch")
-    receipts_value = payload.get("receipts")
-    receipts = (
-        tuple(
-            _receipt_from_payload(receipt)
-            for receipt in receipts_value
-            if isinstance(receipt, Mapping)
-        )
-        if isinstance(receipts_value, list)
-        else ()
-    )
-    failure_value = payload.get("failure")
-    failure = None
-    if isinstance(failure_value, Mapping):
-        details = failure_value.get("details")
-        failure = SettlementFailure(
-            kind=SettlementFailureKind(str(failure_value["kind"])),
-            step_kind=SettlementStepKind(str(failure_value["step_kind"])),
-            reason=str(failure_value["reason"]),
-            details=dict(details) if isinstance(details, Mapping) else None,
-        )
-    value = payload.get("value")
+    value, receipts, failure = decode_settlement_result_payload(payload)
     if value_decoder is not None and value is not None:
         value = value_decoder(value)
     return SettlementResult(
@@ -113,4 +82,4 @@ def settlement_receipt(
     )
     if not isinstance(payload, Mapping):
         raise RuntimeError("TypeScript settlement receipt shape mismatch")
-    return _receipt_from_payload(payload)
+    return decode_settlement_receipt_payload(payload)

@@ -313,37 +313,107 @@ def _runtime_result(result: SettlementResult[Any]) -> dict[str, Any]:
     }
 
 
-def _runtime_result_metadata(
+def _required_settlement_string(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    shape: str,
+) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"TypeScript settlement result {shape} shape mismatch")
+    return value
+
+
+_SettlementEnum = TypeVar("_SettlementEnum", bound=StrEnum)
+
+
+def _required_settlement_enum(
+    enum_type: type[_SettlementEnum],
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    shape: str,
+) -> _SettlementEnum:
+    try:
+        return enum_type(_required_settlement_string(payload, key, shape=shape))
+    except ValueError:
+        raise RuntimeError(
+            f"TypeScript settlement result {shape} shape mismatch"
+        ) from None
+
+
+def decode_settlement_receipt_payload(payload: Any) -> SettlementReceipt:
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("TypeScript settlement result receipts shape mismatch")
+    source_ref = payload.get("source_ref")
+    if source_ref is not None and (
+        not isinstance(source_ref, str) or not source_ref.strip()
+    ):
+        raise RuntimeError("TypeScript settlement result receipts shape mismatch")
+    return SettlementReceipt(
+        step_kind=_required_settlement_enum(
+            SettlementStepKind,
+            payload,
+            "step_kind",
+            shape="receipts",
+        ),
+        status=_required_settlement_string(payload, "status", shape="receipts"),
+        effect_id=_required_settlement_string(
+            payload,
+            "effect_id",
+            shape="receipts",
+        ),
+        source_ref=source_ref,
+    )
+
+
+def decode_settlement_result_payload(
     payload: Any,
-) -> tuple[tuple[SettlementReceipt, ...], SettlementFailure | None]:
+) -> tuple[Any, tuple[SettlementReceipt, ...], SettlementFailure | None]:
+    """Decode the shared TS settlement envelope at the Python boundary."""
+
     if not isinstance(payload, Mapping):
         raise RuntimeError("TypeScript settlement result shape mismatch")
+    if "value" not in payload or "failure" not in payload:
+        raise RuntimeError("TypeScript settlement result shape mismatch")
     receipts_value = payload.get("receipts")
-    receipts = (
-        tuple(
-            SettlementReceipt(
-                step_kind=SettlementStepKind(str(receipt["step_kind"])),
-                status=str(receipt["status"]),
-                effect_id=str(receipt["effect_id"]),
-                source_ref=str(receipt.get("source_ref") or "") or None,
-            )
-            for receipt in receipts_value
-            if isinstance(receipt, Mapping)
-        )
-        if isinstance(receipts_value, list)
-        else ()
+    if not isinstance(receipts_value, list):
+        raise RuntimeError("TypeScript settlement result receipts shape mismatch")
+    receipts = tuple(
+        decode_settlement_receipt_payload(receipt) for receipt in receipts_value
     )
     failure_value = payload.get("failure")
     failure = None
-    if isinstance(failure_value, Mapping):
+    if failure_value is not None:
+        if not isinstance(failure_value, Mapping):
+            raise RuntimeError("TypeScript settlement result failure shape mismatch")
+        if payload.get("value") is not None:
+            raise RuntimeError("TypeScript settlement result shape mismatch")
         details = failure_value.get("details")
+        if details is not None and not isinstance(details, Mapping):
+            raise RuntimeError("TypeScript settlement result failure shape mismatch")
         failure = SettlementFailure(
-            kind=SettlementFailureKind(str(failure_value["kind"])),
-            step_kind=SettlementStepKind(str(failure_value["step_kind"])),
-            reason=str(failure_value["reason"]),
-            details=dict(details) if isinstance(details, Mapping) else None,
+            kind=_required_settlement_enum(
+                SettlementFailureKind,
+                failure_value,
+                "kind",
+                shape="failure",
+            ),
+            step_kind=_required_settlement_enum(
+                SettlementStepKind,
+                failure_value,
+                "step_kind",
+                shape="failure",
+            ),
+            reason=_required_settlement_string(
+                failure_value,
+                "reason",
+                shape="failure",
+            ),
+            details=dict(details) if details is not None else None,
         )
-    return receipts, failure
+    return payload.get("value"), receipts, failure
 
 
 T = TypeVar("T")
@@ -412,7 +482,7 @@ class SettlementResult(Generic[T]):
                 "next": _runtime_result(next_result),
             },
         )
-        receipts, failure = _runtime_result_metadata(reduced)
+        _, receipts, failure = decode_settlement_result_payload(reduced)
         return SettlementResult(
             value=next_result.value,
             receipts=receipts,

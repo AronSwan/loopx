@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -282,6 +283,28 @@ def test_settlement_result_short_circuits_without_erasing_failure(
     assert result.failure is not None
     assert result.failure.kind is failure_kind
     assert result.receipts == failed.receipts
+
+
+def test_settlement_result_bind_rejects_corrupted_receipts() -> None:
+    def writeback(value: int) -> SettlementResult[int]:
+        return SettlementResult.pure(value + 1)
+
+    with patch.object(core_effect_program, "effect_runtime_result") as runtime_result:
+        runtime_result.side_effect = [
+            {"execute": True},
+            {
+                "value": {
+                    "completed_phases": [],
+                    "writeback": None,
+                    "quota_spend": None,
+                },
+                "receipts": ["corrupted-receipt"],
+                "failure": None,
+            },
+        ]
+
+        with pytest.raises(RuntimeError, match="receipts shape mismatch"):
+            SettlementResult.pure(2).bind(writeback)
 
 
 def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:

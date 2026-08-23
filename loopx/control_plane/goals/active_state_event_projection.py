@@ -56,6 +56,7 @@ def active_state_event_projection_fields(
     event_log_basename: str = DEFAULT_STATE_EVENT_LOG_BASENAME,
 ) -> dict[str, Any]:
     goal_id = str(goal.get("id") or "").strip()
+    first_warning: dict[str, Any] | None = None
     for event_log_path in state_event_log_candidates(
         goal,
         state_path=state_path,
@@ -79,15 +80,17 @@ def active_state_event_projection_fields(
                 item_limit=item_limit,
             )
         except (OSError, StateEventError) as exc:
-            return {
-                "state_event_projection_warning": {
-                    "schema_version": STATE_EVENT_READ_WARNING_SCHEMA_VERSION,
-                    "source": "event_log",
-                    "event_log": event_log_path.name,
-                    "fallback": "markdown_active_state",
-                    "reason": type(exc).__name__,
+            if first_warning is None:
+                first_warning = {
+                    "state_event_projection_warning": {
+                        "schema_version": STATE_EVENT_READ_WARNING_SCHEMA_VERSION,
+                        "source": "event_log",
+                        "event_log": event_log_path.name,
+                        "fallback": "markdown_active_state",
+                        "reason": type(exc).__name__,
+                    }
                 }
-            }
+            continue
         if fields:
             fields["state_event_projection"] = {
                 "schema_version": STATE_EVENT_PROJECTION_SCHEMA_VERSION,
@@ -100,4 +103,4 @@ def active_state_event_projection_fields(
                 "projection_version": projection.get("projection_version"),
             }
             return fields
-    return {}
+    return first_warning or {}

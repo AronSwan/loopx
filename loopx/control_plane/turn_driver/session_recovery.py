@@ -36,10 +36,12 @@ def reconcile_failed_turn_retry_request(
     *,
     session_binding_resolver: SessionBindingResolver | None,
 ) -> dict[str, Any]:
-    recovery_value = journal.get("host_recovery")
-    recovery = dict(recovery_value) if isinstance(recovery_value, Mapping) else {}
-    if not recovery:
+    if "host_recovery" not in journal:
         return dict(request)
+    recovery_value = journal.get("host_recovery")
+    if not isinstance(recovery_value, Mapping):
+        raise ValueError("failed-Turn host recovery shape mismatch")
+    recovery = dict(recovery_value)
     if recovery.get("schema_version") != HOST_RECOVERY_SCHEMA_VERSION:
         raise ValueError("failed-Turn host recovery has an unsupported schema")
     if recovery.get("kind") not in HOST_RECOVERY_KINDS:
