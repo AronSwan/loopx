@@ -38,6 +38,15 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from ..coordination.authority_core import (
+    CoordinationSnapshot,
+    DecisionOutcome,
+    HandoffMode,
+    HandoffModeTransitionCommand,
+    OwnershipGate,
+    decide,
+    ownership_gate_requirement,
+)
 from ..goals.active_state_metadata import parse_state_frontmatter
 from .contract import normalize_todo_claimed_by
 
@@ -141,9 +150,14 @@ def enter_todo_ownership_handoff_gate(
 
     mode = goal_handoff_mode(state_text)
     extras: dict[str, Any] = {"handoff_mode": mode}
-    if not ownership_mutation or mode != HANDOFF_MODE_HARD_LEASE:
+    gate = ownership_gate_requirement(
+        handoff_mode=HandoffMode(mode),
+        ownership_mutation=ownership_mutation,
+        authority_mode=str(mutation_authority.get("mode") or "") or None,
+    )
+    if gate is OwnershipGate.NOT_REQUIRED:
         return extras
-    if mutation_authority.get("mode") == DELEGATED_AUTHORITY_MODE:
+    if gate is OwnershipGate.DELEGATED_OVERRIDE:
         extras["handoff_gate_overridden"] = True
         return extras
     from ..work_items.task_lease import hold_handoff_lease_holder_gate
@@ -332,6 +346,19 @@ def _quiescence_offenders(
     return claimed, leases
 
 
+def _authority_offender_tokens(
+    offenders: list[dict[str, Any]],
+    *,
+    kind: str,
+) -> tuple[str, ...]:
+    """Keep every offender represented without changing its public payload."""
+
+    return tuple(
+        str(offender.get("todo_id") or f"<missing-{kind}-todo-id:{index}>")
+        for index, offender in enumerate(offenders, start=1)
+    )
+
+
 def set_goal_handoff_mode(
     *,
     registry_path: Path,
@@ -411,12 +438,51 @@ def set_goal_handoff_mode(
                 goal_id=goal_id,
                 state_text=original,
             )
-            if claimed or leases:
+            requested_core_mode = HandoffMode(requested)
+            if previous in HANDOFF_MODE_VALUES:
+                previous_core_mode = HandoffMode(previous)
+            else:
+                # Invalid persisted front-matter can be repaired, but it is
+                # never an idempotent transition.  Pick any distinct typed
+                # source mode; quiescence is independent of the source mode.
+                previous_core_mode = next(
+                    candidate
+                    for candidate in HandoffMode
+                    if candidate is not requested_core_mode
+                )
+            transition = decide(
+                CoordinationSnapshot(
+                    handoff_mode=previous_core_mode,
+                    active_claimed_todo_ids=_authority_offender_tokens(
+                        claimed,
+                        kind="claimed",
+                    ),
+                    active_lease_todo_ids=_authority_offender_tokens(
+                        leases,
+                        kind="lease",
+                    ),
+                ),
+                HandoffModeTransitionCommand(requested_mode=requested_core_mode),
+            )
+            if transition.code == "handoff_mode_not_quiescent":
                 raise HandoffModeError(
                     "handoff_mode can only change while the goal is quiescent: "
                     f"{len(claimed)} claimed open todo(s), "
                     f"{len(leases)} time-active lease(s)",
                     code="handoff_mode_not_quiescent",
+                    payload={
+                        "goal_id": goal_id,
+                        "requested_mode": requested,
+                        **previous_mode_fields,
+                        "claimed_todos": claimed,
+                        "active_leases": leases,
+                    },
+                )
+            if transition.outcome is not DecisionOutcome.APPLY:
+                raise HandoffModeError(
+                    f"handoff_mode transition rejected by authority core: "
+                    f"{transition.code}",
+                    code=transition.code,
                     payload={
                         "goal_id": goal_id,
                         "requested_mode": requested,
