@@ -10,16 +10,20 @@ from urllib.parse import urlparse
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from .goal_channel_contracts import (
+    HUMAN_GATE_AUTO_NOTIFY_SETTING,
     binding_for_goal,
+    clear_human_gate_auto_notify_marker,
     control_message,
     goal_from_registry,
     goal_objective,
+    human_gate_auto_notify_marker_path,
     now_iso,
     operation_packet,
     provider_idempotency_key,
     read_goal_channel_binding,
     save_goal_binding,
     semantic_key,
+    write_human_gate_auto_notify_marker,
 )
 from .goal_channel_transport import (
     APP_ID_PATTERN,
@@ -49,6 +53,15 @@ from .presentation.kanban import (
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _default_goal_channel_automation(
+    raw_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Human-gate auto-notify is on by default for newly configured channels."""
+    automation = _mapping(raw_binding.get("automation"))
+    automation.setdefault(HUMAN_GATE_AUTO_NOTIFY_SETTING, True)
+    return automation
 
 
 def _base_url_from_payload(payload: Mapping[str, Any]) -> str:
@@ -758,6 +771,7 @@ def setup_lark_goal_channel(
                 "bot_display_name": effective_bot_name,
                 "cli_bin": effective_cli_bin,
             }
+        automation = _default_goal_channel_automation(raw_existing)
         saved_binding: dict[str, Any] = {
             "goal_id": goal_id,
             "provider": "lark",
@@ -770,7 +784,7 @@ def setup_lark_goal_channel(
                 "base_url": kanban_url,
             },
             "identity": saved_identity,
-            "automation": _mapping(raw_existing.get("automation")),
+            "automation": automation,
             "receipts": mutable_receipts,
         }
         if effective_target_name:
@@ -781,6 +795,11 @@ def setup_lark_goal_channel(
             goal_id=goal_id,
             binding=saved_binding,
         )
+        marker_path = human_gate_auto_notify_marker_path(binding_path, goal_id)
+        if automation.get(HUMAN_GATE_AUTO_NOTIFY_SETTING) is True:
+            write_human_gate_auto_notify_marker(marker_path)
+        else:
+            clear_human_gate_auto_notify_marker(marker_path)
     return operation_packet(
         ok=True,
         goal_id=goal_id,
