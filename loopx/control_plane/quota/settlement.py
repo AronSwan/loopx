@@ -29,10 +29,12 @@ from .effect_program import (
     SettlementStep,
     SettlementStepKind,
     ReceiptBoundMonitorPhase,
+    ReceiptBoundTerminalPhase,
     build_codex_app_settlement_plan,
     build_turn_scoped_cli_settlement_plan,
     settlement_binding_args,
     receipt_bound_monitor_phase,
+    receipt_bound_terminal_phase,
     settlement_result_payload,
     settlement_step_command,
 )
@@ -63,6 +65,7 @@ __all__ = [
     "find_settlement_writeback",
     "infer_persisted_heartbeat_settlement_identity",
     "receipt_bound_monitor_settlement_phase",
+    "receipt_bound_terminal_settlement_phase",
     "require_settlement_spend",
     "require_settlement_terminal_closeout",
     "require_settlement_writeback",
@@ -146,6 +149,50 @@ def receipt_bound_monitor_settlement_phase(
     return receipt_bound_monitor_phase(
         poll_present=True,
         material_change=True,
+        durable_writeback_present=durable_writeback_present,
+        quota_spend_present=quota_spend_present,
+    )
+
+
+def receipt_bound_terminal_settlement_phase(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    todo_id: str | None,
+    turn_instance_id: str | None,
+    replan_obligation_id: str | None = None,
+) -> ReceiptBoundTerminalPhase | None:
+    """Resolve terminal settlement for the exact persisted receipt identity.
+
+    Terminal replay is complete only after the identity has durable writeback,
+    quota-spend, and explicit no-follow-up closeout receipts.  An identity with
+    no terminal closeout remains open; a partial terminal chain remains pending
+    and therefore cannot suppress live work selection.
+    """
+
+    identity_result = resolve_heartbeat_settlement_identity(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=todo_id,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+    )
+    identity = identity_result.value
+    if identity is None:
+        return None
+    terminal_closeout_present = (
+        require_settlement_terminal_closeout(runtime_root, identity).value is not None
+    )
+    durable_writeback_present = (
+        require_settlement_writeback(runtime_root, identity).value is not None
+    )
+    quota_spend_present = (
+        require_settlement_spend(runtime_root, identity).value is not None
+    )
+    return receipt_bound_terminal_phase(
+        terminal_closeout_present=terminal_closeout_present,
         durable_writeback_present=durable_writeback_present,
         quota_spend_present=quota_spend_present,
     )

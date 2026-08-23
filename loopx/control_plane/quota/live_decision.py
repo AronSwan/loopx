@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from ...quota import build_quota_should_run
-from .settlement import receipt_bound_monitor_settlement_phase
+from .settlement import (
+    receipt_bound_monitor_settlement_phase,
+    receipt_bound_terminal_settlement_phase,
+)
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     resolve_scheduler_execution_context,
@@ -133,6 +136,14 @@ def build_live_quota_should_run_decision(
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
     )
+    receipt_bound_terminal_phase = receipt_bound_terminal_settlement_phase(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=receipt_bound_todo_id,
+        replan_obligation_id=receipt_bound_replan_obligation_id,
+        turn_instance_id=turn_instance_id,
+    )
     payload = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
@@ -145,6 +156,7 @@ def build_live_quota_should_run_decision(
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         receipt_bound_todo_id=receipt_bound_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
+        receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
     )

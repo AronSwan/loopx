@@ -13,6 +13,7 @@ import {
   settlementIdentityFromPlan,
   settlementNextAction,
   receiptBoundMonitorPhase,
+  receiptBoundTerminalPhase,
   settlementPure,
   settlementResultPayload,
 } from "../../loopx/control_plane/effect_program.ts";
@@ -107,6 +108,33 @@ test("receipt-bound monitor settlement phase is derived from typed receipts", ()
     receiptBoundMonitorPhase({
       poll_present: true,
       material_change: true,
+      durable_writeback_present: true,
+      quota_spend_present: true,
+    }),
+    "settled",
+  );
+});
+
+test("receipt-bound terminal settlement requires the full closeout chain", () => {
+  assert.equal(
+    receiptBoundTerminalPhase({
+      terminal_closeout_present: false,
+      durable_writeback_present: true,
+      quota_spend_present: true,
+    }),
+    "open",
+  );
+  assert.equal(
+    receiptBoundTerminalPhase({
+      terminal_closeout_present: true,
+      durable_writeback_present: true,
+      quota_spend_present: false,
+    }),
+    "settlement_pending",
+  );
+  assert.equal(
+    receiptBoundTerminalPhase({
+      terminal_closeout_present: true,
       durable_writeback_present: true,
       quota_spend_present: true,
     }),
