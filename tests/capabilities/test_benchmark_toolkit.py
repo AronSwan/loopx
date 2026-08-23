@@ -481,6 +481,95 @@ def test_structured_external_network_requests_remain_fail_closed(
     assert receipt["evidence_counts"]["external_network_request"] == 1
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git clone git@github.com:owner/repo.git",
+        "git clone ssh://git@github.com/owner/repo.git",
+        "git clone git://github.com/owner/repo.git",
+    ],
+)
+def test_non_http_git_clone_requests_remain_fail_closed(command: str) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["classification"] == "integrity_policy_violation"
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+def test_structured_non_http_git_clone_request_remains_fail_closed() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            arguments={"argv": ["git", "clone", "git@github.com:owner/repo.git"]}
+        ),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["classification"] == "integrity_policy_violation"
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+def test_local_git_clone_path_is_not_network_access() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command="git clone ../fixture-repo worktree"),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["external_network_request"] == 0
+
+
+def test_http_git_clone_remains_external_network_access() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command="git clone https://github.com/owner/repo.git"),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["classification"] == "integrity_policy_violation"
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git clone -b main --depth 1 git@github.com:owner/repo.git",
+        "git clone git+ssh://git@github.com/owner/repo.git",
+    ],
+)
+def test_non_http_git_clone_variants_remain_fail_closed(command: str) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["classification"] == "integrity_policy_violation"
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git clone /abs/path/repo.git",
+        "git clone file:///abs/path/repo.git",
+        "git clone /tmp/cache@2/repo.git",
+    ],
+)
+def test_local_git_clone_paths_are_not_external_network_access(command: str) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["external_network_request"] == 0
+
+
 def test_structured_loopback_argv_uses_explicit_loopback_scope() -> None:
     receipt = build_benchmark_integrity_qualification(
         trajectory=_trajectory(
