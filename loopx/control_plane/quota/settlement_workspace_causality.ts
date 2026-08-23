@@ -7,6 +7,8 @@ export const DELIVERY_WORKSPACE_CAUSALITY_REQUEST_SCHEMA =
   "loopx_delivery_workspace_causality_request_v0";
 export const DELIVERY_WORKSPACE_CAUSALITY_RESULT_SCHEMA =
   "loopx_delivery_workspace_causality_result_v0";
+export const DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION =
+  "delivery_workspace_resolution_v0";
 
 export const DELIVERY_WORKSPACE_REQUIREMENTS = [
   "required",
@@ -29,7 +31,35 @@ type DeliveryWorkspaceCausalityOperation =
   | "classify"
   | "normalize"
   | "event_fields"
+  | "missing_workspace"
   | "from_event";
+
+export type DeliveryWorkspaceResolution =
+  | {
+      schema_version: typeof DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION;
+      todo_id: string;
+      decision: "require_snapshot";
+      requirement: "required";
+      reason: "declared_workspace_snapshot_required";
+    }
+  | {
+      schema_version: typeof DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION;
+      todo_id: string;
+      decision: "omit_snapshot";
+      requirement: "not_required";
+      reason: "explicit_non_delivery_contract";
+    }
+  | {
+      schema_version: typeof DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION;
+      todo_id: string;
+      decision: "repair_contract";
+      requirement: "unknown";
+      reason: "todo_delivery_contract_not_explicit";
+      accepted_resolutions: readonly [
+        "declare_repository_or_write_contract",
+        "declare_explicit_non_delivery_contract",
+      ];
+    };
 
 function optionalObject(value: unknown, label: string): JsonObject | null {
   if (value === null || value === undefined) return null;
@@ -56,7 +86,8 @@ function stringArray(value: unknown, label: string): readonly string[] {
 function operation(value: unknown): DeliveryWorkspaceCausalityOperation {
   if (
     value === "classify" || value === "normalize" ||
-    value === "event_fields" || value === "from_event"
+    value === "event_fields" || value === "missing_workspace" ||
+    value === "from_event"
   ) return value;
   throw new Error("delivery workspace causality operation is unsupported");
 }
@@ -123,6 +154,43 @@ export function classifyDeliveryWorkspaceCausality(
     requirement,
     source,
     reason,
+  };
+}
+
+export function resolveMissingDeliveryWorkspace(
+  value: unknown,
+): DeliveryWorkspaceResolution | null {
+  const causality = normalizeDeliveryWorkspaceCausality(value, null);
+  if (!causality) return null;
+  const base = {
+    schema_version: DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION,
+    todo_id: causality.todo_id,
+  } as const;
+  if (causality.requirement === "required") {
+    return {
+      ...base,
+      decision: "require_snapshot",
+      requirement: "required",
+      reason: "declared_workspace_snapshot_required",
+    };
+  }
+  if (causality.requirement === "not_required") {
+    return {
+      ...base,
+      decision: "omit_snapshot",
+      requirement: "not_required",
+      reason: "explicit_non_delivery_contract",
+    };
+  }
+  return {
+    ...base,
+    decision: "repair_contract",
+    requirement: "unknown",
+    reason: "todo_delivery_contract_not_explicit",
+    accepted_resolutions: [
+      "declare_repository_or_write_contract",
+      "declare_explicit_non_delivery_contract",
+    ],
   };
 }
 
@@ -196,6 +264,11 @@ export function evaluateDeliveryWorkspaceCausality(value: unknown): JsonObject {
   if (selectedOperation === "event_fields") {
     return result({
       fields: deliveryWorkspaceCausalityEventFields(request.causality),
+    });
+  }
+  if (selectedOperation === "missing_workspace") {
+    return result({
+      resolution: resolveMissingDeliveryWorkspace(request.causality),
     });
   }
   const nested = normalizeDeliveryWorkspaceCausality(

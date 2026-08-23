@@ -20,6 +20,7 @@ DELIVERY_WORKSPACE_CAUSALITY_REQUEST_SCHEMA = (
 DELIVERY_WORKSPACE_CAUSALITY_RESULT_SCHEMA = (
     "loopx_delivery_workspace_causality_result_v0"
 )
+DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION = "delivery_workspace_resolution_v0"
 DELIVERY_WORKSPACE_REQUIREMENTS = frozenset({"required", "not_required", "unknown"})
 
 
@@ -209,6 +210,81 @@ def delivery_workspace_causality_from_event_details(
             ),
         )
     )
+
+
+def missing_delivery_workspace_resolution(
+    causality: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the TS-owned admission decision for a missing workspace snapshot."""
+
+    prepared = _prepared_causality(causality)
+    if prepared is None:
+        return None
+    result = _runtime_result(
+        "missing_workspace",
+        expected_todo_id=None,
+        causality=prepared,
+    )
+    value = result.get("resolution")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise RuntimeError(
+            "TypeScript delivery workspace resolution result shape mismatch"
+        )
+    decision = value.get("decision")
+    expected = {
+        "require_snapshot": (
+            "required",
+            "declared_workspace_snapshot_required",
+            False,
+        ),
+        "omit_snapshot": (
+            "not_required",
+            "explicit_non_delivery_contract",
+            False,
+        ),
+        "repair_contract": (
+            "unknown",
+            "todo_delivery_contract_not_explicit",
+            True,
+        ),
+    }.get(decision)
+    if expected is None:
+        raise RuntimeError(
+            "TypeScript delivery workspace resolution result shape mismatch"
+        )
+    requirement, reason, has_resolutions = expected
+    expected_keys = {
+        "schema_version",
+        "todo_id",
+        "decision",
+        "requirement",
+        "reason",
+    }
+    accepted_resolutions = value.get("accepted_resolutions")
+    if has_resolutions:
+        expected_keys.add("accepted_resolutions")
+    if (
+        set(value) != expected_keys
+        or value.get("schema_version")
+        != DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION
+        or normalize_todo_id(value.get("todo_id")) != value.get("todo_id")
+        or value.get("requirement") != requirement
+        or value.get("reason") != reason
+        or (
+            has_resolutions
+            and accepted_resolutions
+            != [
+                "declare_repository_or_write_contract",
+                "declare_explicit_non_delivery_contract",
+            ]
+        )
+    ):
+        raise RuntimeError(
+            "TypeScript delivery workspace resolution result shape mismatch"
+        )
+    return dict(value)
 
 
 def completed_todo_workspace_causality(

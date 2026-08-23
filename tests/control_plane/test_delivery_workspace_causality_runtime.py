@@ -102,3 +102,80 @@ def test_python_facade_surfaces_typed_runtime_rejection(monkeypatch) -> None:
         causality.build_delivery_workspace_causality(
             {"todo_id": "todo_write", "required_capabilities": ["filesystem_write"]}
         )
+
+
+def test_python_facade_projects_typed_missing_workspace_resolution(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def call(method: str, params: dict[str, object]) -> dict[str, object]:
+        captured["method"] = method
+        captured["params"] = params
+        return _result(
+            resolution={
+                "schema_version": causality.DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION,
+                "todo_id": "todo_unknown",
+                "decision": "repair_contract",
+                "requirement": "unknown",
+                "reason": "todo_delivery_contract_not_explicit",
+                "accepted_resolutions": [
+                    "declare_repository_or_write_contract",
+                    "declare_explicit_non_delivery_contract",
+                ],
+            }
+        )
+
+    monkeypatch.setattr(causality, "effect_runtime_result", call)
+    source = {
+        "schema_version": causality.DELIVERY_WORKSPACE_CAUSALITY_SCHEMA_VERSION,
+        "todo_id": "todo_unknown",
+        "requirement": "unknown",
+        "source": "selected_todo_contract",
+        "reason": "todo_write_contract_not_explicit",
+    }
+
+    resolution = causality.missing_delivery_workspace_resolution(source)
+
+    assert resolution is not None
+    assert resolution["decision"] == "repair_contract"
+    assert captured["method"] == "quota.delivery_workspace_causality.evaluate"
+    assert captured["params"] == {
+        "schema_version": causality.DELIVERY_WORKSPACE_CAUSALITY_REQUEST_SCHEMA,
+        "operation": "missing_workspace",
+        "expected_todo_id": None,
+        "causality": source,
+    }
+
+
+def test_python_facade_rejects_contradictory_workspace_resolution(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        causality,
+        "effect_runtime_result",
+        lambda _method, _params: _result(
+            resolution={
+                "schema_version": causality.DELIVERY_WORKSPACE_RESOLUTION_SCHEMA_VERSION,
+                "todo_id": "todo_unknown",
+                "decision": "repair_contract",
+                "requirement": "not_required",
+                "reason": "todo_delivery_contract_not_explicit",
+                "accepted_resolutions": [
+                    "declare_repository_or_write_contract",
+                    "declare_explicit_non_delivery_contract",
+                ],
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="resolution result shape mismatch"):
+        causality.missing_delivery_workspace_resolution(
+            {
+                "schema_version": causality.DELIVERY_WORKSPACE_CAUSALITY_SCHEMA_VERSION,
+                "todo_id": "todo_unknown",
+                "requirement": "unknown",
+                "source": "selected_todo_contract",
+                "reason": "todo_write_contract_not_explicit",
+            }
+        )

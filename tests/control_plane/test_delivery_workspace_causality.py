@@ -6,6 +6,7 @@ from loopx.control_plane.quota.settlement_workspace_causality import (
     build_delivery_workspace_causality,
     delivery_workspace_causality_event_fields,
     delivery_workspace_causality_from_event_details,
+    missing_delivery_workspace_resolution,
 )
 
 
@@ -81,7 +82,7 @@ def test_non_delivery_policy_cannot_override_repository_write_contract(
     assert causality["reason"] == "declared_repository_or_write_contract"
 
 
-def test_underspecified_legacy_todo_keeps_workspace_guard_fail_closed() -> None:
+def test_underspecified_current_todo_keeps_workspace_guard_fail_closed() -> None:
     causality = build_delivery_workspace_causality(
         {"todo_id": "todo_legacy", "action_kind": "inspect"}
     )
@@ -89,6 +90,23 @@ def test_underspecified_legacy_todo_keeps_workspace_guard_fail_closed() -> None:
     assert causality is not None
     assert causality["requirement"] == "unknown"
     assert causality["reason"] == "todo_write_contract_not_explicit"
+
+
+def test_unknown_causality_projects_typed_contract_repair() -> None:
+    causality = build_delivery_workspace_causality({"todo_id": "todo_unknown"})
+
+    assert causality is not None
+    assert missing_delivery_workspace_resolution(causality) == {
+        "schema_version": "delivery_workspace_resolution_v0",
+        "todo_id": "todo_unknown",
+        "decision": "repair_contract",
+        "requirement": "unknown",
+        "reason": "todo_delivery_contract_not_explicit",
+        "accepted_resolutions": [
+            "declare_repository_or_write_contract",
+            "declare_explicit_non_delivery_contract",
+        ],
+    }
 
 
 def test_event_fields_round_trip_without_nested_rollout_details() -> None:

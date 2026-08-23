@@ -658,10 +658,8 @@ def test_heartbeat_spend_recovers_completed_todo_identity_after_reselection(
     assert preview["settlement_identity"]["effect_id"] == effect_id
 
 
-@pytest.mark.parametrize("workspace_requirement", ["required", "unknown"])
-def test_typed_workspace_causality_fails_closed_without_workspace_snapshot(
+def test_required_workspace_causality_fails_closed_without_workspace_snapshot(
     tmp_path: Path,
-    workspace_requirement: str,
 ) -> None:
     runtime = tmp_path / "runtime"
     original_todo_id = "todo_completed_delivery"
@@ -670,7 +668,7 @@ def test_typed_workspace_causality_fails_closed_without_workspace_snapshot(
         runtime,
         todo_id=original_todo_id,
         turn_instance_id=turn_instance_id,
-        workspace_requirement=workspace_requirement,
+        workspace_requirement="required",
     )
     before = _normal_run_before(todo_id="todo_new_successor")
 
@@ -692,8 +690,45 @@ def test_typed_workspace_causality_fails_closed_without_workspace_snapshot(
 
     assert preview["ok"] is False
     assert "requires a valid delivery workspace snapshot" in preview["reason"]
-    assert preview["delivery_workspace_causality"]["requirement"] == (
-        workspace_requirement
+    assert preview["delivery_workspace_causality"]["requirement"] == "required"
+    assert preview["delivery_workspace_validated"] is False
+
+
+def test_current_unknown_workspace_causality_fails_closed_without_snapshot(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    original_todo_id = "todo_completed_delivery"
+    turn_instance_id = "turn-completed-delivery"
+    _write_typed_settlement_fixture(
+        runtime,
+        todo_id=original_todo_id,
+        turn_instance_id=turn_instance_id,
+        workspace_requirement="unknown",
+    )
+    before = _normal_run_before(todo_id="todo_new_successor")
+
+    preview = build_quota_slot_preview_for_decision(
+        _normal_run_status(runtime),
+        goal_id=GOAL_ID,
+        before=before,
+        after_decision=lambda _: {
+            **before,
+            "quota": {**before["quota"], "spent_slots": 1},
+        },
+        quota_status_builder=lambda goal, **_: goal["quota"],
+        self_repair_spend_actions=frozenset(),
+        agent_id=AGENT_A,
+        todo_id=original_todo_id,
+        turn_instance_id=turn_instance_id,
+        source="heartbeat",
+    )
+
+    assert preview["ok"] is False
+    assert "requires an explicit Todo delivery contract" in preview["reason"]
+    assert preview["delivery_workspace_causality"]["requirement"] == "unknown"
+    assert preview["delivery_workspace_resolution"]["decision"] == (
+        "repair_contract"
     )
     assert preview["delivery_workspace_validated"] is False
 

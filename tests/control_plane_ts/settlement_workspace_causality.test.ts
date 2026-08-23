@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   DELIVERY_WORKSPACE_CAUSALITY_REQUEST_SCHEMA,
   evaluateDeliveryWorkspaceCausality,
+  resolveMissingDeliveryWorkspace,
 } from "../../loopx/control_plane/quota/settlement_workspace_causality.ts";
 
 const fixture = JSON.parse(
@@ -71,4 +72,34 @@ test("causality decisions do not mutate caller input", () => {
   const before = structuredClone(request);
   evaluateDeliveryWorkspaceCausality(request);
   assert.deepEqual(request, before);
+});
+
+test("missing workspace resolution preserves all three typed requirements", () => {
+  const causality = (requirement: string) => ({
+    schema_version: "delivery_workspace_causality_v0",
+    todo_id: `todo_${requirement}`,
+    requirement,
+    source: "selected_todo_contract",
+    reason: `fixture_${requirement}`,
+  });
+
+  assert.equal(
+    resolveMissingDeliveryWorkspace(causality("required"))?.decision,
+    "require_snapshot",
+  );
+  assert.equal(
+    resolveMissingDeliveryWorkspace(causality("not_required"))?.decision,
+    "omit_snapshot",
+  );
+  assert.deepEqual(resolveMissingDeliveryWorkspace(causality("unknown")), {
+    schema_version: "delivery_workspace_resolution_v0",
+    todo_id: "todo_unknown",
+    decision: "repair_contract",
+    requirement: "unknown",
+    reason: "todo_delivery_contract_not_explicit",
+    accepted_resolutions: [
+      "declare_repository_or_write_contract",
+      "declare_explicit_non_delivery_contract",
+    ],
+  });
 });
