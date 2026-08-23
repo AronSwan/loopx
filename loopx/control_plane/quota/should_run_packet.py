@@ -113,6 +113,10 @@ from ..work_items.work_lane import (
 )
 
 from .should_run_prepare import _QuotaDecisionPreparation
+from .settlement_precedence import (
+    apply_terminal_heartbeat_settlement_precedence,
+    clear_quota_action_projections,
+)
 
 
 def _compact_autonomous_candidate_context(
@@ -406,34 +410,7 @@ def _apply_agent_monitor_only_precedence(
     frontier = payload.get("goal_frontier_projection")
     if isinstance(frontier, dict):
         frontier.pop("vision_continuation_audit", None)
-    for key in (
-        "agent_command",
-        "action_portfolio",
-        "agent_lane_frontier_hint",
-        "agent_lane_next_action",
-        "agent_scope_frontier",
-        "autonomous_replan_decision",
-        "autonomous_replan_obligation",
-        "autonomous_replan_scope",
-        "blocked_priority_fallback",
-        "capability_gate",
-        "capability_monitor_fallback",
-        "external_evidence_observation",
-        "goal_route_hint",
-        "notify_user_on_capability_gate",
-        "notify_user_on_gate",
-        "notify_user_on_open_todo",
-        "open_todo_notification_policy",
-        "open_todo_notify_reason",
-        "required_reads",
-        "replan_action_packet",
-        "scoped_user_gate_fallback",
-        "stall_self_repair",
-        "vision_continuation_audit",
-        "vision_wait_state",
-        "workspace_guard",
-    ):
-        payload.pop(key, None)
+    clear_quota_action_projections(payload)
 
 
 def _attach_truthy_fields(payload: dict[str, Any], **fields: Any) -> None:
@@ -1379,6 +1356,10 @@ def _build_quota_should_run_payload(
         payload,
         monitor_only=prepared.agent_monitor_only,
         inbox_reply_due=prepared.inbox_reply_due,
+    )
+    apply_terminal_heartbeat_settlement_precedence(
+        payload,
+        terminal_phase=prepared.receipt_bound_terminal_phase,
     )
     if isinstance(payload.get("autonomous_replan_obligation"), dict):
         payload["replan_action_packet"] = build_replan_action_packet(

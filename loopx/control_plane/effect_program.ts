@@ -120,6 +120,29 @@ export function receiptBoundMonitorPhase(
     : "settlement_pending";
 }
 
+export const RECEIPT_BOUND_TERMINAL_PHASES = [
+  "open",
+  "settlement_pending",
+  "settled",
+] as const;
+export type ReceiptBoundTerminalPhase =
+  (typeof RECEIPT_BOUND_TERMINAL_PHASES)[number];
+
+export interface ReceiptBoundTerminalSettlementState {
+  terminal_closeout_present: boolean;
+  durable_writeback_present: boolean;
+  quota_spend_present: boolean;
+}
+
+export function receiptBoundTerminalPhase(
+  state: ReceiptBoundTerminalSettlementState,
+): ReceiptBoundTerminalPhase {
+  if (!state.terminal_closeout_present) return "open";
+  return state.durable_writeback_present && state.quota_spend_present
+    ? "settled"
+    : "settlement_pending";
+}
+
 export interface SettlementIdentityInput {
   goal_id: string;
   agent_id: string;

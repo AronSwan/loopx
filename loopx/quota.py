@@ -18,7 +18,10 @@ from .control_plane.quota.heartbeat_recommendation import (
 from .control_plane.quota.decision_summary import (
     goal_status_health_ok as _goal_status_health_ok,
 )
-from .control_plane.effect_program import ReceiptBoundMonitorPhase
+from .control_plane.effect_program import (
+    ReceiptBoundMonitorPhase,
+    ReceiptBoundTerminalPhase,
+)
 from .control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from .control_plane.quota.goal_boundary import registry_goal_by_id as _registry_goal_by_id
 from .control_plane.quota.policy_constants import (
@@ -826,6 +829,7 @@ def build_quota_should_run(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     receipt_bound_todo_id: str | None = None,
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None = None,
+    receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
@@ -845,6 +849,7 @@ def build_quota_should_run(
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         receipt_bound_todo_id=receipt_bound_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
+        receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
     )

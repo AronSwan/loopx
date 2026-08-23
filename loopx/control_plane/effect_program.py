@@ -25,6 +25,12 @@ class ReceiptBoundMonitorPhase(StrEnum):
     SETTLED = "settled"
 
 
+class ReceiptBoundTerminalPhase(StrEnum):
+    OPEN = "open"
+    SETTLEMENT_PENDING = "settlement_pending"
+    SETTLED = "settled"
+
+
 def receipt_bound_monitor_phase(
     *,
     poll_present: bool,
@@ -44,6 +50,25 @@ def receipt_bound_monitor_phase(
     if result is None:
         return None
     return ReceiptBoundMonitorPhase(str(result))
+
+
+def receipt_bound_terminal_phase(
+    *,
+    terminal_closeout_present: bool,
+    durable_writeback_present: bool,
+    quota_spend_present: bool,
+) -> ReceiptBoundTerminalPhase | None:
+    result = effect_runtime_result(
+        "settlement.receipt_bound_terminal_phase",
+        {
+            "terminal_closeout_present": terminal_closeout_present,
+            "durable_writeback_present": durable_writeback_present,
+            "quota_spend_present": quota_spend_present,
+        },
+    )
+    if result is None:
+        return None
+    return ReceiptBoundTerminalPhase(str(result))
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ import {
   settlementIdentityPayload,
   settlementPlanPayload,
   receiptBoundMonitorPhase,
+  receiptBoundTerminalPhase,
   settlementResultPayload,
   SETTLEMENT_FAILURE_KINDS,
   SETTLEMENT_STEP_KINDS,
@@ -358,6 +359,14 @@ export function createEffectRuntimeHandlers(
       (params) => receiptBoundMonitorPhase({
         poll_present: params.poll_present === true,
         material_change: params.material_change === true,
+        durable_writeback_present: params.durable_writeback_present === true,
+        quota_spend_present: params.quota_spend_present === true,
+      }),
+    ],
+    [
+      "settlement.receipt_bound_terminal_phase",
+      (params) => receiptBoundTerminalPhase({
+        terminal_closeout_present: params.terminal_closeout_present === true,
         durable_writeback_present: params.durable_writeback_present === true,
         quota_spend_present: params.quota_spend_present === true,
       }),

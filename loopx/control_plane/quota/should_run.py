@@ -36,7 +36,7 @@ from ..work_items.interaction_contract import (
     build_interaction_contract,
     build_protocol_action_packet,
 )
-from .effect_program import ReceiptBoundMonitorPhase
+from .effect_program import ReceiptBoundMonitorPhase, ReceiptBoundTerminalPhase
 
 from .should_run_packet import (
     _QuotaDecisionRoute,
@@ -49,10 +49,22 @@ from .should_run_prepare import (
     _QuotaDecisionPreparation,
     _prepare_quota_should_run_item,
 )
+from .settlement_precedence import apply_terminal_settlement_route_precedence
 
 
 QUOTA_PAUSED_MODE = "quota_paused"
 GOAL_STOPPED_MODE = "goal_stopped"
+
+
+def _resolve_quota_route_with_terminal_precedence(
+    prepared: _QuotaDecisionPreparation,
+) -> _QuotaDecisionRoute:
+    route = _resolve_quota_should_run_route(prepared)
+    apply_terminal_settlement_route_precedence(
+        route,
+        terminal_phase=prepared.receipt_bound_terminal_phase,
+    )
+    return route
 
 
 def _apply_selected_todo_guards(
@@ -101,7 +113,7 @@ def _apply_selected_todo_guards(
         prepared.reason = str(
             boundary_projection_repair.get("reason") or prepared.reason
         )
-    return _resolve_quota_should_run_route(prepared)
+    return _resolve_quota_route_with_terminal_precedence(prepared)
 
 
 def build_quota_paused_should_run_payload(
@@ -226,6 +238,7 @@ def build_quota_should_run(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     receipt_bound_todo_id: str | None = None,
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None = None,
+    receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
@@ -290,9 +303,10 @@ def build_quota_should_run(
             health_items=health_items,
             receipt_bound_todo_id=receipt_bound_todo_id,
             receipt_bound_monitor_phase=receipt_bound_monitor_phase,
+            receipt_bound_terminal_phase=receipt_bound_terminal_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         )
-        route = _resolve_quota_should_run_route(prepared)
+        route = _resolve_quota_route_with_terminal_precedence(prepared)
         route = _apply_selected_todo_guards(prepared, route)
         return _build_quota_should_run_payload(
             prepared,

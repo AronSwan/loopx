@@ -1792,6 +1792,116 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert len(replayed_completion_events) == 2
 
 
+def test_same_turn_terminal_receipt_replay_preempts_autonomous_replan(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+        "--scan-path",
+        str(project),
+    )
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "terminal_receipt_replay_characterized",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        "--scan-path",
+        str(project),
+    )
+    assert spend_rc == 0, spend
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "terminal receipt replay characterized",
+        "--no-follow-up",
+    )
+    assert complete_rc == 0, complete
+    assert complete["completion_continuation"] == "no_followup"
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+
+    assert replay_rc == 0, replay
+    assert replay["decision"] == "skip", replay
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay.get("selected_todo") is None
+    assert replay.get("replan_action_packet") is None
+    assert replay.get("autonomous_replan_obligation") is None
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 1
+
+    fresh_turn_args = tuple(
+        "turn-settlement-cli-2" if value == TURN_ID else value
+        for value in guard_args
+    )
+    fresh_rc, fresh = _run_cli(registry_path, runtime, *fresh_turn_args)
+    assert fresh_rc == 0, fresh
+    assert fresh["decision"] == "autonomous_replan_required", fresh
+    assert fresh["should_run"] is True
+    assert fresh["replan_action_packet"]["obligation_id"]
+
+
 def test_legacy_read_only_workspace_mismatch_fails_then_corrects_from_todo_contract(
     tmp_path: Path,
 ) -> None:
