@@ -399,6 +399,10 @@ a loopback socket.
 `benchmark_id`, `case_id`, and a custom policy's `policy_id` are public labels, not
 paths. Path-like values fail closed and are emitted only as `redacted`, so a runner
 cannot move an operator directory into the public receipt through identifier fields.
+`case_id` alone may use the canonical two-segment `namespace/name` form used by
+public benchmark catalogs. Absolute paths, dot segments, backslashes, whitespace,
+and deeper path shapes remain rejected; benchmark and policy ids remain single-token
+labels.
 
 ### Exact-job container binding
 

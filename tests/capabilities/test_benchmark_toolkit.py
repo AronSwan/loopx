@@ -644,6 +644,43 @@ def test_path_like_attestation_labels_fail_closed_without_leaking(
     assert private_path not in json.dumps(receipt, sort_keys=True)
 
 
+def test_namespaced_public_case_id_qualifies_without_weakening_path_gate() -> None:
+    attestation = _attestation()
+    attestation["case_id"] = "public-suite/case-1"
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(),
+        runtime_attestation=attestation,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["case_id"] == "public-suite/case-1"
+    assert receipt["blockers"] == []
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        "public-suite/nested/case-1",
+        "public-suite/../case-1",
+        "public suite/case-1",
+        "public-suite\\case-1",
+    ],
+)
+def test_noncanonical_namespaced_case_id_still_fails_closed(case_id: str) -> None:
+    attestation = _attestation()
+    attestation["case_id"] = case_id
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(),
+        runtime_attestation=attestation,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["case_id"] == "redacted"
+    assert "runtime_attestation_case_id_path_like" in receipt["blockers"]
+
+
 def test_path_like_policy_id_fails_closed_without_leaking() -> None:
     private_path = "C:\\Users\\private-user\\policy.json"
     receipt = build_benchmark_integrity_qualification(
