@@ -112,6 +112,10 @@ _PATH_LIKE_LABEL_PATTERN = re.compile(
 )
 _NETWORK_COMMAND_PATTERN = re.compile(r"(?is)\b(?:curl|wget)\b|\bgit\s+clone\b")
 _HTTP_URL_PATTERN = re.compile(r"(?is)https?://[^\s\"'<>]+")
+_GIT_CLONE_COMMAND_PATTERN = re.compile(r"(?is)\bgit\s+clone\b")
+_GIT_REMOTE_PATTERN = re.compile(
+    r"(?is)(?:\b(?:git|ssh)://[^\s\"'<>]+|(?<![A-Za-z0-9_.@/-])[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:[^\s\"'<>]+)"
+)
 _COMMAND_TEXT_FIELDS = ("cmd", "command")
 _COMMAND_ARGUMENT_FIELDS = ("args", "argv")
 # ATIF currently carries a function name rather than a typed side-effect class.
@@ -358,6 +362,8 @@ def _network_request_scope(arguments: object) -> NetworkRequestScope:
     for text in command_texts:
         if not _NETWORK_COMMAND_PATTERN.search(text):
             continue
+        if _GIT_CLONE_COMMAND_PATTERN.search(text) and _GIT_REMOTE_PATTERN.search(text):
+            return NetworkRequestScope.EXTERNAL
         for url in _HTTP_URL_PATTERN.finditer(text):
             current = _scope_for_url(url.group(0))
             if current is NetworkRequestScope.EXTERNAL:
