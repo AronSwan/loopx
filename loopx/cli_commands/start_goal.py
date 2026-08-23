@@ -12,6 +12,10 @@ from ..bootstrap_command_pack import (
     build_start_goal_host_surface_selection_packet,
     render_start_goal_guided_markdown,
 )
+from ..control_plane.effect_runtime import (
+    EffectRuntimeStartupError,
+    MINIMUM_NODE_VERSION_TEXT,
+)
 from ._host_thread import current_host_thread_id
 
 PrintPayload = Callable[
@@ -26,6 +30,28 @@ _CAPABILITY_ROUTE_PREFIX = re.compile(
     r"(?P<remainder>[\s\S]*)\Z"
 )
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
+
+
+def _effect_runtime_startup_failure_payload(
+    exc: EffectRuntimeStartupError,
+) -> dict[str, object]:
+    diagnostic_code = getattr(exc, "diagnostic_code", "runtime_startup_failed")
+    return {
+        "ok": False,
+        "schema_version": "loopx_start_goal_guided_v0",
+        "error": "LoopX TypeScript control-plane runtime is unavailable",
+        "diagnostic_code": diagnostic_code,
+        "runtime_requirement": {
+            "runtime": "node",
+            "minimum_node_version": MINIMUM_NODE_VERSION_TEXT,
+            "required_for": ["start-goal", "control_plane"],
+        },
+        "recommended_action": (
+            f"Install or activate Node.js {MINIMUM_NODE_VERSION_TEXT} or newer "
+            "on PATH, then run `loopx doctor --deep` and retry "
+            "`loopx start-goal --guided`."
+        ),
+    }
 
 
 def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
@@ -218,34 +244,44 @@ def handle_start_goal_command(
         print_payload(payload, args.format, render_start_goal_guided_markdown)
         return 2
     if not args.host_surface:
-        payload = build_start_goal_host_surface_selection_packet(
+        try:
+            payload = build_start_goal_host_surface_selection_packet(
+                project=Path(args.project),
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                thread_id=current_host_thread_id(args),
+                new_peer=bool(getattr(args, "new_peer", False)),
+                cli_bin=args.cli_bin,
+                goal_text=goal_text,
+                available_capabilities=args.available_capabilities,
+                capability_route=capability_route,
+                fine_grained=fine_grained,
+                include_command_pack_detail=bool(args.include_command_pack_detail),
+            )
+        except EffectRuntimeStartupError as exc:
+            payload = _effect_runtime_startup_failure_payload(exc)
+            print_payload(payload, args.format, render_start_goal_guided_markdown)
+            return 1
+        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        return 0
+    try:
+        payload = build_start_goal_guided_packet(
             project=Path(args.project),
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             thread_id=current_host_thread_id(args),
             new_peer=bool(getattr(args, "new_peer", False)),
             cli_bin=args.cli_bin,
+            host_surface=args.host_surface,
             goal_text=goal_text,
             available_capabilities=args.available_capabilities,
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=bool(args.include_command_pack_detail),
         )
+    except EffectRuntimeStartupError as exc:
+        payload = _effect_runtime_startup_failure_payload(exc)
         print_payload(payload, args.format, render_start_goal_guided_markdown)
-        return 0
-    payload = build_start_goal_guided_packet(
-        project=Path(args.project),
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        thread_id=current_host_thread_id(args),
-        new_peer=bool(getattr(args, "new_peer", False)),
-        cli_bin=args.cli_bin,
-        host_surface=args.host_surface,
-        goal_text=goal_text,
-        available_capabilities=args.available_capabilities,
-        capability_route=capability_route,
-        fine_grained=fine_grained,
-        include_command_pack_detail=bool(args.include_command_pack_detail),
-    )
+        return 1
     print_payload(payload, args.format, render_start_goal_guided_markdown)
     return 0

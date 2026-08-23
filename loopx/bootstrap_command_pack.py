@@ -1700,6 +1700,23 @@ def build_start_goal_guided_packet(
 
 
 def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
+    if payload.get("ok") is False:
+        lines = [
+            "# Guided Start Goal",
+            "",
+            f"- error: `{payload.get('error')}`",
+        ]
+        diagnostic_code = payload.get("diagnostic_code")
+        if diagnostic_code:
+            lines.append(f"- diagnostic_code: `{diagnostic_code}`")
+        recommended_action = payload.get("recommended_action")
+        if recommended_action:
+            lines.append(f"- recommended_action: {recommended_action}")
+        suggested_command = payload.get("suggested_command")
+        if suggested_command:
+            lines.append(f"- suggested_command: `{suggested_command}`")
+        return "\n".join(lines) + "\n"
+
     def command_summary(value: Any) -> str:
         parts = str(value or "").split()
         return " ".join(parts[:3]) + (" ..." if len(parts) > 3 else "")
