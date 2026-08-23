@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .active_state_editing import (
@@ -112,6 +113,37 @@ def link_generated_successor_todo_ids(
     return metadata_updated
 
 
+def _completion_updates_for_write(
+    block: Mapping[str, Any],
+    *,
+    target_status: str,
+    normalized_status: str | None,
+    completion_continuation: str | None,
+    completion_recovery: str | None,
+    completion_metadata_updates_override: Mapping[str, Any] | None,
+    no_followup: bool | None,
+    successor_todo_ids: list[str] | None,
+) -> dict[str, Any]:
+    if completion_metadata_updates_override is None:
+        return completion_metadata_updates(
+            block,
+            target_status=target_status,
+            normalized_status=normalized_status,
+            completion_continuation=completion_continuation,
+            completion_recovery=completion_recovery,
+            no_followup=no_followup,
+            successor_todo_ids=successor_todo_ids,
+        )
+    updates = dict(completion_metadata_updates_override)
+    if any(
+        key not in {"completion_continuation", "completion_recovery"}
+        or not isinstance(value, str)
+        for key, value in updates.items()
+    ):
+        raise RuntimeError("TypeScript Todo completion metadata updates shape mismatch")
+    return updates
+
+
 def link_superseding_todo_id(
     lines: list[str],
     *,
@@ -192,6 +224,7 @@ def apply_todo_update_to_lines(
     successor_todo_ids: list[str] | None = None,
     completion_continuation: str | None = None,
     completion_recovery: str | None = None,
+    completion_metadata_updates_override: Mapping[str, Any] | None = None,
     resume_when: str | None = None,
     clear_resume_when: bool = False,
     no_followup: bool | None = None,
@@ -333,12 +366,15 @@ def apply_todo_update_to_lines(
     if no_followup is not None:
         updates["no_followup"] = no_followup
     updates.update(
-        completion_metadata_updates(
+        _completion_updates_for_write(
             block,
             target_status=target_status,
             normalized_status=normalized_status,
             completion_continuation=completion_continuation,
             completion_recovery=completion_recovery,
+            completion_metadata_updates_override=(
+                completion_metadata_updates_override
+            ),
             no_followup=no_followup,
             successor_todo_ids=successor_todo_ids,
         )
