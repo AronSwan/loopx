@@ -476,6 +476,64 @@ def test_setup_execute_persists_private_binding_after_verified_pin(
     _assert_public_packet(payload)
 
 
+def test_setup_execute_defaults_human_gate_auto_notify_on(tmp_path: Path) -> None:
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    binding_path = tmp_path / ".loopx" / "goal-channel.json"
+    kanban_path = tmp_path / ".loopx" / "lark-kanban.json"
+    calls: list[list[str]] = []
+
+    payload = setup_lark_goal_channel(
+        registry=_registry(tmp_path),
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        kanban_config_path=kanban_path,
+        bot_app_id="cli_public_fixture",
+        execute=True,
+        runner=_fake_runner(calls),
+    )
+    assert payload["ok"] is True
+    assert payload["status"] == "configured"
+    persisted = read_goal_channel_binding(binding_path)["bindings"][GOAL_ID]
+    assert persisted["automation"]["human_gate_auto_notify_enabled"] is True
+    marker_path = goal_channel_contracts.human_gate_auto_notify_marker_path(
+        binding_path, GOAL_ID
+    )
+    assert goal_channel_contracts.human_gate_auto_notify_marker_enabled(marker_path)
+
+
+def test_setup_execute_preserves_explicit_auto_notify_opt_out(tmp_path: Path) -> None:
+    binding_path = tmp_path / ".loopx" / "goal-channel.json"
+    binding_path.parent.mkdir(parents=True)
+    kanban_path = tmp_path / ".loopx" / "lark-kanban.json"
+    _write_binding(binding_path, kanban_path)
+    payload = read_goal_channel_binding(binding_path)
+    payload["bindings"][GOAL_ID]["automation"] = {
+        "human_gate_auto_notify_enabled": False
+    }
+    write_goal_channel_binding(binding_path, payload)
+    calls: list[list[str]] = []
+
+    result = setup_lark_goal_channel(
+        registry=_registry(tmp_path),
+        registry_path=tmp_path / ".loopx" / "registry.json",
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        kanban_config_path=kanban_path,
+        bot_app_id="cli_public_fixture",
+        execute=True,
+        runner=_fake_runner(calls),
+    )
+    assert result["ok"] is True
+    assert result["status"] == "configured"
+    persisted = read_goal_channel_binding(binding_path)["bindings"][GOAL_ID]
+    assert persisted["automation"]["human_gate_auto_notify_enabled"] is False
+    marker_path = goal_channel_contracts.human_gate_auto_notify_marker_path(
+        binding_path, GOAL_ID
+    )
+    assert not goal_channel_contracts.human_gate_auto_notify_marker_enabled(marker_path)
+
+
 def test_configure_auto_notify_is_preview_first_and_persists_private_opt_in(
     tmp_path: Path,
 ) -> None:
@@ -556,9 +614,12 @@ def test_configure_can_disable_auto_notify_for_incomplete_binding(
     _assert_public_packet(payload)
 
 
-def test_auto_notify_gate_is_disabled_by_default_and_suppressible(
+def test_auto_notify_gate_is_disabled_when_unconfigured_and_suppressible(
     tmp_path: Path,
 ) -> None:
+    # A raw binding with no automation setting is unconfigured (disabled); the
+    # setup path now defaults human-gate auto-notify to on (see
+    # test_setup_execute_defaults_human_gate_auto_notify_on).
     binding_path = tmp_path / ".loopx" / "goal-channel.json"
     binding_path.parent.mkdir(parents=True)
     kanban_path = tmp_path / ".loopx" / "lark-kanban.json"
