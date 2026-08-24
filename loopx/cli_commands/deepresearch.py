@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..deepresearch import (
+from ..capabilities.deep_research.runtime import (
     DEFAULT_MAX_SOURCES,
     DEFAULT_MAX_SUBQUESTIONS,
     add_source,
@@ -134,7 +134,10 @@ def register_deepresearch_command(
     add_source_parser.add_argument(
         "--tool",
         default="unspecified",
-        help="Tool that produced the evidence: web_search, web_fetch, local_read, ...",
+        help=(
+            "Tool that produced the evidence: web_search, web_fetch, local_read, ... "
+            "Caller-declared provenance: the CLI records it, it does not attest the tool ran."
+        ),
     )
     add_source_parser.add_argument("--title", help="Optional human-readable source title.")
     add_source_parser.add_argument(
@@ -359,6 +362,11 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         if expedition:
             lines.append(
                 f"- next expedition: {expedition['question_id']} — {expedition['text']}"
+            )
+        guidance = packet.get("terminal_guidance")
+        if guidance:
+            lines.append(
+                f"- run closed: ledger immutable; next start: {guidance.get('next_start')}"
             )
     if payload.get("report_path"):
         lines.append(f"- report: {payload['report_path']}")

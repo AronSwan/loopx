@@ -22,6 +22,25 @@ research" but own different truths and must not be merged casually:
 Choose one per question; they do not share state and neither can close the
 other's work.
 
+## Boundary with explore
+
+The `explore` capability owns the goal-scoped, public-safe, cross-session
+knowledge topology (questions, findings, evidence relations). deep-research owns
+a private, session-scoped transactional ledger:
+
+- deep-research keeps raw source locators (URLs or local paths that may not be
+  safe to publish), claim lineage, precise contradiction pairs with sides-with
+  adjudication, stop/close decisions, and the citation report. It works
+  standalone — with no LoopX goal and no explore opt-in.
+- explore keeps the canonical, reusable projection. Any future bridge is a
+  one-way, idempotent, public-safe derivation: explore receives sanitized,
+  opaque evidence refs only; it never reads the raw deep-research ledger or
+  report, never dual-writes research state, and a graph node resolving never
+  closes (or reopens) a research run.
+
+In short: deep-research is the only writer of `.loopx/deepresearch/`, and
+public surfaces only ever see derived, reconstructable projections.
+
 ## Lifecycle
 
 `start` opens a run; `close` is the explicit terminal transition; the next
@@ -33,7 +52,13 @@ these typed transitions — never edited by hand.
 
 ## Layout
 
-- Domain state machine and report: `loopx/deepresearch.py`
-- CLI: `loopx/cli_commands/deepresearch.py` (`loopx deepresearch …`)
+- Domain state machine and report (capability owner):
+  `loopx/capabilities/deep_research/runtime.py`
+- CLI adapter: `loopx/cli_commands/deepresearch.py` (`loopx deepresearch …`)
 - Host entry: the `/loopx-deepresearch` skill facade installed by
   `loopx slash-commands --install`
+
+Recorded claims carry caller-declared provenance: `--tool` records the tool the
+caller says produced the evidence. The CLI records that provenance; it does not
+attest that the tool actually ran — execution receipts belong to a future
+host/harness bridge, not this ledger.

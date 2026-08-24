@@ -1,3 +1,11 @@
+"""Domain owner for the deep-research capability.
+
+State machine, ledger transitions, packet, and report for the
+`/loopx-deepresearch` bounded research loop. The CLI
+(`loopx/cli_commands/deepresearch.py`) is a thin adapter over this module;
+nothing else may mutate `.loopx/deepresearch/` state.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .file_lock import exclusive_file_lock
+from ...file_lock import exclusive_file_lock
 
 COMMAND = "/loopx-deepresearch"
 STATE_SCHEMA_VERSION = "loopx_deepresearch_state_v0"
@@ -32,6 +40,21 @@ def report_path(project: Path) -> Path:
     return project / ".loopx" / "deepresearch" / _REPORT_FILENAME
 
 
+def _require_within_project(project: Path, target: Path) -> Path:
+    """Constrain every ledger write to the resolved project root.
+
+    `--project` is caller-chosen, so the only trustworthy boundary is that the
+    resolved write target stays inside the resolved project directory: this is
+    the auditable answer to "a user-controlled component reaches the write
+    path" — the component selects the root, never a filename.
+    """
+    root = project.expanduser().resolve()
+    resolved = target.expanduser().resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"refusing to touch a path outside the project root: {resolved}")
+    return resolved
+
+
 def load_state(project: Path) -> dict[str, Any] | None:
     path = state_path(project)
     if not path.exists():
@@ -44,7 +67,7 @@ def load_state(project: Path) -> dict[str, Any] | None:
 
 def _save_state(project: Path, state: dict[str, Any]) -> None:
     state["updated_at"] = _now_iso()
-    path = state_path(project)
+    path = _require_within_project(project, state_path(project))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -104,10 +127,10 @@ def _archive_current_run(project: Path, state: dict[str, Any]) -> Path:
     """
     stamp = str(state.get("closed_at") or state.get("updated_at") or _now_iso())
     safe = "".join(ch if ch.isalnum() or ch in "-+" else "-" for ch in stamp)
-    target = archive_root(project) / safe
+    target = _require_within_project(project, archive_root(project) / safe)
     suffix = 2
     while target.exists():  # same-second closes must not overwrite each other
-        target = archive_root(project) / f"{safe}-{suffix}"
+        target = _require_within_project(project, archive_root(project) / f"{safe}-{suffix}")
         suffix += 1
     target.mkdir(parents=True, exist_ok=True)
     state_path(project).rename(target / _STATE_FILENAME)
@@ -407,6 +430,30 @@ def _resolve_question_unlocked(
     open_contradictions = [
         x for x in state["contradictions"] if x["status"] == "open"
     ]
+    # Any contradiction touching the evidence — open or already resolved — must
+    # not have been adjudicated against a cited claim: otherwise the citation
+    # report would back the answer with a side the same ledger ruled out.
+    touching = [
+        x
+        for x in state["contradictions"]
+        if x["claim_a"] in evidence_claims or x["claim_b"] in evidence_claims
+    ]
+    for contradiction in touching:
+        if (
+            contradiction["status"] == "resolved"
+            and contradiction["sides_with"] not in evidence_claims
+        ):
+            overruled = next(
+                cid
+                for cid in (contradiction["claim_a"], contradiction["claim_b"])
+                if cid in evidence_claims
+            )
+            raise ValueError(
+                f"contradiction {contradiction['id']} was resolved against "
+                f"{overruled}; an answer cannot cite the overruled side — cite the "
+                f"adjudicated {contradiction['sides_with']} instead or drop "
+                f"{overruled} from --evidence-claims"
+            )
     blocking = [
         x
         for x in open_contradictions
@@ -427,6 +474,13 @@ def _resolve_question_unlocked(
                 raise ValueError(
                     f"contradiction {contradiction['id']} resolution must side with "
                     f"{contradiction['claim_a']} or {contradiction['claim_b']}"
+                )
+            if sides_with not in evidence_claims:
+                raise ValueError(
+                    f"contradiction {contradiction['id']} resolution sides with "
+                    f"{sides_with}, which is not among this question's evidence claims "
+                    f"{evidence_claims}; the adjudicated side must back the answer — "
+                    "cite it in --evidence-claims"
                 )
             rationale = str(resolution.get("rationale", "")).strip()
             if not rationale:
@@ -537,12 +591,30 @@ def _priority_rank(priority: str) -> int:
 
 def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[str, Any]:
     stop = evaluate_stop(state)
+    run_status = state.get("status", "active")
     open_questions = sorted(
         (q for q in state["questions"] if q["status"] == "open"),
         key=lambda q: (_priority_rank(q["priority"]), q["id"]),
     )
     next_expedition: dict[str, Any] | None = None
-    if not stop["stopped"]:
+    terminal_guidance: dict[str, Any] | None = None
+    if run_status == "closed":
+        # A closed run rejects every ledger mutation, so an expedition would be
+        # an instruction the ledger cannot accept: the packet must project the
+        # terminal state instead of a runnable action.
+        terminal_guidance = {
+            "run_status": "closed",
+            "ledger_immutable": True,
+            "why": (
+                "this run is closed and its ledger is immutable; every evidence "
+                "mutation is rejected until the next start"
+            ),
+            "next_start": (
+                f"{cli_bin} deepresearch start --project {project} "
+                "--question <new-question> (archives this closed run and begins fresh)"
+            ),
+        }
+    elif not stop["stopped"]:
         open_contradictions = [x for x in state["contradictions"] if x["status"] == "open"]
         if open_questions:
             target = open_questions[0]
@@ -574,13 +646,15 @@ def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[
         "schema_version": PACKET_SCHEMA_VERSION,
         "command": COMMAND,
         "question": state["question"],
-        "run_status": state.get("status", "active"),
+        "run_status": run_status,
         "research_contract": {
             "question": state["question"],
             "budget": state["budget"],
             "created_at": state["created_at"],
             "rules": [
-                "claims come only from tool output you actually saw; never fabricate URLs or content",
+                "claims come only from tool output the caller actually saw; --tool is "
+                "caller-declared provenance the CLI records, not an execution "
+                "attestation; never fabricate URLs or content",
                 "every subquestion derives from a recorded claim",
                 "every resolution cites recorded evidence claim ids",
                 "contradictions block resolution until an explicit sides-with rationale is recorded",
@@ -616,6 +690,7 @@ def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[
         ],
         "stop_conditions": stop,
         "next_expedition": next_expedition,
+        "terminal_guidance": terminal_guidance,
         "evidence_commands": {
             "add_source": (
                 f"{cli_bin} deepresearch add-source --project {project} "
@@ -714,7 +789,7 @@ def write_report(project: Path) -> dict[str, Any]:
     with exclusive_file_lock(state_path(project), operation="deepresearch_report"):
         state = _require_state(project)
         content = render_report(state)
-        path = report_path(project)
+        path = _require_within_project(project, report_path(project))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         stop = evaluate_stop(state)

@@ -201,7 +201,9 @@ def test_subquestions_must_derive_from_recorded_claims(tmp_path: Path) -> None:
     assert derived["question_id"] == "q2"
 
     # Python callers must hit the same wall, not just argparse users.
-    from loopx.deepresearch import add_subquestion as domain_add_subquestion
+    from loopx.capabilities.deep_research.runtime import (
+        add_subquestion as domain_add_subquestion,
+    )
 
     try:
         domain_add_subquestion(tmp_path, text="bypass attempt", priority="P1", from_claim=None)
@@ -414,6 +416,149 @@ def test_open_contradiction_blocks_completion_until_resolved(tmp_path: Path) -> 
     assert resolved["packet"]["stop_conditions"]["stopped"] is True
 
 
+def test_resolution_cannot_side_with_claim_outside_answer_evidence(tmp_path: Path) -> None:
+    # Reviewer repro: x1 records c2 contradicting c1; resolving q1 citing only
+    # c1 while adjudicating sides-with=c2 used to succeed, so the citation
+    # report could back the answer with the side the same transition ruled
+    # against. The adjudicated side must be part of the answer's evidence.
+    _start(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://a.example/x",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://b.example/y",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps(
+                [
+                    {
+                        "text": "gate runs per hour only",
+                        "stance": "contradicts",
+                        "relates_claim": "c1",
+                    }
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    result = _run_cli(
+        "deepresearch",
+        "resolve-question",
+        "--project",
+        ".",
+        "--question-id",
+        "q1",
+        "--answer",
+        "Per hour.",
+        "--evidence-claims",
+        "c1",
+        "--contradiction-resolution",
+        "contradiction-id=x1 sides-with=c2 rationale='hourly source is primary'",
+        cwd=tmp_path,
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "not among this question's evidence claims" in data["error"]
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["questions"][0]["status"] == "open"
+
+
+def test_pre_resolved_contradiction_rejects_overruled_evidence(tmp_path: Path) -> None:
+    # Same hole through two calls: adjudicate x1 standalone (sides-with c2),
+    # then answer citing only the overruled c1.
+    _start(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://a.example/x",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            "https://b.example/y",
+            "--tool",
+            "web_fetch",
+            "--claims-json",
+            json.dumps(
+                [
+                    {
+                        "text": "gate runs per hour only",
+                        "stance": "contradicts",
+                        "relates_claim": "c1",
+                    }
+                ]
+            ),
+            cwd=tmp_path,
+        )
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-contradiction",
+            "--project",
+            ".",
+            "--contradiction-id",
+            "x1",
+            "--sides-with",
+            "c2",
+            "--rationale",
+            "hourly source is primary",
+            cwd=tmp_path,
+        )
+    )
+    result = _run_cli(
+        "deepresearch",
+        "resolve-question",
+        "--project",
+        ".",
+        "--question-id",
+        "q1",
+        "--answer",
+        "Per turn.",
+        "--evidence-claims",
+        "c1",
+        cwd=tmp_path,
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "resolved against c1" in data["error"]
+
+
 def test_self_contradiction_is_rejected(tmp_path: Path) -> None:
     _start(tmp_path)
     result = _run_cli(
@@ -611,7 +756,7 @@ def test_second_run_lifecycle_close_then_start(tmp_path: Path) -> None:
 def test_lock_contention_returns_typed_json_not_traceback(tmp_path: Path) -> None:
     # Reviewer probe: holding the state lock made the CLI print a traceback
     # under --format json. The JSON contract must survive lock timeouts.
-    from loopx.deepresearch import state_path
+    from loopx.capabilities.deep_research.runtime import state_path
     from loopx.file_lock import exclusive_file_lock
 
     _start(tmp_path)
@@ -711,6 +856,26 @@ def test_closed_run_rejects_every_ledger_mutation(tmp_path: Path) -> None:
     assert state["questions"][0]["status"] == "open"
 
 
+def test_closed_packet_projects_terminal_guidance_not_expedition(tmp_path: Path) -> None:
+    # Reviewer repro: `start -> early close -> status` used to return
+    # run_status=closed with stop_conditions.stopped=false and a runnable
+    # next_expedition — an instruction the same ledger would reject. The
+    # closed packet must project the terminal state instead.
+    _start(tmp_path)
+    closed = _payload(_run_cli("deepresearch", "close", "--project", ".", cwd=tmp_path))
+    packet = closed["packet"]
+    assert packet["run_status"] == "closed"
+    assert packet["stop_conditions"]["stopped"] is False  # q1 is still open
+    assert packet["next_expedition"] is None
+    guidance = packet["terminal_guidance"]
+    assert guidance["ledger_immutable"] is True
+    assert "deepresearch start" in guidance["next_start"]
+
+    status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
+    assert status["packet"]["next_expedition"] is None
+    assert status["packet"]["terminal_guidance"]["ledger_immutable"] is True
+
+
 def test_report_generation_is_serialized_with_run_rotation(tmp_path: Path) -> None:
     # Reviewer barrier probe: a report that read the previous run must never
     # land next to the next run's state file. Report and close/start rotation
@@ -718,8 +883,8 @@ def test_report_generation_is_serialized_with_run_rotation(tmp_path: Path) -> No
     # serialization, not by luck.
     import threading
 
-    from loopx import deepresearch
-    from loopx.deepresearch import start_research, write_report
+    from loopx.capabilities.deep_research import runtime as deepresearch
+    from loopx.capabilities.deep_research.runtime import start_research, write_report
 
     _start(tmp_path, question="old question")
     # Make the old run stopped so the interleaved start (--new-run) can rotate

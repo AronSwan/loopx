@@ -70,12 +70,12 @@ DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     "implemented_protocols": [
         {
             "schema_version": "loopx_deepresearch_state_v0",
-            "module": "loopx.deepresearch",
+            "module": "loopx.capabilities.deep_research.runtime",
             "doc": "loopx/capabilities/deep_research/README.md",
         },
         {
             "schema_version": "loopx_deepresearch_packet_v0",
-            "module": "loopx.deepresearch",
+            "module": "loopx.capabilities.deep_research.runtime",
             "doc": "loopx/capabilities/deep_research/README.md",
         },
     ],
@@ -93,12 +93,23 @@ DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
             "truth is the .loopx/deepresearch state, not goal todos."
         ),
         (
+            "Distinct from the explore capability: explore owns the goal-scoped, "
+            "public-safe, cross-session question/finding topology; deep-research "
+            "owns this private, session-scoped ledger — raw source locators, claim "
+            "lineage, contradiction adjudication, stop/close/report. Any future "
+            "bridge is a one-way, idempotent, public-safe projection: explore "
+            "never reads the raw ledger, never dual-writes, and graph resolution "
+            "never closes a research run."
+        ),
+        (
             "The packet owns research progression and stop decisions; the model "
             "executes bounded expeditions and records typed ledger transitions only."
         ),
         (
-            "Claims exist only when a tool the agent actually ran produced them; "
-            "reports must keep every citation resolvable to a recorded source."
+            "Claims carry caller-declared provenance: --tool records the tool the "
+            "caller says produced the evidence, and the CLI records it without "
+            "attesting execution; reports must keep every citation resolvable to a "
+            "recorded source."
         ),
         (
             "One active run per project; finished or closed runs are archived under "
