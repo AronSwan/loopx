@@ -236,6 +236,32 @@ test("legacy scheduler state is migrated once into the collision-safe layout", a
   await assert.rejects(readFile(legacyPath, "utf8"), { code: "ENOENT" });
 });
 
+test("overlong legacy scope loads as missing state, not an effect rejection", async (t) => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-scheduler-state-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  // A legacy scope component beyond the filesystem path-component limit cannot
+  // exist in the legacy layout; the canonical bounded path has no state yet,
+  // so the first load must return missing state instead of ENAMETOOLONG.
+  const overlongGoalId = "g".repeat(300);
+  const request = storeRequest(runtimeRoot, { goal_id: overlongGoalId });
+
+  const result = await loadSchedulerState(request);
+
+  assert.equal(result.state, null);
+  const canonical = schedulerStatePath(runtimeRoot, {
+    ...scope,
+    goalId: overlongGoalId,
+  });
+  assert.ok(
+    !canonical.includes("g".repeat(256)),
+    "canonical path components must stay bounded",
+  );
+  assert.ok(
+    Math.max(...canonical.split("/").map((part) => part.length)) <= 64,
+    "canonical path component must not exceed the scoped-segment bound",
+  );
+});
+
 test("concurrent writes for sanitized-equivalent scopes stay isolated", async (t) => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-scheduler-state-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));

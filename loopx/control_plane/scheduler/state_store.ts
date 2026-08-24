@@ -498,6 +498,19 @@ async function migrateLegacySchedulerState(
   path: string,
   legacyPath: string,
 ): Promise<JsonObject | null> {
+  // Probe the legacy file before creating any directory or taking the legacy
+  // lock. The legacy layout uses unbounded safeSegment labels, so an overlong
+  // scope component can make the legacy path unaddressable (ENAMETOOLONG) or
+  // simply absent (ENOENT); either way there is nothing to migrate and the
+  // canonical path must be reported as missing rather than raising an effect
+  // rejection from mkdir on the unbounded legacy directory.
+  try {
+    await readFile(legacyPath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENAMETOOLONG") return null;
+    throw error;
+  }
   return await withFileMutationLock(legacyPath, async () =>
     await withFileMutationLock(path, async () => {
       try {
