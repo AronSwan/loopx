@@ -1123,8 +1123,8 @@ def install_slash_commands(
         # ~/.gemini/antigravity-cli/skills root using the documented flat
         # layout (one <name>.md per skill). The official docs describe no home
         # override, so LoopX offers none: installs target exactly that path,
-        # and the root belongs to agy alone — Gemini CLI reads ~/.gemini/skills,
-        # ZCode reads ~/.agents/skills — so the surfaces never collide.
+        # and the root belongs to agy alone (Gemini CLI reads ~/.gemini/skills),
+        # so the managed skill surfaces never collide across different hosts.
         _install_skill_facade(
             skills_dir=agy_root / "skills",
             surface="agy",

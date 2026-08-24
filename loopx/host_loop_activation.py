@@ -255,7 +255,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     },
     "agy": {
         "display_name": "Antigravity CLI",
-        "host_loop": "Antigravity CLI native /goal loop with schedule self-wakes, gated by LoopX quota should-run",
+        "host_loop": "Antigravity CLI native /goal loop with schedule self-wakes (LoopX quota pacing is advisory)",
         "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
         "accepted_inputs": [
             "agy",
@@ -505,7 +505,7 @@ def _heartbeat_commands(
         "gemini-cli": "Gemini CLI agent loop gated by LoopX",
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
         "zcode": "ZCode agent loop gated by LoopX",
-        "agy": "Antigravity CLI agent loop gated by LoopX",
+        "agy": "Antigravity CLI agent loop with advisory LoopX quota pacing",
         "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "deepseek-harness-native": "DeepSeek Harness same-session plugin loop gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",

@@ -21,6 +21,7 @@ from host_surface_cli_probes import (
 
 from loopx.agent_onboarding import _start_instruction, _surface_install_command
 from loopx.host_loop_activation import (
+    _heartbeat_commands,
     build_agent_type_catalog,
     build_host_loop_activation_packet,
     normalize_agent_type,
@@ -145,6 +146,8 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     )
     assert entry["display_name"] == "Antigravity CLI"
     assert entry["host_loop"]
+    assert "gated" not in entry["host_loop"].lower()
+    assert "advisory" in entry["host_loop"].lower()
     # The bare product name is what a user types.
     assert HOST_SURFACE in entry["accepted_inputs"]
     assert normalize_agent_type("agy") == HOST_SURFACE
@@ -155,16 +158,16 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     }
 
 
-def test_activation_binds_native_goal_and_wake_and_keeps_the_quota_gate() -> None:
+def test_activation_binds_native_goal_and_wake_with_advisory_quota_entry() -> None:
     """Antigravity CLI owns both a native goal primitive (the `/goal` command
     with host-side forced continuation until `<!-- GOAL_COMPLETE -->`,
     live-verified in the TUI and headless `-p`) and a native in-session
     scheduler (the `schedule` tool plus background-task/subagent wakes).
     The packet has to state exactly that capability envelope: bind the
-    objective via `/goal`, arm self-wakes with `schedule`, keep every turn,
-    wake and audit-continuation gated through quota, and admit the loop dies
-    with the session — an overstated capability here is what makes an agent
-    claim autonomous setup it cannot deliver."""
+    objective via `/goal`, arm self-wakes with `schedule`, state advisory
+    quota pacing without claiming host continuation interception, and admit
+    the loop dies with the session — an overstated capability here is what
+    makes an agent claim autonomous setup it cannot deliver."""
     packet = build_host_loop_activation_packet(
         agent_type=HOST_SURFACE,
         goal_id="surface-goal",
@@ -198,6 +201,7 @@ def test_activation_binds_native_goal_and_wake_and_keeps_the_quota_gate() -> Non
     assert "only" in gate
     assert "alive" in gate
     assert "daemon" in gate
+    assert "advisory" in gate
     steps = " ".join(packet["activation_steps"])
     assert "`/goal <task_body>`" in steps
     assert AGY_GOAL_COMPLETE_TOKEN in steps
@@ -212,6 +216,19 @@ def test_activation_binds_native_goal_and_wake_and_keeps_the_quota_gate() -> Non
         packet["entry_command_hint"]
         == "the LoopX skill installed in ~/.gemini/antigravity-cli/skills"
     )
+    # Ensure rendered heartbeat commands and scope contain no machine-gate semantics
+    assert "gated" not in packet["activation_input_command"].lower()
+    assert "advisory" in packet["activation_input_command"].lower()
+    hb = _heartbeat_commands(
+        goal_id="surface-goal",
+        agent_type=HOST_SURFACE,
+        cli_bin="loopx",
+        agent_id="probe-agent",
+    )
+    assert "gated" not in hb["heartbeat_prompt"].lower()
+    assert "gated" not in hb["heartbeat_prompt_json"].lower()
+    assert "advisory" in hb["heartbeat_prompt"].lower()
+    assert "advisory" in hb["heartbeat_prompt_json"].lower()
 
 
 def test_native_goal_and_wake_facts_match_the_live_probes() -> None:

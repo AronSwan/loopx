@@ -77,11 +77,12 @@ loopx start-goal --guided --project . --slash-command-arguments="<task>" --host-
 
 After todo writeback, bind the generated heartbeat task body with the native
 `/goal <task_body>`, start every following turn (and every `schedule` wake
-and audit-continuation) with `quota should-run`, and arm the next bounded
+and audit-continuation) with `quota should-run` (advisory guidance; LoopX
+does not intercept native host continuations), and arm the next bounded
 wake with the native `schedule` tool only when quota allows more work.
 
 ## Layout
 
-- `__init__.py` — host facts: install surface id, skills root resolution, the
-  env override used by the installer and the activation packet, and the
-  native goal + wake primitives the activation cites.
+- `__init__.py` — host facts: install surface id, fixed skills root resolution,
+  activation extras (advisory quota pacing and continuation boundaries),
+  and the native goal + wake primitives the activation cites.
