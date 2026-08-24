@@ -26,6 +26,7 @@ COVERAGE_WINDOW_SOURCES = 3
 
 _STATE_FILENAME = "research.json"
 _REPORT_FILENAME = "report.md"
+_LEDGER_DIR = Path(".loopx") / "deepresearch"
 
 
 def _now_iso() -> str:
@@ -33,11 +34,11 @@ def _now_iso() -> str:
 
 
 def state_path(project: Path) -> Path:
-    return project / ".loopx" / "deepresearch" / _STATE_FILENAME
+    return project / _LEDGER_DIR / _STATE_FILENAME
 
 
 def report_path(project: Path) -> Path:
-    return project / ".loopx" / "deepresearch" / _REPORT_FILENAME
+    return project / _LEDGER_DIR / _REPORT_FILENAME
 
 
 def _require_within_project(project: Path, target: Path) -> Path:
@@ -115,7 +116,7 @@ def _normalize_source_ref(ref: str) -> str:
 
 
 def archive_root(project: Path) -> Path:
-    return project / ".loopx" / "deepresearch" / "archive"
+    return project / _LEDGER_DIR / "archive"
 
 
 def _archive_current_run(project: Path, state: dict[str, Any]) -> Path:
@@ -401,6 +402,75 @@ def resolve_question(
         )
 
 
+def _adjudicate_touching_contradictions(
+    state: dict[str, Any],
+    evidence_claims: list[str],
+    contradiction_resolutions: list[dict[str, Any]],
+) -> None:
+    """Enforce the adjudication invariant for one answer transition.
+
+    Any contradiction touching the evidence — open or already resolved — must
+    not end up adjudicated against a cited claim: otherwise the citation report
+    would back the answer with a side the ledger itself ruled out. Open ones
+    are resolved in this transition, but only toward a side that belongs to the
+    answer's evidence.
+    """
+    touching = [
+        x
+        for x in state["contradictions"]
+        if x["claim_a"] in evidence_claims or x["claim_b"] in evidence_claims
+    ]
+    for contradiction in touching:
+        if (
+            contradiction["status"] == "resolved"
+            and contradiction["sides_with"] not in evidence_claims
+        ):
+            overruled = next(
+                cid
+                for cid in (contradiction["claim_a"], contradiction["claim_b"])
+                if cid in evidence_claims
+            )
+            raise ValueError(
+                f"contradiction {contradiction['id']} was resolved against "
+                f"{overruled}; an answer cannot cite the overruled side — cite the "
+                f"adjudicated {contradiction['sides_with']} instead or drop "
+                f"{overruled} from --evidence-claims"
+            )
+    by_id = {r.get("contradiction_id"): r for r in contradiction_resolutions}
+    for contradiction in touching:
+        if contradiction["status"] != "open":
+            continue
+        resolution = by_id.get(contradiction["id"])
+        if resolution is None:
+            raise ValueError(
+                f"open contradiction {contradiction['id']} involves your evidence; "
+                "resolve it via --contradiction-resolution with an explicit sides-with "
+                "claim id and rationale"
+            )
+        sides_with = resolution.get("sides_with")
+        if sides_with not in {contradiction["claim_a"], contradiction["claim_b"]}:
+            raise ValueError(
+                f"contradiction {contradiction['id']} resolution must side with "
+                f"{contradiction['claim_a']} or {contradiction['claim_b']}"
+            )
+        if sides_with not in evidence_claims:
+            raise ValueError(
+                f"contradiction {contradiction['id']} resolution sides with "
+                f"{sides_with}, which is not among this question's evidence claims "
+                f"{evidence_claims}; the adjudicated side must back the answer — "
+                "cite it in --evidence-claims"
+            )
+        rationale = str(resolution.get("rationale", "")).strip()
+        if not rationale:
+            raise ValueError(
+                f"contradiction {contradiction['id']} resolution needs a non-empty rationale"
+            )
+        contradiction["status"] = "resolved"
+        contradiction["sides_with"] = sides_with
+        contradiction["resolution"] = rationale
+        contradiction["resolved_at"] = _now_iso()
+
+
 def _resolve_question_unlocked(
     project: Path,
     state: dict[str, Any],
@@ -427,70 +497,7 @@ def _resolve_question_unlocked(
         )
     if not evidence_claims:
         raise ValueError("resolving a question requires at least one recorded evidence claim")
-    open_contradictions = [
-        x for x in state["contradictions"] if x["status"] == "open"
-    ]
-    # Any contradiction touching the evidence — open or already resolved — must
-    # not have been adjudicated against a cited claim: otherwise the citation
-    # report would back the answer with a side the same ledger ruled out.
-    touching = [
-        x
-        for x in state["contradictions"]
-        if x["claim_a"] in evidence_claims or x["claim_b"] in evidence_claims
-    ]
-    for contradiction in touching:
-        if (
-            contradiction["status"] == "resolved"
-            and contradiction["sides_with"] not in evidence_claims
-        ):
-            overruled = next(
-                cid
-                for cid in (contradiction["claim_a"], contradiction["claim_b"])
-                if cid in evidence_claims
-            )
-            raise ValueError(
-                f"contradiction {contradiction['id']} was resolved against "
-                f"{overruled}; an answer cannot cite the overruled side — cite the "
-                f"adjudicated {contradiction['sides_with']} instead or drop "
-                f"{overruled} from --evidence-claims"
-            )
-    blocking = [
-        x
-        for x in open_contradictions
-        if x["claim_a"] in evidence_claims or x["claim_b"] in evidence_claims
-    ]
-    if blocking:
-        by_id = {r.get("contradiction_id"): r for r in contradiction_resolutions}
-        for contradiction in blocking:
-            resolution = by_id.get(contradiction["id"])
-            if resolution is None:
-                raise ValueError(
-                    f"open contradiction {contradiction['id']} involves your evidence; "
-                    "resolve it via --contradiction-resolution with an explicit sides-with "
-                    "claim id and rationale"
-                )
-            sides_with = resolution.get("sides_with")
-            if sides_with not in {contradiction["claim_a"], contradiction["claim_b"]}:
-                raise ValueError(
-                    f"contradiction {contradiction['id']} resolution must side with "
-                    f"{contradiction['claim_a']} or {contradiction['claim_b']}"
-                )
-            if sides_with not in evidence_claims:
-                raise ValueError(
-                    f"contradiction {contradiction['id']} resolution sides with "
-                    f"{sides_with}, which is not among this question's evidence claims "
-                    f"{evidence_claims}; the adjudicated side must back the answer — "
-                    "cite it in --evidence-claims"
-                )
-            rationale = str(resolution.get("rationale", "")).strip()
-            if not rationale:
-                raise ValueError(
-                    f"contradiction {contradiction['id']} resolution needs a non-empty rationale"
-                )
-            contradiction["status"] = "resolved"
-            contradiction["sides_with"] = sides_with
-            contradiction["resolution"] = rationale
-            contradiction["resolved_at"] = _now_iso()
+    _adjudicate_touching_contradictions(state, evidence_claims, contradiction_resolutions)
     question["status"] = "answered"
     question["answer"] = answer
     question["evidence_claims"] = list(evidence_claims)
@@ -589,6 +596,26 @@ def _priority_rank(priority: str) -> int:
     return {"P0": 0, "P1": 1, "P2": 2}.get(priority, 3)
 
 
+def _closed_run_guidance(cli_bin: str, project: Path) -> dict[str, Any]:
+    """Typed terminal projection replacing the expedition on a closed run.
+
+    A closed run rejects every ledger mutation, so an expedition would be an
+    instruction the ledger cannot accept.
+    """
+    return {
+        "run_status": "closed",
+        "ledger_immutable": True,
+        "why": (
+            "this run is closed and its ledger is immutable; every evidence "
+            "mutation is rejected until the next start"
+        ),
+        "next_start": (
+            f"{cli_bin} deepresearch start --project {project} "
+            "--question <new-question> (archives this closed run and begins fresh)"
+        ),
+    }
+
+
 def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[str, Any]:
     stop = evaluate_stop(state)
     run_status = state.get("status", "active")
@@ -599,21 +626,7 @@ def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[
     next_expedition: dict[str, Any] | None = None
     terminal_guidance: dict[str, Any] | None = None
     if run_status == "closed":
-        # A closed run rejects every ledger mutation, so an expedition would be
-        # an instruction the ledger cannot accept: the packet must project the
-        # terminal state instead of a runnable action.
-        terminal_guidance = {
-            "run_status": "closed",
-            "ledger_immutable": True,
-            "why": (
-                "this run is closed and its ledger is immutable; every evidence "
-                "mutation is rejected until the next start"
-            ),
-            "next_start": (
-                f"{cli_bin} deepresearch start --project {project} "
-                "--question <new-question> (archives this closed run and begins fresh)"
-            ),
-        }
+        terminal_guidance = _closed_run_guidance(cli_bin, project)
     elif not stop["stopped"]:
         open_contradictions = [x for x in state["contradictions"] if x["status"] == "open"]
         if open_questions:
