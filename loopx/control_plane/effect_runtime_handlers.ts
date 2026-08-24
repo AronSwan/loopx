@@ -74,6 +74,10 @@ import {
   projectQuotaActionPortfolio,
   qualifyActionSelection,
 } from "./work_items/action_portfolio.ts";
+import {
+  validateInteractionProjectionHookInvocation,
+  validateInteractionProjectionHookRegistration,
+} from "./capability_hooks.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
@@ -333,6 +337,19 @@ export function createEffectRuntimeHandlers(
     [
       "governed_capability.settlement_status",
       (params) => governedCapabilitySettlementStatus(params.failure),
+    ],
+    [
+      "capability_hook.interaction_projection.validate_registration",
+      (params) => validateInteractionProjectionHookRegistration(
+        params.registration,
+      ),
+    ],
+    [
+      "capability_hook.interaction_projection.validate",
+      (params) => validateInteractionProjectionHookInvocation({
+        registration: params.registration,
+        result: params.result,
+      }),
     ],
     [
       "settlement.identity",
