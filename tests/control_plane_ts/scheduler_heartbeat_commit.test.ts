@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ import {
   normalizeSchedulerState,
   schedulerStatePath,
 } from "../../loopx/control_plane/scheduler/state_store.ts";
+import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 
 const scope = {
   goal_id: "goal-heartbeat",
@@ -66,6 +68,21 @@ test("exact ACK commits scheduler state and is replay-safe", async (t) => {
   assert.equal(replay.written, false);
   assert.equal(replay.replayed, true);
   assert.equal(replay.state_digest, first.state_digest);
+});
+
+test("steady-state ACK is reduced to a typed skipped receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
+  const skipped = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    effect_id: "heartbeat-effect-skipped",
+    ack_needed: false,
+    apply_needed: false,
+    expected_state_digest: first.state_digest,
+  }));
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.already_applied, true);
+  assert.equal(skipped.written, false);
+  assert.equal(skipped.state_digest, first.state_digest);
 });
 
 test("effect identity cannot be reused for a different payload", async (t) => {
@@ -243,6 +260,55 @@ test("preview retains compact failure facts when no state is persisted", async (
   assert.equal((second.state?.host_update_failures as unknown[]).length, 2);
 });
 
+test("preview reads legacy state without migrating or deleting it", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const legacyHash = createHash("sha256")
+    .update(scope.state_key, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  const legacyPath = join(
+    runtimeRoot,
+    "goals",
+    scope.goal_id,
+    "scheduler-state",
+    scope.agent_id,
+    scope.surface,
+    `${legacyHash}.json`,
+  );
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  await mkdir(join(legacyPath, ".."), { recursive: true });
+  const legacyState = {
+    schema_version: "loopx_scheduler_state_v0",
+    ...scope,
+    reset_token: "legacy-reset",
+    identity_signature: "legacy-identity",
+    progression_index: 0,
+    progression_minutes: [15, 30, 60],
+    last_applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    updated_at: "2026-08-24T08:00:00Z",
+  } as JsonObject;
+  await writeFile(legacyPath, `${JSON.stringify(legacyState)}\n`, "utf8");
+  const preview = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    effect_id: "legacy-preview",
+    execute: false,
+    reset_token: "legacy-reset",
+    identity_signature: "legacy-identity",
+    expected_state_digest: schedulerHeartbeatCommitStateDigest(legacyState),
+  }));
+  assert.equal(preview.status, "preview");
+  assert.equal(preview.state?.last_applied_rrule, "FREQ=MINUTELY;INTERVAL=15");
+  assert.equal(await readFile(legacyPath, "utf8"), `${JSON.stringify(legacyState)}\n`);
+  await assert.rejects(
+    readFile(schedulerStatePath(runtimeRoot, {
+      goalId: scope.goal_id,
+      agentId: scope.agent_id,
+      surface: scope.surface,
+      stateKey: scope.state_key,
+    }), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
 test("identity reset starts a new progression without losing CAS protection", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
@@ -251,8 +317,9 @@ test("identity reset starts a new progression without losing CAS protection", as
     effect_id: "identity-reset-failure",
     reset_token: "reset-2",
     identity_signature: "identity-2",
+    progression_index: 1,
     progression_minutes: [15, 30, 60],
-    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
     applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
     observed_host_rrule: "FREQ=MINUTELY;INTERVAL=30",
     apply_needed: true,
@@ -312,5 +379,11 @@ test("malformed and unsupported commit requests fail closed", async () => {
       progression_index: -1,
     })),
     /progression_index/,
+  );
+  await assert.rejects(
+    evaluateSchedulerHeartbeatCommit(request("/tmp/runtime", {
+      prior_host_update_failures: [{ failure_kind: "timeout" }],
+    })),
+    /prior_host_update_failures\[0\] is malformed/,
   );
 });

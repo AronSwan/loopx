@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from loopx.control_plane.scheduler.heartbeat_commit import (
     commit_scheduler_heartbeat,
     scheduler_state_digest,
@@ -142,3 +144,50 @@ def test_python_facade_commits_replays_and_enforces_scheduler_cas(
     assert stale["status"] == "conflict"
     assert stale["reason_code"] == "state_digest_conflict"
     assert stale["state_digest"] == failed_twice["state_digest"]
+
+
+def test_python_adapter_rejects_malformed_compact_facts_before_runtime(
+    tmp_path: Path,
+) -> None:
+    state = _state(progression_index=0, updated_at="2026-08-24T08:00:00Z")
+    with pytest.raises(ValueError, match="execute must be a boolean"):
+        commit_scheduler_heartbeat(
+            runtime_root=tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            surface=SURFACE,
+            state_key=STATE_KEY,
+            outcome="ack",
+            state=state,
+            facts={"execute": "false"},
+            ack={"applied_rrule": RRULE_15, "expected_rrule": RRULE_15},
+            expected_state_digest=None,
+        )
+    with pytest.raises(ValueError, match="prior failure cache must be a list"):
+        commit_scheduler_heartbeat(
+            runtime_root=tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            surface=SURFACE,
+            state_key=STATE_KEY,
+            state=state,
+            outcome="ack",
+            facts={"prior_host_update_failures": "not-a-list"},
+            ack={"applied_rrule": RRULE_15, "expected_rrule": RRULE_15},
+            expected_state_digest=None,
+        )
+    with pytest.raises(
+        ValueError, match=r"prior_host_update_failures\[0\] is malformed"
+    ):
+        commit_scheduler_heartbeat(
+            runtime_root=tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            surface=SURFACE,
+            state_key=STATE_KEY,
+            outcome="ack",
+            state=state,
+            facts={"prior_host_update_failures": [{"failure_kind": "timeout"}]},
+            ack={"applied_rrule": RRULE_15, "expected_rrule": RRULE_15},
+            expected_state_digest=None,
+        )
