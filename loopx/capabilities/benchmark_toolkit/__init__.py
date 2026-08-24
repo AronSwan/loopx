@@ -99,10 +99,13 @@ from .native_codex_profile import (
     compact_native_codex_profile_receipt,
     inspect_native_codex_profile,
     install_native_codex_profile,
-    native_codex_app_server_environment,
     native_codex_app_server_shell_policy_args,
     native_codex_profile_environment,
     render_native_codex_goal_prompt,
+)
+from .provider_gateway import (
+    RunnerOwnedProviderGateway,
+    serve_runner_owned_provider_gateway,
 )
 from .plan_fidelity import (
     BENCHMARK_PLAN_FIDELITY_SCHEMA_VERSION,
@@ -215,6 +218,7 @@ __all__ = [
     "PublicTrajectoryLifecycleState",
     "PublicTrajectorySummaryError",
     "RunPermissionAction",
+    "RunnerOwnedProviderGateway",
     "StdioNativeGoalTransport",
     "admit_benchmark_case",
     "attach_native_goal",
@@ -249,7 +253,6 @@ __all__ = [
     "inspect_native_codex_profile",
     "install_native_codex_profile",
     "materialize_public_benchmark_artifacts",
-    "native_codex_app_server_environment",
     "native_codex_app_server_shell_policy_args",
     "native_codex_profile_environment",
     "normalize_benchmark_concurrency_config",
@@ -271,6 +274,7 @@ __all__ = [
     "run_native_goal_process_until_terminal",
     "run_native_goal_turn",
     "run_native_goal_until_terminal",
+    "serve_runner_owned_provider_gateway",
     "select_exact_docker_container",
     "start_native_goal_turn",
     "upsert_benchmark_experiment_board_row",
