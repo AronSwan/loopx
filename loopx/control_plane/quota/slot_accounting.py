@@ -169,6 +169,31 @@ def _resolve_preview_settlement(
     }
 
 
+def _repair_settlement_workspace_causality(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    settlement_identity: SettlementIdentity | None,
+    causality: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    requirement = str((causality or {}).get("requirement") or "")
+    if settlement_identity is None or requirement not in {"", "unknown"}:
+        return causality
+    repaired = completed_todo_workspace_causality(
+        status_payload,
+        goal_id=goal_id,
+        todo_id=settlement_identity.todo_id,
+        source=(
+            "current_todo_contract_repair"
+            if requirement == "unknown"
+            else "completed_todo_contract_fallback"
+        ),
+    )
+    if str((repaired or {}).get("requirement") or "") == "unknown":
+        return causality
+    return repaired or causality
+
+
 def _now_local() -> str:
     return now_local_iso()
 
@@ -461,12 +486,12 @@ def build_quota_slot_preview_for_decision(
         if raw_runtime_root
         else None
     )
-    if settlement_identity is not None and not delivery_workspace_causality:
-        delivery_workspace_causality = completed_todo_workspace_causality(
-            status_payload,
-            goal_id=safe_goal_id,
-            todo_id=settlement_identity.todo_id,
-        )
+    delivery_workspace_causality = _repair_settlement_workspace_causality(
+        status_payload,
+        goal_id=safe_goal_id,
+        settlement_identity=settlement_identity,
+        causality=delivery_workspace_causality,
+    )
     safe_bypass_without_delivery = (
         safe_bypass_requested and delivery_completion_run is None
     )

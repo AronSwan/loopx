@@ -733,6 +733,62 @@ def test_current_unknown_workspace_causality_fails_closed_without_snapshot(
     assert preview["delivery_workspace_validated"] is False
 
 
+def test_unknown_workspace_causality_reloads_repaired_todo_contract(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    original_todo_id = "todo_repaired_delivery"
+    turn_instance_id = "turn-repaired-delivery"
+    _write_typed_settlement_fixture(
+        runtime,
+        todo_id=original_todo_id,
+        turn_instance_id=turn_instance_id,
+        workspace_requirement="unknown",
+    )
+    before = _normal_run_before(todo_id="todo_new_successor")
+    status = _normal_run_status(runtime)
+    status["attention_queue"]["items"][0]["project_asset"] = {
+        "agent_todos": {
+            "items": [
+                {
+                    "todo_id": original_todo_id,
+                    "task_repository": "git:github.com/example/loopx",
+                    "required_write_scopes": ["loopx/**"],
+                }
+            ]
+        }
+    }
+
+    preview = build_quota_slot_preview_for_decision(
+        status,
+        goal_id=GOAL_ID,
+        before=before,
+        after_decision=lambda _: {
+            **before,
+            "quota": {**before["quota"], "spent_slots": 1},
+        },
+        quota_status_builder=lambda goal, **_: goal["quota"],
+        self_repair_spend_actions=frozenset(),
+        agent_id=AGENT_A,
+        todo_id=original_todo_id,
+        turn_instance_id=turn_instance_id,
+        source="heartbeat",
+    )
+
+    assert preview["ok"] is False
+    assert "requires a valid delivery workspace snapshot" in preview["reason"]
+    assert preview["delivery_workspace_causality"] == {
+        "schema_version": "delivery_workspace_causality_v0",
+        "todo_id": original_todo_id,
+        "requirement": "required",
+        "source": "current_todo_contract_repair",
+        "reason": "declared_repository_or_write_contract",
+    }
+    assert preview["delivery_workspace_resolution"]["decision"] == (
+        "require_snapshot"
+    )
+
+
 def test_implicit_heartbeat_identity_fails_closed_on_persisted_effect_drift(
     tmp_path: Path,
 ) -> None:
