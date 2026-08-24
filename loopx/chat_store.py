@@ -454,43 +454,57 @@ class ChatSessionStore:
         origin: str = "web",
     ) -> tuple[dict[str, Any], bool]:
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        existing = self.turn_for_client(session_id, client_id)
-        if existing is not None:
-            return existing, False
-        session = self.load_session(session_id)
-        if session is None:
-            raise KeyError("chat session was not found")
-        active_turn_id = session.get("active_turn_id")
-        if active_turn_id:
-            active = self.load_turn(session_id, str(active_turn_id))
-            if active and active.get("status") in {"queued", "starting", "running", "interrupting"}:
-                raise RuntimeError(str(active_turn_id))
-        now = utc_now()
-        turn_id = uuid.uuid4().hex
-        payload = {
-            "schema_version": CHAT_TURN_SCHEMA_VERSION,
-            "turn_id": turn_id,
-            "session_id": session_id,
-            "client_turn_id": client_id,
-            "status": "queued",
-            "message": str(message),
-            "origin": _opaque_id(origin, field="origin"),
-            "upstream_turn_id": None,
-            "response": None,
-            "error_code": None,
-            "error": None,
-            "created_at": now,
-            "started_at": None,
-            "first_event_at": None,
-            "completed_at": None,
-            "last_activity_at": now,
-            "delta_count": 0,
-            "sse_reconnect_count": 0,
-        }
-        path = self._turn_path(session_id, turn_id)
-        _atomic_write_json(path, payload)
-        os.chmod(path, 0o600)
-        self.update_session(session_id, status="busy", active_turn_id=turn_id, last_activity_at=now)
+        session_path = self._session_path(session_id)
+        with exclusive_file_lock(
+            session_path,
+            agent_id="loopx-chat",
+            operation="create_chat_turn",
+        ):
+            existing = self.turn_for_client(session_id, client_id)
+            if existing is not None:
+                return existing, False
+            session = self.load_session(session_id)
+            if session is None:
+                raise KeyError("chat session was not found")
+            active_turn_id = session.get("active_turn_id")
+            if active_turn_id:
+                active = self.load_turn(session_id, str(active_turn_id))
+                if active and active.get("status") in {"queued", "starting", "running", "interrupting"}:
+                    raise RuntimeError(str(active_turn_id))
+            now = utc_now()
+            turn_id = uuid.uuid4().hex
+            payload = {
+                "schema_version": CHAT_TURN_SCHEMA_VERSION,
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "client_turn_id": client_id,
+                "status": "queued",
+                "message": str(message),
+                "origin": _opaque_id(origin, field="origin"),
+                "upstream_turn_id": None,
+                "response": None,
+                "error_code": None,
+                "error": None,
+                "created_at": now,
+                "started_at": None,
+                "first_event_at": None,
+                "completed_at": None,
+                "last_activity_at": now,
+                "delta_count": 0,
+                "sse_reconnect_count": 0,
+            }
+            path = self._turn_path(session_id, turn_id)
+            _atomic_write_json(path, payload)
+            os.chmod(path, 0o600)
+            session.update(
+                {
+                    "status": "busy",
+                    "active_turn_id": turn_id,
+                    "last_activity_at": now,
+                    "updated_at": utc_now(),
+                }
+            )
+            _atomic_write_json(session_path, session, preserve_mode=True)
         self.append_message(
             session_id,
             role="user",
