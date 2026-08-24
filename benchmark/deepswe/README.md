@@ -142,7 +142,10 @@ Prepare the latter two with
 `SKILL.md` files into a runner image. Generate the first input with
 `render_native_codex_goal_prompt`, build app-server's environment with
 `native_codex_app_server_environment(profile, provider_env_key=..., base_env=...)`,
-then separately exclude that key from agent shell and tool processes. The
+and append `native_codex_app_server_shell_policy_args(provider_env_keys=(...,))`
+to the app-server command so that key is excluded from model-created shell
+commands. A Linux agent container still needs a runner-owned local gateway so
+the real provider credential is absent from the container entirely. The
 credential-free `native_codex_profile_environment` remains the default for CLI
 and preflight work. Set
 `NativeGoalConfig.required_skill_ids=profile.required_skill_ids`. The runtime then

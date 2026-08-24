@@ -17,18 +17,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
+from loopx.capabilities.benchmark_toolkit.native_codex_goal import (  # noqa: E402
     NativeGoalConfig,
     compact_native_goal_receipt,
     probe_native_goal_process,
 )
-from loopx.capabilities.benchmark_toolkit.native_codex_profile import (
+from loopx.capabilities.benchmark_toolkit.native_codex_profile import (  # noqa: E402
     NativeCodexProfile,
     compact_native_codex_goal_prompt_receipt,
     compact_native_codex_profile_receipt,
     inspect_native_codex_profile,
     install_native_codex_profile,
     native_codex_app_server_environment,
+    native_codex_app_server_shell_policy_args,
     native_codex_profile_environment,
     render_native_codex_goal_prompt,
 )
@@ -100,12 +101,19 @@ def main() -> int:
             provider_env_key=provider_key,
             base_env=sentinel_env,
         )
+        shell_policy_args = native_codex_app_server_shell_policy_args(
+            provider_env_keys=(provider_key,)
+        )
         provider_environment_receipt = {
             "default_environment_credential_free": provider_key
             not in default_profile_env,
             "declared_provider_value_admitted": app_server_env.get(provider_key)
             == "provider-sentinel",
             "unrelated_value_excluded": unrelated_key not in app_server_env,
+            "agent_shell_provider_value_excluded": (
+                f'shell_environment_policy.exclude=["{provider_key}"]'
+                in shell_policy_args
+            ),
             "raw_values_recorded": False,
         }
         if not all(
@@ -187,6 +195,15 @@ def main() -> int:
                     required_skill_ids=profile.required_skill_ids,
                 ),
                 codex_bin=codex_bin,
+                process_command=[
+                    codex_bin,
+                    "app-server",
+                    "--listen",
+                    "stdio://",
+                    "--enable",
+                    "goals",
+                    *shell_policy_args,
+                ],
                 process_env=app_server_env,
                 process_cwd=str(project),
                 response_timeout_sec=30,

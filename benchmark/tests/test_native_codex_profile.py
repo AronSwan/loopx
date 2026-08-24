@@ -14,6 +14,7 @@ from loopx.capabilities.benchmark_toolkit.native_codex_profile import (
     inspect_native_codex_profile,
     install_native_codex_profile,
     native_codex_app_server_environment,
+    native_codex_app_server_shell_policy_args,
     native_codex_profile_environment,
     render_native_codex_goal_prompt,
 )
@@ -129,6 +130,36 @@ def test_app_server_environment_rejects_invalid_or_missing_provider_key(
             profile,
             provider_env_key="CODEX_GOAL_API_KEY",
             base_env={"PATH": "/usr/bin:/bin"},
+        )
+
+
+def test_native_codex_app_server_shell_policy_is_explicit_and_fail_closed() -> None:
+    args = native_codex_app_server_shell_policy_args(
+        provider_env_keys=("SECOND_PROVIDER_KEY", "PRIMARY_PROVIDER_KEY"),
+    )
+    assert args == (
+        "-c",
+        'shell_environment_policy.inherit="core"',
+        "-c",
+        "shell_environment_policy.ignore_default_excludes=false",
+        "-c",
+        (
+            'shell_environment_policy.include_only=["HOME", "LANG", "LC_ALL", '
+            '"LC_CTYPE", "LOGNAME", "PATH", "SHELL", "SSL_CERT_DIR", '
+            '"SSL_CERT_FILE", "TERM", "TMPDIR", "TZ", "USER"]'
+        ),
+        "-c",
+        'shell_environment_policy.exclude=["PRIMARY_PROVIDER_KEY", "SECOND_PROVIDER_KEY"]',
+    )
+
+
+@pytest.mark.parametrize("provider_env_key", ("", "invalid-key", "WITH SPACE"))
+def test_native_codex_app_server_shell_policy_rejects_unsafe_keys(
+    provider_env_key: str,
+) -> None:
+    with pytest.raises(ValueError, match="provider_env_keys"):
+        native_codex_app_server_shell_policy_args(
+            provider_env_keys=(provider_env_key,),
         )
 
 
