@@ -9,6 +9,9 @@
 //   arguments are provided.
 // - `loopx_goal_activate` binds the current session to a LoopX goal after
 //   `loopx start-goal` wrote todos and produced a heartbeat task_body.
+// - `loopx_task_lease` exposes the existing task_lease_v0 CLI contract for
+//   explicit acquire/renew/transfer/release/inspect calls; it never automates
+//   lease lifecycle actions or creates a second lease store.
 // - Once bound, every `agent_settled` continuation runs through
 //   `loopx quota should-run --runtime-profile generic_cli`; LoopX decides
 //   whether to continue (injecting the heartbeat task_body as a follow-up),
@@ -22,12 +25,14 @@
 // atomically disposes it so an in-flight quota probe can never continue the
 // old session past a reload / session-replacement boundary.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { Type } from "typebox";
 import {
   buildQuotaArgs,
+  runPiTaskLease,
   createBindingStore,
   createEphemeralSessionIdentity,
   createGoalLoop,
@@ -45,6 +50,38 @@ async function runLoopxCli(args: string[], directory: string): Promise<string> {
     maxBuffer: 8 * 1024 * 1024,
   });
   return stdout;
+}
+
+type TaskLeaseCliResult = {
+  stdout?: string;
+  returncode?: number;
+};
+
+// execFile rejects on typed non-zero CLI outcomes. Node preserves the JSON
+// stdout on that error, so task_lease_v0 remains the authoritative result.
+async function runLoopxTaskLeaseCli(
+  args: string[],
+  directory: string,
+): Promise<TaskLeaseCliResult> {
+  try {
+    const { stdout } = await execFile(process.env.LOOPX_BIN || "loopx", args, {
+      cwd: directory,
+      timeout: LOOPX_CLI_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return { stdout, returncode: 0 };
+  } catch (error) {
+    const failure = error as { stdout?: unknown; returncode?: unknown; code?: unknown };
+    return {
+      stdout: typeof failure.stdout === "string" ? failure.stdout : "",
+      returncode:
+        typeof failure.returncode === "number"
+          ? failure.returncode
+          : typeof failure.code === "number"
+            ? failure.code
+            : 1,
+    };
+  }
 }
 
 async function probeLoopxQuota(binding: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -231,6 +268,87 @@ export default function (pi: ExtensionAPI) {
             }),
           },
         ],
+        details: {},
+      };
+    },
+  });
+
+  // loopx_task_lease — an explicit, agent-callable facade over the existing
+  // task_lease_v0 CLI. Goal and owner authority come from the active Pi
+  // binding, and only an advertised capability may mutate a lease. No
+  // lifecycle action is automated by the host.
+  pi.registerTool({
+    name: "loopx_task_lease",
+    label: "LoopX Task Lease",
+    description:
+      "Inspect or explicitly mutate a task_lease_v0 lease for the active Pi goal. " +
+      "Mutations require a registered bound agentId and an explicit task_lease_v0 " +
+      "capability advertisement; goal and owner authority always come from the active session binding.",
+    parameters: Type.Object({
+      action: StringEnum(["acquire", "renew", "transfer", "release", "inspect"] as const, {
+        description: "One of acquire, renew, transfer, release, or inspect.",
+      }),
+      todoId: Type.String({ minLength: 1, description: "Structured LoopX todo id." }),
+      idempotencyKey: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Execution-instance key for acquire/renew/transfer/release.",
+        }),
+      ),
+      expectedVersion: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: "CAS lease version required by renew/transfer/release.",
+        }),
+      ),
+      ttlSeconds: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 86400,
+          description: "Optional lease TTL in seconds for acquire/renew/transfer.",
+        }),
+      ),
+      writeScopes: Type.Optional(
+        Type.Array(Type.String({ minLength: 1 }), {
+          description: "Relative write scopes for acquire; repeatable at the CLI boundary.",
+        }),
+      ),
+      newOwner: Type.Optional(
+        Type.String({ minLength: 1, description: "Target registered agent id for transfer." }),
+      ),
+      newIdempotencyKey: Type.Optional(
+        Type.String({ minLength: 1, description: "Target execution-instance key for transfer." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { key, store } = bindContext(ctx);
+      const binding = await store.read(key).catch(() => null);
+      const result = await runPiTaskLease(
+        binding,
+        {
+          action: String(params.action),
+          todoId: String(params.todoId),
+          ...(params.idempotencyKey !== undefined
+            ? { idempotencyKey: String(params.idempotencyKey) }
+            : {}),
+          ...(params.expectedVersion !== undefined
+            ? { expectedVersion: Number(params.expectedVersion) }
+            : {}),
+          ...(params.ttlSeconds !== undefined
+            ? { ttlSeconds: Number(params.ttlSeconds) }
+            : {}),
+          ...(params.writeScopes !== undefined
+            ? { writeScopes: params.writeScopes.map(String) }
+            : {}),
+          ...(params.newOwner !== undefined ? { newOwner: String(params.newOwner) } : {}),
+          ...(params.newIdempotencyKey !== undefined
+            ? { newIdempotencyKey: String(params.newIdempotencyKey) }
+            : {}),
+        },
+        runLoopxTaskLeaseCli,
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
         details: {},
       };
     },

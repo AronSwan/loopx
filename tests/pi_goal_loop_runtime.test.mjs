@@ -7,11 +7,13 @@ import path from "node:path"
 import {
   BRIDGE_SCHEMA_VERSION,
   DEFAULT_RETRY_MINUTES,
+  buildTaskLeaseArgs,
   createBindingStore,
   createEphemeralSessionIdentity,
   createGoalLoop,
   createMemoryBindingStore,
   hasAbortedAssistantMessage,
+  runPiTaskLease,
   sanitizedKey,
   sessionKey,
   waitPlan,
@@ -221,6 +223,18 @@ test("run_now injects the heartbeat task body exactly once", async () => {
   assert.equal(binding.lastInjectedPrompt, "LoopX task body")
   assert.equal(binding.autoResume, true)
 })
+
+function taskLeaseBinding(overrides = {}) {
+  return {
+    directory: "project",
+    registryPath: "registry.json",
+    goalId: "goal-lease",
+    agentId: "agent-lease",
+    availableCapabilities: ["task_lease_v0"],
+    terminal: false,
+    ...overrides,
+  }
+}
 
 
 test("validated terminal no-follow-up stops and notifies without a message", async () => {
@@ -1147,4 +1161,219 @@ test("stale userPrompt write after re-activate cannot pause new goal", async () 
   assert.equal(binding.goalId, "new-goal")
   assert.equal(binding.autoResume, true)
   assert.equal(scheduled.filter((t) => !t.cleared).length, 1)
+})
+
+
+test("task-lease argv encodes all lifecycle actions with exact flags", () => {
+  const binding = taskLeaseBinding()
+  const prefix = ["--registry", "registry.json", "--format", "json", "task-lease"]
+  const cases = [
+    [
+      {
+        action: "acquire",
+        todoId: "todo_alpha",
+        idempotencyKey: "turn-1",
+        ttlSeconds: 90,
+        expectedVersion: 4,
+        writeScopes: ["loopx/**", "docs/**"],
+      },
+      [
+        "acquire", "--goal-id", "goal-lease", "--todo-id", "todo_alpha", "--owner", "agent-lease",
+        "--idempotency-key", "turn-1", "--ttl-seconds", "90", "--expected-version", "4",
+        "--write-scope", "loopx/**", "--write-scope", "docs/**",
+      ],
+    ],
+    [
+      {
+        action: "renew",
+        todoId: "todo_alpha",
+        idempotencyKey: "turn-1",
+        ttlSeconds: 120,
+        expectedVersion: 5,
+      },
+      [
+        "renew", "--goal-id", "goal-lease", "--todo-id", "todo_alpha", "--owner", "agent-lease",
+        "--idempotency-key", "turn-1", "--ttl-seconds", "120", "--expected-version", "5",
+      ],
+    ],
+    [
+      {
+        action: "transfer",
+        todoId: "todo_alpha",
+        idempotencyKey: "turn-1",
+        newOwner: "agent-next",
+        newIdempotencyKey: "turn-2",
+        ttlSeconds: 180,
+        expectedVersion: 6,
+      },
+      [
+        "transfer", "--goal-id", "goal-lease", "--todo-id", "todo_alpha", "--owner", "agent-lease",
+        "--idempotency-key", "turn-1", "--new-owner", "agent-next", "--new-idempotency-key", "turn-2",
+        "--ttl-seconds", "180", "--expected-version", "6",
+      ],
+    ],
+    [
+      { action: "release", todoId: "todo_alpha", idempotencyKey: "turn-1", expectedVersion: 7 },
+      [
+        "release", "--goal-id", "goal-lease", "--todo-id", "todo_alpha", "--owner", "agent-lease",
+        "--idempotency-key", "turn-1", "--expected-version", "7",
+      ],
+    ],
+    [
+      { action: "inspect", todoId: "todo_alpha" },
+      ["inspect", "--goal-id", "goal-lease", "--todo-id", "todo_alpha"],
+    ],
+  ]
+  for (const [request, suffix] of cases) {
+    assert.deepEqual(buildTaskLeaseArgs(binding, request), [...prefix, ...suffix])
+  }
+})
+
+
+test("task-lease mutations require session authority and capability before CLI execution", async () => {
+  const calls = []
+  const runCli = async (...args) => {
+    calls.push(args)
+    return {
+      stdout: JSON.stringify({ ok: true, schema_version: "task_lease_v0", action: "acquire" }),
+      returncode: 0,
+    }
+  }
+  const request = { action: "acquire", todoId: "todo_alpha", idempotencyKey: "turn-1" }
+  const cases = [
+    [null, "missing_goal_binding"],
+    [taskLeaseBinding({ goalId: "" }), "invalid_request"],
+    [taskLeaseBinding({ terminal: true }), "inactive_goal_binding"],
+    [taskLeaseBinding({ agentId: "" }), "invalid_request"],
+    [taskLeaseBinding({ availableCapabilities: [] }), "capability_not_advertised"],
+  ]
+  for (const [binding, errorCode] of cases) {
+    const result = await runPiTaskLease(binding, request, runCli)
+    assert.equal(result.ok, false)
+    assert.equal(result.error_code, errorCode)
+  }
+  const authorityMismatch = await runPiTaskLease(
+    taskLeaseBinding(),
+    { ...request, goalId: "goal-other" },
+    runCli,
+  )
+  assert.equal(authorityMismatch.error_code, "authority_mismatch")
+  const invalidForm = await runPiTaskLease(
+    taskLeaseBinding(),
+    { ...request, ttlSeconds: 86401 },
+    runCli,
+  )
+  assert.equal(invalidForm.error_code, "invalid_request")
+  assert.equal(calls.length, 0)
+})
+
+
+test("inspect is read-only and preserves a compact typed receipt", async () => {
+  const calls = []
+  const runCli = async (...args) => {
+    calls.push(args)
+    return {
+      stdout: JSON.stringify({
+        ok: true,
+        schema_version: "task_lease_v0",
+        action: "inspect",
+        active: false,
+        lease: null,
+        lease_path: "synthetic-private-lease-path/todo_alpha.json",
+      }),
+      returncode: 0,
+    }
+  }
+  const result = await runPiTaskLease(
+    taskLeaseBinding({ agentId: "", availableCapabilities: [] }),
+    { action: "inspect", todoId: "todo_alpha" },
+    runCli,
+  )
+  assert.deepEqual(result, {
+    ok: true,
+    schema_version: "task_lease_v0",
+    action: "inspect",
+    active: false,
+    lease: null,
+  })
+  assert.deepEqual(calls[0][0], [
+    "--registry", "registry.json", "--format", "json", "task-lease", "inspect",
+    "--goal-id", "goal-lease", "--todo-id", "todo_alpha",
+  ])
+  assert.equal(calls[0][1], "project")
+})
+
+
+test("non-zero write-scope and CAS failures stay typed and omit private paths", async () => {
+  const conflict = {
+    ok: false,
+    schema_version: "task_lease_v0",
+    action: "acquire",
+    error: "write scope overlaps another active task lease",
+    error_code: "write_scope_conflict",
+    conflicts: [{
+      todo_id: "todo_beta",
+      owner: "agent-other",
+      write_scopes: ["src/**"],
+      lease_path: "synthetic-private-lease-path/todo_beta.json",
+    }],
+    lease_path: "synthetic-private-lease-path/todo_alpha.json",
+  }
+  const first = await runPiTaskLease(
+    taskLeaseBinding(),
+    { action: "acquire", todoId: "todo_alpha", idempotencyKey: "turn-1", writeScopes: ["src/**"] },
+    async () => ({
+      stdout: JSON.stringify({ ok: true, schema_version: "task_lease_v0", action: "acquire" }),
+      returncode: 0,
+    }),
+  )
+  assert.equal(first.ok, true)
+  const second = await runPiTaskLease(
+    taskLeaseBinding(),
+    { action: "acquire", todoId: "todo_beta", idempotencyKey: "turn-2", writeScopes: ["src/**"] },
+    async () => ({ stdout: JSON.stringify(conflict), returncode: 1 }),
+  )
+  assert.equal(second.error_code, "write_scope_conflict")
+  assert.deepEqual(second.conflicts, [{ todo_id: "todo_beta", owner: "agent-other", write_scopes: ["src/**"] }])
+  assert.equal(JSON.stringify(second).includes("lease_path"), false)
+
+  const cas = await runPiTaskLease(
+    taskLeaseBinding(),
+    { action: "renew", todoId: "todo_alpha", idempotencyKey: "turn-1", expectedVersion: 8 },
+    async () => ({
+      stdout: JSON.stringify({
+        ok: false,
+        schema_version: "task_lease_v0",
+        action: "renew",
+        error: "lease owner or idempotency key mismatch",
+        error_code: "lease_cas_mismatch",
+        expected_version: 8,
+        actual_version: 9,
+        lease_path: "synthetic-private-lease-path/todo_alpha.json",
+      }),
+      returncode: 1,
+    }),
+  )
+  assert.equal(cas.error_code, "lease_cas_mismatch")
+  assert.equal(cas.expected_version, 8)
+  assert.equal(cas.actual_version, 9)
+  assert.equal(JSON.stringify(cas).includes("synthetic-private-lease-path"), false)
+})
+
+
+test("task-lease transport and malformed payloads fail closed", async () => {
+  const request = { action: "inspect", todoId: "todo_alpha" }
+  const cases = [
+    [async () => { throw new Error("socket unavailable") }, "transport_error"],
+    [async () => ({ stdout: "not-json", returncode: 0 }), "protocol_error"],
+    [async () => ({
+      stdout: JSON.stringify({ ok: true, schema_version: "task_lease_v0", action: "renew" }),
+      returncode: 0,
+    }), "protocol_error"],
+  ]
+  for (const [runCli, errorCode] of cases) {
+    const result = await runPiTaskLease(taskLeaseBinding(), request, runCli)
+    assert.equal(result.ok, false)
+    assert.equal(result.error_code, errorCode)
+  }
 })

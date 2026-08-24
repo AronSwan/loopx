@@ -99,6 +99,28 @@ def test_pi_extension_runtime_is_managed_and_directly_executable() -> None:
     assert "export function waitPlan" in text
 
 
+def test_pi_task_lease_facade_exposes_typed_cli_boundary() -> None:
+    text = runtime_source()
+    # The Pi host owns only binding/transport and argv construction. Lease
+    # state, transitions, and conflict decisions stay in the CLI contract.
+    assert "export function buildTaskLeaseArgs" in text
+    assert "export async function runPiTaskLease" in text
+    assert '"task-lease"' in text
+    assert '"task_lease_v0"' in text
+    assert "availableCapabilities" in text
+    assert "write_scope_conflict" not in text
+    assert "lease_cas_mismatch" not in text
+    assert "returncode" in text
+
+
+def test_pi_extension_registers_task_lease_as_an_explicit_tool() -> None:
+    text = extension_source()
+    assert 'name: "loopx_task_lease"' in text
+    assert "runPiTaskLease" in text
+    assert "registerTool" in text
+    assert "task_lease_v0" in text
+
+
 def test_pi_extension_uses_ephemeral_identity_without_a_session_file() -> None:
     adapter = extension_source()
     runtime = runtime_source()
