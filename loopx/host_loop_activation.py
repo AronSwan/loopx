@@ -17,6 +17,7 @@ from .project_prompt import (
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
 AGENT_TYPE_CATALOG_SCHEMA_VERSION = "loopx_agent_type_catalog_v0"
 IDENTITY_SELECTION_SCHEMA_VERSION = "loopx_host_loop_identity_selection_v0"
+PI_OPTIONAL_COMPAT_ECHO = "optional compatibility echo; host authority derives the value"
 HOST_MANAGED_SKILL_AGENT_TYPES = frozenset(
     {
         "ark-managed-agent",
@@ -858,11 +859,11 @@ def _pi_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
             "host_tool": "loopx_goal_activate",
             "tool_argument_mapping": {
                 "activationToken": "pi_session_authority.token from the host startup/session packet",
-                "goalId": "optional compatibility echo; host authority derives the value",
+                "goalId": PI_OPTIONAL_COMPAT_ECHO,
                 "objective": "heartbeat_prompt.task_body",
-                "agentId": "optional compatibility echo; host authority derives the value",
-                "registryPath": "optional compatibility echo; host authority derives the value",
-                "availableCapabilities": "optional compatibility echo; host authority derives the value",
+                "agentId": PI_OPTIONAL_COMPAT_ECHO,
+                "registryPath": PI_OPTIONAL_COMPAT_ECHO,
+                "availableCapabilities": PI_OPTIONAL_COMPAT_ECHO,
             },
             "cli_can_mutate_directly": False,
             "missing_host_tool_gate": (

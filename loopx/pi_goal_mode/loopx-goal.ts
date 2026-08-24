@@ -46,6 +46,18 @@ import {
 
 const execFile = promisify(execFileCallback);
 const LOOPX_CLI_TIMEOUT_MS = 30_000;
+const LOOPX_INSPECT_COMMANDS = new Set(["", "status", "history", "list", "resume"]);
+
+function packetString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function rejectedCliReturncode(error: unknown): number {
+  const failure = error as { returncode?: unknown; code?: unknown };
+  if (typeof failure.returncode === "number") return failure.returncode;
+  if (typeof failure.code === "number") return failure.code;
+  return 1;
+}
 
 async function runLoopxCli(args: string[], directory: string): Promise<string> {
   const { stdout } = await execFile(process.env.LOOPX_BIN || "loopx", args, {
@@ -112,20 +124,25 @@ function buildPiSessionAuthority(packet: StartGoalPacket): PiSessionAuthority {
   if (activation.activation_allowed !== true) {
     throw new Error("LoopX start-goal packet does not authorize Pi host activation");
   }
-  const goalId = String(packet.goal_id ?? commandPack.goal_id ?? "").trim();
-  const project = String(packet.project ?? commandPack.project ?? "").trim();
-  const registryPath = String(
-    packet.project_connection?.registry ?? commandPack.project_connection?.registry ??
-      commandPack.registry_path ?? "",
-  ).trim();
-  const agentId = String(activation.agent_id ?? packet.agent_id ?? commandPack.agent_id ?? "").trim();
+  const goalId = packetString(packet.goal_id) || packetString(commandPack.goal_id);
+  const project = packetString(packet.project) || packetString(commandPack.project);
+  const registryPath =
+    packetString(packet.project_connection?.registry) ||
+    packetString(commandPack.project_connection?.registry) ||
+    packetString(commandPack.registry_path);
+  const agentId =
+    packetString(activation.agent_id) ||
+    packetString(packet.agent_id) ||
+    packetString(commandPack.agent_id);
   if (!goalId || !project || !registryPath || !agentId) {
     throw new Error("LoopX start-goal packet is missing verified Pi authority fields");
   }
   const packetCapabilities = Array.isArray(activation.available_capabilities)
-    ? activation.available_capabilities.map(String)
+    ? activation.available_capabilities.map(packetString).filter(Boolean)
     : [];
-  const availableCapabilities = [...new Set(packetCapabilities)].sort();
+  const availableCapabilities = [...new Set(packetCapabilities)].sort((left, right) =>
+    left.localeCompare(right),
+  );
   return {
     schemaVersion: PI_SESSION_AUTHORITY_SCHEMA_VERSION,
     token: randomUUID(),
@@ -144,7 +161,7 @@ function authorityFieldsEqual(left: PiSessionAuthority, right: PiSessionAuthorit
 }
 
 function packetNeedsHostSelection(packet: StartGoalPacket): boolean {
-  const activation = packet.host_loop_activation || packet.command_pack?.host_loop_activation;
+  const activation = packet?.host_loop_activation ?? packet?.command_pack?.host_loop_activation;
   return !activation || activation.activation_allowed !== true;
 }
 
@@ -165,12 +182,7 @@ async function runLoopxTaskLeaseCli(
     const failure = error as { stdout?: unknown; returncode?: unknown; code?: unknown };
     return {
       stdout: typeof failure.stdout === "string" ? failure.stdout : "",
-      returncode:
-        typeof failure.returncode === "number"
-          ? failure.returncode
-          : typeof failure.code === "number"
-            ? failure.code
-            : 1,
+      returncode: rejectedCliReturncode(failure),
     };
   }
 }
@@ -268,6 +280,99 @@ export default function (pi: ExtensionAPI) {
     return candidate;
   };
 
+  const inspectLoopx = async (key: string, ctx: ExtensionContext) => {
+    try {
+      const stdout = await runLoopxCli(
+        ["--format", "json", "bootstrap-command-pack", "--project", "."],
+        ctx.cwd,
+      );
+      const packet = parseJsonObject(stdout);
+      if (packet) {
+        try {
+          establishSessionAuthority(key, packet);
+        } catch {
+          // A status-only packet may intentionally stop before host activation.
+        }
+      }
+      const display = typeof packet?.message === "string" ? packet.message : stdout;
+      ctx.ui.setWidget("loopx", display.split("\n").slice(0, 24));
+      ctx.ui.notify("LoopX packet ready (widget above the editor).", "info");
+      pi.appendEntry("loopx-packet", { text: display });
+    } catch (error) {
+      ctx.ui.notify(
+        `LoopX inspect failed: ${(error as Error)?.message || String(error)}`,
+        "error",
+      );
+    }
+  };
+
+  const startLoopx = async (
+    trimmed: string,
+    key: string,
+    store: ReturnType<typeof createBindingStore>,
+    ctx: ExtensionContext,
+  ) => {
+    try {
+      const stdout = await runLoopxCli(
+        [
+          "--format",
+          "json",
+          "start-goal",
+          "--guided",
+          "--project",
+          ".",
+          "--goal-text",
+          trimmed,
+          "--host-surface",
+          "pi",
+          "--available-capability",
+          TASK_LEASE_CAPABILITY,
+        ],
+        ctx.cwd,
+      );
+      const packet = parseJsonObject(stdout);
+      if (!packet) throw new Error("LoopX start-goal returned a non-JSON packet");
+      let authority: PiSessionAuthority | null = null;
+      if (!packetNeedsHostSelection(packet)) {
+        authority = establishSessionAuthority(key, packet);
+        loop.bind(key, {
+          store,
+          isIdle: () => ctx.isIdle(),
+          notify: (message: string, kind: string) => ctx.ui.notify(message, kind),
+          authority,
+        });
+      }
+      const deliveredPacket = {
+        ...packet,
+        ...(authority
+          ? {
+              pi_session_authority: {
+                schema_version: authority.schemaVersion,
+                token: authority.token,
+                goal_id: authority.goalId,
+                agent_id: authority.agentId,
+                registry_path: authority.registryPath,
+                available_capabilities: authority.availableCapabilities,
+              },
+            }
+          : {}),
+      };
+      pi.sendUserMessage(JSON.stringify(deliveredPacket), {
+        deliverAs: "followUp",
+        triggerTurn: true,
+      });
+      ctx.ui.notify(
+        "LoopX start-goal packet delivered to the agent; it will follow the ordered transaction.",
+        "info",
+      );
+    } catch (error) {
+      ctx.ui.notify(
+        `LoopX start-goal failed: ${(error as Error)?.message || String(error)}`,
+        "error",
+      );
+    }
+  };
+
   // /loopx — inspect the project packet, or start a guided LoopX goal.
   pi.registerCommand("loopx", {
     description:
@@ -276,107 +381,15 @@ export default function (pi: ExtensionAPI) {
       const trimmed = String(args || "").trim();
       const { key, store } = bindContext(ctx);
       const binding = await store.read(key).catch(() => null);
-      if (
-        !trimmed ||
-        trimmed === "status" ||
-        trimmed === "history" ||
-        trimmed === "list" ||
-        trimmed === "resume"
-      ) {
+      if (LOOPX_INSPECT_COMMANDS.has(trimmed)) {
         if (trimmed === "resume" && binding) {
           await loop.resume(key);
           return;
         }
-        try {
-          const stdout = await runLoopxCli(
-            ["--format", "json", "bootstrap-command-pack", "--project", "."],
-            ctx.cwd,
-          );
-          const packet = parseJsonObject(stdout);
-          if (packet) {
-            try {
-              establishSessionAuthority(key, packet);
-            } catch {
-              // A status-only packet may intentionally stop before host activation.
-            }
-          }
-          const display = packet?.message ? String(packet.message) : stdout;
-          ctx.ui.setWidget("loopx", display.split("\n").slice(0, 24));
-          ctx.ui.notify("LoopX packet ready (widget above the editor).", "info");
-          pi.appendEntry("loopx-packet", { text: display });
-        } catch (error) {
-          ctx.ui.notify(
-            `LoopX inspect failed: ${(error as Error)?.message || String(error)}`,
-            "error",
-          );
-        }
+        await inspectLoopx(key, ctx);
         return;
       }
-      // Start a guided goal for the exact Pi host; the returned packet
-      // includes ordered todos and the heartbeat task_body the agent needs.
-      // Deliver the packet straight to the agent as a user message (the same
-      // followUp/triggerTurn pattern the quota loop uses for heartbeat
-      // injection) instead of prefilling the editor: no popup box, no manual
-      // Enter step before the agent follows the ordered transaction.
-      try {
-        const stdout = await runLoopxCli(
-          [
-            "--format",
-            "json",
-            "start-goal",
-            "--guided",
-            "--project",
-            ".",
-            "--goal-text",
-            trimmed,
-            "--host-surface",
-            "pi",
-            "--available-capability",
-            TASK_LEASE_CAPABILITY,
-          ],
-          ctx.cwd,
-        );
-        const packet = parseJsonObject(stdout);
-        if (!packet) throw new Error("LoopX start-goal returned a non-JSON packet");
-        let authority: PiSessionAuthority | null = null;
-        if (!packetNeedsHostSelection(packet)) {
-          authority = establishSessionAuthority(key, packet);
-          loop.bind(key, {
-            store,
-            isIdle: () => ctx.isIdle(),
-            notify: (message: string, kind: string) => ctx.ui.notify(message, kind),
-            authority,
-          });
-        }
-        const deliveredPacket = {
-          ...packet,
-          ...(authority
-            ? {
-                pi_session_authority: {
-                  schema_version: authority.schemaVersion,
-                  token: authority.token,
-                  goal_id: authority.goalId,
-                  agent_id: authority.agentId,
-                  registry_path: authority.registryPath,
-                  available_capabilities: authority.availableCapabilities,
-                },
-              }
-            : {}),
-        };
-        pi.sendUserMessage(JSON.stringify(deliveredPacket), {
-          deliverAs: "followUp",
-          triggerTurn: true,
-        });
-        ctx.ui.notify(
-          "LoopX start-goal packet delivered to the agent; it will follow the ordered transaction.",
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(
-          `LoopX start-goal failed: ${(error as Error)?.message || String(error)}`,
-          "error",
-        );
-      }
+      await startLoopx(trimmed, key, store, ctx);
     },
   });
 

@@ -128,15 +128,20 @@ function bindingDefaults(directory) {
   }
 }
 
-function authorityError(code, message) {
+function typedError(code, message) {
   const error = new Error(message)
   error.code = code
   return error
 }
 
+const authorityError = typedError
+const taskLeaseRequestError = typedError
+
 function normalizeAuthorityCapabilities(value) {
   if (!Array.isArray(value)) return []
-  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))].sort()
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))].sort((left, right) =>
+    left.localeCompare(right),
+  )
 }
 
 export function normalizePiSessionAuthority(value) {
@@ -366,12 +371,6 @@ export function buildQuotaArgs(binding) {
   return args
 }
 
-function taskLeaseRequestError(code, message) {
-  const error = new Error(message)
-  error.code = code
-  return error
-}
-
 function taskLeaseFailure(action, errorCode, message) {
   return {
     ok: false,
@@ -518,7 +517,8 @@ function taskLeaseFieldValues(request, field, kind, required) {
 // Build the exact CLI argv used by the installed Pi extension. Goal and owner
 // authority come from the active session binding; request fields are only the
 // lifecycle inputs the agent is allowed to choose.
-export function buildTaskLeaseArgs(binding, request = {}, verifiedAuthority) {
+export function buildTaskLeaseArgs(binding, request, verifiedAuthority) {
+  request = request ?? {}
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw taskLeaseRequestError("invalid_request", "task lease request must be an object")
   }
@@ -625,7 +625,14 @@ function compactTaskLeasePayload(payload) {
 // Execute a task-lease request through an injected CLI transport. A typed
 // non-zero payload is authoritative and survives process rejection; malformed
 // or empty output fails closed without exposing stderr or raw host details.
-export async function runPiTaskLease(binding, request = {}, runCli, verifiedAuthority) {
+function cliReturncode(error) {
+  if (typeof error?.returncode === "number") return error.returncode
+  if (typeof error?.code === "number") return error.code
+  return 1
+}
+
+export async function runPiTaskLease(binding, request, runCli, verifiedAuthority) {
+  request = request ?? {}
   const action = String(request?.action || "").trim() || null
   if (verifiedAuthority === undefined) {
     return taskLeaseFailure(
@@ -653,12 +660,7 @@ export async function runPiTaskLease(binding, request = {}, runCli, verifiedAuth
   } catch (error) {
     result = {
       stdout: error?.stdout,
-      returncode:
-        typeof error?.returncode === "number"
-          ? error.returncode
-          : typeof error?.code === "number"
-            ? error.code
-            : 1,
+      returncode: cliReturncode(error),
     }
   }
   const stdout = typeof result === "string" ? result : result?.stdout
