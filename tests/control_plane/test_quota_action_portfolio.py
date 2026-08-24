@@ -28,6 +28,8 @@ def _legacy_future_primary_status() -> dict:
         priority="P2",
         title="Advance the independent fallback slice.",
         claimed_by=AGENT_ID,
+        required_capabilities=["fallback_runner"],
+        required_write_scopes=["artifacts/fallback/**"],
     )
     primary = quota_todo_item(
         todo_id=PRIMARY_ID,
@@ -68,6 +70,7 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         turn_instance_id="turn-portfolio-001",
+        available_capabilities=["fallback_runner"],
     )
 
     assert packet["selected_todo"]["todo_id"] == PRIMARY_ID
@@ -88,6 +91,12 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
     assert [item["todo_id"] for item in portfolio["suggested_actions"]] == [
         PRIMARY_ID,
         FALLBACK_ID,
+    ]
+    assert portfolio["suggested_actions"][1]["required_capabilities"] == [
+        "fallback_runner"
+    ]
+    assert portfolio["suggested_actions"][1]["required_write_scopes"] == [
+        "artifacts/fallback/**"
     ]
     assert packet["interaction_contract"]["agent_channel"][
         "action_portfolio_ref"
@@ -123,6 +132,11 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
         "schema_version": "quota_cli_action_portfolio_compaction_v0",
         "ref": "$.agent_todo_summary.first_executable_items",
     }
+    compact_candidates = compact["agent_todo_summary"]["first_executable_items"]
+    assert compact_candidates[1]["required_capabilities"] == ["fallback_runner"]
+    assert compact_candidates[1]["required_write_scopes"] == [
+        "artifacts/fallback/**"
+    ]
     effect_turn = interpret_quota_should_run_packet(packet)
     assert effect_turn.observation.action_portfolio == portfolio
 
