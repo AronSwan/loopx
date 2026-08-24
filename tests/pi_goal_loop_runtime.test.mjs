@@ -251,8 +251,21 @@ function taskLeaseBinding(overrides = {}) {
     registryPath: "registry.json",
     goalId: "goal-lease",
     agentId: "agent-lease",
+    activationToken: "lease-token",
     availableCapabilities: ["task_lease_v0"],
     terminal: false,
+    ...overrides,
+  }
+}
+
+function taskLeaseAuthority(overrides = {}) {
+  return {
+    schemaVersion: "loopx_pi_session_authority_v0",
+    token: "lease-token",
+    goalId: "goal-lease",
+    agentId: "agent-lease",
+    registryPath: "registry.json",
+    availableCapabilities: ["task_lease_v0"],
     ...overrides,
   }
 }
@@ -1262,27 +1275,35 @@ test("task-lease mutations require session authority and capability before CLI e
   }
   const request = { action: "acquire", todoId: "todo_alpha", idempotencyKey: "turn-1" }
   const cases = [
-    [null, "missing_goal_binding"],
-    [taskLeaseBinding({ goalId: "" }), "invalid_request"],
+    [null, "missing_goal_binding", taskLeaseAuthority()],
+    [taskLeaseBinding({ goalId: "" }), "authority_mismatch", taskLeaseAuthority()],
     [taskLeaseBinding({ terminal: true }), "inactive_goal_binding"],
-    [taskLeaseBinding({ agentId: "" }), "invalid_request"],
-    [taskLeaseBinding({ availableCapabilities: [] }), "capability_not_advertised"],
+    [taskLeaseBinding({ agentId: "" }), "authority_mismatch", taskLeaseAuthority()],
+    [
+      taskLeaseBinding({ availableCapabilities: [] }),
+      "capability_not_advertised",
+      taskLeaseAuthority({ availableCapabilities: [] }),
+    ],
   ]
-  for (const [binding, errorCode] of cases) {
-    const result = await runPiTaskLease(binding, request, runCli)
+  for (const [binding, errorCode, authority = taskLeaseAuthority()] of cases) {
+    const result = await runPiTaskLease(binding, request, runCli, authority)
     assert.equal(result.ok, false)
     assert.equal(result.error_code, errorCode)
   }
+  const missingHostAuthority = await runPiTaskLease(taskLeaseBinding(), request, runCli)
+  assert.equal(missingHostAuthority.error_code, "authority_not_bound")
   const authorityMismatch = await runPiTaskLease(
     taskLeaseBinding(),
     { ...request, goalId: "goal-other" },
     runCli,
+    taskLeaseAuthority(),
   )
   assert.equal(authorityMismatch.error_code, "authority_mismatch")
   const invalidForm = await runPiTaskLease(
     taskLeaseBinding(),
     { ...request, ttlSeconds: 86401 },
     runCli,
+    taskLeaseAuthority(),
   )
   assert.equal(invalidForm.error_code, "invalid_request")
   assert.equal(calls.length, 0)
@@ -1306,9 +1327,10 @@ test("inspect is read-only and preserves a compact typed receipt", async () => {
     }
   }
   const result = await runPiTaskLease(
-    taskLeaseBinding({ agentId: "", availableCapabilities: [] }),
+    taskLeaseBinding({ availableCapabilities: [] }),
     { action: "inspect", todoId: "todo_alpha" },
     runCli,
+    taskLeaseAuthority({ availableCapabilities: [] }),
   )
   assert.deepEqual(result, {
     ok: true,
@@ -1347,12 +1369,14 @@ test("non-zero write-scope and CAS failures stay typed and omit private paths", 
       stdout: JSON.stringify({ ok: true, schema_version: "task_lease_v0", action: "acquire" }),
       returncode: 0,
     }),
+    taskLeaseAuthority(),
   )
   assert.equal(first.ok, true)
   const second = await runPiTaskLease(
     taskLeaseBinding(),
     { action: "acquire", todoId: "todo_beta", idempotencyKey: "turn-2", writeScopes: ["src/**"] },
     async () => ({ stdout: JSON.stringify(conflict), returncode: 1 }),
+    taskLeaseAuthority(),
   )
   assert.equal(second.error_code, "write_scope_conflict")
   assert.deepEqual(second.conflicts, [{ todo_id: "todo_beta", owner: "agent-other", write_scopes: ["src/**"] }])
@@ -1374,6 +1398,7 @@ test("non-zero write-scope and CAS failures stay typed and omit private paths", 
       }),
       returncode: 1,
     }),
+    taskLeaseAuthority(),
   )
   assert.equal(cas.error_code, "lease_cas_mismatch")
   assert.equal(cas.expected_version, 8)
@@ -1393,7 +1418,7 @@ test("task-lease transport and malformed payloads fail closed", async () => {
     }), "protocol_error"],
   ]
   for (const [runCli, errorCode] of cases) {
-    const result = await runPiTaskLease(taskLeaseBinding(), request, runCli)
+    const result = await runPiTaskLease(taskLeaseBinding(), request, runCli, taskLeaseAuthority())
     assert.equal(result.ok, false)
     assert.equal(result.error_code, errorCode)
   }
@@ -1457,7 +1482,7 @@ test("host-bound Pi authority rejects agent and capability rebinding before leas
     }, async (...args) => {
       calls.push(args)
       return { stdout: "", returncode: 1 }
-    })
+    }, authorityA)
   }
   assert.equal(calls.length, 0)
 

@@ -627,6 +627,13 @@ function compactTaskLeasePayload(payload) {
 // or empty output fails closed without exposing stderr or raw host details.
 export async function runPiTaskLease(binding, request = {}, runCli, verifiedAuthority) {
   const action = String(request?.action || "").trim() || null
+  if (verifiedAuthority === undefined) {
+    return taskLeaseFailure(
+      action,
+      "authority_not_bound",
+      "Pi session has no current host-verified authority",
+    )
+  }
   let args
   try {
     args = buildTaskLeaseArgs(binding, request, verifiedAuthority)
