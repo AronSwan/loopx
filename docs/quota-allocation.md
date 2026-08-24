@@ -342,6 +342,24 @@ candidate is missing a capability, the gate returns
 `credentials`/`production_access`, or
 `action=skip` for unsupported capability classes.
 
+When more than one same-agent action is admitted, `quota should-run` makes that
+choice legible through `action_portfolio.suggested_actions`: one ordered
+recommendation plus at most two alternatives. These suggestions are bounded for
+readability and explicitly non-exhaustive; the recommendation is a default, not
+a binding or permission list. The first response sets
+`interaction_contract.cli_channel.selection_required=true`, returns one typed
+`selection_command.command_args_template`, a shared bound `route_prefix`, compact
+`candidate_discovery_args`, and creates an identity-less heartbeat receipt.
+After its steering audit, the agent may use the discovery command to inspect the
+authoritative open agent queue, then renders the template with any currently
+authoritative, same-agent, capability-ready Todo, including one not shown in the
+bounded suggestions. That request is only a pending selection: the second guard
+re-runs current lane arbitration and eligibility checks before upgrading the
+receipt. A newly due hard-priority monitor, blocking user gate, or other current
+preemption defers the request and leaves the receipt identity-less. Delivery and
+quota spend remain disabled until binding succeeds. A single-candidate response
+keeps the direct execution path and does not add an extra selection round trip.
+
 Blocked candidates retain typed `resolution_bindings` even when another todo is
 runnable. Each binding names the capability, its resolution owner, and the
 exact `blocked_todo_ids`. The interaction contract turns an owner-held binding

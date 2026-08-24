@@ -1250,14 +1250,32 @@ co-displayed global agent todo rows as goal-wide, so `--agent-id` is not
 mistaken for a filter that replaces the goal-wide queue.
 When more than one already-admitted advancement todo remains runnable, the
 same guard also includes `action_portfolio.schema_version=
-quota_action_portfolio_v0`. `primary` is the selected todo and remains the
-normal execution target. `fallback_actions` contains at most two ordered,
-agent-scoped, capability-ready alternatives. The machine trigger is
-`fallback_policy.trigger=primary_unavailable_at_execution`: a host or agent
-uses the first alternative that is still runnable only after the primary's
-real call site reports that it cannot execute, and must preserve/report the
-primary blocker instead of silently dropping it. This is an executable hot-path
-contract, not a request to choose a lower-priority todo eagerly.
+quota_action_portfolio_v1`. `primary` is the ordered recommendation, while
+`suggested_actions` is the single canonical bounded convenience view: it carries
+the recommendation plus at most two ordered, agent-scoped, capability-ready
+alternatives and labels them `recommended` or `alternative`. The portfolio does
+not duplicate those candidates under a second fallback view.
+`selection_policy.candidate_scope=current_authoritative_eligible_todos` keeps
+the legal choice boundary separate from the displayed suggestions;
+`suggestions_exhaustive=false` makes that distinction machine-readable.
+`selection_policy.decision_owner=agent` and
+`recommendation_role=default_not_binding` make the priority order advisory at
+this boundary rather than silently binding the first Todo.
+
+The first quota response sets `selection_required=true` and exposes one typed
+`selection_command.command_args_template` with a `{todo_id}` placeholder plus a
+shared bound `route_prefix` and compact `candidate_discovery_args` for the
+authoritative open agent queue. Its
+heartbeat receipt has no settlement identity, so direct delivery and spend fail
+closed. The template is deliberately independent of the bounded suggestions:
+the agent may discover and request any currently projected, agent-scoped,
+capability-ready Todo. That request is a pending selection, not a committed
+receipt identity. Quota first re-runs current lane arbitration and eligibility;
+a newly due hard-priority monitor, blocking user gate, or other preemption
+defers the request and keeps the receipt identity-less. A qualified request does
+not need to have appeared in the bounded suggestions. Only the upgraded response
+restores delivery and its settlement plan. If there is only one admitted action,
+no portfolio selection phase is added.
 
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota
@@ -1266,9 +1284,9 @@ selects the next ready advancement todo and records the future monitor under
 `availability_reason=scheduled_for_future`. Legacy state that labels such work
 as `advancement_task` cannot be reclassified from phrases such as “Monday” or
 “after the window opens”; explicit `task_class` remains authoritative. The
-portfolio still exposes bounded fallback actions for that compatibility case,
-so a failed execution preflight need not send a weak model back through the
-entire cold diagnostic packet.
+portfolio still exposes bounded alternatives for that compatibility case, so
+the agent can bind a different ready action without replaying the entire cold
+diagnostic packet.
 The same scoped guard may include
 `goal_route_hint.schema_version=goal_route_hint_v0`. This is a goal-level
 read-path synthesis over the current `agent_lane_next_action`,

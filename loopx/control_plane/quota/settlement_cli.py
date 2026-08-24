@@ -203,6 +203,24 @@ def quota_rollout_settlement_binding(
     if explicit_todo_id or explicit_replan_obligation_id:
         return explicit_todo_id, explicit_replan_obligation_id
 
+    action_portfolio_value = payload.get("action_portfolio")
+    action_portfolio: Mapping[str, object] = (
+        action_portfolio_value
+        if isinstance(action_portfolio_value, Mapping)
+        else {}
+    )
+    selection_policy_value = action_portfolio.get("selection_policy")
+    selection_policy: Mapping[str, object] = (
+        selection_policy_value
+        if isinstance(selection_policy_value, Mapping)
+        else {}
+    )
+    if selection_policy.get("requires_explicit_turn_binding") is True:
+        # A portfolio guard without an explicit selection is intentionally
+        # identity-less, so recommendation order cannot become hidden
+        # settlement authority.
+        return None, None
+
     interaction = (
         payload.get("interaction_contract")
         if isinstance(payload.get("interaction_contract"), Mapping)

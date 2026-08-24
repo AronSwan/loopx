@@ -38,6 +38,7 @@ from .autonomous_replan_obligation import (
     todo_lifecycle_settlement_obligation,
 )
 from .accountable_settlement import build_accountable_work_item_settlement_plan
+from . import action_selection_contract as selection
 from .primary_action import (
     build_primary_action_projection,
     protocol_action_label as _protocol_action_label,
@@ -584,6 +585,8 @@ def _turn_scoped_cli_settlement_context(
     ),
     turn_instance_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if selection.action_portfolio_requires_explicit_selection(payload):
+        return None, None
     agent_identity = (
         payload.get("agent_identity")
         if isinstance(payload.get("agent_identity"), dict)
@@ -734,6 +737,14 @@ def interaction_next_cli_actions(
         )
     except ValueError:
         scheduler_args = ""
+    selection_command_template = selection.action_portfolio_selection_command_template(
+        payload,
+        scoped_cli_args=scoped_cli_args,
+        scheduler_args=scheduler_args,
+        turn_instance_id=turn_instance_id,
+    )
+    if selection_command_template:
+        return [selection_command_template]
     typed_quota_guard = (
         f"loopx --format json quota should-run --goal-id {goal_id}"
         f"{scoped_cli_args}{scheduler_args}"
@@ -1172,6 +1183,7 @@ def _build_interaction_agent_channel(
     channel.update(build_primary_action_projection(payload, mode=mode))
     if isinstance(payload.get("action_portfolio"), dict):
         channel["action_portfolio_ref"] = "$.action_portfolio"
+    selection.apply_action_selection_agent_gate(channel, payload)
     if capability_reentry is not None:
         candidate = capability_reentry["candidates"][0]
         target = candidate["verification_target"]
@@ -1268,6 +1280,7 @@ def _build_interaction_cli_channel(
     capability_reentry: dict[str, Any] | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
+    spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
     if capability_reentry is None:
         capability_reentry = build_runtime_capability_reentry_packet(
             payload,
@@ -1293,15 +1306,16 @@ def _build_interaction_cli_channel(
             turn_instance_id=turn_instance_id,
         ),
         "spend_allowed_now": False,
-        "spend_after_validation": spend_after_validation,
+        "spend_after_validation": spend_after_selection,
         "spend_policy": _interaction_spend_policy(
             execution_obligation,
             heartbeat_recommendation,
             mode=mode,
-            spend_after_validation=spend_after_validation,
+            spend_after_validation=spend_after_selection,
         ),
     }
-    if settlement_plan is not None and spend_after_validation:
+    selection.apply_action_selection_cli_gate(channel, payload)
+    if settlement_plan is not None and spend_after_selection:
         channel["settlement_plan"] = settlement_plan
     if settlement_plan is not None and replan_settlement_contract is not None:
         channel["replan_settlement_contract"] = replan_settlement_contract
@@ -1312,7 +1326,7 @@ def _build_interaction_cli_channel(
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
-    if spend_after_validation and selected_todo.get("task_repository"):
+    if spend_after_selection and selected_todo.get("task_repository"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
             "refresh": "delivery_workspace; otherwise --delivery-workspace-path",

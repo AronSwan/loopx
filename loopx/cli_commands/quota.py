@@ -50,6 +50,7 @@ from ..control_plane.scheduler.execution_context import (
     SchedulerRuntimeProfile,
     scheduler_execution_context_for_runtime_profile,
 )
+from ..control_plane.todos.contract import normalize_todo_id
 from ..file_lock import lock_timeout_error_fields
 from ..presentation.renderers.quota_event_markdown import (
     render_quota_monitor_poll_markdown,
@@ -538,6 +539,79 @@ def _quota_renderer(
     }.get(command, render_quota_markdown)
 
 
+def _requested_quota_action_todo_id(
+    args: argparse.Namespace,
+) -> str | None:
+    if not (
+        bool(args.codex_app)
+        or args.runtime_profile == "codex_app_heartbeat"
+    ):
+        return None
+    return normalize_todo_id(args.todo_id)
+
+
+def _heartbeat_quota_action_selection_bindings(
+    *,
+    runtime_root: Path,
+    args: argparse.Namespace,
+    heartbeat_turn_id: str | None,
+) -> tuple[dict[str, object] | None, str | None, str | None]:
+    if not heartbeat_turn_id:
+        return None, None, None
+    existing = find_heartbeat_receipt(
+        runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        turn_instance_id=heartbeat_turn_id,
+    )
+    if not existing:
+        return None, None, None
+    todo_id, replan_obligation_id = _heartbeat_receipt_settlement_bindings(existing)
+    return existing, todo_id, replan_obligation_id
+
+
+def _require_requested_quota_action_selection(
+    payload: Mapping[str, object],
+    *,
+    requested_todo_id: str | None,
+    receipt_bound_todo_id: str | None,
+    receipt_bound_replan_obligation_id: str | None,
+) -> None:
+    if not requested_todo_id or (
+        receipt_bound_todo_id or receipt_bound_replan_obligation_id
+    ):
+        return
+    selected_todo = payload.get("selected_todo")
+    if not isinstance(selected_todo, Mapping) or (
+        normalize_todo_id(selected_todo.get("todo_id")) != requested_todo_id
+        or selected_todo.get("selection_binding") != "pending_action_selection"
+        or payload.get("ok") is not True
+        or payload.get("should_run") is not True
+        or payload.get("normal_delivery_allowed") is not True
+    ):
+        raise HeartbeatReceiptIdentityConflictError(
+            "explicit action selection must name one currently projected "
+            "agent-scoped, capability-ready Todo"
+        )
+
+
+def _commit_pending_action_selection(
+    payload: Mapping[str, object],
+    *,
+    requested_todo_id: str | None,
+) -> None:
+    """Promote a qualified selection only after receipt reconciliation commits."""
+
+    selected_todo = payload.get("selected_todo")
+    if (
+        requested_todo_id
+        and isinstance(selected_todo, dict)
+        and normalize_todo_id(selected_todo.get("todo_id")) == requested_todo_id
+        and selected_todo.get("selection_binding") == "pending_action_selection"
+    ):
+        selected_todo["selection_binding"] = "heartbeat_receipt"
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -571,21 +645,15 @@ def handle_quota_command(
         scheduler_context = context.scheduler_context
         operator_inbox_urgency_projector = context.operator_inbox_urgency_projector
         if args.quota_command == "should-run":
-            receipt_bound_todo_id, receipt_bound_replan_obligation_id = None, None
-            if heartbeat_turn_id:
-                heartbeat_receipt_existing = find_heartbeat_receipt(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    turn_instance_id=heartbeat_turn_id,
-                )
-                if heartbeat_receipt_existing:
-                    (
-                        receipt_bound_todo_id,
-                        receipt_bound_replan_obligation_id,
-                    ) = _heartbeat_receipt_settlement_bindings(
-                        heartbeat_receipt_existing
-                    )
+            (
+                heartbeat_receipt_existing,
+                receipt_bound_todo_id,
+                receipt_bound_replan_obligation_id,
+            ) = _heartbeat_quota_action_selection_bindings(
+                runtime_root=runtime_root,
+                args=args,
+                heartbeat_turn_id=heartbeat_turn_id,
+            )
             payload = build_live_quota_should_run_decision(
                 status_payload,
                 goal_id=args.goal_id,
@@ -602,10 +670,23 @@ def handle_quota_command(
                     project_live_explore_composition_frontier
                 ),
                 receipt_bound_todo_id=receipt_bound_todo_id,
+                requested_action_todo_id=(
+                    _requested_quota_action_todo_id(args)
+                    if receipt_bound_todo_id is None
+                    else None
+                ),
                 receipt_bound_replan_obligation_id=(
                     receipt_bound_replan_obligation_id
                 ),
                 turn_instance_id=heartbeat_turn_id,
+            )
+            _require_requested_quota_action_selection(
+                payload,
+                requested_todo_id=_requested_quota_action_todo_id(args),
+                receipt_bound_todo_id=receipt_bound_todo_id,
+                receipt_bound_replan_obligation_id=(
+                    receipt_bound_replan_obligation_id
+                ),
             )
             if heartbeat_turn_id:
                 if heartbeat_receipt_existing:
@@ -826,6 +907,10 @@ def handle_quota_command(
                     status=heartbeat_receipt_existing_status,
                     appended=heartbeat_receipt_existing_appended,
                 )
+                _commit_pending_action_selection(
+                    payload,
+                    requested_todo_id=_requested_quota_action_todo_id(args),
+                )
             else:
                 settlement_identity = (
                     SettlementIdentity(
@@ -886,6 +971,10 @@ def handle_quota_command(
                         receipt,
                         turn_instance_id=heartbeat_turn_id,
                         status="committed" if rollout_event.get("appended") else "replayed",
+                    )
+                    _commit_pending_action_selection(
+                        payload,
+                        requested_todo_id=_requested_quota_action_todo_id(args),
                     )
                 else:
                     fail_heartbeat_receipt(

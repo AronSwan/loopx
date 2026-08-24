@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,50 @@ def bind_scheduler_followup_cli_routes(
         }
 
 
+def bind_action_selection_cli_routes(
+    payload: dict[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+) -> None:
+    """Bind two-phase action-selection commands to this live CLI source."""
+
+    interaction_value = payload.get("interaction_contract")
+    interaction: Mapping[str, Any] = (
+        interaction_value
+        if isinstance(interaction_value, Mapping)
+        else {}
+    )
+    cli_channel_value = interaction.get("cli_channel")
+    if not isinstance(cli_channel_value, dict):
+        return
+    cli_channel: dict[str, Any] = cli_channel_value
+    if cli_channel.get("selection_required") is not True:
+        return
+    selection_command = cli_channel.get("selection_command")
+    if not isinstance(selection_command, dict):
+        return
+    route_prefix = selection_command.get("route_prefix")
+    if not isinstance(route_prefix, str):
+        return
+    try:
+        tokens = shlex.split(route_prefix)
+    except ValueError:
+        return
+    if tokens == ["loopx", "--format", "json"]:
+        selection_command["route_prefix"] = shlex.join(
+            [
+                "loopx",
+                "--registry",
+                str(registry_path.expanduser().resolve()),
+                "--runtime-root",
+                str(runtime_root.expanduser().resolve()),
+                "--format",
+                "json",
+            ]
+        )
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -94,6 +139,7 @@ def build_live_quota_should_run_decision(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     bounded_research_frontier_projector: BoundedResearchFrontierProjector | None = None,
     receipt_bound_todo_id: str | None = None,
+    requested_action_todo_id: str | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
@@ -155,6 +201,7 @@ def build_live_quota_should_run_decision(
         scheduler_execution_context=resolved_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         receipt_bound_todo_id=receipt_bound_todo_id,
+        requested_action_todo_id=requested_action_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
@@ -165,5 +212,10 @@ def build_live_quota_should_run_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
         source=route_source,
+    )
+    bind_action_selection_cli_routes(
+        payload,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
     )
     return payload

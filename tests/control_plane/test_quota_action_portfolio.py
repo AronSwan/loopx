@@ -62,33 +62,81 @@ def _legacy_future_primary_status() -> dict:
     )
 
 
-def test_sticky_primary_exposes_bounded_fallback_on_every_hot_path() -> None:
+def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> None:
     packet = build_quota_should_run(
         _legacy_future_primary_status(),
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
+        turn_instance_id="turn-portfolio-001",
     )
 
     assert packet["selected_todo"]["todo_id"] == PRIMARY_ID
     portfolio = packet["action_portfolio"]
     assert portfolio["primary"]["todo_id"] == PRIMARY_ID
-    assert [item["todo_id"] for item in portfolio["fallback_actions"]] == [
-        FALLBACK_ID
+    assert "fallback_actions" not in portfolio
+    assert "fallback_policy" not in portfolio
+    assert portfolio["selection_policy"] == {
+        "decision_owner": "agent",
+        "mode": "explicit_turn_binding",
+        "recommendation_role": "default_not_binding",
+        "requires_explicit_turn_binding": True,
+        "direct_delivery_before_selection": False,
+        "max_alternative_actions": 2,
+        "candidate_scope": "current_authoritative_eligible_todos",
+        "suggestions_exhaustive": False,
+    }
+    assert [item["todo_id"] for item in portfolio["suggested_actions"]] == [
+        PRIMARY_ID,
+        FALLBACK_ID,
     ]
-    assert portfolio["fallback_policy"]["trigger"] == (
-        "primary_unavailable_at_execution"
-    )
     assert packet["interaction_contract"]["agent_channel"][
         "action_portfolio_ref"
     ] == "$.action_portfolio"
+    assert packet["interaction_contract"]["agent_channel"][
+        "selection_required"
+    ] is True
+    assert packet["interaction_contract"]["agent_channel"][
+        "delivery_allowed"
+    ] is False
+    cli_channel = packet["interaction_contract"]["cli_channel"]
+    assert cli_channel["selection_required"] is True
+    assert cli_channel["spend_after_validation"] is False
+    assert cli_channel["next_cli_actions"] == []
+    selection_command = cli_channel["selection_command"]
+    assert selection_command["route_prefix"] == "loopx --format json"
+    assert "--todo-id '{todo_id}'" in selection_command["command_args_template"]
+    assert "--turn-instance-id turn-portfolio-001" in (
+        selection_command["command_args_template"]
+    )
+    assert selection_command["candidate_discovery_args"].startswith("todo list")
+    assert "settlement_plan" not in cli_channel
 
     compact = compact_quota_should_run_cli_payload(packet)
-    assert compact["action_portfolio"] == portfolio
+    assert compact["action_portfolio"]["selection_policy"] == (
+        portfolio["selection_policy"]
+    )
+    assert compact["action_portfolio"]["suggested_actions"] == [
+        {"todo_id": PRIMARY_ID, "selection_role": "recommended"},
+        {"todo_id": FALLBACK_ID, "selection_role": "alternative"},
+    ]
+    assert compact["action_portfolio"]["suggested_action_details"] == {
+        "schema_version": "quota_cli_action_portfolio_compaction_v0",
+        "ref": "$.agent_todo_summary.first_executable_items",
+    }
     effect_turn = interpret_quota_should_run_packet(packet)
     assert effect_turn.observation.action_portfolio == portfolio
 
     envelope = build_turn_envelope(packet)
     assert envelope["action"]["action_portfolio"] == portfolio
+    assert envelope["writeback"]["selection_required"] is True
+    assert envelope["writeback"]["suggested_todo_ids"] == [
+        PRIMARY_ID,
+        FALLBACK_ID,
+    ]
+    assert envelope["writeback"]["selection_command_ref"] == (
+        "full_decision.interaction_contract.cli_channel.selection_command"
+    )
+    assert "next_cli_actions" not in envelope["writeback"]
     assert envelope["action_signature"]["coverage"] == (
         ACTION_SIGNATURE_COVERAGE_V2
     )

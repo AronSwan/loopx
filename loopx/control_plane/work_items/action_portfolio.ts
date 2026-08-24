@@ -7,11 +7,15 @@ import {
 
 import type { JsonObject } from "../effect_program.ts";
 
-export const ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v0";
+export const ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v1";
 export const ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION =
   "quota_action_portfolio_request_v0";
+export const ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION =
+  "action_selection_qualification_v0";
+export const ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION =
+  "action_selection_qualification_request_v0";
 
-const MAX_FALLBACK_ACTIONS = 3;
+const MAX_ALTERNATIVE_ACTIONS = 3;
 
 interface ActionCandidate extends JsonObject {
   todo_id: string;
@@ -67,18 +71,28 @@ function primaryProjection(candidate: ActionCandidate): JsonObject {
   return { todo_id: candidate.todo_id };
 }
 
-function fallbackProjection(candidate: ActionCandidate): JsonObject {
+function suggestedActionProjection(candidate: ActionCandidate): JsonObject {
   const projected: JsonObject = {
     todo_id: candidate.todo_id,
     text: candidate.text,
   };
-  for (const field of ["priority", "action_kind", "claimed_by"] as const) {
+  for (const field of ["priority", "action_kind"] as const) {
     if (candidate[field] !== undefined) projected[field] = candidate[field];
   }
   if (candidate.claim_required_before_work === true) {
     projected.claim_required_before_work = true;
   }
   return projected;
+}
+
+function allowedActionProjection(
+  candidate: ActionCandidate,
+  selectionRole: "recommended" | "alternative",
+): JsonObject {
+  return {
+    ...suggestedActionProjection(candidate),
+    selection_role: selectionRole,
+  };
 }
 
 function unavailableProjection(candidate: ActionCandidate): JsonObject {
@@ -116,21 +130,21 @@ export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
   }
   const primary = actionCandidate(request.primary, "action_portfolio_request.primary");
   requireRunnableAdvancement(primary, "action_portfolio_request.primary");
-  const maximum = request.max_fallback_actions === undefined
+  const maximum = request.max_alternative_actions === undefined
     ? 2
     : requireInteger(
-      request.max_fallback_actions,
-      "action_portfolio_request.max_fallback_actions",
+      request.max_alternative_actions,
+      "action_portfolio_request.max_alternative_actions",
     );
-  if (maximum < 1 || maximum > MAX_FALLBACK_ACTIONS) {
+  if (maximum < 1 || maximum > MAX_ALTERNATIVE_ACTIONS) {
     throw new Error(
-      `action_portfolio_request.max_fallback_actions must be between 1 and ${MAX_FALLBACK_ACTIONS}`,
+      `action_portfolio_request.max_alternative_actions must be between 1 and ${MAX_ALTERNATIVE_ACTIONS}`,
     );
   }
 
   const rawCandidates = Array.isArray(request.candidates) ? request.candidates : [];
   const seen = new Set<string>([candidateIdentity(primary)]);
-  const fallbackActions: ActionCandidate[] = [];
+  const alternativeActions: ActionCandidate[] = [];
   for (const [index, rawCandidate] of rawCandidates.entries()) {
     const candidate = actionCandidate(
       rawCandidate,
@@ -143,8 +157,8 @@ export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
     const identity = candidateIdentity(candidate);
     if (seen.has(identity)) continue;
     seen.add(identity);
-    fallbackActions.push(candidate);
-    if (fallbackActions.length >= maximum) break;
+    alternativeActions.push(candidate);
+    if (alternativeActions.length >= maximum) break;
   }
 
   const rawUnavailable = Array.isArray(request.unavailable_higher_priority)
@@ -168,24 +182,112 @@ export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
     }
     seenUnavailable.add(identity);
     unavailableHigherPriority.push(candidate);
-    if (unavailableHigherPriority.length >= MAX_FALLBACK_ACTIONS) break;
+    if (unavailableHigherPriority.length >= MAX_ALTERNATIVE_ACTIONS) break;
   }
 
-  if (fallbackActions.length === 0 && unavailableHigherPriority.length === 0) {
+  if (alternativeActions.length === 0 && unavailableHigherPriority.length === 0) {
     return null;
   }
+  const requiresExplicitTurnBinding = alternativeActions.length > 0;
   return {
     schema_version: ACTION_PORTFOLIO_SCHEMA_VERSION,
     primary: primaryProjection(primary),
-    fallback_policy: {
-      trigger: "primary_unavailable_at_execution",
-      selection: "first_still_runnable_in_order",
-      preserve_primary_blocker: true,
-      max_fallback_actions: maximum,
+    selection_policy: {
+      decision_owner: "agent",
+      mode: requiresExplicitTurnBinding
+        ? "explicit_turn_binding"
+        : "recommended_only",
+      recommendation_role: requiresExplicitTurnBinding
+        ? "default_not_binding"
+        : "only_runnable_action",
+      requires_explicit_turn_binding: requiresExplicitTurnBinding,
+      direct_delivery_before_selection: !requiresExplicitTurnBinding,
+      max_alternative_actions: maximum,
+      candidate_scope: "current_authoritative_eligible_todos",
+      suggestions_exhaustive: false,
     },
-    fallback_actions: fallbackActions.map(fallbackProjection),
+    suggested_actions: [
+      allowedActionProjection(primary, "recommended"),
+      ...alternativeActions.map((candidate) =>
+        allowedActionProjection(candidate, "alternative")
+      ),
+    ],
     unavailable_higher_priority: unavailableHigherPriority.map(
       unavailableProjection,
     ),
+  };
+}
+
+/**
+ * Qualify an agent's provisional Todo choice against the current hard lane.
+ *
+ * A same-turn `--todo-id` is not a receipt binding yet.  Python projects the
+ * current authoritative candidate and the current arbitration result; this
+ * reducer alone decides whether that pending choice may become the settlement
+ * candidate.  Committed receipt replay remains a separate state.
+ */
+export function qualifyActionSelection(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "action_selection_qualification_request");
+  if (
+    request.schema_version !==
+      ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION
+  ) {
+    throw new Error(
+      `action_selection_qualification_request.schema_version must be ${ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION}`,
+    );
+  }
+  const requestedTodoId = requireNonEmptyString(
+    request.requested_todo_id,
+    "action_selection_qualification_request.requested_todo_id",
+  );
+  const rawCandidate = request.candidate;
+  const preemptions = Array.isArray(request.delivery_preemptions)
+    ? request.delivery_preemptions.map((item, index) =>
+      requireNonEmptyString(
+        item,
+        `action_selection_qualification_request.delivery_preemptions[${index}]`,
+      )
+    )
+    : [];
+  const shouldRun = request.should_run === true;
+  const normalDeliveryAllowed = request.normal_delivery_allowed === true;
+  if (rawCandidate === null || rawCandidate === undefined) {
+    return {
+      schema_version: ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION,
+      state: "rejected",
+      requested_todo_id: requestedTodoId,
+      reason: "candidate_not_currently_eligible",
+    };
+  }
+  const candidate = actionCandidate(
+    rawCandidate,
+    "action_selection_qualification_request.candidate",
+  );
+  requireRunnableAdvancement(
+    candidate,
+    "action_selection_qualification_request.candidate",
+  );
+  if (candidate.todo_id !== requestedTodoId) {
+    throw new Error(
+      "action_selection_qualification_request.candidate.todo_id must match requested_todo_id",
+    );
+  }
+  if (!shouldRun || !normalDeliveryAllowed || preemptions.length > 0) {
+    return {
+      schema_version: ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION,
+      state: "deferred",
+      requested_todo_id: requestedTodoId,
+      reason: preemptions[0] ?? "current_delivery_gate",
+      delivery_preemptions: preemptions,
+    };
+  }
+  return {
+    schema_version: ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION,
+    state: "qualified",
+    requested_todo_id: requestedTodoId,
+    selected_todo: {
+      ...suggestedActionProjection(candidate),
+      selection_binding: "pending_action_selection",
+    },
   };
 }

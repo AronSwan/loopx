@@ -14,8 +14,8 @@ loopx quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
 The default `quota should-run` output remains unchanged. The v0 envelope keeps:
 
 - the selected todo, claim, and effective action;
-- the bounded action portfolio when another admitted action can take over after
-  a primary execution failure;
+- the bounded action portfolio when the agent must choose among multiple
+  admitted actions before delivery;
 - concrete user actions and gate reasons;
 - required reads;
 - write scope, approvals, guards, workspace/capability gates, and stop rule;
@@ -40,6 +40,33 @@ migration as a review signal. Its bounded, JSON-only v2 migration budget applies
 only when a v0/v1 baseline moves to v2; ordinary growth limits resume once v2
 is the baseline. A digest change without a supported coverage migration, or a
 v2 portfolio above that one-version budget, still fails closed.
+
+For `quota_action_portfolio_v1`, the envelope carries the recommendation and
+bounded, non-exhaustive `suggested_actions`, but neither is a settlement
+identity or permission list. When the full interaction contract says
+`selection_required=true`, the agent must rerun quota in the same turn with any
+currently authoritative, same-agent, capability-ready Todo. The full decision's
+`selection_command.command_args_template` is a rendering template, not a
+permission list. It and `candidate_discovery_args` share one bound
+`route_prefix`; the discovery route exposes the current open agent queue
+when the bounded suggestions are insufficient. The requested Todo remains
+pending until the second guard re-runs current lane arbitration and eligibility;
+only a qualified request upgrades the identity-less receipt. A newly due hard
+lane leaves the receipt unbound, and only the resulting receipt-bound envelope
+is a delivery contract.
+
+`loopx turn plan` and `loopx turn run-once` have no agent selection phase before
+they build the host transaction. When such a Turn sees a v1 portfolio, its
+outer controller binds the advisory primary by rerunning the same current
+eligibility qualification, retains the portfolio in the envelope for audit,
+and marks the selected Todo with
+`selected_by=turn_controller_advisory_primary`. This deterministic compatibility
+path does not apply to heartbeat/model turns: their first response remains
+identity-less and delivery-blocked until the agent explicitly chooses.
+
+The compact envelope does not truncate those executable commands into unusable
+strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
+`selection_command_ref`; the full decision remains the authority for exact argv.
 
 `protocol_action_packet` remains in the full decision/cold path. The envelope
 reconstructs its ordered semantic fields from `action`, `user`, work-lane,

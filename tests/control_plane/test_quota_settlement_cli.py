@@ -12,6 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "settlement-cli-fixture"
 AGENT_ID = "codex-settlement-cli"
 TODO_ID = "todo_fixture_settlement"
+ALTERNATIVE_TODO_ID = "todo_fixture_alternative"
+SECOND_ALTERNATIVE_TODO_ID = "todo_fixture_second_alternative"
+OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID = "todo_fixture_outside_portfolio"
 REENTRY_TODO_ID = "todo_fixture_network_reentry"
 DUE_MONITOR_TODO_ID = "todo_fixture_due_monitor"
 TURN_ID = "turn-settlement-cli-1"
@@ -189,6 +192,27 @@ def _configure_repository_write_todo(project: Path) -> Path:
     return state_path
 
 
+def _configure_selectable_alternative(project: Path) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.rstrip()
+        + "\n- [ ] [P1] Advance the independent alternative delivery.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={ALTERNATIVE_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement -->\n"
+        + "- [ ] [P1] Advance the second independent alternative.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={SECOND_ALTERNATIVE_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement -->\n"
+        + "- [ ] [P1] Advance the fourth eligible action.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement -->\n",
+        encoding="utf-8",
+    )
+
+
 def _configure_runtime_capability_reentry_fixture(project: Path) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -221,6 +245,36 @@ def _append_newly_due_monitor(project: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _append_blocking_user_gate(project: Path) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.rstrip()
+        + "\n\n## User Todo\n\n"
+        + "- [ ] [P0-user] Approve the newly introduced delivery gate.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_user_gate status=open "
+        + "task_class=user_gate action_kind=approve_delivery "
+        + f"blocks_agent={AGENT_ID} "
+        + "decision_scope=delivery:action:fixture priority=P0-USER -->\n",
+        encoding="utf-8",
+    )
+
+
+def _heartbeat_receipt_events(runtime: Path, turn_instance_id: str) -> list[dict[str, Any]]:
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    if not log_path.exists():
+        return []
+    return [
+        event
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if (
+            (event := json.loads(line)).get("event_kind") == "quota_should_run"
+            and event.get("run_id") == turn_instance_id
+            and event.get("agent_id") == AGENT_ID
+        )
+    ]
 
 
 def _configure_autonomous_replan_fixture(
@@ -972,6 +1026,319 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
     assert spend_replay["appended"] is False
     assert _spend_run_count(runtime) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+
+
+def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-1"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+
+    assert first_rc == 0, first
+    assert first["action_portfolio"]["selection_policy"][
+        "requires_explicit_turn_binding"
+    ] is True
+    assert first["interaction_contract"]["agent_channel"][
+        "selection_required"
+    ] is True
+    assert first["interaction_contract"]["agent_channel"][
+        "delivery_allowed"
+    ] is False
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    cli_channel = first["interaction_contract"]["cli_channel"]
+    assert cli_channel["next_cli_actions"] == []
+    selection_command = cli_channel["selection_command"]
+    assert "--todo-id '{todo_id}'" in selection_command["command_args_template"]
+    assert "--registry" in selection_command["route_prefix"]
+    assert "--runtime-root" in selection_command["route_prefix"]
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert "action_portfolio" not in selected
+    assert selected["interaction_contract"]["agent_channel"].get(
+        "selection_required"
+    ) is None
+    assert selected["interaction_contract"]["agent_channel"][
+        "delivery_allowed"
+    ] is True
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"][
+        "todo_id"
+    ] == ALTERNATIVE_TODO_ID
+    plan_identity = selected["interaction_contract"]["cli_channel"][
+        "settlement_plan"
+    ]["identity"]
+    assert plan_identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-invalid"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    assert OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID not in {
+        item["todo_id"]
+        for item in first["action_portfolio"]["suggested_actions"]
+    }
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == (
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
+    )
+    assert selected["selected_todo"]["selection_binding"] == (
+        "heartbeat_receipt"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-unprojected"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    invalid_rc, invalid = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        "todo_not_projected",
+    )
+
+    assert first_rc == 0, first
+    assert invalid_rc != 0, invalid
+    assert invalid["ok"] is False
+    assert invalid["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_unsuggested_selection_revalidates_current_capability_readiness(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open ",
+            f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open "
+            "required_capabilities=network ",
+        ),
+        encoding="utf-8",
+    )
+    turn_instance_id = "turn-agent-selection-capability-blocked"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    blocked_rc, blocked = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    assert blocked_rc != 0, blocked
+    assert blocked["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_first_call_agent_selection_is_qualified_before_receipt_commit(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-without-portfolio"
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "committed"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_pending_action_selection_does_not_preempt_newly_due_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-monitor-preemption"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_newly_due_monitor(project)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert len(events) == 1
+    assert not events[0]["details"].get("todo_id")
+    assert not events[0]["details"].get("settlement_effect_id")
+
+
+def test_pending_action_selection_does_not_commit_after_new_user_gate(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-user-gate"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_blocking_user_gate(project)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert len(events) == 1
+    assert not events[0]["details"].get("todo_id")
+    assert not events[0]["details"].get("settlement_effect_id")
 
 
 def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(

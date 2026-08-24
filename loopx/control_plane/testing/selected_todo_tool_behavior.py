@@ -35,11 +35,17 @@ SELECTED_TODO_TOOL_BEHAVIOR_MAX_CALLS = 6
 SELECTED_TODO_TOOL_FIXTURE_GOAL_ID = "portfolio-goal"
 SELECTED_TODO_TOOL_FIXTURE_AGENT_ID = "codex-portfolio"
 SELECTED_TODO_TOOL_FIXTURE_TODO_ID = "todo_portfolio001"
+STALE_DONE_PRIMARY_TODO_ID = "todo_portfolio_stale001"
 _SELECTED_TARGET = "fixture/selected-lane.json"
 _DECOY_TARGET = "fixture/deferred-lane.json"
 SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT = (
     f"Read only `{_SELECTED_TARGET}`; use its self-contained JSON to verify "
     "the selected lane contract."
+)
+STALE_DONE_PRIMARY_ACTION_TEXT = (
+    "Do not repeat the legacy primary slice: its delivery and validation are "
+    "already complete, but this Todo is intentionally still open to model "
+    "stale-control-plane drift. Choose the visible successor instead."
 )
 _READ_ONLY_PREFLIGHT_COMMANDS = {
     "pwd",
@@ -75,6 +81,8 @@ def _build_fixture(
     root: Path,
     *,
     prior_in_flight_progress: bool = False,
+    unsuggested_selected_todo: bool = False,
+    stale_done_primary_successor: bool = False,
 ) -> _SelectedTodoToolFixture:
     source_root = Path(__file__).resolve().parents[3]
     project_root = root / "project"
@@ -127,19 +135,35 @@ def _build_fixture(
         text=True,
         timeout=10,
     )
-    next_action = (
+    decoy_action = (
+        STALE_DONE_PRIMARY_ACTION_TEXT
+        if stale_done_primary_successor
+        else
         f"Read only `{_DECOY_TARGET}`; start the newly queued sibling lane."
+    )
+    next_action = (
+        decoy_action
         if prior_in_flight_progress
+        or unsuggested_selected_todo
+        or stale_done_primary_successor
         else SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
     )
+    decoy_count = 3 if unsuggested_selected_todo else 1 if prior_in_flight_progress else 0
     decoy_todo = (
-        f"- [ ] [P1] {next_action}\n"
+        f"- [ ] [P1] {STALE_DONE_PRIMARY_ACTION_TEXT}\n"
         "  <!-- loopx:todo "
-        "todo_id=todo_portfolio_decoy001 status=open "
-        "task_class=advancement_task action_kind=inspect_deferred_contract "
+        f"todo_id={STALE_DONE_PRIMARY_TODO_ID} status=open "
+        "task_class=advancement_task action_kind=legacy_slice_already_complete "
         f"claimed_by={SELECTED_TODO_TOOL_FIXTURE_AGENT_ID} priority=P1 -->\n"
-        if prior_in_flight_progress
-        else ""
+        if stale_done_primary_successor
+        else "".join(
+            f"- [ ] [P1] {decoy_action} Candidate {index}.\n"
+            "  <!-- loopx:todo "
+            f"todo_id=todo_portfolio_decoy00{index} status=open "
+            "task_class=advancement_task action_kind=inspect_deferred_contract "
+            f"claimed_by={SELECTED_TODO_TOOL_FIXTURE_AGENT_ID} priority=P1 -->\n"
+            for index in range(1, decoy_count + 1)
+        )
     )
     state_path.write_text(
         "---\n"
@@ -284,6 +308,22 @@ def _is_quota_guard(command: str) -> bool:
         == SELECTED_TODO_TOOL_FIXTURE_AGENT_ID
         and "--codex-app" in tokens
         and argument_value(tokens, "--turn-instance-id")
+    )
+
+
+def _is_candidate_discovery(command: str) -> bool:
+    tokens = loopx_command_tokens(command)
+    if not tokens:
+        return False
+    try:
+        todo_index = tokens.index("todo")
+    except ValueError:
+        return False
+    return bool(
+        tokens[todo_index : todo_index + 2] == ["todo", "list"]
+        and argument_value(tokens, "--goal-id")
+        == SELECTED_TODO_TOOL_FIXTURE_GOAL_ID
+        and argument_value(tokens, "--role") == "agent"
     )
 
 
@@ -795,6 +835,8 @@ def _classify_tool_command(
 ) -> tuple[str, str | None]:
     if _is_quota_guard(command):
         return "quota_should_run", None
+    if _is_candidate_discovery(command):
+        return "candidate_discovery", None
     clock_output = _clock_output(command)
     if clock_output is not None:
         return "clock", clock_output
@@ -834,7 +876,30 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
     action = dict(signature.get("action") or {})
     user = dict(signature.get("user") or {})
     selected = dict(action.get("selected_todo") or {})
-    contract = {
+    action_portfolio_value = packet.get("action_portfolio")
+    action_portfolio: Mapping[str, Any] = (
+        action_portfolio_value
+        if isinstance(action_portfolio_value, Mapping)
+        else {}
+    )
+    raw_suggested_actions = action_portfolio.get("suggested_actions")
+    suggested_actions = (
+        raw_suggested_actions if isinstance(raw_suggested_actions, list) else []
+    )
+    suggested_action_ids = [
+        str(item.get("todo_id") or "").strip()
+        for item in suggested_actions
+        if isinstance(item, Mapping) and str(item.get("todo_id") or "").strip()
+    ]
+    interaction = packet.get("interaction_contract")
+    interaction = interaction if isinstance(interaction, Mapping) else {}
+    raw_cli_channel = interaction.get("cli_channel")
+    cli_channel = (
+        raw_cli_channel
+        if isinstance(raw_cli_channel, Mapping)
+        else {}
+    )
+    contract: dict[str, Any] = {
         "decision": "execute",
         "selected_todo_id": selected.get("todo_id"),
         "user_action_required": bool(user.get("action_required")),
@@ -842,9 +907,15 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         "delivery_allowed": bool(action.get("delivery_allowed")),
         "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
         "external_write_requested": False,
+        "selection_required": cli_channel.get("selection_required") is True,
+        "suggested_action_ids": suggested_action_ids,
     }
     if (
-        contract["selected_todo_id"] != SELECTED_TODO_TOOL_FIXTURE_TODO_ID
+        (
+            not contract["selection_required"]
+            and contract["selected_todo_id"]
+            != SELECTED_TODO_TOOL_FIXTURE_TODO_ID
+        )
         or contract["user_action_required"]
         or not contract["must_attempt_work"]
         or contract["quiet_noop_allowed"]
@@ -931,10 +1002,14 @@ class DoubaoSelectedTodoToolBehaviorActor:
         qualification_id: str,
         fixture_root: Path,
         prior_in_flight_progress: bool = False,
+        unsuggested_selected_todo: bool = False,
+        stale_done_primary_successor: bool = False,
     ) -> dict[str, Any]:
         fixture = _build_fixture(
             fixture_root,
             prior_in_flight_progress=prior_in_flight_progress,
+            unsuggested_selected_todo=unsuggested_selected_todo,
+            stale_done_primary_successor=stale_done_primary_successor,
         )
         messages: list[dict[str, Any]] = [
             {
@@ -944,8 +1019,14 @@ class DoubaoSelectedTodoToolBehaviorActor:
                     "heartbeat task and use the available shell tool when needed. "
                     "The shell working directory is the connected goal project "
                     "root; resolve relative paths from the selected Todo there. "
-                    "Choose each next action from the latest tool result. After "
-                    "quota, execute the exact action in selected_todo.text directly. "
+                    "Choose each next action from the latest tool result. If quota "
+                    "sets selection_required, choose any currently eligible Todo; "
+                    "selection_command is non-binding. Replace {todo_id}, then "
+                    "run exactly `<route_prefix> <command_args_template>` for the "
+                    "second quota guard before delivery. Only when the visible "
+                    "packet lacks the Todo identity you need, run exactly "
+                    "`<route_prefix> <candidate_discovery_args>`. "
+                    "Otherwise execute the exact action in selected_todo.text directly. "
                     "When it names one file, read only that file; do not discover, "
                     "compare, or inspect other targets. After that selected Todo "
                     "tool succeeds, call no more tools."
@@ -955,6 +1036,7 @@ class DoubaoSelectedTodoToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        selection_required = False
         contract: dict[str, Any] | None = None
         seen_once: set[str] = set()
         actor_ref = self._client.actor_ref
@@ -992,6 +1074,11 @@ class DoubaoSelectedTodoToolBehaviorActor:
                 }
             )
             if kind == "selected_action":
+                if selection_required:
+                    return receipt(
+                        passed=False,
+                        failure_code="delivery_before_action_selection",
+                    )
                 try:
                     _execute_selected_read(tool_call.command, fixture=fixture)
                 except (RuntimeError, ValueError, json.JSONDecodeError):
@@ -1006,11 +1093,21 @@ class DoubaoSelectedTodoToolBehaviorActor:
                 "unexpected_command",
             }:
                 return receipt(passed=False, failure_code=kind)
-            if kind in {"clock", "quota_should_run"} and kind in seen_once:
+            if kind == "quota_should_run" and quota_observed:
+                tokens = loopx_command_tokens(tool_call.command) or []
+                requested_todo_id = argument_value(tokens, "--todo-id")
+                if not selection_required:
+                    return receipt(
+                        passed=False,
+                        failure_code="repeated_quota_should_run",
+                    )
+                kind = "quota_action_selection"
+                steps[-1]["kind"] = kind
+            if kind == "clock" and kind in seen_once:
                 return receipt(passed=False, failure_code=f"repeated_{kind}")
-            if kind in {"clock", "quota_should_run"}:
+            if kind == "clock":
                 seen_once.add(kind)
-            if kind == "quota_should_run":
+            if kind in {"quota_should_run", "quota_action_selection"}:
                 try:
                     tool_output = execute_loopx_cli(
                         tool_call.command,
@@ -1024,10 +1121,31 @@ class DoubaoSelectedTodoToolBehaviorActor:
                     quota_packet = json.loads(tool_output)
                     contract = _quota_contract(quota_packet)
                     quota_observed = True
+                    selection_required = bool(contract["selection_required"])
+                    if kind == "quota_action_selection":
+                        if selection_required:
+                            raise ValueError("action selection did not bind the turn")
+                        if contract["selected_todo_id"] != requested_todo_id:
+                            raise ValueError("action selection bound a different Todo")
                 except (RuntimeError, ValueError, json.JSONDecodeError):
                     return receipt(
                         passed=False,
                         failure_code="quota_execution_failed",
+                    )
+            elif kind == "candidate_discovery":
+                try:
+                    tool_output = execute_loopx_cli(
+                        tool_call.command,
+                        source_root=fixture.source_root,
+                        project_root=fixture.project_root,
+                        argument_overrides={
+                            "--registry": str(fixture.global_registry_path),
+                        },
+                    )
+                except (RuntimeError, ValueError, json.JSONDecodeError):
+                    return receipt(
+                        passed=False,
+                        failure_code="candidate_discovery_failed",
                     )
             elif kind == "workspace_read":
                 try:
