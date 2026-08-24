@@ -20,6 +20,7 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .install_contract import NO_CLONE_INSTALL_URL
 from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path
+from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
 from .release_manifest import load_release_manifest, release_version_tag
@@ -205,11 +206,13 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
     )
     if not owns_module:
         return {"available": False}
+    owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {
         "available": True,
         "kind": "python_distribution",
         "version": installed.version,
-        "installer": installer,
+        "installer": owner.manager,
+        "installer_environment": owner.environment,
         "root": str(Path(installed.locate_file("")).resolve()),
     }
 
@@ -532,14 +535,15 @@ def build_install_freshness(
         f"{local_install_command(repo_root, skip_skills=externally_managed_skills)}\n"
         f"loopx doctor{doctor_agent_arg}"
     )
-    upgrade_command = (
-        f"{shlex.quote(sys.executable)} -m pip install --upgrade loopx\n"
-        "loopx workflow-skills --install\n"
-        "loopx slash-commands --install\n"
-        f"loopx doctor{doctor_agent_arg}"
-        if distribution_install
-        else no_clone_command
-    )
+    distribution_owner = PythonInstallOwner(
+        str(distribution_install.get("installer") or "unknown"),
+        distribution_install.get("installer_environment"),
+    ) if distribution_install else None
+    upgrade_command = python_distribution_upgrade_command(
+        owner=distribution_owner,
+        python_executable=sys.executable,
+        doctor_command=f"loopx doctor{doctor_agent_arg}",
+    ) if distribution_owner else no_clone_command
     manifest_source_git_commit = manifest_source.get("git_commit")
     manifest_source_revision = (
         manifest_source_git_commit
@@ -616,6 +620,9 @@ def build_install_freshness(
         ),
         "python_distribution_installer": (
             distribution_install.get("installer") if distribution_install else None
+        ),
+        "python_distribution_installer_environment": (
+            distribution_install.get("installer_environment") if distribution_install else None
         ),
         "externally_managed_skills": externally_managed_skills,
         "release_manifest_available": manifest.get("available"),
