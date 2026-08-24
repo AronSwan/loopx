@@ -336,10 +336,9 @@ def _start_instruction(agent_type: str) -> str:
         )
     if agent_type == "zcode":
         return (
-            "Invoke the LoopX skill from `AGENTS_HOME/skills` (or a project-local "
-            "`.agents/skills` copy); after todo writeback, carry the generated "
-            "heartbeat task body as the session objective and start every following "
-            "turn with `quota should-run`."
+            "Invoke `$loopx` (or the LoopX skill from `ZCODE_HOME/skills`); after "
+            "todo writeback, carry the generated heartbeat task body as the "
+            "session objective and start every following turn with `quota should-run`."
         )
     if agent_type == "deepseek-harness":
         return (

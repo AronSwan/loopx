@@ -4,19 +4,23 @@ import os
 from pathlib import Path
 
 ZCODE_INSTALL_SURFACE = "zcode"
-ZCODE_HOME_ENV = "ZCODE_AGENTS_HOME"
-DEFAULT_ZCODE_HOME = ".agents"
+ZCODE_HOME_ENV = "ZCODE_HOME"
+DEFAULT_ZCODE_HOME = ".zcode"
 SKILLS_SUBDIR = "skills"
-SKILLS_ROOT_LABEL = "AGENTS_HOME/skills"
+SKILLS_ROOT_LABEL = "ZCODE_HOME/skills"
 
 
 def zcode_home(value: str | None = None) -> Path:
-    """ZCode discovers user skills from AGENTS_HOME/skills (default ~/.agents).
+    """ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode).
 
-    ZCode has no goal primitive and no host automation scheduler; like the other
-    skill-facade CLI hosts it is driven by the agent's own turn loop gated by
-    LoopX quota. Project-local skills under ``<repo>/.agents/skills`` shadow the
-    user root, so installs target the user root and stay project independent.
+    While ZCode provides native Goal Mode and Automations, LoopX currently
+    reaches ZCode through its skill facade where the session turn loop is
+    gated by LoopX quota should-run.
     """
-    raw = value or os.environ.get(ZCODE_HOME_ENV) or str(Path.home() / DEFAULT_ZCODE_HOME)
+    raw = (
+        value
+        or os.environ.get(ZCODE_HOME_ENV)
+        or os.environ.get("ZCODE_AGENTS_HOME")
+        or str(Path.home() / DEFAULT_ZCODE_HOME)
+    )
     return Path(raw).expanduser()

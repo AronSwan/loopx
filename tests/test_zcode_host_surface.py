@@ -55,7 +55,7 @@ def test_agent_onboarding_setup_command_installs_the_zcode_surface(
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": str(tmp_path / "home"),
-        ZCODE_HOME_ENV: str(tmp_path / "agents"),
+        ZCODE_HOME_ENV: str(tmp_path / "zcode"),
     }
     if "PYTHONPATH" in os.environ:  # keep hermetic when run from a worktree
         env["PYTHONPATH"] = os.environ["PYTHONPATH"]
@@ -64,7 +64,7 @@ def test_agent_onboarding_setup_command_installs_the_zcode_surface(
         HOST_SURFACE,
         outside,
         env,
-        expected_skill=tmp_path / "agents" / "skills" / "loopx" / "SKILL.md",
+        expected_skill=tmp_path / "zcode" / "skills" / "loopx" / "SKILL.md",
     )
 
 
@@ -73,17 +73,17 @@ def test_zcode_home_env_override_wins_over_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(ZCODE_HOME_ENV, str(tmp_path / "custom-agents"))
-    assert zcode_home() == tmp_path / "custom-agents"
+    monkeypatch.setenv(ZCODE_HOME_ENV, str(tmp_path / "custom-zcode"))
+    assert zcode_home() == tmp_path / "custom-zcode"
     monkeypatch.delenv(ZCODE_HOME_ENV, raising=False)
-    assert zcode_home() == tmp_path / "home" / ".agents"
+    assert zcode_home() == tmp_path / "home" / ".zcode"
     assert zcode_home(str(tmp_path / "explicit")) == tmp_path / "explicit"
 
 
 def test_installer_preserves_user_owned_zcode_skill(tmp_path: Path) -> None:
     """The skills root is shared with the user's own skills; an unmarked file
     must never be overwritten, and a rerun over a managed file is a no-op."""
-    skills_dir = tmp_path / "agents" / "skills"
+    skills_dir = tmp_path / "zcode" / "skills"
     skill_path = skills_dir / "loopx" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("user-owned skill body\n", encoding="utf-8")
@@ -91,7 +91,7 @@ def test_installer_preserves_user_owned_zcode_skill(tmp_path: Path) -> None:
     payload = install_slash_commands(
         execute=True,
         surfaces=["zcode"],
-        zcode_agents_home=str(tmp_path / "agents"),
+        zcode_home=str(tmp_path / "zcode"),
     )
     statuses = {
         (item["surface"], item["command"]): item["status"] for item in payload["installed"]
@@ -106,7 +106,7 @@ def test_installer_preserves_user_owned_zcode_skill(tmp_path: Path) -> None:
     payload = install_slash_commands(
         execute=True,
         surfaces=["zcode"],
-        zcode_agents_home=str(tmp_path / "agents"),
+        zcode_home=str(tmp_path / "zcode"),
     )
     statuses = {
         (item["surface"], item["command"]): item["status"] for item in payload["installed"]
@@ -118,7 +118,7 @@ def test_installer_preserves_user_owned_zcode_skill(tmp_path: Path) -> None:
         execute=True,
         uninstall=True,
         surfaces=["zcode"],
-        zcode_agents_home=str(tmp_path / "agents"),
+        zcode_home=str(tmp_path / "zcode"),
     )
     assert not skill_path.exists()
     assert retire["ok"] is True
@@ -135,6 +135,7 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     )
     assert entry["display_name"] == "ZCode"
     assert entry["host_loop"]
+    assert entry["entry"] == "$loopx <task> or the LoopX skill from ZCODE_HOME/skills"
     # The bare product name is what a user types.
     assert HOST_SURFACE in entry["accepted_inputs"]
     assert normalize_agent_type("zcode") == HOST_SURFACE
@@ -144,10 +145,11 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     }
 
 
-def test_activation_claims_no_host_loop_zcode_does_not_have() -> None:
-    """ZCode owns no goal primitive or automation scheduler. The packet has to
-    say so: an overstated capability here is what makes an agent claim
-    autonomous setup it cannot deliver."""
+def test_activation_uses_skill_facade_loop_without_claiming_unintegrated_native_binding() -> None:
+    """ZCode integrates via the skill facade while native Goal Mode and
+    Automations bindings are not yet connected. The packet must accurately
+    describe the quota-gated agent turn loop without claiming unintegrated
+    native bindings."""
     packet = build_host_loop_activation_packet(
         agent_type=HOST_SURFACE,
         goal_id="surface-goal",
@@ -158,7 +160,11 @@ def test_activation_claims_no_host_loop_zcode_does_not_have() -> None:
     assert packet["host_mutation"]["cli_can_mutate_directly"] is False
     assert packet["host_mutation"]["host_loop_primitive"] is None
     assert packet["host_mutation"]["loop_driver"] == "agent_cli_turn_loop"
+    assert (
+        "LoopX is currently integrated with ZCode via skill facade"
+        in packet["host_mutation"]["missing_host_tool_gate"]
+    )
     assert packet["setup_command"] == _surface_install_command(HOST_SURFACE, "loopx", ".")
     assert "quota should-run" in " ".join(packet["activation_steps"])
     assert "quota should-run" in _start_instruction(HOST_SURFACE)
-    assert packet["entry_command_hint"] == "the LoopX skill installed in AGENTS_HOME/skills"
+    assert packet["entry_command_hint"] == "the LoopX skill installed in ZCODE_HOME/skills"

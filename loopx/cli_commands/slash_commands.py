@@ -100,8 +100,14 @@ def register_slash_commands_command(
         help="Cursor CLI home for MCP registration. Defaults to CURSOR_HOME or ~/.cursor.",
     )
     parser.add_argument(
+        "--zcode-home",
+        dest="zcode_home",
+        help="ZCode home for skill installation. Defaults to ZCODE_HOME or ~/.zcode.",
+    )
+    parser.add_argument(
         "--zcode-agents-home",
-        help="ZCode agents home for skill installation. Defaults to ZCODE_AGENTS_HOME or ~/.agents.",
+        dest="zcode_home",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--opencode-home",
@@ -140,7 +146,7 @@ def handle_slash_commands_command(
             opencode_home=args.opencode_home,
             gemini_home=args.gemini_home,
             cursor_home=args.cursor_home,
-            zcode_agents_home=args.zcode_agents_home,
+            zcode_home=getattr(args, "zcode_home", None),
             pi_project=args.pi_project,
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)

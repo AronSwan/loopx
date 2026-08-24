@@ -241,7 +241,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     "zcode": {
         "display_name": "ZCode",
         "host_loop": "agent-driven ZCode loop gated by LoopX quota should-run",
-        "entry": "the LoopX skill installed in AGENTS_HOME/skills",
+        "entry": "$loopx <task> or the LoopX skill from ZCODE_HOME/skills",
         "accepted_inputs": [
             "zcode",
             "z_code",
@@ -1056,15 +1056,14 @@ def _skill_facade_cli_activation(
     extra_host_mutation: dict[str, Any] | None = None,
     extra_activation_steps: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Activation for a CLI host that LoopX reaches through a skill facade only.
+    """Activation for a CLI host that LoopX reaches through a skill facade.
 
-    Gemini CLI and cursor-agent have no goal primitive to bind: no `/goal` to
-    set, no extension tool to call, no host automation to schedule. What they do
-    have is skill discovery, so the loop driver is the agent's own turn loop and
-    LoopX gates it the only way it can — every continuation has to enter through
-    quota should-run. That is a weaker guarantee than a host-owned loop and is
-    stated as such, because claiming autonomous heartbeat support these hosts
-    cannot deliver is worse than admitting the agent drives itself.
+    For skill-facade CLI hosts where no direct host-native loop binding is
+    integrated, the loop driver is the agent's own turn loop and LoopX gates it
+    by requiring every continuation to enter through quota should-run. That is a
+    weaker guarantee than a host-owned loop and is stated as such, because
+    claiming autonomous heartbeat support these hosts cannot deliver is worse
+    than admitting the agent drives itself.
     """
     return {
         "host_surface": host_surface,
@@ -1146,6 +1145,15 @@ def _zcode_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
         host_surface="zcode_agent_loop",
         install_surface=ZCODE_INSTALL_SURFACE,
         skills_root=SKILLS_ROOT_LABEL,
+        extra_host_mutation={
+            "missing_host_tool_gate": (
+                "LoopX is currently integrated with ZCode via skill facade and "
+                "has no direct machine binding for ZCode native Goal Mode or "
+                "Automations. If the session cannot keep entering through quota "
+                "should-run, show the exact heartbeat-prompt command for the user "
+                "to run and do not claim autonomous heartbeat support."
+            ),
+        },
     )
 
 
