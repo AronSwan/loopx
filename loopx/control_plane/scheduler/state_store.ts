@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +34,8 @@ export const CODEX_APP_SURFACE = "codex_app";
 
 const HOST_UPDATE_FAILURE_CACHE_LIMIT = 4;
 const HOST_UPDATE_FAILURE_TTL_MS = 24 * 60 * 60 * 1_000;
+const SCOPE_SEGMENT_LABEL_LIMIT = 47;
+const SCOPE_SEGMENT_HASH_LENGTH = 16;
 
 export const SCHEDULER_STATE_OPERATIONS = [
   "rrule_for_minutes",
@@ -348,6 +350,19 @@ function safeSegment(value: unknown): string {
   return safe || "default";
 }
 
+function stableHash(value: string, length: number): string {
+  return createHash("sha256")
+    .update(value, "utf8")
+    .digest("hex")
+    .slice(0, length);
+}
+
+function scopedSegment(value: unknown): string {
+  const raw = trimmed(value);
+  const label = safeSegment(raw).slice(0, SCOPE_SEGMENT_LABEL_LIMIT);
+  return `${label}-${stableHash(raw, SCOPE_SEGMENT_HASH_LENGTH)}`;
+}
+
 function expandUser(path: string): string {
   if (path === "~") return homedir();
   if (path.startsWith("~/") || path.startsWith("~\\")) {
@@ -360,10 +375,22 @@ export function schedulerStatePath(
   runtimeRoot: string,
   scope: SchedulerScope,
 ): string {
-  const stateHash = createHash("sha256")
-    .update(scope.stateKey, "utf8")
-    .digest("hex")
-    .slice(0, 16);
+  const stateHash = stableHash(scope.stateKey, 16);
+  return join(
+    expandUser(runtimeRoot),
+    "goals",
+    scopedSegment(scope.goalId),
+    "scheduler-state",
+    scopedSegment(scope.agentId),
+    scopedSegment(scope.surface),
+    `${stateHash}.json`,
+  );
+}
+
+function legacySchedulerStatePath(
+  runtimeRoot: string,
+  scope: SchedulerScope,
+): string {
   return join(
     expandUser(runtimeRoot),
     "goals",
@@ -371,7 +398,7 @@ export function schedulerStatePath(
     "scheduler-state",
     safeSegment(scope.agentId),
     safeSegment(scope.surface),
-    `${stateHash}.json`,
+    `${stableHash(scope.stateKey, 16)}.json`,
   );
 }
 
@@ -453,28 +480,67 @@ function storeRequest(value: unknown, operation: "load" | "write"): {
   request: JsonObject;
   scope: SchedulerScope;
   path: string;
+  legacyPath: string;
 } {
   const request = requiredObject(value, `scheduler.state.${operation} params`);
   if (request.schema_version !== SCHEDULER_STATE_STORE_REQUEST_SCHEMA) {
     throw new Error("Scheduler state store request schema mismatch");
   }
   const scope = schedulerScope(request);
-  const path = schedulerStatePath(
-    requiredString(request.runtime_root, "runtime_root"),
-    scope,
+  const runtimeRoot = requiredString(request.runtime_root, "runtime_root");
+  const path = schedulerStatePath(runtimeRoot, scope);
+  const legacyPath = legacySchedulerStatePath(runtimeRoot, scope);
+  return { request, scope, path, legacyPath };
+}
+
+async function migrateLegacySchedulerState(
+  scope: SchedulerScope,
+  path: string,
+  legacyPath: string,
+): Promise<JsonObject | null> {
+  return await withFileMutationLock(legacyPath, async () =>
+    await withFileMutationLock(path, async () => {
+      try {
+        const current = normalizeSchedulerState(
+          JSON.parse(await readFile(path, "utf8")),
+          scope,
+        );
+        if (current) return current;
+      } catch {
+        // The canonical path is still absent or unusable; inspect legacy state.
+      }
+      let legacyState: JsonObject | null = null;
+      try {
+        legacyState = normalizeSchedulerState(
+          JSON.parse(await readFile(legacyPath, "utf8")),
+          scope,
+        );
+      } catch {
+        return null;
+      }
+      if (!legacyState) return null;
+      await atomicWriteJson(path, stableValue(legacyState) as JsonObject);
+      try {
+        await unlink(legacyPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      return legacyState;
+    })
   );
-  return { request, scope, path };
 }
 
 export async function loadSchedulerState(
   value: unknown,
 ): Promise<SchedulerStateLoadResult> {
-  const { scope, path } = storeRequest(value, "load");
+  const { scope, path, legacyPath } = storeRequest(value, "load");
   let state: JsonObject | null = null;
   try {
     state = normalizeSchedulerState(JSON.parse(await readFile(path, "utf8")), scope);
-  } catch {
-    state = null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      state = await migrateLegacySchedulerState(scope, path, legacyPath);
+    }
   }
   return {
     schema_version: SCHEDULER_STATE_STORE_RESULT_SCHEMA,
