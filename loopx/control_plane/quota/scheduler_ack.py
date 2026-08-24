@@ -135,19 +135,25 @@ def _project_scheduler_ack_record(
     *,
     result: dict[str, Any],
     applied_rrule: str,
+    surface: str,
+    state_key: str,
     plan: dict[str, Any],
     generated_at: str,
     reason_summary: str | None,
 ) -> dict[str, Any]:
     state = result.get("state")
-    scheduler_state = state if isinstance(state, dict) else None
+    scheduler_state = (
+        {key: value for key, value in state.items() if key != "heartbeat_commit"}
+        if isinstance(state, dict)
+        else None
+    )
     reason = str(reason_summary or "").strip() or (
         f"acknowledged Codex App scheduler RRULE {applied_rrule}; no quota spend"
     )
     event: dict[str, Any] = {
         "event_type": QUOTA_SCHEDULER_ACK_CLASSIFICATION,
-        "surface": CODEX_APP_SURFACE,
-        "state_key": CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+        "surface": surface,
+        "state_key": state_key,
         "applied_rrule": applied_rrule,
         "before": compact_quota_decision(before),
         "scheduler_state": scheduler_state,
@@ -475,6 +481,8 @@ def record_quota_scheduler_ack_for_decision(
         before,
         result=scheduler_commit,
         applied_rrule=str(facts["applied_rrule"]),
+        surface=surface,
+        state_key=state_key,
         plan=ack_plan,
         generated_at=safe_generated_at,
         reason_summary=reason_summary,
@@ -507,7 +515,9 @@ def record_quota_scheduler_ack_for_decision(
         "delivery_outcome": record["delivery_outcome"],
         "scheduler_state_path": str(state_path),
         "before": output_before,
-        "after": None,
+        # Preserve the legacy CLI projection for a no-op ACK. Older callers
+        # use `after` to carry the unchanged compact decision in this case.
+        "after": output_before if already_applied else None,
         "post_ack_contract": {
             "next_action": "wait_for_next_scheduler_tick_or_material_state_transition",
             "do_not_apply_successor_rrule_from_ack_response": True,

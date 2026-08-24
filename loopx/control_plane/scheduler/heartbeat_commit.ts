@@ -26,6 +26,7 @@ import {
   schedulerRruleIntervalMinutes,
   schedulerStatePath,
   loadSchedulerState,
+  normalizeSchedulerHostUpdateFailure,
   SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
   type SchedulerScope,
 } from "./state_store.ts";
@@ -206,7 +207,16 @@ function optionalFailureList(value: unknown): JsonObject[] {
   if (!Array.isArray(value)) {
     throw new Error("prior_host_update_failures must be an array");
   }
-  return normalizeSchedulerHostUpdateFailures(value);
+  const normalized = value.map((candidate, index) => {
+    const failure = normalizeSchedulerHostUpdateFailure(candidate);
+    if (!failure) {
+      throw new Error(
+        `prior_host_update_failures[${index}] is malformed`,
+      );
+    }
+    return failure;
+  });
+  return normalizeSchedulerHostUpdateFailures(normalized);
 }
 
 function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
@@ -462,6 +472,14 @@ function transitionAllowsStaleAck(
   return proofMatchesExisting || existing === null;
 }
 
+function isStaleMonitorAck(
+  request: SchedulerHeartbeatCommitRequest,
+): boolean {
+  return request.operation === "ack" &&
+    request.cadence_class === "monitor_wait" &&
+    request.applied_rrule !== request.expected_rrule;
+}
+
 function buildAckState(
   request: SchedulerHeartbeatCommitRequest,
   existing: JsonObject | null,
@@ -657,19 +675,21 @@ export async function evaluateSchedulerHeartbeatCommit(
   const request = requestObject(value);
   const path = schedulerStatePath(request.runtime_root, request.scope);
   const fingerprint = requestDigest(request);
-  // Let the existing state store perform its one-time legacy-layout migration;
-  // the authoritative digest read still happens again inside this transaction's
-  // canonical lock below.
-  await loadSchedulerState({
+  // Execute mode migrates the legacy layout before taking the canonical lock.
+  // Preview mode asks the state store for a read-only legacy fallback so a
+  // dry-run cannot create or delete the canonical/legacy files.
+  const loaded = await loadSchedulerState({
     schema_version: SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
     runtime_root: request.runtime_root,
     goal_id: request.scope.goalId,
     agent_id: request.scope.agentId,
     surface: request.scope.surface,
     state_key: request.scope.stateKey,
+    migrate_legacy: request.execute,
   });
   return await withFileMutationLock(path, async () => {
-    const existing = await readStateUnderLock(path, request.scope);
+    const canonical = await readStateUnderLock(path, request.scope);
+    const existing = canonical ?? (!request.execute ? loaded.state : null);
     const existingDigest = schedulerHeartbeatCommitStateDigest(existing);
     const metadata = commitMetadata(existing);
     if (metadata?.effect_id === request.effect_id) {
@@ -708,9 +728,12 @@ export async function evaluateSchedulerHeartbeatCommit(
       existing.reset_token === request.reset_token &&
       existing.identity_signature === request.identity_signature
     );
+    // A changed scheduler identity starts a fresh progression, including when
+    // the new hint is already beyond index zero. A stale monitor ACK is the
+    // exception: its identity proof is what prevents an old monitor from
+    // resetting a newer scheduler state.
     const identityReset = existing !== null && !identityMatches &&
-      request.progression_index === 0 &&
-      !request.host_match_observed;
+      !request.host_match_observed && !isStaleMonitorAck(request);
     if (existing !== null && !identityMatches && !identityReset) {
       return result(
         request,

@@ -15,6 +15,37 @@ SCHEDULER_HEARTBEAT_COMMIT_REQUEST_SCHEMA = (
 SCHEDULER_HEARTBEAT_COMMIT_RESULT_SCHEMA = "loopx_scheduler_heartbeat_commit_result_v0"
 
 
+def _required_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"scheduler heartbeat {label} must be a boolean")
+    return value
+
+
+def _optional_bool(value: Any, label: str) -> bool | None:
+    if value is None:
+        return None
+    return _required_bool(value, label)
+
+
+def _required_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"scheduler heartbeat {label} must be a non-empty string")
+    return value.strip()
+
+
+def _required_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"scheduler heartbeat {label} must be an integer")
+    return value
+
+
+def _first_present(*values: Any, default: Any = None) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return default
+
+
 def _stable_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_stable_value(item) for item in value]
@@ -112,56 +143,83 @@ def commit_scheduler_heartbeat(
     )
     if not isinstance(progression_minutes, list) or not progression_minutes:
         raise ValueError("scheduler heartbeat state must include progression_minutes")
+    if any(
+        isinstance(item, bool) or not isinstance(item, int) or item <= 0
+        for item in progression_minutes
+    ):
+        raise ValueError(
+            "scheduler heartbeat progression_minutes must be positive integers"
+        )
     progression_index = safe_facts.get(
         "progression_index", safe_state.get("progression_index")
     )
-    if isinstance(progression_index, bool) or not isinstance(progression_index, int):
-        raise ValueError("scheduler heartbeat state must include progression_index")
-    if not isinstance(
-        safe_facts.get("reset_token", safe_state.get("reset_token")), str
-    ) or not safe_facts.get("reset_token", safe_state.get("reset_token")):
-        raise ValueError("scheduler heartbeat state must include reset_token")
-    if not isinstance(
-        safe_facts.get("identity_signature", safe_state.get("identity_signature")),
-        str,
-    ) or not safe_facts.get("identity_signature", safe_state.get("identity_signature")):
-        raise ValueError("scheduler heartbeat state must include identity_signature")
-    expected_rrule = (
-        str(
-            (ack_payload or {}).get("expected_rrule")
-            or safe_facts.get("expected_rrule")
-            or ""
-        ).strip()
-        or str((failure_payload or {}).get("target_rrule") or "").strip()
+    progression_index = _required_int(progression_index, "progression_index")
+    if progression_index < 0 or progression_index >= len(progression_minutes):
+        raise ValueError("scheduler heartbeat progression_index is out of range")
+    reset_token = _required_text(
+        safe_facts.get("reset_token", safe_state.get("reset_token")),
+        "reset_token",
     )
-    applied_rrule = str(
-        (ack_payload or {}).get("applied_rrule")
-        or safe_facts.get("applied_rrule")
-        or ""
-    ).strip()
-    observed_host_rrule = str(
-        (failure_payload or {}).get("observed_host_rrule")
-        or safe_facts.get("observed_host_rrule")
-        or ""
-    ).strip()
+    identity_signature = _required_text(
+        safe_facts.get("identity_signature", safe_state.get("identity_signature")),
+        "identity_signature",
+    )
+    expected_value = (ack_payload or {}).get("expected_rrule")
+    if expected_value is None:
+        expected_value = safe_facts.get("expected_rrule")
+    if expected_value is None:
+        expected_value = (failure_payload or {}).get("target_rrule")
+    expected_rrule = (
+        ""
+        if expected_value in (None, "")
+        else _required_text(expected_value, "expected_rrule")
+    )
+    applied_value = (ack_payload or {}).get("applied_rrule")
+    if applied_value is None:
+        applied_value = safe_facts.get("applied_rrule")
+    applied_rrule = (
+        ""
+        if applied_value in (None, "")
+        else _required_text(applied_value, "applied_rrule")
+    )
+    observed_value = (failure_payload or {}).get("observed_host_rrule")
+    if observed_value is None:
+        observed_value = safe_facts.get("observed_host_rrule")
+    observed_host_rrule = (
+        ""
+        if observed_value in (None, "")
+        else _required_text(observed_value, "observed_host_rrule")
+    )
     prior_failures = safe_facts.get("prior_host_update_failures")
     if prior_failures is None:
         prior_failures = safe_state.get("host_update_failures")
     if prior_failures is None and safe_state.get("host_update_failure") is not None:
         prior_failures = [safe_state["host_update_failure"]]
-    if prior_failures is not None and not isinstance(prior_failures, list):
+    if prior_failures is not None and (
+        not isinstance(prior_failures, list)
+        or any(not isinstance(item, Mapping) for item in prior_failures)
+    ):
         raise ValueError("scheduler heartbeat prior failure cache must be a list")
     # A compact-facts caller must prove whether a host mutation was needed.
     # Keep the legacy full-state path compatible with older callers while
     # refusing to manufacture authority for the new transaction boundary.
     if "apply_needed" in safe_facts:
-        apply_needed = safe_facts["apply_needed"]
+        apply_needed = _optional_bool(safe_facts["apply_needed"], "apply_needed")
     elif failure_payload is not None and "apply_needed" in failure_payload:
-        apply_needed = failure_payload["apply_needed"]
+        apply_needed = _optional_bool(failure_payload["apply_needed"], "apply_needed")
     elif operation == "host_failure" and safe_state:
         apply_needed = True
     else:
         apply_needed = None
+    failure_kind_value = _first_present(
+        safe_facts.get("failure_kind"),
+        (failure_payload or {}).get("failure_kind"),
+    )
+    failure_kind = (
+        None
+        if failure_kind_value in (None, "")
+        else _required_text(failure_kind_value, "failure_kind")
+    )
 
     params: dict[str, Any] = {
         "schema_version": SCHEDULER_HEARTBEAT_COMMIT_REQUEST_SCHEMA,
@@ -173,37 +231,43 @@ def commit_scheduler_heartbeat(
         "surface": surface,
         "state_key": state_key,
         "expected_state_digest": expected_state_digest,
-        "reset_token": safe_facts.get("reset_token", safe_state.get("reset_token")),
-        "identity_signature": safe_facts.get(
-            "identity_signature", safe_state.get("identity_signature")
-        ),
+        "reset_token": reset_token,
+        "identity_signature": identity_signature,
         "progression_index": progression_index,
         "progression_minutes": progression_minutes,
         # An exact ACK event omits expected_rrule; null lets the TS decoder
         # derive it from progression_index/progression_minutes.
         "expected_rrule": expected_rrule or None,
         "applied_rrule": applied_rrule,
-        "cadence_class": str(
-            (ack_payload or {}).get("cadence_class")
-            or (failure_payload or {}).get("cadence_class")
-            or safe_facts.get("cadence_class")
-            or "default"
+        "cadence_class": _required_text(
+            _first_present(
+                (ack_payload or {}).get("cadence_class"),
+                (failure_payload or {}).get("cadence_class"),
+                safe_facts.get("cadence_class"),
+                default="default",
+            ),
+            "cadence_class",
         ),
-        "stale_tolerance_minutes": int(
-            (ack_payload or {}).get("stale_tolerance_minutes")
-            or (failure_payload or {}).get("stale_tolerance_minutes")
-            or safe_facts.get("stale_tolerance_minutes")
-            or 2
+        "stale_tolerance_minutes": _required_int(
+            _first_present(
+                (ack_payload or {}).get("stale_tolerance_minutes"),
+                (failure_payload or {}).get("stale_tolerance_minutes"),
+                safe_facts.get("stale_tolerance_minutes"),
+                default=2,
+            ),
+            "stale_tolerance_minutes",
         ),
-        "generated_at": str(
-            safe_facts.get("generated_at", safe_state.get("updated_at")) or ""
-        ).strip(),
-        "execute": bool(safe_facts.get("execute", execute)),
-        "ack_needed": safe_facts.get(
-            "ack_needed", (ack_payload or {}).get("ack_needed")
+        "generated_at": _required_text(
+            safe_facts.get("generated_at", safe_state.get("updated_at")),
+            "generated_at",
+        ),
+        "execute": _required_bool(safe_facts.get("execute", execute), "execute"),
+        "ack_needed": _optional_bool(
+            safe_facts.get("ack_needed", (ack_payload or {}).get("ack_needed")),
+            "ack_needed",
         ),
         "apply_needed": apply_needed,
-        "source": str(
+        "source": _required_text(
             safe_facts.get(
                 "source",
                 (failure_payload or {}).get("source")
@@ -213,12 +277,13 @@ def commit_scheduler_heartbeat(
                     if operation == "host_failure"
                     else "quota_scheduler_ack"
                 ),
-            )
+            ),
+            "source",
         ),
-        "host_match_observed": bool(safe_facts.get("host_match_observed", False)),
-        "failure_kind": safe_facts.get(
-            "failure_kind", (failure_payload or {}).get("failure_kind")
+        "host_match_observed": _required_bool(
+            safe_facts.get("host_match_observed", False), "host_match_observed"
         ),
+        "failure_kind": failure_kind,
         "observed_host_rrule": observed_host_rrule,
         "prior_host_update_failures": prior_failures or [],
     }
