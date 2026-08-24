@@ -292,8 +292,9 @@ def completed_todo_workspace_causality(
     *,
     goal_id: str,
     todo_id: str,
+    source: str = "completed_todo_contract_fallback",
 ) -> dict[str, str] | None:
-    """Recover a legacy effect's causality from its exact completed Todo."""
+    """Recover an effect's causality from its exact projected Todo contract."""
 
     queue = status_payload.get("attention_queue")
     queue_items = queue.get("items") if isinstance(queue, Mapping) else []
@@ -320,6 +321,6 @@ def completed_todo_workspace_causality(
                         continue
                     return build_delivery_workspace_causality(
                         item,
-                        source="completed_todo_contract_fallback",
+                        source=source,
                     )
     return None
