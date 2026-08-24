@@ -4,6 +4,7 @@ import {
   requireInteger,
   requireJsonObject,
   requireNonEmptyString,
+  requireStringArray,
 } from "../runtime_decode.ts";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -21,6 +22,8 @@ const MAX_ALTERNATIVE_ACTIONS = 3;
 interface ActionCandidate extends JsonObject {
   todo_id: string;
   text: string;
+  required_capabilities?: string[];
+  required_write_scopes?: string[];
 }
 
 function actionCandidate(value: unknown, label: string): ActionCandidate {
@@ -45,6 +48,14 @@ function actionCandidate(value: unknown, label: string): ActionCandidate {
   }
   if (raw.index !== null && raw.index !== undefined) {
     candidate.index = requireInteger(raw.index, `${label}.index`);
+  }
+  for (const field of [
+    "required_capabilities",
+    "required_write_scopes",
+  ] as const) {
+    if (raw[field] !== null && raw[field] !== undefined) {
+      candidate[field] = requireStringArray(raw[field], `${label}.${field}`);
+    }
   }
   if (raw.claim_required_before_work === true) {
     candidate.claim_required_before_work = true;
@@ -78,6 +89,12 @@ function suggestedActionProjection(candidate: ActionCandidate): JsonObject {
     text: candidate.text,
   };
   for (const field of ["priority", "action_kind"] as const) {
+    if (candidate[field] !== undefined) projected[field] = candidate[field];
+  }
+  for (const field of [
+    "required_capabilities",
+    "required_write_scopes",
+  ] as const) {
     if (candidate[field] !== undefined) projected[field] = candidate[field];
   }
   if (candidate.claim_required_before_work === true) {

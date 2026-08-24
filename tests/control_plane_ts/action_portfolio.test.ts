@@ -16,6 +16,8 @@ function candidate(todoId: string, text: string, priority: string) {
     status: "open",
     task_class: "advancement_task",
     claimed_by: "codex-main",
+    required_capabilities: [`capability_${todoId}`],
+    required_write_scopes: [`artifacts/${todoId}/**`],
   };
 }
 
@@ -51,18 +53,24 @@ test("action portfolio exposes one recommendation and bounded selectable alterna
       todo_id: "todo_primary001",
       text: "Run the primary slice.",
       priority: "P0",
+      required_capabilities: ["capability_todo_primary001"],
+      required_write_scopes: ["artifacts/todo_primary001/**"],
       selection_role: "recommended",
     },
     {
       todo_id: "todo_fallback001",
       text: "Run fallback one.",
       priority: "P1",
+      required_capabilities: ["capability_todo_fallback001"],
+      required_write_scopes: ["artifacts/todo_fallback001/**"],
       selection_role: "alternative",
     },
     {
       todo_id: "todo_fallback002",
       text: "Run fallback two.",
       priority: "P2",
+      required_capabilities: ["capability_todo_fallback002"],
+      required_write_scopes: ["artifacts/todo_fallback002/**"],
       selection_role: "alternative",
     },
   ]);
@@ -126,6 +134,19 @@ test("malformed candidates fail closed at the typed boundary", () => {
     }),
     /status must be open/,
   );
+  assert.throws(
+    () => projectQuotaActionPortfolio({
+      schema_version: ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION,
+      primary: candidate("todo_primary001", "Run the primary slice.", "P0"),
+      candidates: [
+        {
+          ...candidate("todo_contract001", "Malformed contract.", "P1"),
+          required_write_scopes: "artifacts/**",
+        },
+      ],
+    }),
+    /required_write_scopes must be an array of strings/,
+  );
 });
 
 test("pending selection qualifies only after current hard-lane arbitration", () => {
@@ -147,6 +168,8 @@ test("pending selection qualifies only after current hard-lane arbitration", () 
     todo_id: successor.todo_id,
     text: successor.text,
     priority: successor.priority,
+    required_capabilities: successor.required_capabilities,
+    required_write_scopes: successor.required_write_scopes,
     selection_binding: "pending_action_selection",
   });
 
