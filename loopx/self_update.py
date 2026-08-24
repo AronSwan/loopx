@@ -623,11 +623,44 @@ def execute_update_plan(payload: dict[str, Any], *, timeout_seconds: int = 600) 
         "doctor_stdout_tail": doctor_result.stdout[-2000:],
         "doctor_stderr_tail": doctor_result.stderr[-2000:],
     }
+    extension_doctor_result = None
+    if install_result.returncode == 0 and doctor_result.returncode == 0:
+        extension_doctor_result = subprocess.run(
+            [
+                str(loopx_bin),
+                "--format",
+                "json",
+                "extension",
+                "doctor",
+                "--all-enabled",
+                "--execute",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=timeout_seconds,
+        )
+        execution.update(
+            {
+                "extension_doctor_returncode": extension_doctor_result.returncode,
+                "extension_doctor_stdout_tail": extension_doctor_result.stdout[-2000:],
+                "extension_doctor_stderr_tail": extension_doctor_result.stderr[-2000:],
+            }
+        )
+    else:
+        execution["extension_doctor_status"] = "skipped_release_update_failed"
     updated = dict(payload)
     updated["execution"] = execution
-    updated["ok"] = install_result.returncode == 0 and doctor_result.returncode == 0
+    updated["ok"] = (
+        install_result.returncode == 0
+        and doctor_result.returncode == 0
+        and extension_doctor_result is not None
+        and extension_doctor_result.returncode == 0
+    )
     if not updated["ok"]:
-        updated["recommended_action"] = "inspect update execution tails and restore from rollback plan if needed"
+        updated["recommended_action"] = (
+            "inspect update execution tails and restore from rollback plan if needed"
+        )
         return updated
     execution["restarted_services"] = restart_managed_loopx_services()
     return updated
@@ -686,8 +719,37 @@ def execute_rollback_plan(
                 "doctor_stderr_tail": doctor_result.stderr[-2000:],
             }
         )
-        updated["ok"] = doctor_result.returncode == 0
-        if not updated["ok"] and previous_link_target:
+        if doctor_result.returncode == 0:
+            extension_doctor_result = subprocess.run(
+                [
+                    str(loopx_bin),
+                    "--format",
+                    "json",
+                    "extension",
+                    "doctor",
+                    "--all-enabled",
+                    "--execute",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            execution.update(
+                {
+                    "extension_doctor_returncode": extension_doctor_result.returncode,
+                    "extension_doctor_stdout_tail": extension_doctor_result.stdout[
+                        -2000:
+                    ],
+                    "extension_doctor_stderr_tail": extension_doctor_result.stderr[
+                        -2000:
+                    ],
+                }
+            )
+            updated["ok"] = extension_doctor_result.returncode == 0
+        else:
+            execution["extension_doctor_status"] = "skipped_core_doctor_failed"
+            updated["ok"] = False
+        if doctor_result.returncode != 0 and previous_link_target:
             restore_link = loopx_bin.with_name(f".{loopx_bin.name}.rollback.restore.{os.getpid()}")
             if restore_link.exists() or restore_link.is_symlink():
                 restore_link.unlink()
@@ -713,11 +775,21 @@ def execute_rollback_plan(
         if "restore_link" in locals() and (restore_link.exists() or restore_link.is_symlink()):
             restore_link.unlink()
     updated["execution"] = execution
-    updated["recommended_action"] = (
-        "rollback complete; review doctor output"
-        if updated["ok"]
-        else "rollback failed; inspect execution error before retrying"
-    )
+    if updated["ok"]:
+        updated["recommended_action"] = "rollback complete; review doctor output"
+    elif (
+        execution.get("doctor_returncode") == 0
+        and execution.get("extension_doctor_returncode") not in {None, 0}
+    ):
+        updated["recommended_action"] = (
+            "rollback activated, but one or more enabled extensions remain fail "
+            "closed; repair the provider and run `loopx extension doctor "
+            "--all-enabled --execute`"
+        )
+    else:
+        updated["recommended_action"] = (
+            "rollback failed; inspect execution error before retrying"
+        )
     return updated
 
 
