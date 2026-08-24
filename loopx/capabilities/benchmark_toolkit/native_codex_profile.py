@@ -45,6 +45,21 @@ _INSTALL_ENV_PASSTHROUGH = (
     "TERM",
     "TZ",
 )
+_AGENT_SHELL_ENV_INCLUDE_ONLY = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+    "USER",
+)
 
 
 class NativeCodexProfileError(RuntimeError):
@@ -256,6 +271,38 @@ def native_codex_app_server_environment(
     env = native_codex_profile_environment(profile, base_env=base_env)
     env[provider_env_key] = provider_value
     return env
+
+
+def native_codex_app_server_shell_policy_args(
+    *,
+    provider_env_keys: Sequence[str],
+) -> tuple[str, ...]:
+    """Build fail-closed Codex shell policy args for runner-owned credentials.
+
+    App-server itself may need a provider credential, but model-created shell
+    commands must not inherit it. Keep the provider key names explicit so callers
+    cannot accidentally rely on ambient secret-name heuristics.
+    """
+
+    normalized = _normalized_ids(
+        provider_env_keys,
+        field="provider_env_keys",
+    )
+    invalid = [key for key in normalized if not _SAFE_ENV_KEY.fullmatch(key)]
+    if invalid:
+        raise ValueError(
+            "provider_env_keys must contain safe environment variable names"
+        )
+    return (
+        "-c",
+        'shell_environment_policy.inherit="core"',
+        "-c",
+        "shell_environment_policy.ignore_default_excludes=false",
+        "-c",
+        f"shell_environment_policy.include_only={json.dumps(_AGENT_SHELL_ENV_INCLUDE_ONLY)}",
+        "-c",
+        f"shell_environment_policy.exclude={json.dumps(normalized)}",
+    )
 
 
 def render_native_codex_goal_prompt(
@@ -615,6 +662,7 @@ __all__ = [
     "inspect_native_codex_profile",
     "install_native_codex_profile",
     "native_codex_app_server_environment",
+    "native_codex_app_server_shell_policy_args",
     "native_codex_profile_environment",
     "render_native_codex_goal_prompt",
 ]

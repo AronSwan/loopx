@@ -7,6 +7,7 @@ for the local real-sandbox path, matching the deepswe infrastructure. This file
 reuses the shipped native Goal runtime (no second implementation):
   from loopx.capabilities.benchmark_toolkit.native_codex_goal import ...
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,6 +20,25 @@ from pathlib import Path
 from tasks import answer_is_fresh, fresh_workspace, prepare_case, stamp_run_start
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROVIDER_CREDENTIAL_ENV_KEY = "ARK_OPENAI_API_KEY"
+_APP_SERVER_ENV_PASSTHROUGH = (
+    "CODEX_HOME",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+    "USER",
+    "ARK_OPENAI_BASE_URL",
+    _PROVIDER_CREDENTIAL_ENV_KEY,
+)
 
 
 def _objective(case_id: str, workspace: Path, instruction: str, treatment: bool) -> str:
@@ -39,7 +59,12 @@ def _objective(case_id: str, workspace: Path, instruction: str, treatment: bool)
     )
 
 
-def _app_server_command(*, codex_bin: str, enable_web_search: bool) -> list[str]:
+def _app_server_command(
+    *,
+    codex_bin: str,
+    enable_web_search: bool,
+    shell_policy_args: tuple[str, ...],
+) -> list[str]:
     """Build the app-server Goal command with hosted Responses API compatibility.
 
     The codex app-server emits a ``multi_agent_v1`` dynamic-tool namespace by
@@ -59,9 +84,23 @@ def _app_server_command(*, codex_bin: str, enable_web_search: bool) -> list[str]
         "goals",
         "-c",
         "features.multi_agent=false",
+        *shell_policy_args,
     ]
-    command += ["-c", "tools.web_search=true" if enable_web_search else "tools.web_search=false"]
+    command += [
+        "-c",
+        "tools.web_search=true" if enable_web_search else "tools.web_search=false",
+    ]
     return command
+
+
+def _app_server_environment(environ: dict[str, str]) -> dict[str, str]:
+    """Admit only runtime essentials plus the app-server provider boundary."""
+
+    return {
+        key: str(environ[key])
+        for key in _APP_SERVER_ENV_PASSTHROUGH
+        if environ.get(key)
+    }
 
 
 def _native_goal_modules():
@@ -71,8 +110,16 @@ def _native_goal_modules():
         compact_native_goal_receipt,
         run_native_goal_process_until_terminal,
     )
+    from loopx.capabilities.benchmark_toolkit.native_codex_profile import (  # noqa: PLC0415
+        native_codex_app_server_shell_policy_args,
+    )
 
-    return NativeGoalConfig, compact_native_goal_receipt, run_native_goal_process_until_terminal
+    return (
+        NativeGoalConfig,
+        compact_native_goal_receipt,
+        run_native_goal_process_until_terminal,
+        native_codex_app_server_shell_policy_args,
+    )
 
 
 def run_case(
@@ -93,11 +140,13 @@ def run_case(
     started_at = stamp_run_start(workspace)
     instruction = (workspace / "instruction.md").read_text(encoding="utf-8")
 
-    NativeGoalConfig, compact_receipt, run_native = _native_goal_modules()
+    NativeGoalConfig, compact_receipt, run_native, shell_policy = _native_goal_modules()
     model = os.environ.get("ARK_OPENAI_MODEL", "deepseek-v4-flash-ga-260731")
     config = NativeGoalConfig(
         cwd=str(workspace),
-        objective=_objective(case_id, workspace, instruction, treatment=(arm == "treatment")),
+        objective=_objective(
+            case_id, workspace, instruction, treatment=(arm == "treatment")
+        ),
         task_instruction=instruction,
         model=model,
         effort=os.environ.get("CODEX_GOAL_EFFORT", "xhigh"),
@@ -110,8 +159,11 @@ def run_case(
         process_command=_app_server_command(
             codex_bin=os.environ.get("CODEX_BIN", "codex"),
             enable_web_search=enable_web_search,
+            shell_policy_args=shell_policy(
+                provider_env_keys=(_PROVIDER_CREDENTIAL_ENV_KEY,)
+            ),
         ),
-        process_env={**os.environ},
+        process_env=_app_server_environment(dict(os.environ)),
         process_cwd=str(workspace),
         goal_timeout_sec=timeout_sec,
     )
