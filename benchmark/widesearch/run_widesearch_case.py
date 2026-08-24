@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from tasks import answer_is_fresh, fresh_workspace, prepare_case, stamp_run_start
 
@@ -154,7 +155,7 @@ def run_case(
     data_root: Path,
     timeout_sec: int,
     enable_web_search: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     if sys.platform != "linux":
         raise RuntimeError("widesearch_native_isolation_unavailable_use_pier")
     raw = data_root / "widesearch.jsonl"

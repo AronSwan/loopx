@@ -76,11 +76,16 @@ def _validated_allowed_paths(values: Sequence[str]) -> tuple[str, ...]:
     return normalized
 
 
-def _upstream_connection(parsed: SplitResult, *, timeout_sec: float):
+def _upstream_connection(
+    parsed: SplitResult, *, timeout_sec: float
+) -> http.client.HTTPConnection:
+    host = parsed.hostname
+    if host is None:  # Defensive narrowing; _validated_upstream rejects this.
+        raise ValueError("upstream_base_url must include a host")
     port = parsed.port
     if parsed.scheme == "https":
-        return http.client.HTTPSConnection(parsed.hostname, port, timeout=timeout_sec)
-    return http.client.HTTPConnection(parsed.hostname, port, timeout=timeout_sec)
+        return http.client.HTTPSConnection(host, port, timeout=timeout_sec)
+    return http.client.HTTPConnection(host, port, timeout=timeout_sec)
 
 
 @contextmanager
@@ -124,7 +129,7 @@ def serve_runner_owned_provider_gateway(
             self.end_headers()
             self.wfile.write(body)
 
-        def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        def do_POST(self) -> None:
             requested = urlsplit(self.path)
             if requested.path not in admitted_paths:
                 self._json_error(404, "provider_gateway_path_not_admitted")
@@ -179,7 +184,7 @@ def serve_runner_owned_provider_gateway(
             finally:
                 connection.close()
 
-        def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        def do_GET(self) -> None:
             self._json_error(405, "provider_gateway_method_not_admitted")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
@@ -192,8 +197,9 @@ def serve_runner_owned_provider_gateway(
     thread.start()
     try:
         host, port = server.server_address[:2]
+        rendered_host = host.decode("ascii") if isinstance(host, bytes) else str(host)
         yield RunnerOwnedProviderGateway(
-            base_url=f"http://{host}:{port}",
+            base_url=f"http://{rendered_host}:{port}",
             allowed_paths=admitted_paths,
         )
     finally:
