@@ -676,7 +676,15 @@ def record_quota_scheduler_failure_for_decision(
         payload["failed_rrule"] = target_rrule
         return payload
     committed_state = scheduler_commit.get("state")
-    scheduler_state = committed_state if isinstance(committed_state, dict) else None
+    scheduler_state = (
+        {
+            key: value
+            for key, value in committed_state.items()
+            if key != "heartbeat_commit"
+        }
+        if isinstance(committed_state, dict)
+        else None
+    )
     failure_record = (
         scheduler_state.get("host_update_failure")
         if isinstance(scheduler_state, dict)
