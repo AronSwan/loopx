@@ -235,7 +235,7 @@ def build_parser() -> LoopXArgumentParser:
 
     register_starter_commands(sub)
 
-    register_doctor_command(sub)
+    register_doctor_command(sub, add_subcommand_format)
 
     register_first_run_report_command(sub)
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import build_parser, main, output_format, resolve_global_output_format
+from loopx.cli_commands import doctor as doctor_command
 from loopx.cli_commands import todo as todo_command
 from loopx.cli_commands.quota_request import validate_quota_command_request
 from loopx.cli_commands.todo_argument_validation import (
@@ -1101,3 +1102,24 @@ def test_subcommand_format_keeps_precedence_over_resolved_global_default() -> No
     args.format = resolve_global_output_format(args)
 
     assert output_format(args) == "json"
+
+
+def test_doctor_accepts_subcommand_json_format(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        doctor_command,
+        "collect_doctor",
+        lambda *, deep=False, agent_type=None: {
+            "ok": True,
+            "deep": deep,
+            "agent_type": agent_type,
+        },
+    )
+
+    exit_code = main(["doctor", "--format", "json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"ok": True, "deep": False, "agent_type": None}

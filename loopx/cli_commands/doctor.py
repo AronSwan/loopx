@@ -11,13 +11,18 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+AddFormat = Callable[[argparse.ArgumentParser], None]
 
 
-def register_doctor_command(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+def register_doctor_command(
+    subparsers: argparse._SubParsersAction,
+    add_subcommand_format: AddFormat,
+) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "doctor",
         help="Diagnose local CLI installation, PATH, wrapper, and import health.",
     )
+    add_subcommand_format(parser)
     parser.add_argument(
         "--deep",
         action="store_true",
@@ -39,5 +44,6 @@ def handle_doctor_command(args: argparse.Namespace, print_payload: PrintPayload)
         deep=bool(args.deep),
         agent_type=args.agent_type,
     )
-    print_payload(payload, args.format, render_doctor_markdown)
+    output_format = getattr(args, "subcommand_format", None) or args.format
+    print_payload(payload, output_format, render_doctor_markdown)
     return 0 if payload.get("ok") else 1
