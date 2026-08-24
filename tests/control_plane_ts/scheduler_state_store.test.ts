@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -182,12 +182,112 @@ test("state path is scoped, sanitized, and stable", () => {
     join(
       "/runtime",
       "goals",
-      "goal-with-spaces",
+      "goal-with-spaces-116e9296329bcdc8",
       "scheduler-state",
-      "agent-..-..-other",
-      "codex_app",
+      "agent-..-..-other-55571d8866830ec6",
+      "codex_app-b32e6f37f5dad64e",
       "d9ad89d416adc9b2.json",
     ),
+  );
+});
+
+test("sanitized-equivalent scheduler scopes have distinct bounded paths", () => {
+  const goalPaths = ["a b", "a-b", "非 ASCII", "---"].map((goalId) =>
+    schedulerStatePath("/runtime", { ...scope, goalId })
+  );
+  const agentPaths = ["agent/name", "agent-name"].map((agentId) =>
+    schedulerStatePath("/runtime", { ...scope, agentId })
+  );
+  const surfacePaths = ["codex app", "codex-app"].map((surface) =>
+    schedulerStatePath("/runtime", { ...scope, surface })
+  );
+  assert.equal(new Set(goalPaths).size, goalPaths.length);
+  assert.equal(new Set(agentPaths).size, agentPaths.length);
+  assert.equal(new Set(surfacePaths).size, surfacePaths.length);
+  for (const path of [...goalPaths, ...agentPaths, ...surfacePaths]) {
+    for (const segment of path.split("/")) assert.ok(segment.length <= 64);
+  }
+});
+
+test("legacy scheduler state is migrated once into the collision-safe layout", async (t) => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-scheduler-state-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  const legacyPath = join(
+    runtimeRoot,
+    "goals",
+    scope.goalId,
+    "scheduler-state",
+    scope.agentId,
+    scope.surface,
+    "d9ad89d416adc9b2.json",
+  );
+  await writeSchedulerState(storeRequest(runtimeRoot, { state: state() }));
+  const canonicalPath = schedulerStatePath(runtimeRoot, scope);
+  const persisted = await readFile(canonicalPath, "utf8");
+  await rm(canonicalPath);
+  await mkdir(dirname(legacyPath), { recursive: true });
+  await writeFile(legacyPath, persisted, "utf8");
+
+  const migrated = await loadSchedulerState(storeRequest(runtimeRoot));
+
+  assert.deepEqual(migrated.state, state());
+  assert.equal(migrated.path, canonicalPath);
+  assert.deepEqual(JSON.parse(await readFile(canonicalPath, "utf8")), state());
+  await assert.rejects(readFile(legacyPath, "utf8"), { code: "ENOENT" });
+});
+
+test("overlong legacy scope loads as missing state, not an effect rejection", async (t) => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-scheduler-state-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  // A legacy scope component beyond the filesystem path-component limit cannot
+  // exist in the legacy layout; the canonical bounded path has no state yet,
+  // so the first load must return missing state instead of ENAMETOOLONG.
+  const overlongGoalId = "g".repeat(300);
+  const request = storeRequest(runtimeRoot, { goal_id: overlongGoalId });
+
+  const result = await loadSchedulerState(request);
+
+  assert.equal(result.state, null);
+  const canonical = schedulerStatePath(runtimeRoot, {
+    ...scope,
+    goalId: overlongGoalId,
+  });
+  assert.ok(
+    !canonical.includes("g".repeat(256)),
+    "canonical path components must stay bounded",
+  );
+  assert.ok(
+    Math.max(...canonical.split("/").map((part) => part.length)) <= 64,
+    "canonical path component must not exceed the scoped-segment bound",
+  );
+});
+
+test("concurrent writes for sanitized-equivalent scopes stay isolated", async (t) => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-scheduler-state-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  const firstGoalId = "a b";
+  const secondGoalId = "a-b";
+  const firstState = { ...state(), goal_id: firstGoalId };
+  const secondState = { ...state(), goal_id: secondGoalId };
+
+  await Promise.all([
+    writeSchedulerState(storeRequest(runtimeRoot, {
+      goal_id: firstGoalId,
+      state: firstState,
+    })),
+    writeSchedulerState(storeRequest(runtimeRoot, {
+      goal_id: secondGoalId,
+      state: secondState,
+    })),
+  ]);
+
+  assert.deepEqual(
+    (await loadSchedulerState(storeRequest(runtimeRoot, { goal_id: firstGoalId }))).state,
+    firstState,
+  );
+  assert.deepEqual(
+    (await loadSchedulerState(storeRequest(runtimeRoot, { goal_id: secondGoalId }))).state,
+    secondState,
   );
 });
 
