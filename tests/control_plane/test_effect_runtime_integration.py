@@ -5,10 +5,13 @@ import json
 import os
 import shutil
 import signal
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from loopx.control_plane import effect_runtime
 
@@ -31,6 +34,26 @@ def _digest(path: Path) -> str | None:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except FileNotFoundError:
         return None
+
+
+def _raw_runtime_response(
+    info: dict[str, object],
+    payload: bytes,
+) -> dict[str, object]:
+    response = b""
+    with socket.create_connection(
+        (str(info["host"]), int(info["port"])), timeout=2
+    ) as connection:
+        connection.settimeout(2)
+        connection.sendall(payload)
+        while b"\n" not in response:
+            chunk = connection.recv(64 * 1024)
+            if not chunk:
+                break
+            response += chunk
+    decoded = json.loads(response.split(b"\n", 1)[0])
+    assert isinstance(decoded, dict)
+    return decoded
 
 
 def test_windows_pid_liveness_uses_a_non_signaling_probe(monkeypatch) -> None:
@@ -176,8 +199,10 @@ def test_typed_write_rejects_cross_effect_overwrite(
                 "expected_previous_sha256": _digest(journal_path),
             },
         )
-    except RuntimeError as exc:
+    except effect_runtime.EffectRuntimeConflict as exc:
         assert "belongs to another settlement effect" in str(exc)
+        assert exc.error_kind == "conflict"
+        assert exc.diagnostic_code == "journal_effect_conflict"
     else:
         raise AssertionError("cross-effect overwrite must fail closed")
     assert json.loads(journal_path.read_text(encoding="utf-8")) == first
@@ -231,6 +256,9 @@ def test_typed_write_serializes_same_effect_checkpoints_with_cas(
 
     assert sum(isinstance(outcome, RuntimeError) for outcome in outcomes) == 1
     failure = next(outcome for outcome in outcomes if isinstance(outcome, RuntimeError))
+    assert isinstance(failure, effect_runtime.EffectRuntimeConflict)
+    assert failure.error_kind == "conflict"
+    assert failure.diagnostic_code == "compare_and_swap_conflict"
     assert "compare-and-swap precondition failed" in str(failure)
     assert json.loads(journal_path.read_text(encoding="utf-8")) in (first, second)
     success = next(outcome for outcome in outcomes if isinstance(outcome, dict))
@@ -518,3 +546,130 @@ def test_oversized_request_is_rejected_before_runtime_dispatch(
         {},
         retry_safe=False,
     )
+
+
+def test_non_object_json_request_is_rejected_at_the_socket_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "1000")
+
+    ping = effect_runtime.effect_runtime_result("runtime.ping", {})
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info = effect_runtime._read_info(
+        effect_runtime._runtime_info_path(fingerprint),
+        fingerprint=fingerprint,
+    )
+    assert info is not None
+
+    response = _raw_runtime_response(info, b"null\n")
+
+    assert response["request_id"] == "unknown"
+    assert response["ok"] is False
+    assert response["error"] == {
+        "kind": "request_rejected",
+        "code": "invalid_request",
+        "message": "Effect runtime request must be an object",
+    }
+    assert (
+        effect_runtime.effect_runtime_result("runtime.ping", {})["pid"]
+        == ping["pid"]
+    )
+    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+def test_corrupt_persisted_journal_maps_to_bounded_internal_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "1000")
+    journal_path = tmp_path / "corrupt-turn-journal.json"
+    journal_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(effect_runtime.EffectRuntimeInternalError) as caught:
+        effect_runtime.effect_runtime_result(
+            "turn_journal.write",
+            {
+                "path": str(journal_path),
+                "journal": _journal("effect-one"),
+                "expected_effect_id": "effect-one",
+                "expected_previous_sha256": _digest(journal_path),
+            },
+        )
+
+    assert caught.value.diagnostic_code == "unexpected_handler_error"
+    assert str(caught.value) == "Effect runtime handler failed unexpectedly"
+    assert str(journal_path) not in str(caught.value)
+    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+@pytest.mark.parametrize(
+    ("payload", "exception_type", "transient"),
+    [
+        (
+            {"kind": "request_rejected", "code": "invalid_request", "message": "bad"},
+            effect_runtime.EffectRuntimeRejected,
+            None,
+        ),
+        (
+            {"kind": "conflict", "code": "state_conflict", "message": "stale"},
+            effect_runtime.EffectRuntimeConflict,
+            None,
+        ),
+        (
+            {"kind": "io_transient", "code": "io_busy", "message": "busy"},
+            effect_runtime.EffectRuntimeTransientIOError,
+            True,
+        ),
+        (
+            {"kind": "io_permanent", "code": "io_not_found", "message": "gone"},
+            effect_runtime.EffectRuntimePermanentIOError,
+            False,
+        ),
+        (
+            {
+                "kind": "lock_timeout",
+                "code": "mutation_lock_timeout",
+                "message": "waited",
+            },
+            effect_runtime.EffectRuntimeLockTimeout,
+            None,
+        ),
+        (
+            {
+                "kind": "internal_failure",
+                "code": "unexpected_handler_error",
+                "message": "failed",
+            },
+            effect_runtime.EffectRuntimeInternalError,
+            None,
+        ),
+    ],
+)
+def test_remote_error_envelope_preserves_typed_exception(
+    payload: dict[str, str],
+    exception_type: type[effect_runtime.EffectRuntimeRemoteError],
+    transient: bool | None,
+) -> None:
+    error = effect_runtime._remote_runtime_error(payload)
+
+    assert isinstance(error, exception_type)
+    assert error.error_kind == payload["kind"]
+    assert error.diagnostic_code == payload["code"]
+    if transient is not None:
+        assert isinstance(error, effect_runtime.EffectRuntimeIOError)
+        assert error.transient is transient
+
+
+def test_invalid_remote_error_envelope_fails_as_bounded_internal_error() -> None:
+    error = effect_runtime._remote_runtime_error(
+        {"kind": "internal_failure", "message": "/private/path\nstack"}
+    )
+
+    assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
+    assert error.diagnostic_code == "invalid_error_envelope"
+    assert "/private/path" not in str(error)
