@@ -32,6 +32,8 @@ import path from "node:path"
 export const BRIDGE_SCHEMA_VERSION = "loopx_pi_goal_bridge_v0"
 export const TERMINAL_STATE_SCHEMA_VERSION = "goal_terminal_state_v0"
 export const SOURCE_COMPLETENESS_SCHEMA_VERSION = "goal_terminal_source_completeness_v0"
+export const PI_SESSION_AUTHORITY_SCHEMA_VERSION = "loopx_pi_session_authority_v0"
+export const PI_ACTIVATION_SCHEMA_VERSION = "loopx_pi_goal_activation_v0"
 export const DEFAULT_RETRY_MINUTES = 3
 export const TASK_LEASE_CAPABILITY = "task_lease_v0"
 export const TASK_LEASE_SCHEMA_VERSION = "task_lease_v0"
@@ -115,6 +117,7 @@ function bindingDefaults(directory) {
     agentId: "",
     registryPath: "",
     availableCapabilities: [],
+    activationToken: "",
     taskBody: "",
     autoResume: true,
     terminal: false,
@@ -123,6 +126,88 @@ function bindingDefaults(directory) {
     unchangedPolls: 0,
     lastInjectedPrompt: "",
   }
+}
+
+function authorityError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function normalizeAuthorityCapabilities(value) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))].sort()
+}
+
+export function normalizePiSessionAuthority(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw authorityError("authority_not_bound", "Pi session has no host-verified authority")
+  }
+  const token = String(value.token || "").trim()
+  const goalId = String(value.goalId || "").trim()
+  const agentId = String(value.agentId || "").trim()
+  const registryPath = String(value.registryPath || "").trim()
+  if (!token || !goalId || !agentId || !registryPath) {
+    throw authorityError(
+      "authority_not_bound",
+      "host-verified Pi authority must include token, goal, agent, and registry",
+    )
+  }
+  return {
+    schemaVersion: PI_SESSION_AUTHORITY_SCHEMA_VERSION,
+    token,
+    goalId,
+    agentId,
+    registryPath,
+    availableCapabilities: normalizeAuthorityCapabilities(value.availableCapabilities),
+  }
+}
+
+function sameAuthority(left, right) {
+  return left?.schemaVersion === right?.schemaVersion &&
+    left?.token === right?.token &&
+    left?.goalId === right?.goalId &&
+    left?.agentId === right?.agentId &&
+    left?.registryPath === right?.registryPath &&
+    JSON.stringify(left?.availableCapabilities || []) ===
+      JSON.stringify(right?.availableCapabilities || [])
+}
+
+function assertActivationAuthority(authority, fields) {
+  const normalized = normalizePiSessionAuthority(authority)
+  const suppliedToken = String(fields?.activationToken || "").trim()
+  if (!suppliedToken) {
+    throw authorityError(
+      "authority_token_required",
+      "loopx_goal_activate requires the host-issued session authority token",
+    )
+  }
+  if (suppliedToken !== normalized.token) {
+    throw authorityError("authority_mismatch", "Pi session authority token does not match")
+  }
+  const checks = [
+    ["goalId", fields?.goalId, normalized.goalId],
+    ["agentId", fields?.agentId, normalized.agentId],
+    ["registryPath", fields?.registryPath, normalized.registryPath],
+  ]
+  for (const [field, supplied, expected] of checks) {
+    if (supplied !== undefined && String(supplied || "").trim() !== expected) {
+      throw authorityError(
+        "authority_mismatch",
+        `${field} does not match the host-verified Pi session authority`,
+      )
+    }
+  }
+  if (fields?.availableCapabilities !== undefined) {
+    const supplied = normalizeAuthorityCapabilities(fields.availableCapabilities)
+    if (JSON.stringify(supplied) !== JSON.stringify(normalized.availableCapabilities)) {
+      throw authorityError(
+        "capability_not_verified",
+        "availableCapabilities must match the host-verified Pi session authority",
+      )
+    }
+  }
+  return normalized
 }
 
 function casMatches(current, expected) {
@@ -359,9 +444,25 @@ function assertTaskLeaseInteger(value, field, { minimum = 0, maximum } = {}) {
   return value
 }
 
-function taskLeaseBindingAuthority(binding, action) {
+function taskLeaseBindingAuthority(binding, action, verifiedAuthority) {
   if (!binding || typeof binding !== "object") {
     throw taskLeaseRequestError("missing_goal_binding", "Pi session has no active LoopX goal binding")
+  }
+  if (verifiedAuthority !== undefined) {
+    const authority = normalizePiSessionAuthority(verifiedAuthority)
+    const bindingCapabilities = normalizeAuthorityCapabilities(binding.availableCapabilities)
+    if (
+      String(binding.activationToken || "") !== authority.token ||
+      String(binding.goalId || "") !== authority.goalId ||
+      String(binding.agentId || "") !== authority.agentId ||
+      String(binding.registryPath || "") !== authority.registryPath ||
+      JSON.stringify(bindingCapabilities) !== JSON.stringify(authority.availableCapabilities)
+    ) {
+      throw taskLeaseRequestError(
+        "authority_mismatch",
+        "Pi session binding does not match the host-verified authority",
+      )
+    }
   }
   const goalId = taskLeaseGoalId(binding.goalId)
   const fields = TASK_LEASE_ACTION_FIELDS[action]
@@ -417,12 +518,12 @@ function taskLeaseFieldValues(request, field, kind, required) {
 // Build the exact CLI argv used by the installed Pi extension. Goal and owner
 // authority come from the active session binding; request fields are only the
 // lifecycle inputs the agent is allowed to choose.
-export function buildTaskLeaseArgs(binding, request = {}) {
+export function buildTaskLeaseArgs(binding, request = {}, verifiedAuthority) {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw taskLeaseRequestError("invalid_request", "task lease request must be an object")
   }
   const action = String(request.action || "").trim()
-  const { goalId, owner, fields } = taskLeaseBindingAuthority(binding, action)
+  const { goalId, owner, fields } = taskLeaseBindingAuthority(binding, action, verifiedAuthority)
   for (const field of ["goalId", "owner"]) {
     if (request[field] !== undefined) {
       throw taskLeaseRequestError(
@@ -524,11 +625,11 @@ function compactTaskLeasePayload(payload) {
 // Execute a task-lease request through an injected CLI transport. A typed
 // non-zero payload is authoritative and survives process rejection; malformed
 // or empty output fails closed without exposing stderr or raw host details.
-export async function runPiTaskLease(binding, request = {}, runCli) {
+export async function runPiTaskLease(binding, request = {}, runCli, verifiedAuthority) {
   const action = String(request?.action || "").trim() || null
   let args
   try {
-    args = buildTaskLeaseArgs(binding, request)
+    args = buildTaskLeaseArgs(binding, request, verifiedAuthority)
   } catch (error) {
     return taskLeaseFailure(
       action,
@@ -650,6 +751,7 @@ export function createGoalLoop(options) {
   const timers = new Map()
   const evaluations = new Map()
   const contexts = new Map()
+  const authorities = new Map()
   let disposed = false
   let epoch = 0
 
@@ -829,7 +931,32 @@ export function createGoalLoop(options) {
     // using the freshest context available. The adapter must pass one stable
     // store instance per key so the store's per-key commit queue is shared.
     bind(key, services) {
+      if (services?.authority !== undefined) {
+        const authority = normalizePiSessionAuthority(services.authority)
+        const current = authorities.get(key)
+        if (current && !sameAuthority(current, authority)) {
+          throw authorityError(
+            "authority_mismatch",
+            "Pi session authority cannot change after host binding",
+          )
+        }
+        authorities.set(key, authority)
+      }
       contexts.set(key, services)
+    },
+    // Host-only seam: the Pi adapter calls this after it receives a verified
+    // startup/session packet. Model-callable tools never receive this method.
+    bindAuthority(key, authority) {
+      const normalized = normalizePiSessionAuthority(authority)
+      const current = authorities.get(key)
+      if (current && !sameAuthority(current, normalized)) {
+        throw authorityError(
+          "authority_mismatch",
+          "Pi session authority cannot change after host binding",
+        )
+      }
+      authorities.set(key, normalized)
+      return normalized
     },
     cancel(key) {
       cancelScheduled(key)
@@ -838,11 +965,24 @@ export function createGoalLoop(options) {
       if (disposed) return null
       const services = contexts.get(key)
       if (!services) throw new Error("loopx_goal_activate requires a bound session context")
+      const authority = authorities.get(key) || services.authority
+      const verified = assertActivationAuthority(authority, fields)
       // Increment the persisted generation so every in-flight evaluation for
       // this key is rejected at its next compare-and-swap commit.
       const current = await services.store.read(key)
       const generation = (current?.generation || 0) + 1
-      const binding = await services.store.write(key, { ...fields, generation })
+      const binding = await services.store.write(key, {
+        ...fields,
+        activationToken: verified.token,
+        goalId: verified.goalId,
+        agentId: verified.agentId,
+        registryPath: verified.registryPath,
+        availableCapabilities: verified.availableCapabilities,
+        generation,
+      })
+      if (!binding) {
+        throw authorityError("authority_mismatch", "Pi session binding changed during activation")
+      }
       if (disposed) return null
       cancelScheduled(key)
       services.notify(

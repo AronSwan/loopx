@@ -28,10 +28,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { execFile as execFileCallback } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Type } from "typebox";
 import {
   buildQuotaArgs,
+  PI_ACTIVATION_SCHEMA_VERSION,
+  PI_SESSION_AUTHORITY_SCHEMA_VERSION,
+  TASK_LEASE_CAPABILITY,
   runPiTaskLease,
   createBindingStore,
   createEphemeralSessionIdentity,
@@ -56,6 +60,93 @@ type TaskLeaseCliResult = {
   stdout?: string;
   returncode?: number;
 };
+
+type PiSessionAuthority = {
+  schemaVersion: string;
+  token: string;
+  goalId: string;
+  agentId: string;
+  registryPath: string;
+  availableCapabilities: string[];
+};
+
+type StartGoalPacket = {
+  ok?: boolean;
+  goal_id?: unknown;
+  project?: unknown;
+  project_connection?: { registry?: unknown };
+  host_loop_activation?: {
+    activation_allowed?: unknown;
+    agent_id?: unknown;
+    available_capabilities?: unknown;
+  };
+  command_pack?: {
+    project?: unknown;
+    goal_id?: unknown;
+    agent_id?: unknown;
+    registry_path?: unknown;
+    project_connection?: { registry?: unknown };
+    host_loop_activation?: {
+      activation_allowed?: unknown;
+      agent_id?: unknown;
+      available_capabilities?: unknown;
+    };
+  };
+  message?: unknown;
+};
+
+function parseJsonObject(stdout: string): StartGoalPacket | null {
+  try {
+    const parsed: unknown = JSON.parse(stdout || "");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as StartGoalPacket)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildPiSessionAuthority(packet: StartGoalPacket): PiSessionAuthority {
+  const commandPack = packet.command_pack || {};
+  const activation = packet.host_loop_activation || commandPack.host_loop_activation || {};
+  if (activation.activation_allowed !== true) {
+    throw new Error("LoopX start-goal packet does not authorize Pi host activation");
+  }
+  const goalId = String(packet.goal_id ?? commandPack.goal_id ?? "").trim();
+  const project = String(packet.project ?? commandPack.project ?? "").trim();
+  const registryPath = String(
+    packet.project_connection?.registry ?? commandPack.project_connection?.registry ??
+      commandPack.registry_path ?? "",
+  ).trim();
+  const agentId = String(activation.agent_id ?? packet.agent_id ?? commandPack.agent_id ?? "").trim();
+  if (!goalId || !project || !registryPath || !agentId) {
+    throw new Error("LoopX start-goal packet is missing verified Pi authority fields");
+  }
+  const packetCapabilities = Array.isArray(activation.available_capabilities)
+    ? activation.available_capabilities.map(String)
+    : [];
+  const availableCapabilities = [...new Set(packetCapabilities)].sort();
+  return {
+    schemaVersion: PI_SESSION_AUTHORITY_SCHEMA_VERSION,
+    token: randomUUID(),
+    goalId,
+    agentId,
+    registryPath,
+    availableCapabilities,
+  };
+}
+
+function authorityFieldsEqual(left: PiSessionAuthority, right: PiSessionAuthority): boolean {
+  return left.goalId === right.goalId &&
+    left.agentId === right.agentId &&
+    left.registryPath === right.registryPath &&
+    JSON.stringify(left.availableCapabilities) === JSON.stringify(right.availableCapabilities);
+}
+
+function packetNeedsHostSelection(packet: StartGoalPacket): boolean {
+  const activation = packet.host_loop_activation || packet.command_pack?.host_loop_activation;
+  return !activation || activation.activation_allowed !== true;
+}
 
 // execFile rejects on typed non-zero CLI outcomes. Node preserves the JSON
 // stdout on that error, so task_lease_v0 remains the authoritative result.
@@ -116,6 +207,9 @@ export default function (pi: ExtensionAPI) {
   // One stable store instance per key, so the runtime's per-key commit queue
   // and compare-and-swap are shared across every event for the same session.
   const stores = new Map<string, ReturnType<typeof createBindingStore>>();
+  // Host-issued authority is created only by the /loopx startup command. A
+  // model-callable tool can present the token, but cannot mint or alter it.
+  const sessionAuthorities = new Map<string, PiSessionAuthority>();
 
   // One loop per extension instance. Session services (store, idle probe,
   // notify) are bound per key on every event, and `session_shutdown` disposes
@@ -155,8 +249,23 @@ export default function (pi: ExtensionAPI) {
       store,
       isIdle: () => ctx.isIdle(),
       notify: (message: string, kind: string) => ctx.ui.notify(message, kind),
+      authority: sessionAuthorities.get(key),
     });
     return { key, store };
+  };
+
+  const establishSessionAuthority = (key: string, packet: StartGoalPacket) => {
+    const candidate = buildPiSessionAuthority(packet);
+    const current = sessionAuthorities.get(key);
+    if (current) {
+      if (!authorityFieldsEqual(current, candidate)) {
+        throw new Error("LoopX host authority cannot change within one Pi session");
+      }
+      return current;
+    }
+    loop.bindAuthority(key, candidate);
+    sessionAuthorities.set(key, candidate);
+    return candidate;
   };
 
   // /loopx — inspect the project packet, or start a guided LoopX goal.
@@ -179,10 +288,22 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         try {
-          const stdout = await runLoopxCli(["bootstrap-command-pack", "--project", "."], ctx.cwd);
-          ctx.ui.setWidget("loopx", stdout.split("\n").slice(0, 24));
+          const stdout = await runLoopxCli(
+            ["--format", "json", "bootstrap-command-pack", "--project", "."],
+            ctx.cwd,
+          );
+          const packet = parseJsonObject(stdout);
+          if (packet) {
+            try {
+              establishSessionAuthority(key, packet);
+            } catch {
+              // A status-only packet may intentionally stop before host activation.
+            }
+          }
+          const display = packet?.message ? String(packet.message) : stdout;
+          ctx.ui.setWidget("loopx", display.split("\n").slice(0, 24));
           ctx.ui.notify("LoopX packet ready (widget above the editor).", "info");
-          pi.appendEntry("loopx-packet", { text: stdout });
+          pi.appendEntry("loopx-packet", { text: display });
         } catch (error) {
           ctx.ui.notify(
             `LoopX inspect failed: ${(error as Error)?.message || String(error)}`,
@@ -199,10 +320,53 @@ export default function (pi: ExtensionAPI) {
       // Enter step before the agent follows the ordered transaction.
       try {
         const stdout = await runLoopxCli(
-          ["start-goal", "--guided", "--project", ".", "--goal-text", trimmed, "--host-surface", "pi"],
+          [
+            "--format",
+            "json",
+            "start-goal",
+            "--guided",
+            "--project",
+            ".",
+            "--goal-text",
+            trimmed,
+            "--host-surface",
+            "pi",
+            "--available-capability",
+            TASK_LEASE_CAPABILITY,
+          ],
           ctx.cwd,
         );
-        pi.sendUserMessage(stdout, { deliverAs: "followUp", triggerTurn: true });
+        const packet = parseJsonObject(stdout);
+        if (!packet) throw new Error("LoopX start-goal returned a non-JSON packet");
+        let authority: PiSessionAuthority | null = null;
+        if (!packetNeedsHostSelection(packet)) {
+          authority = establishSessionAuthority(key, packet);
+          loop.bind(key, {
+            store,
+            isIdle: () => ctx.isIdle(),
+            notify: (message: string, kind: string) => ctx.ui.notify(message, kind),
+            authority,
+          });
+        }
+        const deliveredPacket = {
+          ...packet,
+          ...(authority
+            ? {
+                pi_session_authority: {
+                  schema_version: authority.schemaVersion,
+                  token: authority.token,
+                  goal_id: authority.goalId,
+                  agent_id: authority.agentId,
+                  registry_path: authority.registryPath,
+                  available_capabilities: authority.availableCapabilities,
+                },
+              }
+            : {}),
+        };
+        pi.sendUserMessage(JSON.stringify(deliveredPacket), {
+          deliverAs: "followUp",
+          triggerTurn: true,
+        });
         ctx.ui.notify(
           "LoopX start-goal packet delivered to the agent; it will follow the ordered transaction.",
           "info",
@@ -224,7 +388,13 @@ export default function (pi: ExtensionAPI) {
     description:
       "Activate a LoopX-backed Pi goal after LoopX start-goal has written todos and produced a heartbeat task_body. The extension then auto-continues through LoopX quota should-run; it never self-declares closure.",
     parameters: Type.Object({
-      goalId: Type.String({ description: "LoopX goal id from the start-goal packet (goal_id)." }),
+      activationToken: Type.String({
+        minLength: 1,
+        description: "Host-issued token from the current Pi startup/session packet.",
+      }),
+      goalId: Type.Optional(
+        Type.String({ description: "Optional compatibility echo of the host packet goal_id." }),
+      ),
       objective: Type.String({
         description: "Heartbeat task_body from the start-goal packet.",
       }),
@@ -240,36 +410,59 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { key } = bindContext(ctx);
-      const binding = await loop.activate(key, {
-        directory: ctx.cwd,
-        goalId: String(params.goalId),
-        agentId: params.agentId ? String(params.agentId) : "",
-        registryPath: params.registryPath ? String(params.registryPath) : "",
-        availableCapabilities: Array.isArray(params.availableCapabilities)
-          ? params.availableCapabilities.map(String)
-          : [],
-        taskBody: String(params.objective),
-        autoResume: true,
-        terminal: false,
-        schedulerToken: "",
-        unchangedPolls: 0,
-        lastInjectedPrompt: "",
-      });
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              version: 1,
-              operation: "loopx_activate",
-              ok: true,
-              message: "LoopX-backed Pi goal activated.",
-              goalId: binding.goalId,
-            }),
-          },
-        ],
-        details: {},
-      };
+      try {
+        const binding = await loop.activate(key, {
+          directory: ctx.cwd,
+          activationToken: String(params.activationToken),
+          ...(params.goalId !== undefined ? { goalId: String(params.goalId) } : {}),
+          ...(params.agentId !== undefined ? { agentId: String(params.agentId) } : {}),
+          ...(params.registryPath !== undefined
+            ? { registryPath: String(params.registryPath) }
+            : {}),
+          ...(params.availableCapabilities !== undefined
+            ? { availableCapabilities: params.availableCapabilities.map(String) }
+            : {}),
+          taskBody: String(params.objective),
+          autoResume: true,
+          terminal: false,
+          schedulerToken: "",
+          unchangedPolls: 0,
+          lastInjectedPrompt: "",
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                version: 1,
+                schema_version: PI_ACTIVATION_SCHEMA_VERSION,
+                operation: "loopx_activate",
+                ok: true,
+                message: "LoopX-backed Pi goal activated.",
+                goalId: binding.goalId,
+              }),
+            },
+          ],
+          details: {},
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                version: 1,
+                schema_version: PI_ACTIVATION_SCHEMA_VERSION,
+                operation: "loopx_activate",
+                ok: false,
+                error: String((error as Error)?.message || "Pi session authority rejected"),
+                error_code: String((error as { code?: string })?.code || "authority_mismatch"),
+              }),
+            },
+          ],
+          details: {},
+        };
+      }
     },
   });
 
@@ -346,6 +539,7 @@ export default function (pi: ExtensionAPI) {
             : {}),
         },
         runLoopxTaskLeaseCli,
+        sessionAuthorities.get(key),
       );
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],

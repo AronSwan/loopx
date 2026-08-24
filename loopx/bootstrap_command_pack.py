@@ -261,6 +261,9 @@ def _guided_command_pack_projection(
 ) -> dict[str, Any]:
     """Keep the guided hot path actionable without nesting the full host packet."""
 
+    connection = command_pack.get("project_connection")
+    registry_path = connection.get("registry") if isinstance(connection, dict) else None
+
     projection: dict[str, Any] = {
         "ok": command_pack.get("ok"),
         "schema_version": command_pack.get("schema_version"),
@@ -268,6 +271,7 @@ def _guided_command_pack_projection(
         "projection_mode": "guided_start_compatibility",
         "read_only": command_pack.get("read_only"),
         "project": command_pack.get("project"),
+        "registry_path": registry_path,
         "goal_id": command_pack.get("goal_id"),
         "agent_id": command_pack.get("agent_id"),
         "host_surface": command_pack.get("host_surface"),

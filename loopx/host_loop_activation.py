@@ -857,11 +857,12 @@ def _pi_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
             "owner": "Pi LoopX goal extension",
             "host_tool": "loopx_goal_activate",
             "tool_argument_mapping": {
-                "goalId": "heartbeat_prompt.goal_id",
+                "activationToken": "pi_session_authority.token from the host startup/session packet",
+                "goalId": "optional compatibility echo; host authority derives the value",
                 "objective": "heartbeat_prompt.task_body",
-                "agentId": "heartbeat_prompt.agent_id when present",
-                "registryPath": "explicit registry path when present",
-                "availableCapabilities": "declared host capabilities when present",
+                "agentId": "optional compatibility echo; host authority derives the value",
+                "registryPath": "optional compatibility echo; host authority derives the value",
+                "availableCapabilities": "optional compatibility echo; host authority derives the value",
             },
             "cli_can_mutate_directly": False,
             "missing_host_tool_gate": (
@@ -873,7 +874,7 @@ def _pi_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
         "activation_steps": [
             "Install or refresh the LoopX Pi surface when needed.",
             "Run the heartbeat-prompt JSON command after project state and todos are written.",
-            "Call loopx_goal_activate with goalId from goal_id, objective from task_body, and optional agentId, registryPath, or availableCapabilities when those values are present.",
+            "Call loopx_goal_activate with the activationToken from the host startup/session packet and objective from task_body; authority fields are host-derived and must not be changed by the model.",
             "Let the extension gate every settled continuation and timer wake through LoopX quota should-run.",
         ],
         "success_criteria": [
