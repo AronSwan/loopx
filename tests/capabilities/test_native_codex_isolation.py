@@ -309,6 +309,81 @@ def test_native_codex_isolation_exposes_only_workspace_profile_and_work_children
     not _namespace_mounts_supported(),
     reason="unprivileged user/mount namespaces are unavailable",
 )
+def test_native_codex_isolation_hides_runner_provider_authority_from_shell_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_root = tmp_path / "controller-private"
+    private_root.mkdir()
+    private_secret_file = private_root / "provider-secret.txt"
+    private_secret_file.write_text("fixture-upstream-secret", encoding="utf-8")
+    workspace = tmp_path / "task-workspace"
+    workspace.mkdir()
+    profile_root = tmp_path / "installed-profile"
+    home = profile_root / "home"
+    codex_home = profile_root / "codex-home"
+    codex_home.mkdir(parents=True)
+    home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'env_key = "LOOPX_MODEL_PROVIDER_SENTINEL"\n',
+        encoding="utf-8",
+    )
+    work_dir = tmp_path / "run-work"
+    work_dir.mkdir()
+    monkeypatch.setenv("ARK_OPENAI_API_KEY", "fixture-upstream-secret")
+
+    probe = textwrap.dedent(
+        """
+        set -eu
+        private_secret_file=$1
+        test -z "${ARK_OPENAI_API_KEY+x}"
+        for process_environment in /proc/[0-9]*/environ; do
+            [ -r "$process_environment" ] || continue
+            ! tr '\\0' '\\n' < "$process_environment" \
+                | grep -a -F 'ARK_OPENAI_API_KEY='
+        done
+        test ! -e "$private_secret_file"
+        ! grep -R -a -F 'ARK_OPENAI_API_KEY=' "$HOME" "$CODEX_HOME"
+        test "$(cat "$CODEX_HOME/config.toml")" = \
+            'env_key = "LOOPX_MODEL_PROVIDER_SENTINEL"'
+        printf 'credential-boundary-isolated\n'
+        """
+    )
+    envelope = build_native_codex_isolation_envelope(
+        executable="sh",
+        process_args=["-ceu", probe, "sh", str(private_secret_file)],
+        work_dir=work_dir,
+        private_root=private_root,
+        workspace_source=workspace,
+        profile_root=profile_root,
+    )
+    isolated_env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "LOOPX_MODEL_PROVIDER_SENTINEL": "runner-owned-gateway-no-upstream-secret",
+    }
+
+    completed = subprocess.run(
+        envelope.process_command,
+        env=isolated_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "credential-boundary-isolated\n"
+    for authority_root in (home, codex_home):
+        for path in authority_root.rglob("*"):
+            if path.is_file():
+                assert b"fixture-upstream-secret" not in path.read_bytes()
+
+
+@pytest.mark.skipif(
+    not _namespace_mounts_supported(),
+    reason="unprivileged user/mount namespaces are unavailable",
+)
 def test_native_codex_isolation_rejects_symlinked_work_children(
     tmp_path: Path,
 ) -> None:

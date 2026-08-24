@@ -28,7 +28,6 @@ from loopx.capabilities.benchmark_toolkit.native_codex_profile import (  # noqa:
     compact_native_codex_profile_receipt,
     inspect_native_codex_profile,
     install_native_codex_profile,
-    native_codex_app_server_environment,
     native_codex_app_server_shell_policy_args,
     native_codex_profile_environment,
     render_native_codex_goal_prompt,
@@ -77,6 +76,21 @@ def _run_profile_cli(
     return payload
 
 
+def _profile_authority_contains_value(profile: NativeCodexProfile, value: str) -> bool:
+    marker = value.encode("utf-8")
+    for root in (profile.home, profile.codex_home):
+        for path in root.rglob("*"):
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or path.stat().st_size > 2_000_000
+            ):
+                continue
+            if marker in path.read_bytes():
+                return True
+    return False
+
+
 def main() -> int:
     args = _parser().parse_args()
     with tempfile.TemporaryDirectory(prefix="loopx-native-goal-profile-smoke-") as raw:
@@ -86,32 +100,37 @@ def main() -> int:
             require_clean_source=not args.allow_dirty_source,
         )
         profile_receipt = compact_native_codex_profile_receipt(profile)
-        provider_key = "LOOPX_BENCHMARK_PROVIDER_SENTINEL"
+        provider_key = "ARK_OPENAI_API_KEY"
+        gateway_sentinel_key = "LOOPX_MODEL_PROVIDER_SENTINEL"
         unrelated_key = "LOOPX_BENCHMARK_UNRELATED_SENTINEL"
+        provider_value = (
+            "fixture-" + hashlib.sha256(str(profile.root).encode("utf-8")).hexdigest()
+        )
         sentinel_env = {
             **os.environ,
-            provider_key: "provider-sentinel",
+            provider_key: provider_value,
             unrelated_key: "unrelated-sentinel",
         }
         default_profile_env = native_codex_profile_environment(
             profile, base_env=sentinel_env
         )
-        app_server_env = native_codex_app_server_environment(
-            profile,
-            provider_env_key=provider_key,
-            base_env=sentinel_env,
-        )
+        app_server_env = {
+            **default_profile_env,
+            gateway_sentinel_key: "runner-owned-gateway-no-upstream-secret",
+        }
         shell_policy_args = native_codex_app_server_shell_policy_args(
-            provider_env_keys=(provider_key,)
+            excluded_env_keys=(gateway_sentinel_key,)
         )
         provider_environment_receipt = {
-            "default_environment_credential_free": provider_key
-            not in default_profile_env,
-            "declared_provider_value_admitted": app_server_env.get(provider_key)
-            == "provider-sentinel",
+            "upstream_provider_value_excluded": provider_key not in app_server_env,
+            "runner_gateway_sentinel_admitted": app_server_env.get(gateway_sentinel_key)
+            == "runner-owned-gateway-no-upstream-secret",
             "unrelated_value_excluded": unrelated_key not in app_server_env,
-            "agent_shell_provider_value_excluded": (
-                f'shell_environment_policy.exclude=["{provider_key}"]'
+            "profile_home_provider_value_excluded": (
+                not _profile_authority_contains_value(profile, provider_value)
+            ),
+            "agent_shell_gateway_sentinel_excluded": (
+                f'shell_environment_policy.exclude=["{gateway_sentinel_key}"]'
                 in shell_policy_args
             ),
             "raw_values_recorded": False,
@@ -202,6 +221,19 @@ def main() -> int:
                     "stdio://",
                     "--enable",
                     "goals",
+                    "-c",
+                    'model_provider="loopx_runner_gateway"',
+                    "-c",
+                    'model_providers.loopx_runner_gateway.name="runner-owned-gateway"',
+                    "-c",
+                    'model_providers.loopx_runner_gateway.base_url="http://127.0.0.1:9"',
+                    "-c",
+                    (
+                        "model_providers.loopx_runner_gateway.env_key="
+                        '"LOOPX_MODEL_PROVIDER_SENTINEL"'
+                    ),
+                    "-c",
+                    'model_providers.loopx_runner_gateway.wire_api="responses"',
                     *shell_policy_args,
                 ],
                 process_env=app_server_env,

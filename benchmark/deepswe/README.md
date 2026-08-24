@@ -140,14 +140,14 @@ The treatment also needs three independent product-path proofs:
 Prepare the latter two with
 `benchmark_toolkit.native_codex_profile.install_native_codex_profile`. Do not copy
 `SKILL.md` files into a runner image. Generate the first input with
-`render_native_codex_goal_prompt`, build app-server's environment with
-`native_codex_app_server_environment(profile, provider_env_key=..., base_env=...)`,
-and append `native_codex_app_server_shell_policy_args(provider_env_keys=(...,))`
-to the app-server command so that key is excluded from model-created shell
-commands. A Linux agent container still needs a runner-owned local gateway so
-the real provider credential is absent from the container entirely. The
-credential-free `native_codex_profile_environment` remains the default for CLI
-and preflight work. Set
+`render_native_codex_goal_prompt`, keep app-server on the credential-free
+`native_codex_profile_environment`, and route its provider through
+`serve_runner_owned_provider_gateway`. The app-server receives only the gateway
+URL and a fixed non-secret env sentinel. A Linux host-side worker must also run
+inside `native_codex_isolation`; filtering child env alone does not prevent a
+danger-full-access agent from reading parent process environments or ambient
+HOME files. `native_codex_app_server_shell_policy_args` remains defense in depth
+for model-created shells, not the credential boundary. Set
 `NativeGoalConfig.required_skill_ids=profile.required_skill_ids`. The runtime then
 uses `skills/list` before thread creation and fails before model work unless Codex
 actually discovers the installed skill set. A filesystem check alone is not
