@@ -41,6 +41,14 @@ a private, session-scoped transactional ledger:
 In short: deep-research is the only writer of `.loopx/deepresearch/`, and
 public surfaces only ever see derived, reconstructable projections.
 
+One ledger invariant spans every transition that adjudicates a contradiction:
+no resolution — inside `resolve-question` or standalone
+`resolve-contradiction` — may overrule a claim that an already-answered
+question cites as evidence. The ledger never silently invalidates a recorded
+answer; late-arriving counterevidence that wins forces an explicit decision
+(side with the cited claim, or close the run and revisit the question in a new
+run) instead of leaving the report internally inconsistent.
+
 ## Lifecycle
 
 `start` opens a run; `close` is the explicit terminal transition; the next

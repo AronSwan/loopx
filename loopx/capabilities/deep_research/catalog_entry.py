@@ -103,7 +103,9 @@ DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
         ),
         (
             "The packet owns research progression and stop decisions; the model "
-            "executes bounded expeditions and records typed ledger transitions only."
+            "executes bounded expeditions and records typed ledger transitions only. "
+            "No contradiction adjudication — in-call or standalone — may overrule "
+            "a claim an already-answered question cites as evidence."
         ),
         (
             "Claims carry caller-declared provenance: --tool records the tool the "

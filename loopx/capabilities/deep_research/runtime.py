@@ -498,12 +498,56 @@ def _resolve_question_unlocked(
     if not evidence_claims:
         raise ValueError("resolving a question requires at least one recorded evidence claim")
     _adjudicate_touching_contradictions(state, evidence_claims, contradiction_resolutions)
+    # The in-call adjudications above may overrule claims cited by OTHER
+    # already-answered questions; the current question's own citations were
+    # validated by the membership rules inside the adjudication.
+    _reject_overruled_answer_evidence(state, exclude_question_id=question_id)
     question["status"] = "answered"
     question["answer"] = answer
     question["evidence_claims"] = list(evidence_claims)
     question["resolved_at"] = _now_iso()
     _save_state(project, state)
     return {"question_id": question_id, "state": state}
+
+
+def _reject_overruled_answer_evidence(
+    state: dict[str, Any],
+    *,
+    exclude_question_id: str | None = None,
+    prospective: tuple[dict[str, Any], str] | None = None,
+) -> None:
+    """Ledger invariant: no answered question may cite an overruled claim.
+
+    A resolved contradiction adjudicates one of its two claims as the loser;
+    the citation report must never back an already-recorded answer with a side
+    the same ledger ruled against. Enforced on every transition that
+    adjudicates a contradiction — in-call (resolve-question) via the resolved
+    scan, standalone (resolve-contradiction) via `prospective`, which lets the
+    check run before any mutation. `exclude_question_id` covers the question
+    being resolved right now: its own citations are governed by the
+    sides-with-membership rules in _adjudicate_touching_contradictions.
+    """
+    resolved = [x for x in state["contradictions"] if x["status"] == "resolved"]
+    if prospective is not None:
+        contradiction, sides_with = prospective
+        resolved.append({**contradiction, "status": "resolved", "sides_with": sides_with})
+    for contradiction in resolved:
+        sides_with = contradiction["sides_with"]
+        loser = (
+            contradiction["claim_b"]
+            if sides_with == contradiction["claim_a"]
+            else contradiction["claim_a"]
+        )
+        for question in state["questions"]:
+            if question["status"] != "answered" or question["id"] == exclude_question_id:
+                continue
+            if loser in question.get("evidence_claims", []):
+                raise ValueError(
+                    f"contradiction {contradiction['id']} overrules {loser}, which is cited "
+                    f"as evidence by answered question {question['id']}; the ledger cannot "
+                    "silently invalidate an answer it already recorded — re-resolve toward "
+                    "the cited side, or close the run and reopen the question in a new run"
+                )
 
 
 def resolve_contradiction(
@@ -518,7 +562,8 @@ def resolve_contradiction(
     Question resolution closes contradictions touching its evidence, but a
     contradiction can outlive the question that produced its claims; without
     this path the closeout gate would deadlock. Still a typed, audited
-    transition — not a manual state edit.
+    transition — not a manual state edit — and it cannot overrule evidence an
+    already-answered question cites.
     """
     rationale = rationale.strip()
     if not rationale:
@@ -539,6 +584,7 @@ def resolve_contradiction(
                 f"resolution must side with {contradiction['claim_a']} or "
                 f"{contradiction['claim_b']}, got {sides_with!r}"
             )
+        _reject_overruled_answer_evidence(state, prospective=(contradiction, sides_with))
         contradiction["status"] = "resolved"
         contradiction["sides_with"] = sides_with
         contradiction["resolution"] = rationale
@@ -670,7 +716,9 @@ def build_packet(state: dict[str, Any], *, cli_bin: str, project: Path) -> dict[
                 "attestation; never fabricate URLs or content",
                 "every subquestion derives from a recorded claim",
                 "every resolution cites recorded evidence claim ids",
-                "contradictions block resolution until an explicit sides-with rationale is recorded",
+                "contradictions block resolution until an explicit sides-with rationale is "
+                "recorded, and no adjudication — in-call or standalone — may overrule a "
+                "claim an already-answered question cites as evidence",
             ],
         },
         "ledger_summary": {

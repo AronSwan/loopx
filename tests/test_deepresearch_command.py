@@ -39,6 +39,69 @@ def _start(tmp_path: Path, *, question: str = "How does loopx gate agent loops?"
     assert _payload(result)["packet"]["next_expedition"]["question_id"] == "q1"
 
 
+def _add_source(
+    tmp_path: Path, ref: str, claims: list[dict], *, tool: str = "web_fetch"
+) -> dict:
+    return _payload(
+        _run_cli(
+            "deepresearch",
+            "add-source",
+            "--project",
+            ".",
+            "--url-or-path",
+            ref,
+            "--tool",
+            tool,
+            "--claims-json",
+            json.dumps(claims),
+            cwd=tmp_path,
+        )
+    )
+
+
+def _seed_contradiction(tmp_path: Path) -> None:
+    """c1 (supports) then c2 (contradicts c1) — leaves open contradiction x1."""
+    _add_source(
+        tmp_path, "https://a.example/x", [{"text": "gate runs per turn", "stance": "supports"}]
+    )
+    _add_source(
+        tmp_path,
+        "https://b.example/y",
+        [
+            {
+                "text": "gate runs per hour only",
+                "stance": "contradicts",
+                "relates_claim": "c1",
+            }
+        ],
+    )
+
+
+def _resolve_question(
+    tmp_path: Path,
+    *,
+    question_id: str,
+    answer: str,
+    evidence: list[str],
+    resolutions: list[str] | None = None,
+):
+    args = [
+        "deepresearch",
+        "resolve-question",
+        "--project",
+        ".",
+        "--question-id",
+        question_id,
+        "--answer",
+        answer,
+        "--evidence-claims",
+        *evidence,
+    ]
+    for resolution in resolutions or []:
+        args += ["--contradiction-resolution", resolution]
+    return _run_cli(*args, cwd=tmp_path)
+
+
 def test_full_round_trip_resolves_question_and_writes_report(tmp_path: Path) -> None:
     _start(tmp_path)
     added = _payload(
@@ -215,79 +278,24 @@ def test_subquestions_must_derive_from_recorded_claims(tmp_path: Path) -> None:
 
 def test_contradiction_blocks_resolution_until_sides_with_rationale(tmp_path: Path) -> None:
     _start(tmp_path)
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://a.example/x",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
-            cwd=tmp_path,
-        )
-    )
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://b.example/y",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps(
-                [
-                    {
-                        "text": "gate runs per hour only",
-                        "stance": "contradicts",
-                        "relates_claim": "c1",
-                    }
-                ]
-            ),
-            cwd=tmp_path,
-        )
-    )
+    _seed_contradiction(tmp_path)
     status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
     assert status["packet"]["ledger_summary"]["open_contradictions"] == 1
 
-    blocked = _run_cli(
-        "deepresearch",
-        "resolve-question",
-        "--project",
-        ".",
-        "--question-id",
-        "q1",
-        "--answer",
-        "something",
-        "--evidence-claims",
-        "c1",
-        "c2",
-        cwd=tmp_path,
+    blocked = _resolve_question(
+        tmp_path, question_id="q1", answer="something", evidence=["c1", "c2"]
     )
     assert "open contradiction x1" in json.loads(blocked.stdout)["error"]
 
     resolved = _payload(
-        _run_cli(
-            "deepresearch",
-            "resolve-question",
-            "--project",
-            ".",
-            "--question-id",
-            "q1",
-            "--answer",
-            "The gate runs per turn; the hourly source described a different cadence.",
-            "--evidence-claims",
-            "c1",
-            "c2",
-            "--contradiction-resolution",
-            "contradiction-id=x1 sides-with=c1 rationale='primary source shows per-turn admission'",
-            cwd=tmp_path,
+        _resolve_question(
+            tmp_path,
+            question_id="q1",
+            answer="The gate runs per turn; the hourly source described a different cadence.",
+            evidence=["c1", "c2"],
+            resolutions=[
+                "contradiction-id=x1 sides-with=c1 rationale='primary source shows per-turn admission'"
+            ],
         )
     )
     assert resolved["packet"]["ledger_summary"]["open_contradictions"] == 0
@@ -322,72 +330,16 @@ def test_open_contradiction_blocks_completion_until_resolved(tmp_path: Path) -> 
     # Reviewer repro: c1, a claim contradicting it (c2), then an unrelated c3;
     # resolving q1 with c3 only must NOT let the packet claim completion.
     _start(tmp_path)
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://a.example/x",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
-            cwd=tmp_path,
-        )
+    _seed_contradiction(tmp_path)
+    _add_source(
+        tmp_path, "https://c.example/z", [{"text": "unrelated detail", "stance": "neutral"}]
     )
     _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://b.example/y",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps(
-                [
-                    {
-                        "text": "gate runs per hour only",
-                        "stance": "contradicts",
-                        "relates_claim": "c1",
-                    }
-                ]
-            ),
-            cwd=tmp_path,
-        )
-    )
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://c.example/z",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps([{"text": "unrelated detail", "stance": "neutral"}]),
-            cwd=tmp_path,
-        )
-    )
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "resolve-question",
-            "--project",
-            ".",
-            "--question-id",
-            "q1",
-            "--answer",
-            "Something answered on unrelated evidence.",
-            "--evidence-claims",
-            "c3",
-            cwd=tmp_path,
+        _resolve_question(
+            tmp_path,
+            question_id="q1",
+            answer="Something answered on unrelated evidence.",
+            evidence=["c3"],
         )
     )
     status = _payload(_run_cli("deepresearch", "status", "--project", ".", cwd=tmp_path))
@@ -422,58 +374,13 @@ def test_resolution_cannot_side_with_claim_outside_answer_evidence(tmp_path: Pat
     # report could back the answer with the side the same transition ruled
     # against. The adjudicated side must be part of the answer's evidence.
     _start(tmp_path)
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://a.example/x",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
-            cwd=tmp_path,
-        )
-    )
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://b.example/y",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps(
-                [
-                    {
-                        "text": "gate runs per hour only",
-                        "stance": "contradicts",
-                        "relates_claim": "c1",
-                    }
-                ]
-            ),
-            cwd=tmp_path,
-        )
-    )
-    result = _run_cli(
-        "deepresearch",
-        "resolve-question",
-        "--project",
-        ".",
-        "--question-id",
-        "q1",
-        "--answer",
-        "Per hour.",
-        "--evidence-claims",
-        "c1",
-        "--contradiction-resolution",
-        "contradiction-id=x1 sides-with=c2 rationale='hourly source is primary'",
-        cwd=tmp_path,
+    _seed_contradiction(tmp_path)
+    result = _resolve_question(
+        tmp_path,
+        question_id="q1",
+        answer="Per hour.",
+        evidence=["c1"],
+        resolutions=["contradiction-id=x1 sides-with=c2 rationale='hourly source is primary'"],
     )
     data = json.loads(result.stdout)
     assert data["ok"] is False
@@ -488,44 +395,7 @@ def test_pre_resolved_contradiction_rejects_overruled_evidence(tmp_path: Path) -
     # Same hole through two calls: adjudicate x1 standalone (sides-with c2),
     # then answer citing only the overruled c1.
     _start(tmp_path)
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://a.example/x",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps([{"text": "gate runs per turn", "stance": "supports"}]),
-            cwd=tmp_path,
-        )
-    )
-    _payload(
-        _run_cli(
-            "deepresearch",
-            "add-source",
-            "--project",
-            ".",
-            "--url-or-path",
-            "https://b.example/y",
-            "--tool",
-            "web_fetch",
-            "--claims-json",
-            json.dumps(
-                [
-                    {
-                        "text": "gate runs per hour only",
-                        "stance": "contradicts",
-                        "relates_claim": "c1",
-                    }
-                ]
-            ),
-            cwd=tmp_path,
-        )
-    )
+    _seed_contradiction(tmp_path)
     _payload(
         _run_cli(
             "deepresearch",
@@ -541,22 +411,121 @@ def test_pre_resolved_contradiction_rejects_overruled_evidence(tmp_path: Path) -
             cwd=tmp_path,
         )
     )
-    result = _run_cli(
-        "deepresearch",
-        "resolve-question",
-        "--project",
-        ".",
-        "--question-id",
-        "q1",
-        "--answer",
-        "Per turn.",
-        "--evidence-claims",
-        "c1",
-        cwd=tmp_path,
+    result = _resolve_question(
+        tmp_path, question_id="q1", answer="Per turn.", evidence=["c1"]
     )
     data = json.loads(result.stdout)
     assert data["ok"] is False
     assert "resolved against c1" in data["error"]
+
+
+def test_standalone_resolution_cannot_overrule_answered_evidence(tmp_path: Path) -> None:
+    # Reviewer probe (r5): answer q1 citing c1 first, THEN add contradicting
+    # c2 and adjudicate x1 standalone toward c2. That used to succeed and left
+    # the ledger claiming the answer rests on a side it ruled against.
+    _start(tmp_path)
+    _add_source(
+        tmp_path,
+        "https://a.example/x",
+        [{"text": "gate runs per turn", "stance": "supports"}],
+    )
+    _payload(_resolve_question(tmp_path, question_id="q1", answer="Per turn.", evidence=["c1"]))
+    _add_source(
+        tmp_path,
+        "https://b.example/y",
+        [
+            {
+                "text": "gate runs per hour only",
+                "stance": "contradicts",
+                "relates_claim": "c1",
+            }
+        ],
+    )
+
+    overruled = _run_cli(
+        "deepresearch",
+        "resolve-contradiction",
+        "--project",
+        ".",
+        "--contradiction-id",
+        "x1",
+        "--sides-with",
+        "c2",
+        "--rationale",
+        "hourly source is primary",
+        cwd=tmp_path,
+    )
+    data = json.loads(overruled.stdout)
+    assert data["ok"] is False
+    assert "cited as evidence by answered question q1" in data["error"]
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["contradictions"][0]["status"] == "open"
+
+    # Siding with the cited side stays legal and unblocks completion.
+    consistent = _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-contradiction",
+            "--project",
+            ".",
+            "--contradiction-id",
+            "x1",
+            "--sides-with",
+            "c1",
+            "--rationale",
+            "primary source shows per-turn admission",
+            cwd=tmp_path,
+        )
+    )
+    assert consistent["packet"]["stop_conditions"]["stopped"] is True
+
+
+def test_in_call_resolution_cannot_overrule_other_answered_question(tmp_path: Path) -> None:
+    # The same invariant on the resolve-question path: adjudicating x1 toward
+    # c2 while answering q2 must not overrule c1 already cited by answered q1.
+    _start(tmp_path)
+    _add_source(
+        tmp_path,
+        "https://a.example/x",
+        [{"text": "gate runs per turn", "stance": "supports"}],
+    )
+    _payload(_resolve_question(tmp_path, question_id="q1", answer="Per turn.", evidence=["c1"]))
+    _add_source(
+        tmp_path,
+        "https://b.example/y",
+        [
+            {
+                "text": "gate runs per hour only",
+                "stance": "contradicts",
+                "relates_claim": "c1",
+            }
+        ],
+    )
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "add-subquestion",
+            "--project",
+            ".",
+            "--text",
+            "Which cadence is correct?",
+            "--from-claim",
+            "c2",
+            cwd=tmp_path,
+        )
+    )
+    result = _resolve_question(
+        tmp_path,
+        question_id="q2",
+        answer="Hourly.",
+        evidence=["c2"],
+        resolutions=["contradiction-id=x1 sides-with=c2 rationale='hourly source is primary'"],
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "cited as evidence by answered question q1" in data["error"]
 
 
 def test_self_contradiction_is_rejected(tmp_path: Path) -> None:
