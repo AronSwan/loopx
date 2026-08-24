@@ -70,6 +70,27 @@ function memoryBindingStore() {
   }
 }
 
+function testAuthority(key, goalId) {
+  return {
+    schemaVersion: "loopx_pi_session_authority_v0",
+    token: `host-token-${key}`,
+    goalId,
+    agentId: "agent-test",
+    registryPath: "/workspace/registry.json",
+    availableCapabilities: ["task_lease_v0"],
+  }
+}
+
+async function activateWithAuthority(loop, key, fields) {
+  const goalId = String(fields.goalId || `goal-${key}`)
+  const authority = testAuthority(key, goalId)
+  loop.bindAuthority(key, authority)
+  return loop.activate(key, {
+    ...fields,
+    activationToken: authority.token,
+  })
+}
+
 
 function terminalDecision() {
   return {
@@ -188,7 +209,7 @@ function harness(initialDecision) {
     },
   }
   const activate = async (key, overrides = {}) =>
-    loop.activate(key, {
+    activateWithAuthority(loop, key, {
       goalId: `goal-${key}`,
       taskBody: "LoopX task body",
       autoResume: true,
@@ -550,7 +571,7 @@ test("an abort pause survives runtime replacement for a persistent session", asy
       ...first.services,
       store,
     })
-    await first.loop.activate("session-persisted-abort", {
+    await activateWithAuthority(first.loop, "session-persisted-abort", {
       goalId: "goal-persisted-abort",
       taskBody: "persisted body",
     })
@@ -601,7 +622,7 @@ test("dispose during the post-probe read stops all side effects when it returns"
       calls.notify += 1
     },
   })
-  await loop.activate("session-race", { goalId: "goal-race", taskBody: "old body" })
+  await activateWithAuthority(loop, "session-race", { goalId: "goal-race", taskBody: "old body" })
   const writesBefore = gated.writes.length
   assert.equal(calls.notify, 1) // only the activation notification
 
@@ -644,7 +665,7 @@ test("ephemeral sessions never inherit the previous run's binding", async () => 
     isIdle: () => true,
     notify: () => {},
   })
-  await run1.loop.activate(identity1.key, { goalId: "old-goal", taskBody: "old body" })
+  await activateWithAuthority(run1.loop, identity1.key, { goalId: "old-goal", taskBody: "old body" })
 
   // Run 2: a fresh ephemeral process must start empty — no quota probe, no
   // continuation of old-goal, no visible binding — and must activate again.
@@ -722,7 +743,7 @@ test("activation during a stale run_now branch prevents stale writes and message
   })
 
   // Activate old goal (write #0, generation -> 1).
-  await loop.activate("session-race", { goalId: "old-goal", taskBody: "old-body" })
+  await activateWithAuthority(loop, "session-race", { goalId: "old-goal", taskBody: "old-body" })
   assert.equal(calls.notify, 1)
 
   // Start settle; the probe returns run_now and the scheduler write blocks.
@@ -733,7 +754,7 @@ test("activation during a stale run_now branch prevents stale writes and message
 
   // Now the old evaluation's first branch write is in-flight.  Activate a
   // new goal for the same key — this bumps the per-key generation.
-  await loop.activate("session-race", { goalId: "new-goal", taskBody: "new-body" })
+  await activateWithAuthority(loop, "session-race", { goalId: "old-goal", taskBody: "new-body" })
   assert.equal(calls.notify, 2)
 
   // Release the old write and let the evaluation continue.
@@ -744,7 +765,7 @@ test("activation during a stale run_now branch prevents stale writes and message
   // task body after the generation moved.
   assert.equal(calls.send, 0)
   const binding = await inner.read("session-race")
-  assert.equal(binding.goalId, "new-goal")
+  assert.equal(binding.goalId, "old-goal")
   assert.notEqual(binding.lastInjectedPrompt, "old-body")
 })
 
@@ -808,7 +829,7 @@ test("activation during a stale terminal write cannot stop the new goal", async 
     },
   })
 
-  await loop.activate("session-terminal-race", {
+  await activateWithAuthority(loop, "session-terminal-race", {
     goalId: "old-goal",
     taskBody: "old-body",
   })
@@ -821,8 +842,8 @@ test("activation during a stale terminal write cannot stop the new goal", async 
 
   // Re-activate the same session with a new goal while the terminal commit
   // is still in-flight.
-  await loop.activate("session-terminal-race", {
-    goalId: "new-goal",
+  await activateWithAuthority(loop, "session-terminal-race", {
+    goalId: "old-goal",
     taskBody: "new-body",
   })
   assert.equal(calls.notify, notifyAfterActivate + 1)
@@ -836,7 +857,7 @@ test("activation during a stale terminal write cannot stop the new goal", async 
   assert.equal(calls.send, 0)
   assert.equal(scheduled.length, 0)
   const binding = await inner.read("session-terminal-race")
-  assert.equal(binding.goalId, "new-goal")
+  assert.equal(binding.goalId, "old-goal")
   assert.equal(binding.terminal, false)
   assert.equal(binding.autoResume, true)
 })
@@ -897,7 +918,7 @@ test("activation during a stale wait write prevents a stale timer", async () => 
     },
   })
 
-  await loop.activate("session-wait-race", {
+  await activateWithAuthority(loop, "session-wait-race", {
     goalId: "old-goal",
     taskBody: "old-body",
   })
@@ -906,8 +927,8 @@ test("activation during a stale wait write prevents a stale timer", async () => 
   await writeBlockedPromise
   assert.equal(calls.quota, 1)
 
-  await loop.activate("session-wait-race", {
-    goalId: "new-goal",
+  await activateWithAuthority(loop, "session-wait-race", {
+    goalId: "old-goal",
     taskBody: "new-body",
   })
 
@@ -919,7 +940,7 @@ test("activation during a stale wait write prevents a stale timer", async () => 
   assert.equal(scheduled.length, 0)
   assert.equal(calls.send, 0)
   const binding = await inner.read("session-wait-race")
-  assert.equal(binding.goalId, "new-goal")
+  assert.equal(binding.goalId, "old-goal")
 })
 
 
@@ -999,7 +1020,7 @@ test("store write failure fails closed with a bounded retry", async () => {
   })
 
   // activate writes (index 0) — succeeds.
-  await loop.activate("session-throw", { goalId: "goal-throw", taskBody: "body" })
+  await activateWithAuthority(loop, "session-throw", { goalId: "goal-throw", taskBody: "body" })
 
   // settle must not throw; the evaluation catches the store write failure
   // and reschedules instead of propagating.
@@ -1128,7 +1149,7 @@ test("stale userPrompt write after re-activate cannot pause new goal", async () 
     },
   })
 
-  await loop.activate("session-user-prompt-race", {
+  await activateWithAuthority(loop, "session-user-prompt-race", {
     goalId: "old-goal",
     taskBody: "old-body",
   })
@@ -1141,8 +1162,8 @@ test("stale userPrompt write after re-activate cannot pause new goal", async () 
 
   // Re-activate the same session with a new goal while the old userPrompt
   // write is still in-flight, then settle to create a new timer.
-  await loop.activate("session-user-prompt-race", {
-    goalId: "new-goal",
+  await activateWithAuthority(loop, "session-user-prompt-race", {
+    goalId: "old-goal",
     taskBody: "new-body",
   })
   assert.equal(calls.notify, 2)
@@ -1158,7 +1179,7 @@ test("stale userPrompt write after re-activate cannot pause new goal", async () 
   // The stale userPrompt commit was rejected: the new goal stays alive
   // with autoResume=true, no timer was cancelled, and no stale state leaked.
   const binding = await inner.read("session-user-prompt-race")
-  assert.equal(binding.goalId, "new-goal")
+  assert.equal(binding.goalId, "old-goal")
   assert.equal(binding.autoResume, true)
   assert.equal(scheduled.filter((t) => !t.cleared).length, 1)
 })
@@ -1376,4 +1397,80 @@ test("task-lease transport and malformed payloads fail closed", async () => {
     assert.equal(result.ok, false)
     assert.equal(result.error_code, errorCode)
   }
+})
+
+
+test("host-bound Pi authority rejects agent and capability rebinding before lease transport", async () => {
+  const store = createMemoryBindingStore()
+  const loop = createGoalLoop({
+    quotaProbe: async () => ({ should_run: false }),
+    sendMessage: () => {},
+    setTimer: () => null,
+    clearTimer: () => {},
+  })
+  const authorityA = {
+    ...testAuthority("session-authority", "goal-a"),
+    availableCapabilities: [],
+  }
+  loop.bind("session-authority", {
+    store,
+    authority: authorityA,
+    isIdle: () => true,
+    notify: () => {},
+  })
+  await loop.activate("session-authority", {
+    activationToken: authorityA.token,
+    goalId: authorityA.goalId,
+    agentId: authorityA.agentId,
+    registryPath: authorityA.registryPath,
+    availableCapabilities: authorityA.availableCapabilities,
+    taskBody: "agent A body",
+  })
+
+  const calls = []
+  let activationFailure = null
+  try {
+    await loop.activate("session-authority", {
+      activationToken: authorityA.token,
+      goalId: "goal-b",
+      agentId: "agent-b",
+      registryPath: "/workspace/other-registry.json",
+      availableCapabilities: ["task_lease_v0"],
+      taskBody: "spoofed agent B body",
+    })
+  } catch (error) {
+    activationFailure = error
+  }
+  assert.equal(activationFailure?.code, "authority_mismatch")
+  const binding = await store.read("session-authority")
+  assert.equal(binding.goalId, "goal-a")
+  assert.equal(binding.agentId, "agent-test")
+  assert.deepEqual(binding.availableCapabilities, [])
+
+  // A caller must not continue into the lease facade after the authority
+  // failure; the transport is therefore never given the spoofed owner.
+  if (!activationFailure) {
+    await runPiTaskLease(binding, {
+      action: "acquire",
+      todoId: "todo_beta",
+      idempotencyKey: "spoofed-turn",
+    }, async (...args) => {
+      calls.push(args)
+      return { stdout: "", returncode: 1 }
+    })
+  }
+  assert.equal(calls.length, 0)
+
+  const tampered = { ...(await store.read("session-authority")), agentId: "agent-b" }
+  const tamperedResult = await runPiTaskLease(
+    tampered,
+    { action: "acquire", todoId: "todo_beta", idempotencyKey: "spoofed-turn" },
+    async (...args) => {
+      calls.push(args)
+      return { stdout: "", returncode: 1 }
+    },
+    authorityA,
+  )
+  assert.equal(tamperedResult.error_code, "authority_mismatch")
+  assert.equal(calls.length, 0)
 })

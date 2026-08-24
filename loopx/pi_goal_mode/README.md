@@ -15,14 +15,17 @@ into a LoopX-governed visible goal loop.
   `/loopx resume` re-arms auto-continuation after a user-driven pause or an
   aborted run.
 - **`loopx_goal_activate`** — agent-callable tool. Binds the current session to
-  a LoopX goal (`goalId`, heartbeat `objective`/task_body, optional `agentId`,
-  `registryPath`, `availableCapabilities`), then starts the quota-gated loop.
+  the host-verified Pi startup/session packet using its one-time
+  `activationToken`, plus the heartbeat `objective`/task_body, then starts the
+  quota-gated loop. Goal, agent, registry, and mutation capabilities are
+  derived from that packet; compatibility echoes are rejected when they do not
+  match the locked authority.
 - **`loopx_task_lease`** — agent-callable, explicit facade over the existing
   `task_lease_v0` CLI. It supports `acquire`, `renew`, `transfer`, `release`,
   and read-only `inspect`. The active Pi binding supplies `goalId` and the
   current owner; the model cannot substitute either authority. Mutation calls
-  require a non-empty bound `agentId` and an explicit
-  `availableCapabilities: ["task_lease_v0", ...]` advertisement. Typed
+  require a non-empty host-verified bound `agentId` and the host-issued
+  `task_lease_v0` capability. Typed
   conflict and CAS payloads (for example `write_scope_conflict` and
   `lease_cas_mismatch`) are preserved as the tool result.
 - **Goal loop** — on every `agent_settled`, the extension probes
@@ -71,9 +74,23 @@ previous run's goal and must activate again through `loopx_goal_activate`.
 
 ## Explicit task leases
 
-Lease support is opt-in per active Pi goal. Include `task_lease_v0` in the
-`availableCapabilities` passed to `loopx_goal_activate`, then call the tool
-with only the lifecycle fields:
+Lease support is explicit at the tool call, while its mutation capability is
+host-bound. Start the Pi flow with `/loopx <goal text>` and use the
+`pi_session_authority.token` from that startup packet when activating:
+
+```text
+loopx_goal_activate({
+  activationToken: "<pi_session_authority.token>",
+  objective: "<heartbeat_prompt.task_body>"
+})
+```
+
+The authority is locked to this Pi session. A later activation that changes the
+goal, agent, registry, or capability set returns a typed authority failure and
+does not reach the lease CLI. Re-run `/loopx <goal text>` in a new host session
+when a different authority is required.
+
+After activation, call the lease tool with only the lifecycle fields:
 
 ```text
 loopx_task_lease({
