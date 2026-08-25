@@ -10,10 +10,9 @@ from .control_plane.todos.contract import (
     normalize_todo_claimed_by,
 )
 from .project_prompt import (
-    render_cli_command_prefix,
     render_heartbeat_prompt_command,
     render_heartbeat_prompt_json_command,
-    shell_arg,
+    render_register_agent_command,
 )
 
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
@@ -508,11 +507,7 @@ def _heartbeat_commands(
     }
     agent_scope = scope_by_type.get(agent_type, scope_by_type["other-agent"])
     scheduler_binding = scheduler_command_binding_for_agent_type(agent_type)
-    renderer_binding = (
-        {"visible_goal_host": "traex-cli"}
-        if agent_type == "traex-cli"
-        else {}
-    )
+    renderer_binding = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
     commands = {
         "heartbeat_prompt_json": render_heartbeat_prompt_json_command(
             goal_id,
@@ -1406,20 +1401,12 @@ def build_host_loop_activation_packet(
             )
             choices.append(choice)
         requested_agent_id = identity.get("requested_agent_id")
-        fresh_agent_id = (
-            str(requested_agent_id)
-            if requested_agent_id
-            else "<new-public-safe-agent-id>"
-        )
-        registration_runtime_root = (
-            identity_runtime_root
-            if identity_runtime_root is not None
-            else runtime_root
-        )
-        register_command = (
-            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=registration_runtime_root)} "
-            f"register-agent --goal-id {shell_arg(goal_id)} "
-            f"--agent-id {shell_arg(fresh_agent_id)} --require-new"
+        fresh_agent_id = str(requested_agent_id or "<new-public-safe-agent-id>")
+        register_command = render_register_agent_command(
+            goal_id,
+            agent_id=fresh_agent_id,
+            cli_bin=cli_bin,
+            runtime_root=identity_runtime_root or runtime_root,
         )
         fresh_registration = (
             {

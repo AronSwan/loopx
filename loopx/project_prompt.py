@@ -42,6 +42,20 @@ def render_cli_command_prefix(
     return prefix
 
 
+def render_register_agent_command(
+    goal_id: str,
+    *,
+    agent_id: str,
+    cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
+) -> str:
+    return (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"register-agent --goal-id {shell_arg(goal_id)} "
+        f"--agent-id {shell_arg(agent_id)} --require-new"
+    )
+
+
 def shell_arg_or_placeholder(value: str) -> str:
     text = str(value)
     if text.startswith("<") and text.endswith(">"):

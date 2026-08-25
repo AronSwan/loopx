@@ -328,7 +328,7 @@ def build_start_goal_host_surface_selection_packet(
     resolved_project = str(_resolve_project(project))
     registry_path = Path(resolved_project) / ".loopx" / "registry.json"
     registry_payload, _registry_error = _read_registry(registry_path)
-    command_runtime_root = _command_runtime_root(
+    command_runtime_root, _ = _runtime_roots(
         registry_payload,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
@@ -483,44 +483,24 @@ def _read_registry(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def _command_runtime_root(
+def _runtime_roots(
     registry: dict[str, Any] | None,
     *,
     registry_path: Path,
     runtime_root_arg: str | None,
-) -> str | None:
-    """Return only an explicit override that command cwd cannot recover."""
-
-    if not runtime_root_arg:
-        return None
-    return str(
-        resolve_runtime_root(
-            registry or {},
-            override=runtime_root_arg,
-            registry_path=registry_path,
+) -> tuple[str | None, str | None]:
+    if runtime_root_arg:
+        resolved = str(
+            resolve_runtime_root(
+                registry or {},
+                override=runtime_root_arg,
+                registry_path=registry_path,
+            )
         )
-    )
-
-
-def _identity_runtime_root(
-    registry: dict[str, Any] | None,
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-) -> str | None:
-    """Resolve the global runtime used by registration and thread binding."""
-
-    if not runtime_root_arg and (
-        not isinstance(registry, dict) or not registry.get("common_runtime_root")
-    ):
-        return None
-    return str(
-        resolve_runtime_root(
-            registry or {},
-            override=runtime_root_arg,
-            registry_path=registry_path,
-        )
-    )
+        return resolved, resolved
+    if not isinstance(registry, dict) or not registry.get("common_runtime_root"):
+        return None, None
+    return None, str(resolve_runtime_root(registry, registry_path=registry_path))
 
 
 def _select_goal(goals: list[dict[str, Any]], goal_id: str | None) -> tuple[str, dict[str, Any] | None]:
@@ -812,12 +792,7 @@ def build_loopx_bootstrap_command_pack(
         None,
     )
     registered_agents = registered_agent_ids_for_goal(registry_goal)
-    command_runtime_root = _command_runtime_root(
-        registry_payload,
-        registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
-    )
-    identity_runtime_root = _identity_runtime_root(
+    command_runtime_root, identity_runtime_root = _runtime_roots(
         registry_payload,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
@@ -1158,7 +1133,7 @@ def _build_multi_goal_start_selection_packet(
     normalized_goal_text = " ".join(goal_text.split())
     normalized_thread_id = normalize_thread_id(thread_id)
     resolved_project = str(inspection["project"])
-    command_runtime_root = _command_runtime_root(
+    command_runtime_root, _ = _runtime_roots(
         registry,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
