@@ -31,6 +31,17 @@ def shell_arg(value: str) -> str:
     return shlex.quote(value)
 
 
+def render_cli_command_prefix(
+    *,
+    cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
+) -> str:
+    prefix = shell_arg(cli_bin)
+    if runtime_root is not None:
+        prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+    return prefix
+
+
 def shell_arg_or_placeholder(value: str) -> str:
     text = str(value)
     if text.startswith("<") and text.endswith(">"):
@@ -221,6 +232,7 @@ def render_heartbeat_prompt_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -242,7 +254,8 @@ def render_heartbeat_prompt_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} heartbeat-prompt --{shell_arg(body)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}"
     )
@@ -252,6 +265,7 @@ def render_heartbeat_prompt_json_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -273,7 +287,8 @@ def render_heartbeat_prompt_json_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} --format json heartbeat-prompt --{shell_arg(body)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"--format json heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}"
     )

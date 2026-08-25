@@ -10,6 +10,7 @@ from .control_plane.todos.contract import (
     normalize_todo_claimed_by,
 )
 from .project_prompt import (
+    render_cli_command_prefix,
     render_heartbeat_prompt_command,
     render_heartbeat_prompt_json_command,
     shell_arg,
@@ -481,6 +482,7 @@ def _heartbeat_commands(
     goal_id: str,
     agent_type: str,
     cli_bin: str,
+    runtime_root: str | None = None,
     agent_id: str | None,
     available_capabilities: list[str] | None = None,
 ) -> dict[str, str]:
@@ -515,6 +517,7 @@ def _heartbeat_commands(
         "heartbeat_prompt_json": render_heartbeat_prompt_json_command(
             goal_id,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -524,6 +527,7 @@ def _heartbeat_commands(
         "heartbeat_prompt": render_heartbeat_prompt_command(
             goal_id,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -1290,6 +1294,7 @@ def build_host_loop_activation_packet(
     agent_type: str,
     goal_id: str,
     cli_bin: str = "loopx",
+    runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
     available_capabilities: list[str] | None = None,
@@ -1313,6 +1318,7 @@ def build_host_loop_activation_packet(
             goal_id=goal_id,
             agent_type=canonical,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=normalized_available_capabilities,
         )
@@ -1370,6 +1376,7 @@ def build_host_loop_activation_packet(
                 goal_id=goal_id,
                 agent_type=canonical,
                 cli_bin=cli_bin,
+                runtime_root=runtime_root,
                 agent_id=candidate,
                 available_capabilities=normalized_available_capabilities,
             )
@@ -1404,7 +1411,8 @@ def build_host_loop_activation_packet(
             else "<new-public-safe-agent-id>"
         )
         register_command = (
-            f"{shell_arg(cli_bin)} register-agent --goal-id {shell_arg(goal_id)} "
+            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+            f"register-agent --goal-id {shell_arg(goal_id)} "
             f"--agent-id {shell_arg(fresh_agent_id)} --require-new"
         )
         fresh_registration = (
