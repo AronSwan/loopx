@@ -21,6 +21,44 @@ collector, processing, reply, reaction, and acknowledgement lifecycle. The
 [Lark Kanban integration guide](../../../docs/integrations/lark-kanban-control-plane-adapter.md)
 documents projection configuration and lineage.
 
+### Bounded group-history catch-up
+
+The event inbox can reconcile messages that predate the live event collector.
+Each invocation reads one ascending page from one configured `route_key` and
+previews the inbox/cursor transition by default. `--execute` first persists and
+reads back every canonical inbox event, then advances an owner-local cursor:
+
+```bash
+loopx lark-inbox history-catch-up \
+  --project . \
+  --config .loopx/config/lark-collector.json \
+  --route-key project-feedback \
+  --start 2026-08-01T00:00:00Z
+
+loopx lark-inbox history-catch-up \
+  --project . \
+  --config .loopx/config/lark-collector.json \
+  --route-key project-feedback \
+  --start 2026-08-01T00:00:00Z \
+  --execute
+```
+
+Retries resume the exact private page token, and a completed window replays
+without another provider read. A caller may extend one completed history
+window to an earlier start once; the provider covers only the missing earlier
+window and rejects later source/config drift. The returned link-evidence packet
+contains URL plus message and route lineage for the owner-local Agent, but not
+the surrounding message body, sender, chat id, profile, cursor, or raw provider
+payload. Inbox and cursor directories are restricted to the owner, and their
+state files are written with mode `0600`. Product-specific URL classification
+and field-enrichment policy remain with the consuming product or private skill.
+
+Group-history reads use the configured Bot identity and require the Bot to be a
+member of the group, the application to be published, and
+`im:message:readonly` plus `im:chat:read`. Permission error `230027` is returned
+as typed `group_history_permission_required`; it never advances the inbox or
+cursor.
+
 ## Lifecycle
 
 Install the bundled provider explicitly, then read back its readiness:
@@ -113,7 +151,8 @@ permission or silently enables an external write.
   `im:chat.members:write_only`、`contact:user.base:readonly`、
   `contact:contact.base:readonly`、`application:application:self_manage`、
   `application:bot.basic_info:read`
-- 收件箱（事件订阅收消息，敏感需审核）：`im:message.group_msg`、
+- 收件箱（事件订阅与群历史，敏感需审核）：`im:message:readonly`、
+  `im:message.group_msg`、`im:message.group_msg.include_bot:read`、
   `im:message.p2p_msg:readonly`
 - 交互/文档 sink：`cardkit:card:read/write`、`docs:document.comment:read/create/delete`
 
