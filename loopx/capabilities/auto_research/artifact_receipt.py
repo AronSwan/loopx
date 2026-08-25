@@ -7,6 +7,9 @@ from typing import Any
 
 from .delivery_contract import (
     AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
+    AutoResearchContractLineage,
+    auto_research_contract_lineage_matches,
+    normalize_auto_research_contract_lineage,
     normalize_auto_research_delivery_contract,
 )
 from .research_state import build_research_evidence_graph_from_rollout_events
@@ -65,13 +68,15 @@ def _lineage_events(
 def _artifact_refs(
     events: Sequence[Mapping[str, Any]],
     *,
-    contract_revision: str,
+    expected_lineage: AutoResearchContractLineage,
 ) -> list[str]:
     refs = {
         str(ref)
         for event in events
-        if str(_details(event).get("contract_revision") or "")
-        == contract_revision
+        if auto_research_contract_lineage_matches(
+            _details(event),
+            expected=expected_lineage,
+        )
         for ref in event.get("artifact_refs") or []
         if str(ref).strip()
     }
@@ -79,20 +84,14 @@ def _artifact_refs(
 
 
 def _failure_kind(result: Mapping[str, Any]) -> str:
-    decision = result.get("terminal_decision")
     if result.get("decision_state") == "conflict":
         return "conflicting_terminal_decisions"
     review = result.get("peer_review")
     if isinstance(review, Mapping):
-        if review.get("state") == "conflict":
-            return "conflicting_peer_reviews"
-        if review.get("state") == "independent_reviewed":
-            if review.get("verdict") == "needs_more_evidence":
-                return "needs_more_evidence"
-            if review.get("verdict") == "reject":
-                return "independent_review_rejected"
-        if review.get("state") in {"self_review_only", "unreviewed"}:
-            return "independent_review_missing"
+        review_failure = _review_failure_kind(review)
+        if review_failure:
+            return review_failure
+    decision = result.get("terminal_decision")
     if (
         isinstance(decision, Mapping)
         and decision.get("outcome") == "retired"
@@ -104,118 +103,240 @@ def _failure_kind(result: Mapping[str, Any]) -> str:
     return "terminal_decision_missing"
 
 
+def _review_failure_kind(review: Mapping[str, Any]) -> str | None:
+    state = str(review.get("state") or "")
+    verdict = (
+        str(review.get("verdict") or "")
+        if state == "independent_reviewed"
+        else None
+    )
+    return {
+        ("conflict", None): "conflicting_peer_reviews",
+        ("independent_reviewed", "needs_more_evidence"): "needs_more_evidence",
+        ("independent_reviewed", "reject"): "independent_review_rejected",
+        ("self_review_only", None): "independent_review_missing",
+        ("unreviewed", None): "independent_review_missing",
+    }.get((state, verdict))
+
+
+def _result_parts(
+    result: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    if not isinstance(result, Mapping):
+        return {}, {}
+    decision = result.get("terminal_decision")
+    review = result.get("peer_review")
+    return (
+        decision if isinstance(decision, Mapping) else {},
+        review if isinstance(review, Mapping) else {},
+    )
+
+
+def _lineage_state(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    expected_lineage: AutoResearchContractLineage,
+) -> tuple[list[str], list[Mapping[str, Any]]]:
+    observed_revisions = sorted(
+        {
+            str(_details(event).get("contract_revision") or "")
+            for event in events
+            if _details(event).get("contract_revision")
+        }
+    )
+    current = [
+        event
+        for event in events
+        if auto_research_contract_lineage_matches(
+            _details(event),
+            expected=expected_lineage,
+        )
+    ]
+    return observed_revisions, current
+
+
+def _result_artifact_refs(
+    result: Mapping[str, Any] | None,
+    *,
+    decision: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> list[str]:
+    if not isinstance(result, Mapping) or result.get("decision_state") != "current":
+        return []
+    refs = list(decision.get("evidence_refs") or [])
+    refs.extend(
+        str(ref)
+        for item in review.get("reviews") or []
+        if isinstance(item, Mapping)
+        for ref in item.get("evidence_refs") or []
+    )
+    return refs
+
+
+def _has_complete_research_lineage(
+    events: Sequence[Mapping[str, Any]],
+) -> bool:
+    event_kinds = {str(event.get("event_kind") or "") for event in events}
+    return {"research_hypothesis", "research_evidence"} <= event_kinds
+
+
+def _criterion_artifact_state(
+    criterion: Mapping[str, Any],
+    *,
+    current_lineage: Sequence[Mapping[str, Any]],
+    expected_lineage: AutoResearchContractLineage,
+    result: Mapping[str, Any] | None,
+    decision: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    if not _has_complete_research_lineage(current_lineage):
+        return [], sorted(criterion["required_artifact_refs"])
+    observed = sorted(
+        set(
+            _artifact_refs(
+                current_lineage,
+                expected_lineage=expected_lineage,
+            )
+        )
+        | set(
+            _result_artifact_refs(
+                result,
+                decision=decision,
+                review=review,
+            )
+        )
+    )
+    missing = sorted(set(criterion["required_artifact_refs"]) - set(observed))
+    return observed, missing
+
+
+def _criterion_status(
+    criterion: Mapping[str, Any],
+    *,
+    result: Mapping[str, Any] | None,
+    decision: Mapping[str, Any],
+    review: Mapping[str, Any],
+    current_lineage: Sequence[Mapping[str, Any]],
+    observed_revisions: Sequence[str],
+    missing_artifacts: Sequence[str],
+) -> str:
+    if observed_revisions and not current_lineage:
+        return "stale"
+    if not _has_complete_research_lineage(current_lineage) or result is None:
+        return "inconclusive"
+    if result.get("decision_state") == "stale":
+        return "stale"
+    if result.get("decision_state") == "conflict":
+        return "inconclusive"
+    independent_approved = (
+        review.get("state") == "independent_reviewed"
+        and review.get("verdict") == "approve"
+    )
+    review_satisfied = (
+        not criterion["requires_independent_review"] or independent_approved
+    )
+    if decision.get("outcome") == "retired":
+        return "not_fulfilled" if review_satisfied else "inconclusive"
+    if decision.get("outcome") != "promoted" or not review_satisfied:
+        return "inconclusive"
+    return "partial" if missing_artifacts else "verified"
+
+
+def _criterion_failure_kind(
+    *,
+    status: str,
+    criterion: Mapping[str, Any],
+    result: Mapping[str, Any] | None,
+    evidence_node: Mapping[str, Any] | None,
+    review: Mapping[str, Any],
+    current_lineage: Sequence[Mapping[str, Any]],
+) -> str:
+    if status == "stale":
+        return "contract_revision_changed"
+    if status == "partial":
+        return "required_artifact_missing"
+    if (
+        status == "inconclusive"
+        and not _has_complete_research_lineage(current_lineage)
+    ):
+        return "contract_evidence_missing"
+    review_failure = _review_failure_kind(review)
+    if isinstance(result, Mapping) and _result_has_review_failure(
+        criterion,
+        result=result,
+        review=review,
+        review_failure=review_failure,
+    ):
+        return _failure_kind(result)
+    if (
+        status != "verified"
+        and isinstance(evidence_node, Mapping)
+        and evidence_node.get("failure_kind")
+    ):
+        return str(evidence_node["failure_kind"])
+    if status != "verified" and isinstance(result, Mapping):
+        return _failure_kind(result)
+    return ""
+
+
+def _result_has_review_failure(
+    criterion: Mapping[str, Any],
+    *,
+    result: Mapping[str, Any],
+    review: Mapping[str, Any],
+    review_failure: str | None,
+) -> bool:
+    return (
+        result.get("decision_state") == "conflict"
+        or review.get("state") == "conflict"
+        or (
+            criterion["requires_independent_review"]
+            and review_failure == "independent_review_missing"
+        )
+        or review_failure
+        in {"needs_more_evidence", "independent_review_rejected"}
+    )
+
+
 def _criterion_result(
     criterion: Mapping[str, Any],
     *,
     result: Mapping[str, Any] | None,
     evidence_node: Mapping[str, Any] | None,
     lineage_events: Sequence[Mapping[str, Any]],
-    contract_revision: str,
+    expected_lineage: AutoResearchContractLineage,
 ) -> dict[str, Any]:
-    observed_revisions = sorted(
-        {
-            str(_details(event).get("contract_revision") or "")
-            for event in lineage_events
-            if _details(event).get("contract_revision")
-        }
+    observed_revisions, current_lineage = _lineage_state(
+        lineage_events,
+        expected_lineage=expected_lineage,
     )
-    current_lineage = [
-        event
-        for event in lineage_events
-        if str(_details(event).get("contract_revision") or "")
-        == contract_revision
-    ]
-    review = (
-        result.get("peer_review")
-        if isinstance(result, Mapping)
-        and isinstance(result.get("peer_review"), Mapping)
-        else {}
-    )
-    decision = (
-        result.get("terminal_decision")
-        if isinstance(result, Mapping)
-        and isinstance(result.get("terminal_decision"), Mapping)
-        else {}
-    )
-    result_artifact_refs: list[str] = []
-    if isinstance(result, Mapping) and result.get("decision_state") == "current":
-        result_artifact_refs.extend(decision.get("evidence_refs") or [])
-        for item in review.get("reviews") or []:
-            if isinstance(item, Mapping):
-                result_artifact_refs.extend(item.get("evidence_refs") or [])
-    observed_artifacts = sorted(
-        set(
-            _artifact_refs(
-                lineage_events,
-                contract_revision=contract_revision,
-            )
-        )
-        | {str(ref) for ref in result_artifact_refs if str(ref).strip()}
-    )
-    missing_artifacts = sorted(
-        set(criterion["required_artifact_refs"]) - set(observed_artifacts)
+    decision, review = _result_parts(result)
+    observed_artifacts, missing_artifacts = _criterion_artifact_state(
+        criterion,
+        current_lineage=current_lineage,
+        expected_lineage=expected_lineage,
+        result=result,
+        decision=decision,
+        review=review,
     )
 
-    if observed_revisions and not current_lineage:
-        status = "stale"
-    elif not current_lineage or result is None:
-        status = "inconclusive"
-    elif result.get("decision_state") in {"conflict", "stale"}:
-        status = (
-            "stale"
-            if result.get("decision_state") == "stale"
-            else "inconclusive"
-        )
-    elif decision.get("outcome") == "retired":
-        independently_confirmed = (
-            not criterion["requires_independent_review"]
-            or (
-                review.get("state") == "independent_reviewed"
-                and review.get("verdict") == "approve"
-            )
-        )
-        status = "not_fulfilled" if independently_confirmed else "inconclusive"
-    elif decision.get("outcome") != "promoted":
-        status = "inconclusive"
-    elif criterion["requires_independent_review"] and not (
-        review.get("state") == "independent_reviewed"
-        and review.get("verdict") == "approve"
-    ):
-        status = "inconclusive"
-    elif missing_artifacts:
-        status = "partial"
-    else:
-        status = "verified"
-
-    if status == "stale":
-        failure_kind = "contract_revision_changed"
-    elif status == "partial":
-        failure_kind = "required_artifact_missing"
-    elif status == "inconclusive" and not current_lineage:
-        failure_kind = "contract_evidence_missing"
-    elif (
-        isinstance(result, Mapping)
-        and (
-            result.get("decision_state") == "conflict"
-            or review.get("state") == "conflict"
-            or (
-                criterion["requires_independent_review"]
-                and review.get("state") in {"self_review_only", "unreviewed"}
-            )
-            or review.get("verdict") in {"needs_more_evidence", "reject"}
-        )
-    ):
-        failure_kind = _failure_kind(result)
-    elif (
-        isinstance(evidence_node, Mapping)
-        and evidence_node.get("failure_kind")
-        and status != "verified"
-    ):
-        failure_kind = str(evidence_node["failure_kind"])
-    elif isinstance(result, Mapping) and status != "verified":
-        failure_kind = _failure_kind(result)
-    else:
-        failure_kind = ""
+    status = _criterion_status(
+        criterion,
+        result=result,
+        decision=decision,
+        review=review,
+        current_lineage=current_lineage,
+        observed_revisions=observed_revisions,
+        missing_artifacts=missing_artifacts,
+    )
+    failure_kind = _criterion_failure_kind(
+        status=status,
+        criterion=criterion,
+        result=result,
+        evidence_node=evidence_node,
+        review=review,
+        current_lineage=current_lineage,
+    )
     return {
         "criterion_id": criterion["criterion_id"],
         "description": criterion["description"],
@@ -225,23 +346,27 @@ def _criterion_result(
         "required_artifact_refs": list(criterion["required_artifact_refs"]),
         "observed_artifact_refs": observed_artifacts,
         "missing_artifact_refs": missing_artifacts,
-        "decision_state": (
-            str(result.get("decision_state") or "missing")
-            if isinstance(result, Mapping)
-            else "missing"
-        ),
+        "decision_state": _decision_state(result),
         "terminal_outcome": str(decision.get("outcome") or ""),
         "terminal_reason": str(decision.get("reason") or ""),
         "review_state": str(review.get("state") or "not_applicable"),
         "review_verdict": str(review.get("verdict") or ""),
         "failure_kind": failure_kind,
-        "measurement_scope": (
-            str(evidence_node.get("measurement_scope") or "")
-            if isinstance(evidence_node, Mapping)
-            else ""
-        ),
+        "measurement_scope": _measurement_scope(evidence_node),
         "observed_contract_revisions": observed_revisions,
     }
+
+
+def _decision_state(result: Mapping[str, Any] | None) -> str:
+    if not isinstance(result, Mapping):
+        return "missing"
+    return str(result.get("decision_state") or "missing")
+
+
+def _measurement_scope(evidence_node: Mapping[str, Any] | None) -> str:
+    if not isinstance(evidence_node, Mapping):
+        return ""
+    return str(evidence_node.get("measurement_scope") or "")
 
 
 def _receipt_status(
@@ -288,24 +413,11 @@ def _failure_feedback(
         if item.get("status") == "verified"
     ]
     fallbacks = sorted(set(fallback_artifact_refs) & set(observed_artifact_refs))
-    derived_reentry = [
-        f"resolve:{item['criterion_id']}:{item['failure_kind']}"
-        for item in failed
-    ]
-    failure_kinds = {
-        str(item.get("failure_kind") or "")
-        for item in failed
-        if item.get("failure_kind")
-    }
-    if contract_state == "missing":
-        failure_kinds.add("contract_record_missing")
-        derived_reentry.insert(0, "record_current_delivery_contract")
-    if missing_required_artifacts:
-        failure_kinds.add("required_artifact_missing")
-        derived_reentry.extend(
-            f"provide:{artifact_ref}"
-            for artifact_ref in missing_required_artifacts
-        )
+    failure_kinds, derived_reentry = _failure_reentry_details(
+        failed,
+        contract_state=contract_state,
+        missing_required_artifacts=missing_required_artifacts,
+    )
     summaries = {
         "stale": (
             "The delivery contract changed after the recorded research evidence; "
@@ -337,58 +449,75 @@ def _failure_feedback(
     }
 
 
-def build_auto_research_artifact_receipt(
+def _failure_reentry_details(
+    failed: Sequence[Mapping[str, Any]],
     *,
-    delivery_contract: Mapping[str, Any],
-    rollout_events: Sequence[Mapping[str, Any]],
-    registered_agent_ids: Sequence[str],
-) -> dict[str, Any]:
-    contract = normalize_auto_research_delivery_contract(delivery_contract)
-    research_contract = contract["research_contract"]
-    contract_events = _contract_events(
-        rollout_events,
-        wish_id=contract["wish"]["wish_id"],
-    )
-    latest_revision = (
-        str(_details(contract_events[-1]).get("contract_revision") or "")
-        if contract_events
-        else ""
-    )
-    contract_state = (
-        "current"
-        if latest_revision == contract["contract_revision"]
-        else "stale"
-        if latest_revision
-        else "missing"
-    )
-    current_research_events = [
-        event
-        for event in rollout_events
-        if str(event.get("event_kind") or "")
-        not in {"research_hypothesis", "research_evidence"}
-        or str(_details(event).get("contract_revision") or "")
-        == contract["contract_revision"]
-    ]
-    evidence_graph = build_research_evidence_graph_from_rollout_events(
-        goal_id=research_contract["goal_id"],
-        rollout_events=[dict(event) for event in current_research_events],
-    )
-    query = build_terminal_result_query(
-        evidence_graph=evidence_graph,
-        rollout_events=rollout_events,
-        registered_agent_ids=registered_agent_ids,
-        include_history=True,
-    )
-    results = {
-        str(item.get("hypothesis_id") or ""): item
-        for item in query["results"]
+    contract_state: str,
+    missing_required_artifacts: Sequence[str],
+) -> tuple[set[str], list[str]]:
+    failure_kinds = {
+        str(item.get("failure_kind") or "")
+        for item in failed
+        if item.get("failure_kind")
     }
-    evidence_nodes = {
+    reentry = [
+        f"resolve:{item['criterion_id']}:{item['failure_kind']}"
+        for item in failed
+    ]
+    if contract_state == "missing":
+        failure_kinds.add("contract_record_missing")
+        reentry.insert(0, "record_current_delivery_contract")
+    if missing_required_artifacts:
+        failure_kinds.add("required_artifact_missing")
+        reentry.extend(
+            f"provide:{artifact_ref}"
+            for artifact_ref in missing_required_artifacts
+        )
+    return failure_kinds, reentry
+
+
+def _contract_state(
+    contract_events: Sequence[Mapping[str, Any]],
+    *,
+    expected_lineage: AutoResearchContractLineage,
+) -> tuple[str | None, str]:
+    latest_revision = None
+    if contract_events:
+        latest_revision = (
+            str(_details(contract_events[-1]).get("contract_revision") or "")
+            or None
+        )
+    if latest_revision is None:
+        return None, "missing"
+    if contract_events and auto_research_contract_lineage_matches(
+        _details(contract_events[-1]),
+        expected=expected_lineage,
+    ):
+        return latest_revision, "current"
+    return latest_revision, "stale"
+
+
+def _indexed_records(
+    records: object,
+) -> dict[str, Mapping[str, Any]]:
+    if not isinstance(records, Sequence):
+        return {}
+    return {
         str(item.get("hypothesis_id") or ""): item
-        for item in evidence_graph.get("nodes") or []
+        for item in records
         if isinstance(item, Mapping)
     }
-    criteria = [
+
+
+def _acceptance_results(
+    *,
+    contract: Mapping[str, Any],
+    rollout_events: Sequence[Mapping[str, Any]],
+    results: Mapping[str, Mapping[str, Any]],
+    evidence_nodes: Mapping[str, Mapping[str, Any]],
+    expected_lineage: AutoResearchContractLineage,
+) -> list[dict[str, Any]]:
+    return [
         _criterion_result(
             criterion,
             result=results.get(criterion["hypothesis_id"]),
@@ -397,24 +526,101 @@ def build_auto_research_artifact_receipt(
                 rollout_events,
                 hypothesis_id=criterion["hypothesis_id"],
             ),
-            contract_revision=contract["contract_revision"],
+            expected_lineage=expected_lineage,
         )
         for criterion in contract["acceptance_criteria"]
     ]
-    observed_artifact_refs = sorted(
+
+
+def _artifact_summary(
+    contract: Mapping[str, Any],
+    criteria: Sequence[Mapping[str, Any]],
+) -> tuple[list[str], list[str]]:
+    observed = sorted(
         {
-            ref
+            str(ref)
             for criterion in criteria
             for ref in criterion["observed_artifact_refs"]
         }
     )
-    missing_required_artifacts = sorted(
+    missing = sorted(
         {
-            artifact["artifact_ref"]
+            str(artifact["artifact_ref"])
             for artifact in contract["required_artifacts"]
             if artifact["required"]
         }
-        - set(observed_artifact_refs)
+        - set(observed)
+    )
+    return observed, missing
+
+
+def _verification_summary(
+    *,
+    criteria: Sequence[Mapping[str, Any]],
+    contract: Mapping[str, Any],
+    evidence_graph_revision: str,
+) -> dict[str, Any]:
+    return {
+        "required_count": sum(item["required"] for item in criteria),
+        "verified_count": sum(
+            item["status"] == "verified" for item in criteria
+        ),
+        "not_fulfilled_count": sum(
+            item["status"] == "not_fulfilled" for item in criteria
+        ),
+        "independent_review_required": any(
+            item["requires_independent_review"]
+            for item in contract["acceptance_criteria"]
+        ),
+        "evidence_graph_revision": evidence_graph_revision,
+    }
+
+
+def build_auto_research_artifact_receipt(
+    *,
+    delivery_contract: Mapping[str, Any],
+    rollout_events: Sequence[Mapping[str, Any]],
+    registered_agent_ids: Sequence[str],
+) -> dict[str, Any]:
+    contract = normalize_auto_research_delivery_contract(delivery_contract)
+    research_contract = contract["research_contract"]
+    expected_lineage = normalize_auto_research_contract_lineage(
+        {
+            "wish_id": contract["wish"]["wish_id"],
+            "contract_ref": contract["contract_ref"],
+            "contract_revision": contract["contract_revision"],
+        },
+        field="delivery_contract",
+        required=True,
+    )
+    contract_events = _contract_events(
+        rollout_events,
+        wish_id=contract["wish"]["wish_id"],
+    )
+    latest_revision, contract_state = _contract_state(
+        contract_events,
+        expected_lineage=expected_lineage,
+    )
+    evidence_graph = build_research_evidence_graph_from_rollout_events(
+        goal_id=research_contract["goal_id"],
+        rollout_events=[dict(event) for event in rollout_events],
+    )
+    query = build_terminal_result_query(
+        evidence_graph=evidence_graph,
+        rollout_events=rollout_events,
+        registered_agent_ids=registered_agent_ids,
+        include_history=True,
+    )
+    criteria = _acceptance_results(
+        contract=contract,
+        rollout_events=rollout_events,
+        results=_indexed_records(query["results"]),
+        evidence_nodes=_indexed_records(evidence_graph.get("nodes")),
+        expected_lineage=expected_lineage,
+    )
+    observed_artifact_refs, missing_required_artifacts = _artifact_summary(
+        contract,
+        criteria,
     )
     status = _receipt_status(
         criteria,
@@ -429,7 +635,7 @@ def build_auto_research_artifact_receipt(
         "contract": {
             "contract_ref": contract["contract_ref"],
             "contract_revision": contract["contract_revision"],
-            "latest_recorded_revision": latest_revision or None,
+            "latest_recorded_revision": latest_revision,
             "state": contract_state,
         },
         "status": status,
@@ -439,22 +645,11 @@ def build_auto_research_artifact_receipt(
             "missing_required_refs": missing_required_artifacts,
         },
         "acceptance_results": criteria,
-        "verification_summary": {
-            "required_count": len(
-                [item for item in criteria if item["required"]]
-            ),
-            "verified_count": len(
-                [item for item in criteria if item["status"] == "verified"]
-            ),
-            "not_fulfilled_count": len(
-                [item for item in criteria if item["status"] == "not_fulfilled"]
-            ),
-            "independent_review_required": any(
-                item["requires_independent_review"]
-                for item in contract["acceptance_criteria"]
-            ),
-            "evidence_graph_revision": query["evidence_graph_revision"],
-        },
+        "verification_summary": _verification_summary(
+            criteria=criteria,
+            contract=contract,
+            evidence_graph_revision=query["evidence_graph_revision"],
+        ),
         "failure_feedback": _failure_feedback(
             status=status,
             contract_state=contract_state,
@@ -467,9 +662,7 @@ def build_auto_research_artifact_receipt(
             observed_artifact_refs=observed_artifact_refs,
         ),
         "learning_disposition": (
-            "candidate"
-            if status in {"verified", "not_fulfilled"}
-            else "none"
+            "candidate" if status in {"verified", "not_fulfilled"} else "none"
         ),
         "boundary": {
             "raw_logs_recorded": False,

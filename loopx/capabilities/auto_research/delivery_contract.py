@@ -3,7 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
+
+from .evidence_packet import (
+    _compact_public_text,
+    _compact_public_text_list,
+    _compact_public_token,
+    validate_research_contract,
+)
 
 
 AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION = (
@@ -46,6 +53,81 @@ _CRITERION_FIELDS = {
     "required",
 }
 _FAILURE_POLICY_FIELDS = {"fallback_artifact_refs", "reentry_conditions"}
+AUTO_RESEARCH_CONTRACT_LINEAGE_FIELDS = (
+    "wish_id",
+    "contract_ref",
+    "contract_revision",
+)
+
+
+class AutoResearchContractLineage(NamedTuple):
+    wish_id: str
+    contract_ref: str
+    contract_revision: str
+
+
+class AutoResearchContractLineageError(ValueError):
+    pass
+
+
+def normalize_auto_research_contract_lineage(
+    value: Mapping[str, Any],
+    *,
+    field: str,
+    required: bool = False,
+) -> AutoResearchContractLineage | None:
+    supplied = {
+        name
+        for name in AUTO_RESEARCH_CONTRACT_LINEAGE_FIELDS
+        if str(value.get(name) or "").strip()
+    }
+    if not supplied:
+        if required:
+            raise AutoResearchContractLineageError(
+                f"{field} requires complete contract lineage"
+            )
+        return None
+    if supplied != set(AUTO_RESEARCH_CONTRACT_LINEAGE_FIELDS):
+        raise AutoResearchContractLineageError(
+            f"{field} contract lineage must provide wish_id, contract_ref, "
+            "and contract_revision together"
+        )
+    try:
+        return AutoResearchContractLineage(
+            *(
+                _compact_public_text(
+                    value.get(name),
+                    field=f"{field}.{name}",
+                    max_len=180,
+                )
+                for name in AUTO_RESEARCH_CONTRACT_LINEAGE_FIELDS
+            )
+        )
+    except ValueError as exc:
+        raise AutoResearchContractLineageError(str(exc)) from exc
+
+
+def auto_research_contract_lineage_matches(
+    value: Mapping[str, Any],
+    *,
+    expected: AutoResearchContractLineage | None,
+) -> bool:
+    try:
+        return (
+            normalize_auto_research_contract_lineage(
+                value,
+                field="contract_lineage",
+            )
+            == expected
+        )
+    except ValueError:
+        return False
+
+
+def auto_research_contract_lineage_dict(
+    lineage: AutoResearchContractLineage,
+) -> dict[str, str]:
+    return dict(zip(AUTO_RESEARCH_CONTRACT_LINEAGE_FIELDS, lineage))
 
 
 def _strict_mapping(
@@ -100,52 +182,13 @@ def _wish_id(*, goal_id: str, original_text: str) -> str:
     return f"wish_{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
-def normalize_auto_research_delivery_contract(
-    value: Mapping[str, Any],
+def _normalize_wish(
+    value: object,
+    *,
+    goal_id: str,
 ) -> dict[str, Any]:
-    from .evidence_packet import (
-        _compact_public_text,
-        _compact_public_text_list,
-        _compact_public_token,
-        validate_research_contract,
-    )
-
-    raw = _strict_mapping(
-        value,
-        field="delivery_contract",
-        allowed=_DELIVERY_CONTRACT_FIELDS,
-    )
-    if raw.get("schema_version") != AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION:
-        raise ValueError(
-            "delivery_contract.schema_version must be "
-            f"{AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION}"
-        )
-    research_contract = validate_research_contract(
-        dict(
-            _strict_mapping(
-                raw.get("research_contract"),
-                field="delivery_contract.research_contract",
-                allowed={
-                    "schema_version",
-                    "goal_id",
-                    "research_objective",
-                    "editable_scope",
-                    "protected_scope",
-                    "metric",
-                    "dev_eval",
-                    "holdout_eval",
-                    "promotion_policy",
-                },
-            )
-        )
-    )
-    contract_ref = _compact_public_text(
-        raw.get("contract_ref"),
-        field="delivery_contract.contract_ref",
-        max_len=160,
-    )
     wish = _strict_mapping(
-        raw.get("wish"),
+        value,
         field="delivery_contract.wish",
         allowed=_WISH_FIELDS,
     )
@@ -155,13 +198,13 @@ def normalize_auto_research_delivery_contract(
         max_len=500,
     )
     derived_wish_id = _wish_id(
-        goal_id=research_contract["goal_id"],
+        goal_id=goal_id,
         original_text=original_text,
     )
     provided_wish_id = wish.get("wish_id")
     if provided_wish_id and provided_wish_id != derived_wish_id:
         raise ValueError("delivery_contract.wish.wish_id does not match the wish")
-    normalized_wish = {
+    return {
         "wish_id": derived_wish_id,
         "original_text": original_text,
         "intent_summary": _compact_public_text(
@@ -187,11 +230,13 @@ def normalize_auto_research_delivery_contract(
         ),
     }
 
+
+def _normalize_required_artifacts(value: object) -> list[dict[str, Any]]:
     required_artifacts: list[dict[str, Any]] = []
     seen_artifact_refs: set[str] = set()
     for index, item in enumerate(
         _bounded_list(
-            raw.get("required_artifacts"),
+            value,
             field="delivery_contract.required_artifacts",
             maximum=MAX_REQUIRED_ARTIFACTS,
         )
@@ -243,12 +288,19 @@ def normalize_auto_research_delivery_contract(
         raise ValueError(
             "delivery_contract requires at least one required artifact"
         )
+    return required_artifacts
 
+
+def _normalize_acceptance_criteria(
+    value: object,
+    *,
+    artifact_refs: set[str],
+) -> list[dict[str, Any]]:
     acceptance_criteria: list[dict[str, Any]] = []
     seen_criterion_ids: set[str] = set()
     for index, item in enumerate(
         _bounded_list(
-            raw.get("acceptance_criteria"),
+            value,
             field="delivery_contract.acceptance_criteria",
             maximum=MAX_ACCEPTANCE_CRITERIA,
         )
@@ -282,7 +334,7 @@ def normalize_auto_research_delivery_contract(
                 f"[{index}].required_artifact_refs"
             ),
         )
-        unknown_refs = sorted(set(required_refs) - seen_artifact_refs)
+        unknown_refs = sorted(set(required_refs) - artifact_refs)
         if unknown_refs:
             raise ValueError(
                 "acceptance criteria reference undeclared artifacts: "
@@ -337,9 +389,16 @@ def normalize_auto_research_delivery_contract(
         raise ValueError(
             "delivery_contract requires at least one required acceptance criterion"
         )
+    return acceptance_criteria
 
+
+def _normalize_failure_policy(
+    value: object,
+    *,
+    artifact_refs: set[str],
+) -> dict[str, list[str]]:
     failure_policy = _strict_mapping(
-        raw.get("failure_policy") or {},
+        value or {},
         field="delivery_contract.failure_policy",
         allowed=_FAILURE_POLICY_FIELDS,
     )
@@ -351,30 +410,84 @@ def normalize_auto_research_delivery_contract(
         ),
         field="delivery_contract.failure_policy.fallback_artifact_refs",
     )
-    unknown_fallbacks = sorted(set(fallback_artifact_refs) - seen_artifact_refs)
+    unknown_fallbacks = sorted(set(fallback_artifact_refs) - artifact_refs)
     if unknown_fallbacks:
         raise ValueError(
             "failure policy references undeclared artifacts: "
             + ", ".join(unknown_fallbacks)
         )
+    return {
+        "fallback_artifact_refs": fallback_artifact_refs,
+        "reentry_conditions": _compact_public_text_list(
+            _bounded_list(
+                failure_policy.get("reentry_conditions") or [],
+                field="delivery_contract.failure_policy.reentry_conditions",
+                maximum=MAX_REENTRY_CONDITIONS,
+            ),
+            field="delivery_contract.failure_policy.reentry_conditions",
+        ),
+    }
+
+
+def normalize_auto_research_delivery_contract(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw = _strict_mapping(
+        value,
+        field="delivery_contract",
+        allowed=_DELIVERY_CONTRACT_FIELDS,
+    )
+    if raw.get("schema_version") != AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION:
+        raise ValueError(
+            "delivery_contract.schema_version must be "
+            f"{AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION}"
+        )
+    research_contract = validate_research_contract(
+        dict(
+            _strict_mapping(
+                raw.get("research_contract"),
+                field="delivery_contract.research_contract",
+                allowed={
+                    "schema_version",
+                    "goal_id",
+                    "research_objective",
+                    "editable_scope",
+                    "protected_scope",
+                    "metric",
+                    "dev_eval",
+                    "holdout_eval",
+                    "promotion_policy",
+                },
+            )
+        )
+    )
+    required_artifacts = _normalize_required_artifacts(
+        raw.get("required_artifacts")
+    )
+    artifact_refs = {
+        str(artifact["artifact_ref"]) for artifact in required_artifacts
+    }
     normalized = {
         "schema_version": AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
-        "contract_ref": contract_ref,
-        "wish": normalized_wish,
+        "contract_ref": _compact_public_text(
+            raw.get("contract_ref"),
+            field="delivery_contract.contract_ref",
+            max_len=160,
+        ),
+        "wish": _normalize_wish(
+            raw.get("wish"),
+            goal_id=research_contract["goal_id"],
+        ),
         "research_contract": research_contract,
         "required_artifacts": required_artifacts,
-        "acceptance_criteria": acceptance_criteria,
-        "failure_policy": {
-            "fallback_artifact_refs": fallback_artifact_refs,
-            "reentry_conditions": _compact_public_text_list(
-                _bounded_list(
-                    failure_policy.get("reentry_conditions") or [],
-                    field="delivery_contract.failure_policy.reentry_conditions",
-                    maximum=MAX_REENTRY_CONDITIONS,
-                ),
-                field="delivery_contract.failure_policy.reentry_conditions",
-            ),
-        },
+        "acceptance_criteria": _normalize_acceptance_criteria(
+            raw.get("acceptance_criteria"),
+            artifact_refs=artifact_refs,
+        ),
+        "failure_policy": _normalize_failure_policy(
+            raw.get("failure_policy"),
+            artifact_refs=artifact_refs,
+        ),
     }
     contract_revision = _canonical_digest(normalized)
     provided_revision = raw.get("contract_revision")

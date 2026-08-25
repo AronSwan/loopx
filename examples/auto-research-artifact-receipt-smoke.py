@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -24,7 +22,9 @@ from examples.auto_research_lightweight_fixture import (  # noqa: E402
     TODO_ID,
     eval_result,
     research_contract,
+    run_auto_research_cli,
     write_json,
+    write_registry,
 )
 
 
@@ -90,72 +90,12 @@ def delivery_contract() -> dict[str, Any]:
         },
     }
 
-
-def run_cli(
-    registry: Path,
-    *args: str,
-    expect_ok: bool = True,
-) -> dict[str, Any]:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "--registry",
-            str(registry),
-            "--format",
-            "json",
-            "auto-research",
-            *args,
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    payload = json.loads(result.stdout)
-    if expect_ok:
-        assert result.returncode == 0 and payload["ok"] is True, (result, payload)
-    else:
-        assert result.returncode != 0 and payload["ok"] is False, (result, payload)
-    return payload
-
-
 def main() -> int:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
-        runtime_root = temp / "runtime"
-        project = temp / "project"
-        project.mkdir()
-        registry = temp / "registry.json"
-        registry.write_text(
-            json.dumps(
-                {
-                    "schema_version": "0.1",
-                    "common_runtime_root": str(runtime_root),
-                    "goals": [
-                        {
-                            "id": GOAL_ID,
-                            "repo": str(project),
-                            "state_file": "ACTIVE_GOAL_STATE.md",
-                            "adapter": {
-                                "kind": "fixture",
-                                "status": "connected-read-only",
-                            },
-                            "coordination": {
-                                "agent_model": "peer_v1",
-                                "registered_agents": [
-                                    AGENT_ID,
-                                    PROMOTER,
-                                    REVIEWER,
-                                ],
-                            },
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
+        registry = write_registry(
+            temp,
+            registered_agents=[AGENT_ID, PROMOTER, REVIEWER],
         )
         contract_path = temp / "delivery-contract.public.json"
         dev_path = temp / "dev-result.public.json"
@@ -168,7 +108,7 @@ def main() -> int:
         write_json(dev_path, dev)
         write_json(holdout_path, holdout)
 
-        packet = run_cli(
+        packet = run_auto_research_cli(
             registry,
             "evidence",
             "--contract",
@@ -196,13 +136,13 @@ def main() -> int:
         )
         packet_path = temp / "evidence-packet.public.json"
         write_json(packet_path, packet)
-        first_append = run_cli(
+        first_append = run_auto_research_cli(
             registry,
             "append-evidence",
             "--packet",
             str(packet_path),
         )
-        second_append = run_cli(
+        second_append = run_auto_research_cli(
             registry,
             "append-evidence",
             "--packet",
@@ -211,7 +151,7 @@ def main() -> int:
         assert first_append["counts_by_kind"]["validation"] == 1, first_append
         assert second_append["appended_count"] == 0, second_append
 
-        run_cli(
+        run_auto_research_cli(
             registry,
             "decide",
             "--goal-id",
@@ -228,7 +168,7 @@ def main() -> int:
             "decision:heldout",
             "--execute",
         )
-        run_cli(
+        run_auto_research_cli(
             registry,
             "review",
             "--goal-id",
@@ -244,7 +184,7 @@ def main() -> int:
             "review:independent",
             "--execute",
         )
-        receipt = run_cli(
+        receipt = run_auto_research_cli(
             registry,
             "artifact-receipt",
             "--contract",

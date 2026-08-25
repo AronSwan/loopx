@@ -358,14 +358,27 @@ def validate_research_hypothesis(item: dict[str, Any]) -> dict[str, Any]:
         ),
         "blocked_by": _compact_public_text_list(item.get("blocked_by"), field="blocked_by"),
     }
-    for field in ("wish_id", "contract_ref", "contract_revision"):
-        if item.get(field):
-            normalized[field] = _compact_public_text(
-                item.get(field),
-                field=f"hypothesis.{field}",
-                max_len=180,
-            )
+    normalized.update(
+        _normalized_record_contract_lineage(
+            item,
+            field="hypothesis",
+        )
+    )
     return normalized
+
+
+def _normalized_record_contract_lineage(
+    item: dict[str, Any],
+    *,
+    field: str,
+) -> dict[str, str]:
+    from .delivery_contract import (
+        auto_research_contract_lineage_dict,
+        normalize_auto_research_contract_lineage,
+    )
+
+    lineage = normalize_auto_research_contract_lineage(item, field=field)
+    return auto_research_contract_lineage_dict(lineage) if lineage else {}
 
 
 def validate_research_evidence_event(item: dict[str, Any]) -> dict[str, Any]:
@@ -421,13 +434,12 @@ def validate_research_evidence_event(item: dict[str, Any]) -> dict[str, Any]:
         "raw_logs_recorded": False,
         "private_artifacts_recorded": False,
     }
-    for field in ("wish_id", "contract_ref", "contract_revision"):
-        if item.get(field):
-            normalized[field] = _compact_public_text(
-                item.get(field),
-                field=f"evidence.{field}",
-                max_len=180,
-            )
+    normalized.update(
+        _normalized_record_contract_lineage(
+            item,
+            field="evidence",
+        )
+    )
     return normalized
 
 
@@ -524,6 +536,56 @@ def _is_retry_evidence_event(event: dict[str, Any]) -> bool:
     )
 
 
+def _normalize_packet_contract(
+    contract: dict[str, Any],
+    *,
+    contract_root: str | Path | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any], dict[str, Any] | None]:
+    from .delivery_contract import (
+        AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
+        build_auto_research_contract_lineage,
+        normalize_auto_research_delivery_contract,
+    )
+
+    delivery_contract: dict[str, Any] | None = None
+    if (
+        contract.get("schema_version")
+        == AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION
+    ):
+        delivery_contract = normalize_auto_research_delivery_contract(contract)
+        contract = delivery_contract["research_contract"]
+    normalized_contract, benchmark_context = _normalize_research_contract_for_packet(
+        contract,
+        contract_root=Path(contract_root).expanduser() if contract_root else None,
+    )
+    return (
+        normalized_contract,
+        delivery_contract,
+        build_auto_research_contract_lineage(
+            normalized_contract,
+            delivery_contract=delivery_contract,
+        ),
+        benchmark_context,
+    )
+
+
+def _apply_contract_lineage(
+    *,
+    hypothesis: dict[str, Any],
+    evidence_events: list[dict[str, Any]],
+    lineage: dict[str, Any],
+) -> None:
+    if not lineage.get("wish_id"):
+        return
+    values = _normalized_record_contract_lineage(
+        lineage,
+        field="contract_lineage",
+    )
+    hypothesis.update(values)
+    for event in evidence_events:
+        event.update(values)
+
+
 def build_auto_research_evidence_packet(
     *,
     contract: dict[str, Any],
@@ -543,27 +605,11 @@ def build_auto_research_evidence_packet(
 ) -> dict[str, Any]:
     """Build public-safe research hypothesis/evidence records from eval outputs."""
 
-    from .delivery_contract import (
-        AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
-        build_auto_research_contract_lineage,
-        normalize_auto_research_delivery_contract,
-    )
-
-    delivery_contract: dict[str, Any] | None = None
-    if (
-        contract.get("schema_version")
-        == AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION
-    ):
-        delivery_contract = normalize_auto_research_delivery_contract(contract)
-        contract = delivery_contract["research_contract"]
-    normalized_contract, benchmark_context = _normalize_research_contract_for_packet(
+    contract, delivery_contract, contract_lineage, benchmark_context = (
+        _normalize_packet_contract(
         contract,
-        contract_root=Path(contract_root).expanduser() if contract_root else None,
-    )
-    contract = normalized_contract
-    contract_lineage = build_auto_research_contract_lineage(
-        contract,
-        delivery_contract=delivery_contract,
+        contract_root=contract_root,
+        )
     )
     if not eval_results:
         raise ValueError("at least one eval result is required")
@@ -583,19 +629,7 @@ def build_auto_research_evidence_packet(
         )
         for index, result in enumerate(eval_results)
     ]
-    if contract_lineage.get("wish_id"):
-        for event in events:
-            event.update(
-                {
-                    "wish_id": contract_lineage["wish_id"],
-                    "contract_ref": contract_lineage["contract_ref"],
-                    "contract_revision": contract_lineage["contract_revision"],
-                }
-            )
     status = _derive_hypothesis_status(events)
-    blocked_by = []
-    if status == "contradicted":
-        blocked_by.append("evidence_or_boundary_guardrail_failed")
     hypothesis_node = validate_research_hypothesis(
         {
             "schema_version": RESEARCH_HYPOTHESIS_SCHEMA_VERSION,
@@ -608,15 +642,17 @@ def build_auto_research_evidence_packet(
             "status": status,
             "grounding_refs": grounding_refs or [],
             "novelty_audit_ref": novelty_audit_ref,
-            "blocked_by": blocked_by,
-            "wish_id": contract_lineage.get("wish_id"),
-            "contract_ref": contract_lineage.get("contract_ref"),
-            "contract_revision": (
-                contract_lineage["contract_revision"]
-                if contract_lineage.get("wish_id")
-                else None
+            "blocked_by": (
+                ["evidence_or_boundary_guardrail_failed"]
+                if status == "contradicted"
+                else []
             ),
         }
+    )
+    _apply_contract_lineage(
+        hypothesis=hypothesis_node,
+        evidence_events=events,
+        lineage=contract_lineage,
     )
     negative_count = len([event for event in events if _is_negative_evidence_event(event)])
     packet = {
@@ -672,19 +708,16 @@ def load_auto_research_evidence_packet(path: str | Path) -> dict[str, Any]:
     )
 
 
-def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str, Any]:
+def _delivery_contract_for_packet(
+    payload: dict[str, Any],
+    *,
+    research_contract: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     from .delivery_contract import (
         build_auto_research_contract_lineage,
         normalize_auto_research_delivery_contract,
     )
 
-    payload = _json_obj(payload, field="auto_research_evidence_packet")
-    schema = _compact_public_token(payload.get("schema_version"), field="schema_version")
-    if schema != AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION:
-        raise ValueError(f"schema_version must be {AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION}")
-    if payload.get("ok") is False:
-        raise ValueError("auto_research_evidence_packet.ok must not be false")
-    contract = validate_research_contract(_json_obj(payload.get("research_contract"), field="research_contract"))
     delivery_contract = (
         normalize_auto_research_delivery_contract(
             _json_obj(
@@ -695,15 +728,8 @@ def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str,
         if payload.get("delivery_contract") is not None
         else None
     )
-    if (
-        delivery_contract
-        and delivery_contract["research_contract"] != contract
-    ):
-        raise ValueError(
-            "delivery_contract.research_contract must match research_contract"
-        )
     expected_lineage = build_auto_research_contract_lineage(
-        contract,
+        research_contract,
         delivery_contract=delivery_contract,
     )
     provided_lineage = payload.get("contract_lineage")
@@ -711,35 +737,107 @@ def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str,
         raise ValueError(
             "contract_lineage must match the normalized delivery contract"
         )
+    return delivery_contract, expected_lineage
+
+
+def _validate_packet_lineage(
+    *,
+    delivery_contract: dict[str, Any] | None,
+    expected_lineage: dict[str, Any],
+    hypothesis: dict[str, Any],
+    evidence_events: list[dict[str, Any]],
+) -> None:
+    if not delivery_contract:
+        return
+    from .delivery_contract import (
+        auto_research_contract_lineage_matches,
+        normalize_auto_research_contract_lineage,
+    )
+
+    expected = normalize_auto_research_contract_lineage(
+        expected_lineage,
+        field="contract_lineage",
+        required=True,
+    )
+    if not auto_research_contract_lineage_matches(
+        hypothesis,
+        expected=expected,
+    ):
+        raise ValueError(
+            "delivery hypothesis lineage must match the normalized contract"
+        )
+    for event in evidence_events:
+        if not auto_research_contract_lineage_matches(
+            event,
+            expected=expected,
+        ):
+            raise ValueError(
+                "delivery evidence lineage must match the normalized contract"
+            )
+
+
+def _validate_packet_event_links(
+    *,
+    hypothesis: dict[str, Any],
+    evidence_events: list[dict[str, Any]],
+) -> None:
+    if not evidence_events:
+        raise ValueError(
+            "auto_research_evidence_packet requires at least one evidence event"
+        )
+    for event in evidence_events:
+        if event["hypothesis_id"] != hypothesis["hypothesis_id"]:
+            raise ValueError(
+                "evidence event hypothesis_id must match packet hypothesis"
+            )
+        if event["todo_id"] != hypothesis["todo_id"]:
+            raise ValueError(
+                "evidence event todo_id must match packet hypothesis"
+            )
+
+
+def _validate_packet_public_boundary(payload: dict[str, Any]) -> None:
+    public_boundary = _json_obj(
+        payload.get("public_boundary"),
+        field="public_boundary",
+    )
+    if public_boundary.get("raw_logs_recorded") or public_boundary.get(
+        "private_artifacts_recorded"
+    ):
+        raise ValueError(
+            "auto_research_evidence_packet must not record raw logs or "
+            "private artifacts"
+        )
+
+
+def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _json_obj(payload, field="auto_research_evidence_packet")
+    schema = _compact_public_token(payload.get("schema_version"), field="schema_version")
+    if schema != AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION:
+        raise ValueError(f"schema_version must be {AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION}")
+    if payload.get("ok") is False:
+        raise ValueError("auto_research_evidence_packet.ok must not be false")
+    contract = validate_research_contract(_json_obj(payload.get("research_contract"), field="research_contract"))
+    delivery_contract, expected_lineage = _delivery_contract_for_packet(
+        payload,
+        research_contract=contract,
+    )
     hypothesis = validate_research_hypothesis(_json_obj(payload.get("hypothesis"), field="hypothesis"))
     evidence_events = [
         validate_research_evidence_event(_json_obj(item, field="evidence_events[]"))
         for item in _json_list(payload.get("evidence_events"), field="evidence_events")
     ]
-    if not evidence_events:
-        raise ValueError("auto_research_evidence_packet requires at least one evidence event")
-    for event in evidence_events:
-        if event["hypothesis_id"] != hypothesis["hypothesis_id"]:
-            raise ValueError("evidence event hypothesis_id must match packet hypothesis")
-        if event["todo_id"] != hypothesis["todo_id"]:
-            raise ValueError("evidence event todo_id must match packet hypothesis")
-        if delivery_contract and any(
-            event.get(field) != expected_lineage[field]
-            for field in ("wish_id", "contract_ref", "contract_revision")
-        ):
-            raise ValueError(
-                "delivery evidence lineage must match the normalized contract"
-            )
-    if delivery_contract and any(
-        hypothesis.get(field) != expected_lineage[field]
-        for field in ("wish_id", "contract_ref", "contract_revision")
-    ):
-        raise ValueError(
-            "delivery hypothesis lineage must match the normalized contract"
-        )
-    public_boundary = _json_obj(payload.get("public_boundary"), field="public_boundary")
-    if public_boundary.get("raw_logs_recorded") or public_boundary.get("private_artifacts_recorded"):
-        raise ValueError("auto_research_evidence_packet must not record raw logs or private artifacts")
+    _validate_packet_event_links(
+        hypothesis=hypothesis,
+        evidence_events=evidence_events,
+    )
+    _validate_packet_lineage(
+        delivery_contract=delivery_contract,
+        expected_lineage=expected_lineage,
+        hypothesis=hypothesis,
+        evidence_events=evidence_events,
+    )
+    _validate_packet_public_boundary(payload)
     normalized = {
         "ok": True,
         "schema_version": schema,
