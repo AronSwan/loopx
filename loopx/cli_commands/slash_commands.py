@@ -64,12 +64,15 @@ def register_slash_commands_command(
             "gemini-cli",
             "cursor",
             "cursor-agent",
+            "zcode",
+            "z-code",
             "pi",
         ],
         help=(
             "Host surface to install. Repeatable. Defaults to static command facades "
-            "for Codex, Claude Code, and OpenCode. `gemini`, `cursor` and `pi` are "
-            "opt-in: they write into those hosts' own homes only when requested."
+            "for Codex, Claude Code, and OpenCode. `gemini`, `cursor`, `zcode` and "
+            "`pi` are opt-in: they write into those hosts' own homes only when "
+            "requested."
         ),
     )
     parser.add_argument(
@@ -95,6 +98,16 @@ def register_slash_commands_command(
     parser.add_argument(
         "--cursor-home",
         help="Cursor CLI home for MCP registration. Defaults to CURSOR_HOME or ~/.cursor.",
+    )
+    parser.add_argument(
+        "--zcode-home",
+        dest="zcode_home",
+        help="ZCode home for skill installation. Defaults to ZCODE_HOME or ~/.zcode.",
+    )
+    parser.add_argument(
+        "--zcode-agents-home",
+        dest="zcode_home",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--opencode-home",
@@ -133,6 +146,7 @@ def handle_slash_commands_command(
             opencode_home=args.opencode_home,
             gemini_home=args.gemini_home,
             cursor_home=args.cursor_home,
+            zcode_home=getattr(args, "zcode_home", None),
             pi_project=args.pi_project,
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)
