@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Qualify that the live weak/default model leaves a stale open primary."""
+"""Qualify that the live weak/default model leaves a stale open primary.
+
+This is a credentialed live qualification, not a public smoke-suite check.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from loopx.control_plane.testing.selected_todo_tool_behavior import (
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.testing.selected_todo_tool_behavior import (  # noqa: E402
     SELECTED_TODO_TOOL_FIXTURE_TODO_ID,
     DoubaoSelectedTodoToolBehaviorActor,
 )
@@ -36,7 +42,7 @@ def main() -> int:
         for receipt in receipts
     )
     summary = {
-        "schema_version": "stale_primary_successor_model_behavior_smoke_v0",
+        "schema_version": "stale_primary_successor_model_behavior_qualification_v0",
         "qualification_passed": passed,
         "attempts_required": ATTEMPTS_REQUIRED,
         "attempts_completed": len(receipts),
