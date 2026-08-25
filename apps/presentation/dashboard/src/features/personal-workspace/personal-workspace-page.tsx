@@ -944,25 +944,29 @@ export function PersonalWorkspacePage({
   }
 
   async function requestGoalLifecycle(goal: WorkspaceGoal, operation: "stop" | "resume" | "delete") {
-    await createPreview({
-      actionKind: "goal.lifecycle",
-      context: { kind: "goal_directory", goal_id: goal.goalId },
-      idempotencyKey: `workspace-goal-${operation}-${goal.goalId}-${Date.now().toString(36)}`,
-      normalizedParameters: {
-        goal_id: goal.goalId,
-        operation,
-        reason: operation === "stop"
-          ? "Stopped from the owner workspace"
+    try {
+      await createPreview({
+        actionKind: "goal.lifecycle",
+        context: { kind: "goal_directory", goal_id: goal.goalId },
+        idempotencyKey: `workspace-goal-${operation}-${goal.goalId}-${Date.now().toString(36)}`,
+        normalizedParameters: {
+          goal_id: goal.goalId,
+          operation,
+          reason: operation === "stop"
+            ? "Stopped from the owner workspace"
+            : operation === "resume"
+              ? "Resumed from the owner workspace"
+              : "Deleted from the owner workspace",
+        },
+        summary: operation === "stop"
+          ? `停止 Goal：${goal.title}`
           : operation === "resume"
-            ? "Resumed from the owner workspace"
-            : "Deleted from the owner workspace",
-      },
-      summary: operation === "stop"
-        ? `停止 Goal：${goal.title}`
-        : operation === "resume"
-          ? `恢复 Goal：${goal.title}`
-          : `删除 Goal：${goal.title}`,
-    });
+            ? `恢复 Goal：${goal.title}`
+            : `删除 Goal：${goal.title}`,
+      });
+    } catch (error) {
+      setActionFeedback(`操作失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   function prepareScheduleDraft(kind: "heartbeat" | "monitor", goalId: string | null) {
