@@ -92,6 +92,19 @@ def _effect_runtime_startup_failure_payload(
     }
 
 
+def _render_start_goal_markdown(payload: dict[str, object]) -> str:
+    if payload.get("ok") is not False:
+        return render_start_goal_guided_markdown(payload)
+    lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
+    for field in ("diagnostic_code", "recommended_action", "suggested_command"):
+        value = payload.get(field)
+        if not value:
+            continue
+        rendered = value if field == "recommended_action" else f"`{value}`"
+        lines.append(f"- {field}: {rendered}")
+    return "\n".join(lines) + "\n"
+
+
 def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--capability-route",
@@ -257,6 +270,8 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
 def handle_start_goal_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
+    *,
+    runtime_root_arg: str | None = None,
 ) -> int:
     if not bool(getattr(args, "guided", False)):
         payload = {
@@ -265,7 +280,7 @@ def handle_start_goal_command(
             "error": "`loopx start-goal` currently requires --guided",
             "suggested_command": "loopx start-goal --guided --goal-text '<goal text>'",
         }
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 2
     try:
         goal_text, capability_route, fine_grained = _resolve_start_goal_input(args)
@@ -279,7 +294,7 @@ def handle_start_goal_command(
                 "--slash-command-arguments='<exact /loopx arguments>'"
             ),
         }
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 2
     if not args.host_surface:
         try:
@@ -295,12 +310,13 @@ def handle_start_goal_command(
                 capability_route=capability_route,
                 fine_grained=fine_grained,
                 include_command_pack_detail=bool(args.include_command_pack_detail),
+                runtime_root_arg=runtime_root_arg,
             )
         except EffectRuntimeStartupError as exc:
             payload = _effect_runtime_startup_failure_payload(exc)
-            print_payload(payload, args.format, render_start_goal_guided_markdown)
+            print_payload(payload, args.format, _render_start_goal_markdown)
             return 1
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 0
     try:
         payload = build_start_goal_guided_packet(
@@ -316,10 +332,11 @@ def handle_start_goal_command(
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=bool(args.include_command_pack_detail),
+            runtime_root_arg=runtime_root_arg,
         )
     except EffectRuntimeStartupError as exc:
         payload = _effect_runtime_startup_failure_payload(exc)
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 1
-    print_payload(payload, args.format, render_start_goal_guided_markdown)
+    print_payload(payload, args.format, _render_start_goal_markdown)
     return 0

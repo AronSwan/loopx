@@ -157,30 +157,50 @@ inbox config but owns host-only details such as the chat id and supervisor:
 
 ```json
 {
-  "schema_version": "lark_event_collector_config_v0",
+  "schema_version": "lark_event_collector_config_v1",
   "enabled": true,
   "service_name": "loopx-lark-feedback",
   "event_key": "im.message.receive_v1",
   "identity": "bot",
   "profile": "project-review-bot",
   "supervisor": "launchd",
-  "chat_id": "oc_<local-private-chat-id>",
   "consume_timeout": "30m",
   "lark_cli_bin": "lark-cli",
-  "event_inbox_config": ".loopx/config/lark/event-inbox.json"
+  "routes": [
+    {
+      "route_key": "requirements-a",
+      "chat_id": "oc_<local-private-chat-id-a>",
+      "event_inbox_config": ".loopx/config/lark/requirements-a.json"
+    },
+    {
+      "route_key": "requirements-b",
+      "chat_id": "oc_<local-private-chat-id-b>",
+      "event_inbox_config": ".loopx/config/lark/requirements-b.json"
+    }
+  ]
 }
 ```
 
-The packaged v0 lifecycle accepts only `im.message.receive_v1`, bot identity,
-an isolated `loopx-` service name, and `configured_chat_all`. These constraints
-match the canonical inbox schema, avoid collisions with unrelated user services,
-and make thread completeness explicit instead of pretending that an
-`addressed_only` consumer sees later unaddressed replies. Plan and install
-output never returns the chat id, local paths, generated jq, or credentials.
+The packaged lifecycle accepts only `im.message.receive_v1`, bot identity, an
+isolated `loopx-` service name, and `configured_chat_all`. Config v1 requires a
+unique lowercase public-safe `route_key` for each route, consumes one
+profile-bound event stream, and routes each configured chat into a distinct
+inbox config and inbox path. Missing, unsafe, or duplicate route keys, duplicate
+chat routes, shared inbox paths, reply chat mismatches, and route profile
+divergence fail closed. Each accepted event persists the configured route key,
+so aggregate drain gives the Agent a stable requirement-context identity without
+exposing a private chat id. A missing or mismatched persisted route key also
+fails closed instead of silently reclassifying an older message. Each inbox therefore
+retains independent pending/processed state and source-context reply placement
+while one Bot can serve several chats without competing consumers. The v0
+single-chat shape remains accepted and is normalized to one route. Plan,
+install, run, and status output expose only route and health counts; they never
+return profile values, chat ids, local paths, generated jq, or credentials.
 
 An enabled collector must bind an explicit non-default Lark CLI profile. When
-`profile` is omitted, LoopX may reuse the enabled inbox reply
-`sender_profile`; when both are present they must match. The generated service
+`profile` is omitted, LoopX may reuse the shared enabled inbox reply
+`sender_profile`; every routed reply profile must resolve to that same value.
+When both are present they must match. The generated service
 passes the profile-bound collector config to the LoopX runtime, which places
 `--profile` before both `event consume` and message readback calls. Collection,
 reply-target verification, and optional replies therefore cannot silently use
@@ -232,27 +252,39 @@ local host write and therefore requires explicit `--execute`. Status separates
 healthy before the first message, while acceptance of a real integration still
 requires one post-install event to appear in the inbox.
 
-Register the generic inbox pointer once at the goal boundary:
+Register one inbox or the v1 routed collector as the Agent-owned goal boundary.
+The latter keeps one authority and one Agent lane while exposing aggregate,
+content-free urgency across all configured chats:
 
 ```bash
 loopx configure-goal \
   --goal-id <goal-id> \
-  --lark-event-inbox-config .loopx/config/lark/event-inbox.json
+  --lark-event-inbox-agent-id <context-assistant-agent-id> \
+  --lark-event-inbox-config .loopx/config/lark/collector.json
 
 # Review the preview, then apply explicitly.
 loopx configure-goal \
   --goal-id <goal-id> \
-  --lark-event-inbox-config .loopx/config/lark/event-inbox.json \
+  --lark-event-inbox-agent-id <context-assistant-agent-id> \
+  --lark-event-inbox-config .loopx/config/lark/collector.json \
   --execute
+
+# Drain all configured chats through the same Agent lane. Each item retains
+# route-specific source-context reply guidance; message-scoped follow-up
+# commands resolve exactly one isolated inbox or fail closed.
+loopx lark-inbox drain \
+  --goal-id <goal-id> \
+  --agent-id <context-assistant-agent-id>
 ```
 
 The configuration catalog exposes this optional capability on demand. Quota
 projects `enabled`, `config_pointer_registered`, a local control command, and a
 content-free urgency summary; it never projects the private path, message ids,
 senders, or message bodies. The summary includes
-pending/direct-question/direct-mention/verified-bot-reply counts and the oldest
-pending age. A configured direct mention or verified reply to a message authored
-by the configured bot becomes a high-priority `lark_event_inbox` work lane
+pending/direct-question/direct-mention/verified-bot-reply counts, routed inbox
+counts, and the oldest pending age. It does not expose route chat ids or profile
+names. A configured direct mention or verified reply to a message authored by
+the configured bot becomes a high-priority `lark_event_inbox` work lane
 before ordinary monitor or advancement work. Generated heartbeat bodies run the
 actual goal-boundary `drain_command`;
 `loopx --registry <invoked-registry> lark-inbox drain --goal-id <goal-id>`

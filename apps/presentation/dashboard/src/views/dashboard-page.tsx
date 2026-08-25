@@ -16,6 +16,7 @@ import {
   formatStatusError,
   parseStatusPayload,
   withGoalActivationState,
+  withoutGoal,
 } from "../data/status";
 import {
   ChatApiError,
@@ -1188,6 +1189,7 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
 function PersonalGoalHome({
   isLoading,
   onGoalActivationStateChange,
+  onGoalDeleted,
   onSelectGoal,
   onReconcileStatus,
   onRefresh,
@@ -1200,6 +1202,7 @@ function PersonalGoalHome({
 }: {
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
+  onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string) => void;
   onReconcileStatus: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
@@ -2370,6 +2373,7 @@ function PersonalGoalHome({
           },
           onOpenOutput: (output) => openGoalChat(output.goalId),
           onGoalActivationStateChange,
+          onGoalDeleted,
           onReconcileStatus,
           onExportOutput: async (output) => {
             const contents = [
@@ -2754,6 +2758,10 @@ export function DashboardPage() {
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
         setPayload((current) => withGoalActivationState(current, goalId, activationState));
+      }}
+      onGoalDeleted={(goalId) => {
+        statusRequestFenceRef.current.projectionRevision += 1;
+        setPayload((current) => withoutGoal(current, goalId));
       }}
       onSelectGoal={selectGoal}
       onReconcileStatus={() => loadFromUrl(

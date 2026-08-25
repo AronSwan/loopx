@@ -42,6 +42,7 @@ import {
   validateGovernedCapabilitySettlementCallback,
 } from "./governed_capability.ts";
 import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace_causality.ts";
+import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { evaluateDeliveryWorkspace } from "./agents/delivery_workspace.ts";
 import {
   interpretTurnJournal,
@@ -60,7 +61,6 @@ import {
 import { reduceTodoCompletionTransaction } from "./todos/completion_transaction.ts";
 import { transitionTodoNextAction } from "./todos/next_action.ts";
 import { evaluateSchedulerStateTransition } from "./scheduler/state_transition_rules.ts";
-import { evaluateSchedulerHeartbeatCommit } from "./scheduler/heartbeat_commit.ts";
 import {
   evaluateSchedulerStateOperation,
   loadSchedulerState,
@@ -279,7 +279,6 @@ export function createEffectRuntimeHandlers(
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],
     ["scheduler.state.load", loadSchedulerState],
     ["scheduler.state.write", writeSchedulerState],
-    ["scheduler.heartbeat.commit", evaluateSchedulerHeartbeatCommit],
     ["turn.delivery_route.evaluate", evaluateDeliveryRoute],
     ["work_item.action_portfolio.project", projectQuotaActionPortfolio],
     ["work_item.action_selection.qualify", qualifyActionSelection],
@@ -289,6 +288,7 @@ export function createEffectRuntimeHandlers(
       "quota.delivery_workspace_causality.evaluate",
       evaluateDeliveryWorkspaceCausality,
     ],
+    ["quota.spend.commit", evaluateQuotaSpendCommit],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(

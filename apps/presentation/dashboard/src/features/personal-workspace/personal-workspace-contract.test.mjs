@@ -135,8 +135,14 @@ assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.g
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
 assert.match(page, /Promise\.resolve\(\)\.then\(\(\) => reconcile\?\.\(\)\)/, "Successful Goal lifecycle apply reconciles the full status payload without blocking the sidebar");
 assert.match(dashboard, /onReconcileStatus=\{\(\) => loadFromUrl\([\s\S]*\{ background: true \}/, "Lifecycle reconciliation uses the non-fatal background status path");
-assert.match(dashboard, /statusProjectionRevisionRef\.current !== projectionRevision/, "A stale background response cannot overwrite a newer optimistic transition");
-assert.match(page, /activityTimeLabel\(item\.output\.createdAt\)/, "Files render human-readable output timestamps");
+assert.match(dashboard, /statusRequestFenceRef\.current\.projectionRevision/, "A stale background response cannot overwrite a newer optimistic transition");
+assert.match(sidebar, /Trash2/, "Stopped Goals expose a delete icon");
+assert.match(sidebar, /onRequestGoalLifecycle\(goal, "delete"\)/, "Goal deletion stays behind the lifecycle request boundary");
+assert.match(page, /lifecycleOperation === "delete"/, "Goal deletion has an explicit lifecycle operation");
+assert.match(page, /callbacks\.onGoalDeleted/, "Successful Goal deletion removes the optimistic sidebar projection");
+assert.match(status, /function withoutGoal/, "Status projection can remove a deleted Goal");
+assert.match(page, /result\.proposal\.status !== "applied"[\s\S]*result\.proposal\.receipt\?\.projection_verified !== true/, "Non-applied typed action results never project as successful Goal deletion");
+assert.match(page, /状态已变化，操作未执行，请重新生成确认预览/, "Stale Goal deletion remains visible with an actionable error");
 assert.match(drawer, /selection\.kind === "run" \|\| selection\.kind === "proposal" \|\| selection\.kind === "schedule"/, "Advanced diagnostics only appears on objects with actionable runtime details");
 
 for (const field of ["agentId", "todoId", "runId", "safePreview"]) {

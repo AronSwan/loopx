@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from ...control_plane.work_items.operator_inbox import (
     OperatorInboxSourceContract,
@@ -23,6 +24,7 @@ CHAT_ID_PATTERN = re.compile(r"oc_[A-Za-z0-9_-]+")
 REACTION_EMOJI_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
 REPLY_PLACEMENT_POLICIES = {"source_thread", "source_context"}
 REPLY_EDITORIAL_STYLES = {"concise", "bullet_points_preferred"}
+ROUTE_KEY_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,79}")
 LARK_OPERATOR_INBOX_SOURCE_CONTRACT = OperatorInboxSourceContract(
     config_schema_version=CONFIG_SCHEMA_VERSION,
     event_schema_version=EVENT_SCHEMA_VERSION,
@@ -201,6 +203,11 @@ def _event_from_payload(payload: object) -> dict[str, Any] | None:
         "create_time": str(payload.get("create_time") or "")[:40],
         "content": content,
     }
+    if "route_key" in payload:
+        route_key = str(payload.get("route_key") or "").strip()
+        if not ROUTE_KEY_PATTERN.fullmatch(route_key):
+            return None
+        event["route_key"] = route_key
     parent_id = str(payload.get("parent_id") or "").strip()
     root_id = str(payload.get("root_id") or "").strip()
     if MESSAGE_ID_PATTERN.fullmatch(parent_id):
@@ -477,7 +484,7 @@ def acknowledge_lark_event_inbox(
         payload = {
             "schema_version": PROCESSED_SCHEMA_VERSION,
             "message_ids": merged,
-            "last_processed_at": datetime.now(timezone.utc).isoformat(),
+            "last_processed_at": datetime.now(UTC).isoformat(),
         }
         temporary = processed_path.with_suffix(".json.tmp")
         temporary.write_text(

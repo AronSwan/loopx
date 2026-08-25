@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .agent_registry import normalize_registered_agents
+from .agy_goal_mode import AGY_ACCEPTED_INPUTS, agy_activation_extras
 from .control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from .control_plane.todos.contract import (
     normalize_required_capabilities,
@@ -11,7 +12,7 @@ from .control_plane.todos.contract import (
 from .project_prompt import (
     render_heartbeat_prompt_command,
     render_heartbeat_prompt_json_command,
-    shell_arg,
+    render_register_agent_command,
 )
 
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
@@ -47,6 +48,7 @@ def scheduler_command_binding_for_agent_type(
         "gemini-cli": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "zcode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "agy": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)
@@ -74,6 +76,7 @@ SUPPORTED_AGENT_TYPES = [
     "gemini-cli",
     "cursor-agent",
     "zcode",
+    "agy",
     "deepseek-harness",
     "deepseek-harness-native",
     "manual",
@@ -250,6 +253,12 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
             "z-code",
         ],
     },
+    "agy": {
+        "display_name": "Antigravity CLI",
+        "host_loop": "Antigravity CLI native /goal loop with schedule self-wakes (LoopX quota pacing is advisory)",
+        "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
+        "accepted_inputs": list(AGY_ACCEPTED_INPUTS),
+    },
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
         "host_loop": "DeepSeek Harness headless/automation loop gated by LoopX quota",
@@ -351,6 +360,9 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "cursor": "cursor-agent",
     "zcode": "zcode",
     "z-code": "zcode",
+    "agy": "agy",
+    "antigravity": "agy",
+    "antigravity-cli": "agy",
     "deepseek-harness": "deepseek-harness",
     "dsh": "deepseek-harness",
     "deepseek-harness-native": "deepseek-harness-native",
@@ -469,6 +481,7 @@ def _heartbeat_commands(
     goal_id: str,
     agent_type: str,
     cli_bin: str,
+    runtime_root: str | None = None,
     agent_id: str | None,
     available_capabilities: list[str] | None = None,
 ) -> dict[str, str]:
@@ -486,6 +499,7 @@ def _heartbeat_commands(
         "gemini-cli": "Gemini CLI agent loop gated by LoopX",
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
         "zcode": "ZCode agent loop gated by LoopX",
+        "agy": "Antigravity CLI agent loop with advisory LoopX quota pacing",
         "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "deepseek-harness-native": "DeepSeek Harness same-session plugin loop gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",
@@ -493,15 +507,12 @@ def _heartbeat_commands(
     }
     agent_scope = scope_by_type.get(agent_type, scope_by_type["other-agent"])
     scheduler_binding = scheduler_command_binding_for_agent_type(agent_type)
-    renderer_binding = (
-        {"visible_goal_host": "traex-cli"}
-        if agent_type == "traex-cli"
-        else {}
-    )
+    renderer_binding = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
     commands = {
         "heartbeat_prompt_json": render_heartbeat_prompt_json_command(
             goal_id,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -511,6 +522,7 @@ def _heartbeat_commands(
         "heartbeat_prompt": render_heartbeat_prompt_command(
             goal_id,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -1057,20 +1069,25 @@ def _skill_facade_cli_activation(
     skills_root: str,
     extra_host_mutation: dict[str, Any] | None = None,
     extra_activation_steps: list[str] | None = None,
+    host_scheduler_note: str | None = None,
+    activation_method: str = "run_agent_cli_loop_gated_by_quota",
 ) -> dict[str, Any]:
     """Activation for a CLI host that LoopX reaches through a skill facade.
 
     For skill-facade CLI hosts where no direct host-native loop binding is
     integrated, the loop driver is the agent's own turn loop and LoopX gates it
-    by requiring every continuation to enter through quota should-run. That is a
-    weaker guarantee than a host-owned loop and is stated as such, because
-    claiming autonomous heartbeat support these hosts cannot deliver is worse
-    than admitting the agent drives itself.
+    by requiring every continuation to enter through quota should-run. A host
+    that does ship a native in-session scheduler passes ``host_scheduler_note``
+    so the packet states that primitive instead of the default no-scheduler
+    sentence. A host that also owns a native goal primitive overrides
+    ``activation_method`` to name the goal binding. The weaker facade boundary
+    remains explicit rather than claiming autonomous heartbeat support the host
+    cannot deliver.
     """
     return {
         "host_surface": host_surface,
         "entry_command_hint": f"the LoopX skill installed in {skills_root}",
-        "activation_method": "run_agent_cli_loop_gated_by_quota",
+        "activation_method": activation_method,
         "activation_input_command": commands["heartbeat_prompt_json"],
         "setup_command": (
             f"{cli_bin} slash-commands --install --surface {install_surface}"
@@ -1094,7 +1111,10 @@ def _skill_facade_cli_activation(
             "Read task_body from the JSON payload and carry it as the session objective.",
             *(extra_activation_steps or []),
             "Start every following turn with quota should-run and stop when it says stop; "
-            "there is no host scheduler to fall back on.",
+            + (
+                host_scheduler_note
+                or "there is no host scheduler to fall back on."
+            ),
         ],
         "success_criteria": [
             f"The {host_label} session has the LoopX skill facade installed and the "
@@ -1156,6 +1176,18 @@ def _zcode_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
                 "to run and do not claim autonomous heartbeat support."
             ),
         },
+    )
+
+
+def _agy_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
+    return _skill_facade_cli_activation(
+        commands,
+        cli_bin,
+        host_label="Antigravity CLI",
+        host_surface="agy_agent_loop",
+        install_surface="agy",
+        skills_root="~/.gemini/antigravity-cli/skills",
+        **agy_activation_extras(),
     )
 
 
@@ -1257,6 +1289,8 @@ def build_host_loop_activation_packet(
     agent_type: str,
     goal_id: str,
     cli_bin: str = "loopx",
+    runtime_root: str | None = None,
+    identity_runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
     available_capabilities: list[str] | None = None,
@@ -1280,6 +1314,7 @@ def build_host_loop_activation_packet(
             goal_id=goal_id,
             agent_type=canonical,
             cli_bin=cli_bin,
+            runtime_root=runtime_root,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=normalized_available_capabilities,
         )
@@ -1318,6 +1353,8 @@ def build_host_loop_activation_packet(
         surface = _cursor_agent_activation(commands, cli_bin)
     elif canonical == "zcode":
         surface = _zcode_activation(commands, cli_bin)
+    elif canonical == "agy":
+        surface = _agy_cli_activation(commands, cli_bin)
     elif canonical == "deepseek-harness":
         surface = _deepseek_harness_activation(commands)
     elif canonical == "deepseek-harness-native":
@@ -1335,6 +1372,7 @@ def build_host_loop_activation_packet(
                 goal_id=goal_id,
                 agent_type=canonical,
                 cli_bin=cli_bin,
+                runtime_root=runtime_root,
                 agent_id=candidate,
                 available_capabilities=normalized_available_capabilities,
             )
@@ -1363,14 +1401,12 @@ def build_host_loop_activation_packet(
             )
             choices.append(choice)
         requested_agent_id = identity.get("requested_agent_id")
-        fresh_agent_id = (
-            str(requested_agent_id)
-            if requested_agent_id
-            else "<new-public-safe-agent-id>"
-        )
-        register_command = (
-            f"{shell_arg(cli_bin)} register-agent --goal-id {shell_arg(goal_id)} "
-            f"--agent-id {shell_arg(fresh_agent_id)} --require-new"
+        fresh_agent_id = str(requested_agent_id or "<new-public-safe-agent-id>")
+        register_command = render_register_agent_command(
+            goal_id,
+            agent_id=fresh_agent_id,
+            cli_bin=cli_bin,
+            runtime_root=identity_runtime_root or runtime_root,
         )
         fresh_registration = (
             {
