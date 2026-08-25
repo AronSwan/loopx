@@ -69,7 +69,6 @@ test("exact ACK commits scheduler state and is replay-safe", async (t) => {
   assert.equal(replay.replayed, true);
   assert.equal(replay.state_digest, first.state_digest);
 });
-
 test("steady-state ACK is reduced to a typed skipped receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
@@ -248,16 +247,58 @@ test("preview retains compact failure facts when no state is persisted", async (
     execute: false,
     reset_token: "reset-2",
     identity_signature: "identity-2",
-    progression_index: 1,
+    progression_index: 0,
     progression_minutes: [15, 16, 30],
     observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
-    expected_rrule: "FREQ=MINUTELY;INTERVAL=16",
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
     apply_needed: true,
     failure_kind: "timeout",
     prior_host_update_failures: prior,
   }));
   assert.equal(second.status, "preview");
-  assert.equal((second.state?.host_update_failures as unknown[]).length, 2);
+  assert.equal((second.state?.host_update_failures as unknown[]).length, 1);
+  assert.equal(
+    (second.state?.host_update_failures as Array<Record<string, unknown>>)[0]
+      .failure_count,
+    2,
+  );
+});
+
+test("missing state rejects nonzero initial progression in execute and preview", async (t) => {
+  const executeRoot = await tempRuntime(t);
+  const execute = await evaluateSchedulerHeartbeatCommit(request(executeRoot, {
+    effect_id: "missing-initial-nonzero-execute",
+    progression_index: 2,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=60",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=60",
+  }));
+  assert.equal(execute.status, "conflict");
+  assert.equal(execute.reason_code, "initial_progression_index_conflict");
+  assert.equal(execute.state, null);
+  await assert.rejects(
+    readFile(
+      schedulerStatePath(executeRoot, {
+        goalId: scope.goal_id,
+        agentId: scope.agent_id,
+        surface: scope.surface,
+        stateKey: scope.state_key,
+      }),
+      "utf8",
+    ),
+    { code: "ENOENT" },
+  );
+
+  const previewRoot = await tempRuntime(t);
+  const preview = await evaluateSchedulerHeartbeatCommit(request(previewRoot, {
+    effect_id: "missing-initial-nonzero-preview",
+    execute: false,
+    progression_index: 1,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+  }));
+  assert.equal(preview.status, "conflict");
+  assert.equal(preview.reason_code, "initial_progression_index_conflict");
+  assert.equal(preview.state, null);
 });
 
 test("preview reads legacy state without migrating or deleting it", async (t) => {
@@ -317,17 +358,45 @@ test("identity reset starts a new progression without losing CAS protection", as
     effect_id: "identity-reset-failure",
     reset_token: "reset-2",
     identity_signature: "identity-2",
-    progression_index: 1,
+    progression_index: 0,
     progression_minutes: [15, 30, 60],
-    expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
-    applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
-    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
     apply_needed: true,
     failure_kind: "timeout",
     expected_state_digest: first.state_digest,
   }));
   assert.equal(reset.status, "written");
   assert.equal(reset.state?.reset_token, "reset-2");
+  assert.equal(reset.state?.progression_index, 0);
+});
+
+test("identity reset rejects nonzero progression and leaves state unchanged", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
+  const reset = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    effect_id: "identity-reset-nonzero",
+    reset_token: "reset-2",
+    identity_signature: "identity-2",
+    progression_index: 1,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    expected_state_digest: first.state_digest,
+  }));
+  assert.equal(reset.status, "conflict");
+  assert.equal(reset.reason_code, "initial_progression_index_conflict");
+  assert.equal(reset.state_digest, first.state_digest);
+  const path = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const persisted = JSON.parse(await readFile(path, "utf8")) as JsonObject;
+  assert.equal(persisted.reset_token, "reset-1");
+  assert.equal(persisted.identity_signature, "identity-1");
+  assert.equal(persisted.progression_index, 0);
 });
 
 test("monitor stale ACK requires matching identity proof", async (t) => {

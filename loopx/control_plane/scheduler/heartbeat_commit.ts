@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { JsonObject } from "../effect_program.ts";
+import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   atomicWriteJson,
   withFileMutationLock,
@@ -75,7 +76,6 @@ export interface SchedulerHeartbeatCommitRequest {
   observed_host_rrule: string;
   prior_host_update_failures: JsonObject[];
 }
-
 interface CommitMetadata {
   schema_version: typeof SCHEDULER_HEARTBEAT_COMMIT_RECEIPT_SCHEMA;
   effect_id: string;
@@ -190,12 +190,12 @@ function optionalDigest(value: unknown): string | null {
 
 function positiveIntegerList(value: unknown, label: string): number[] {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${label} must be a non-empty array of positive integers`);
+    throw new EffectRuntimeRequestError(`${label} must be a non-empty array of positive integers`);
   }
   const result = value.map((item, index) => {
     const number = requiredInteger(item, `${label}[${index}]`);
     if (number <= 0) {
-      throw new Error(`${label} must be a non-empty array of positive integers`);
+      throw new EffectRuntimeRequestError(`${label} must be a non-empty array of positive integers`);
     }
     return number;
   });
@@ -205,12 +205,12 @@ function positiveIntegerList(value: unknown, label: string): number[] {
 function optionalFailureList(value: unknown): JsonObject[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
-    throw new Error("prior_host_update_failures must be an array");
+    throw new EffectRuntimeRequestError("prior_host_update_failures must be an array");
   }
   const normalized = value.map((candidate, index) => {
     const failure = normalizeSchedulerHostUpdateFailure(candidate);
     if (!failure) {
-      throw new Error(
+      throw new EffectRuntimeRequestError(
         `prior_host_update_failures[${index}] is malformed`,
       );
     }
@@ -222,7 +222,7 @@ function optionalFailureList(value: unknown): JsonObject[] {
 function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
   const request = requiredObject(value, "scheduler.heartbeat.commit params");
   if (request.schema_version !== SCHEDULER_HEARTBEAT_COMMIT_REQUEST_SCHEMA) {
-    throw new Error("Scheduler heartbeat commit request schema mismatch");
+    throw new EffectRuntimeRequestError("Scheduler heartbeat commit request schema mismatch");
   }
   const operation = requireStringLiteral(
     request.operation,
@@ -254,7 +254,7 @@ function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
     "progression_minutes",
   );
   if (progressionIndex < 0 || progressionIndex >= progressionMinutes.length) {
-    throw new Error("progression_index must refer to progression_minutes");
+    throw new EffectRuntimeRequestError("progression_index must refer to progression_minutes");
   }
   const generatedAt = requiredString(request.generated_at, "generated_at").trim();
   const execute = request.execute === undefined
@@ -269,14 +269,14 @@ function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
     ? SCHEDULER_ACK_STALE_HINT_TOLERANCE_MINUTES
     : requiredInteger(request.stale_tolerance_minutes, "stale_tolerance_minutes");
   if (staleToleranceMinutes < 0) {
-    throw new Error("stale_tolerance_minutes must not be negative");
+    throw new EffectRuntimeRequestError("stale_tolerance_minutes must not be negative");
   }
 
   const derivedRrule = rruleForMinutes(progressionMinutes[progressionIndex]);
   const expectedRrule = normalizeSchedulerRrule(
     request.expected_rrule ?? request.target_rrule ?? derivedRrule,
   );
-  if (!expectedRrule) throw new Error("expected_rrule must not be empty");
+  if (!expectedRrule) throw new EffectRuntimeRequestError("expected_rrule must not be empty");
   const appliedRrule = normalizeSchedulerRrule(
     request.applied_rrule ?? request.acknowledged_rrule ?? "",
   );
@@ -728,10 +728,9 @@ export async function evaluateSchedulerHeartbeatCommit(
       existing.reset_token === request.reset_token &&
       existing.identity_signature === request.identity_signature
     );
-    // A changed scheduler identity starts a fresh progression, including when
-    // the new hint is already beyond index zero. A stale monitor ACK is the
-    // exception: its identity proof is what prevents an old monitor from
-    // resetting a newer scheduler state.
+    // A changed scheduler identity starts a fresh progression. Initial and
+    // identity-reset commits must begin at index zero; a stale monitor ACK is
+    // the exception to the identity-reset path, not to the initial index rule.
     const identityReset = existing !== null && !identityMatches &&
       !request.host_match_observed && !isStaleMonitorAck(request);
     if (existing !== null && !identityMatches && !identityReset) {
@@ -742,6 +741,19 @@ export async function evaluateSchedulerHeartbeatCommit(
         existing,
         "scheduler heartbeat identity does not match persisted state",
         { reason_code: "identity_conflict" },
+      );
+    }
+    if (
+      (existing === null || identityReset) &&
+      request.progression_index !== 0
+    ) {
+      return result(
+        request,
+        path,
+        "conflict",
+        existing,
+        "scheduler heartbeat initial or identity-reset progression must start at index zero",
+        { reason_code: "initial_progression_index_conflict" },
       );
     }
     if (
