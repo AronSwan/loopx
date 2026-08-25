@@ -216,11 +216,16 @@ def resolve_routed_lark_inbox_config(
     if kind == "inbox":
         return str(config_path)
     _, routes = _collector_routes(project=project, config_path=config_path)
-    matches = [
-        str(route["event_inbox_config_ref"])
-        for route in routes
-        if (route["inbox"]["inbox_path"] / f"{message_id}.json").is_file()
-    ]
+    matches: list[str] = []
+    for route in routes:
+        inbox_path = route["inbox"].get("inbox_path")
+        if inbox_path is None:
+            # A disabled route inbox has no addressable message store; it can
+            # never contain the requested message and must fail closed cleanly
+            # instead of raising on a None path.
+            continue
+        if (inbox_path / f"{message_id}.json").is_file():
+            matches.append(str(route["event_inbox_config_ref"]))
     if len(matches) != 1:
         raise ValueError(
             "message id must resolve to exactly one configured Lark inbox route"

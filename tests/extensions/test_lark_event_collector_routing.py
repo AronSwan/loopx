@@ -490,3 +490,59 @@ def test_routed_drain_fails_closed_on_missing_or_mismatched_persisted_route_key(
             config_path=collector,
             limit=10,
         )
+
+
+def test_disabled_route_inbox_message_resolution_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A disabled route inbox has no message store; resolving a message id on a
+    paused collector must fail closed with a clean error, not raise on a None
+    inbox path.
+    """
+
+    project = _project(tmp_path)
+    disabled_inbox = ".loopx/config/lark/disabled.json"
+    path = project / disabled_inbox
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_inbox_config_v0",
+                "enabled": False,
+                "inbox_dir": ".loopx/inbox/disabled",
+                "capture_scope": "configured_chat_all",
+                "reply": {
+                    "enabled": False,
+                    "sender_profile": "disabled-context-bot",
+                    "sender_identity": "bot",
+                    "bot_display_name": "Disabled Context Bot",
+                    "chat_id": "oc_public_fixture_disabled",
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    collector = _write_collector(
+        project,
+        routes=[
+            {
+                "route_key": "requirements-disabled",
+                "chat_id": "oc_public_fixture_disabled",
+                "event_inbox_config": disabled_inbox,
+            },
+        ],
+    )
+    payload = json.loads(collector.read_text(encoding="utf-8"))
+    payload["enabled"] = False
+    collector.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="must resolve to exactly one configured Lark inbox route",
+    ):
+        resolve_routed_lark_inbox_config(
+            project=project,
+            config_path=collector,
+            message_id="om_public_fixture_disabled",
+        )
