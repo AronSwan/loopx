@@ -388,20 +388,24 @@ function proposalStatus(status: TypedActionProposal["status"]): WorkspaceActionP
   return status;
 }
 
-function proposalFields(parameters: Record<string, unknown>) {
+function proposalFields(parameters: Record<string, unknown>, t: WorkspaceTranslate) {
   const fieldLabels: Record<string, string> = {
-    agent_id: "Agent",
-    completion_criteria: "完成标准",
-    execution_boundary: "执行边界",
-    goal_id: "Goal ID",
-    operation: "操作",
-    reason: "原因",
-    initial_todos: "首个任务",
-    objective: "目标",
-    permission: "权限",
-    stop_condition: "停止条件",
-    title: "标题",
-    workspace_ref: "执行工作区",
+    agent_id: t("proposal.field.agentId"),
+    cadence: t("proposal.field.cadence"),
+    completion_criteria: t("proposal.field.completionCriteria"),
+    execution_boundary: t("proposal.field.executionBoundary"),
+    goal_id: t("proposal.field.goalId"),
+    heartbeat: t("proposal.field.heartbeat"),
+    initial_todos: t("proposal.field.initialTodos"),
+    objective: t("proposal.field.objective"),
+    operation: t("proposal.field.operation"),
+    permission: t("proposal.field.permission"),
+    reason: t("proposal.field.reason"),
+    stop_condition: t("proposal.field.stopCondition"),
+    target: t("proposal.field.target"),
+    timezone: t("proposal.field.timezone"),
+    title: t("proposal.field.title"),
+    workspace_ref: t("proposal.field.workspace"),
   };
   const priority = ["title", "objective", "completion_criteria", "execution_boundary", "permission", "agent_id", "workspace_ref", "initial_todos", "heartbeat", "stop_condition", "goal_id"];
   return Object.entries(parameters)
@@ -415,8 +419,8 @@ function proposalFields(parameters: Record<string, unknown>) {
     label: fieldLabels[label] ?? label.replaceAll("_", " "),
     value: label === "workspace_ref"
       ? value === "current"
-        ? "当前本地工作区（未绑定 Repository）"
-        : `${String(value ?? "当前工作区")}（仅提供执行环境，不会自动关联仓库）`
+        ? t("proposal.workspace.current")
+        : t("proposal.workspace.named", { workspace: String(value ?? "current") })
       : Array.isArray(value) ? value.join(" · ") : typeof value === "object" && value !== null
       ? JSON.stringify(value)
       : String(value ?? "—"),
@@ -433,54 +437,63 @@ function lifecycleOperationFor(proposal: TypedActionProposal): GoalLifecycleOper
     : undefined;
 }
 
-function proposalImpact(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
-  if (proposal.action_kind === "goal.create") {
-    return "确认后会创建 Goal 和首个 Todo，并让选定 Agent 开始首轮推进。";
-  }
-  if (proposal.action_kind === "goal.lifecycle") {
-    if (lifecycleOperation === "stop") {
-      return "确认后会停止自动推进，并将 Goal 移入折叠的「已停止」列表；历史、Todo 和证据都会保留，可随时恢复。";
-    }
-    if (lifecycleOperation === "delete") {
-      return "确认后会从 source registry 和 global registry 移除这个已停止 Goal；项目文件、历史状态文件和备份不会被删除。";
-    }
-    return "确认后会恢复 Goal 的自动调度资格并移回 Active Goals；实际执行仍受 quota、Gate 和 Todo 约束。";
-  }
-  return proposal.permission_classification === "protected"
-    ? "该操作需要通过受保护的 LoopX 写入服务完成。"
-    : "确认后会调用规范 LoopX 服务写入状态。";
-}
-
-function proposalPrimaryLabel(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
-  if (proposal.action_kind === "goal.create") return "创建 Goal 并开始首轮";
-  if (proposal.action_kind === "goal.lifecycle") {
-    if (lifecycleOperation === "stop") return "停止 Goal";
-    if (lifecycleOperation === "delete") return "删除 Goal";
-    return "恢复 Goal";
-  }
-  if (proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true) {
-    return "创建任务并开始执行";
-  }
-  return "确认并应用";
-}
-
-function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPreview {
+function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate): WorkspaceActionPreview {
   const lifecycleOperation = lifecycleOperationFor(proposal);
+  const title = typeof proposal.normalized_parameters.title === "string"
+    ? proposal.normalized_parameters.title
+    : typeof proposal.normalized_parameters.goal_id === "string"
+      ? proposal.normalized_parameters.goal_id
+      : "";
+  const target = typeof proposal.normalized_parameters.target === "string"
+    ? proposal.normalized_parameters.target
+    : "";
+  const localizedSummary = proposal.action_kind === "goal.create"
+    ? t("proposal.summary.goalCreate", { title })
+    : proposal.action_kind === "heartbeat.bind"
+      ? t("proposal.summary.heartbeat")
+      : proposal.action_kind === "monitor.create"
+        ? t("proposal.summary.monitor", { target })
+        : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
+          ? t("proposal.summary.lifecycleStop", { title })
+          : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
+            ? t("proposal.summary.lifecycleDelete", { title })
+            : proposal.action_kind === "goal.lifecycle"
+              ? t("proposal.summary.lifecycleResume", { title })
+        : proposal.summary;
   return {
     actionKind: proposal.action_kind,
-    fields: proposalFields(proposal.normalized_parameters),
+    fields: proposalFields(proposal.normalized_parameters, t),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: proposalImpact(proposal, lifecycleOperation),
+    impact: proposal.action_kind === "goal.create"
+      ? t("proposal.impact.goalCreate")
+      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
+        ? t("proposal.impact.lifecycleStop")
+        : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
+          ? t("proposal.impact.lifecycleDelete")
+        : proposal.action_kind === "goal.lifecycle"
+          ? t("proposal.impact.lifecycleResume")
+      : proposal.permission_classification === "protected"
+      ? t("proposal.impact.protected")
+      : t("proposal.impact.default"),
     previewId: proposal.proposal_id,
     lifecycleOperation,
     gate: proposal.gate ? {
       kind: String(proposal.gate.kind ?? "protected_action"),
       nextAction: typeof proposal.gate.next_action === "string" ? proposal.gate.next_action : undefined,
-      summary: String(proposal.gate.summary ?? "需要宿主确认"),
+      summary: String(proposal.gate.summary ?? t("proposal.gate.default")),
     } : undefined,
-    primaryLabel: proposalPrimaryLabel(proposal, lifecycleOperation),
+    primaryLabel: proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
+      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
+        ? t("proposal.primary.lifecycleStop")
+        : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
+          ? t("proposal.primary.lifecycleDelete")
+        : proposal.action_kind === "goal.lifecycle"
+          ? t("proposal.primary.lifecycleResume")
+      : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
+        ? t("proposal.primary.todoStart")
+        : t("proposal.primary.apply"),
     status: proposalStatus(proposal.status),
-    title: proposal.summary,
+    title: localizedSummary,
   };
 }
 
@@ -495,41 +508,41 @@ function compactGoalSlug(value: string) {
   return `goal-${(hash >>> 0).toString(36)}`;
 }
 
-function goalTitleFromMessage(message: string) {
+function goalTitleFromMessage(message: string, t: WorkspaceTranslate) {
   const quoted = message.match(/[「“"]([^」”"]{2,80})[」”"]/u)?.[1];
   if (quoted) return quoted.trim();
   return message
-    .replace(/^(请|帮我|我想|给我|创建|新建|设置)+/u, "")
+    .replace(/^(请|帮我|我想|给我|创建|新建|设置|please|i want to|create|set up)+/iu, "")
     .replace(/(一个|新的)?\s*(goal|目标)/giu, "")
     .replace(/[，。！？].*$/u, "")
     .trim()
-    .slice(0, 80) || "新的个人 Goal";
+    .slice(0, 80) || t("goal.defaultTitle");
 }
 
 function structuredFieldFromMessage(message: string, labels: string[]) {
   for (const line of message.split(/\r?\n/u)) {
     const trimmed = line.trim();
     for (const label of labels) {
-      const match = trimmed.match(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*[：:]\\s*(.*)$`, "u"));
+      const match = trimmed.match(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*[：:]\\s*(.*)$`, "iu"));
       if (match?.[1]?.trim()) return match[1].trim();
     }
   }
   return "";
 }
 
-function structuredGoalIntentFromMessage(message: string) {
-  const target = structuredFieldFromMessage(message, ["目标"]);
-  const completion = structuredFieldFromMessage(message, ["完成标准"]);
-  const boundary = structuredFieldFromMessage(message, ["执行边界（可选）", "执行边界", "边界"]);
-  const title = (target || goalTitleFromMessage(message)).split(/[。；;\n]/u)[0].trim().slice(0, 80) || "新的个人 Goal";
-  const objective = [target || title, completion ? `完成标准：${completion}` : "", boundary ? `执行边界：${boundary}` : ""]
+function structuredGoalIntentFromMessage(message: string, t: WorkspaceTranslate) {
+  const target = structuredFieldFromMessage(message, ["目标", "Objective"]);
+  const completion = structuredFieldFromMessage(message, ["完成标准", "Completion criteria"]);
+  const boundary = structuredFieldFromMessage(message, ["执行边界（可选）", "执行边界", "边界", "Execution boundary (optional)", "Execution boundary", "Boundary"]);
+  const title = (target || goalTitleFromMessage(message, t)).split(/[。；;\n]/u)[0].trim().slice(0, 80) || t("goal.defaultTitle");
+  const objective = [target || title, completion ? t("goal.objectiveCompletion", { criteria: completion }) : "", boundary ? t("goal.objectiveBoundary", { boundary }) : ""]
     .filter(Boolean)
     .join("\n");
-  const readOnly = /(只读|不调用外部工具|不修改(?:仓库|代码|状态)|read.?only)/iu.test(boundary || message);
+  const readOnly = /(只读|不调用外部工具|不修改(?:仓库|代码|状态)|read.?only|do not (?:call|use) external tools|do not modify (?:repositories|repository|code|state))/iu.test(boundary || message);
   return {
     completionCriteria: completion,
     executionBoundary: boundary,
-    initialTodos: completion ? [`按完成标准推进：${completion}`] : [],
+    initialTodos: completion ? [t("goal.initialTodo", { criteria: completion })] : [],
     objective,
     permission: readOnly ? "read_only" : "workspace_write_on_confirmation",
     title,
@@ -537,31 +550,31 @@ function structuredGoalIntentFromMessage(message: string) {
 }
 
 function cadenceFromMessage(message: string) {
-  const minutes = message.match(/每\s*(\d{1,3})\s*分钟/u)?.[1];
+  const minutes = message.match(/(?:每|every)\s*(\d{1,3})\s*(?:分钟|minutes?)/iu)?.[1];
   if (minutes) return `${minutes}m`;
-  const hours = message.match(/每\s*(\d{1,2})\s*小时/u)?.[1];
+  const hours = message.match(/(?:每|every)\s*(\d{1,2})\s*(?:小时|hours?)/iu)?.[1];
   if (hours) return `${hours}h`;
-  if (/每小时/u.test(message)) return "1h";
-  if (/每天|每日|早上|上午/u.test(message)) return "1d";
+  if (/每小时|every hour|hourly/iu.test(message)) return "1h";
+  if (/每天|每日|早上|上午|daily|every day/iu.test(message)) return "1d";
   return "1d";
 }
 
-function unsupportedCalendarScheduleReason(message: string) {
-  if (/(每周|星期|周[一二三四五六日天]|\d{1,2}\s*[：:]\s*\d{2})/u.test(message)) {
-    return "当前定时检查不支持精确到星期或时刻的日历计划。请改用固定间隔，例如“每 30 分钟”“每 2 小时”或“每天”；草稿已保留，没有生成待确认操作。";
+function unsupportedCalendarScheduleReason(message: string, t: WorkspaceTranslate) {
+  if (/(每周|星期|周[一二三四五六日天]|weekly|every\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|\d{1,2}\s*[：:]\s*\d{2})/iu.test(message)) {
+    return t("schedule.unsupportedCalendar");
   }
   return null;
 }
 
-function monitorTargetFromMessage(message: string) {
-  return structuredFieldFromMessage(message, ["检查内容", "监控内容", "目标"])
-    || message.replace(/^(为当前 Goal )?(添加|配置|创建)?\s*(定时检查|监控)[：:]?/u, "").split(/\r?\n/u)[0].trim()
-    || "检查当前 Goal 的阻塞、进度与新产出";
+function monitorTargetFromMessage(message: string, t: WorkspaceTranslate) {
+  return structuredFieldFromMessage(message, ["检查内容", "监控内容", "目标", "Check target", "Monitor target", "Target"])
+    || message.replace(/^(?:为当前 Goal |for the current Goal )?(?:添加|配置|创建|add|configure|create)?\s*(?:定时检查|监控|scheduled check|monitor)[：:]?/iu, "").split(/\r?\n/u)[0].trim()
+    || t("schedule.defaultTarget");
 }
 
 function stopConditionFromMessage(message: string) {
   if (/(mr|pr).{0,8}(合并|merge)/iu.test(message)) return "pr_merged";
-  if (/发布完成|上线完成/u.test(message)) return "release_complete";
+  if (/发布完成|上线完成|release (?:is )?complete|deployment (?:is )?complete/iu.test(message)) return "release_complete";
   return "goal_complete";
 }
 
@@ -908,7 +921,7 @@ export function PersonalWorkspacePage({
         const restored = Object.fromEntries(stored
           .filter((proposal) => ["ready", "gated", "deferred", "applying"].includes(proposal.status))
           .map((proposal) => {
-            const projected = workspaceProposal(proposal);
+            const projected = workspaceProposal(proposal, t);
             return [projected.previewId, projected];
           }));
         setProposals((current) => ({ ...current, ...restored }));
@@ -917,7 +930,7 @@ export function PersonalWorkspacePage({
         // The workspace remains usable when the optional local proposal store is unavailable.
       });
     return () => { cancelled = true; };
-  }, [readOnly, selectedGoalId]);
+  }, [readOnly, selectedGoalId, t]);
 
   async function createPreview(request: WorkspaceActionPreviewRequest) {
     if (readOnly) throw new Error(t("source.readOnlyWriteError"));
@@ -925,7 +938,7 @@ export function PersonalWorkspacePage({
     try {
       local = callbacks.onPreviewAction
         ? await callbacks.onPreviewAction(request)
-        : workspaceProposal(await previewTypedAction(request));
+        : workspaceProposal(await previewTypedAction(request), t);
     } catch (error) {
       if (!(error instanceof ChatApiError) || error.payload.error_code !== "action_preview_gate") throw error;
       const rawGate = error.payload.gate && typeof error.payload.gate === "object"
@@ -948,15 +961,15 @@ export function PersonalWorkspacePage({
         gate: {
           kind: gateKind,
           nextAction: typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
-          summary: String(rawGate.summary ?? "请选择 Goal 所属工作区。"),
+          summary: String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
         },
         impact: requiresAgentBinding
-          ? "先完成 Agent 身份绑定，再重新检查原操作；当前没有写入 Goal。"
-          : "选择工作区后会重新展示待确认操作，选择本身不会写入状态。",
+          ? t("proposal.workspaceGate.agentImpact")
+          : t("proposal.workspaceGate.selectionImpact"),
         previewId: `workspace-choice-${Date.now().toString(36)}`,
         sourceRequest: request,
         status: "gated",
-        title: requiresAgentBinding ? "先绑定 Agent" : "选择 Goal 工作区",
+        title: requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
         workspaceCandidates,
       };
     }
@@ -968,7 +981,7 @@ export function PersonalWorkspacePage({
 
   function requestGoalCreate() {
     selectGoal(null);
-    setComposerDraft(`manager:${selectedAgentId}`, "我想创建一个长期 Goal：\n目标：\n完成标准：\n执行边界（可选）：\n关联仓库（可选）：\n通知方式（可选）：");
+    setComposerDraft(`manager:${selectedAgentId}`, t("composer.createGoalTemplate"));
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }
 
@@ -979,9 +992,9 @@ export function PersonalWorkspacePage({
       stop: "Stopped from the owner workspace",
     };
     const summaryByOperation: Record<GoalLifecycleOperation, string> = {
-      delete: `删除 Goal：${goal.title}`,
-      resume: `恢复 Goal：${goal.title}`,
-      stop: `停止 Goal：${goal.title}`,
+      delete: t("proposal.summary.lifecycleDelete", { title: goal.title }),
+      resume: t("proposal.summary.lifecycleResume", { title: goal.title }),
+      stop: t("proposal.summary.lifecycleStop", { title: goal.title }),
     };
     try {
       await createPreview({
@@ -996,19 +1009,21 @@ export function PersonalWorkspacePage({
         summary: summaryByOperation[operation],
       });
     } catch (error) {
-      setActionFeedback(`操作失败：${error instanceof Error ? error.message : String(error)}`);
+      setActionFeedback(t("feedback.executionFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      }));
     }
   }
 
   function prepareScheduleDraft(kind: "heartbeat" | "monitor", goalId: string | null) {
     if (!goalId) {
       setComposer(kind === "heartbeat"
-        ? "设置 Heartbeat：\nGoal：\n频率：每天\n停止条件：Goal 完成\n通知：仅在需要我时"
-        : "配置定时检查：\nGoal：\n检查内容：\n频率：每 2 小时\n停止条件：Goal 完成");
+        ? t("composer.heartbeatTemplateWithoutGoal")
+        : t("composer.monitorTemplateWithoutGoal"));
     } else {
       setComposer(kind === "heartbeat"
-        ? "为当前 Goal 设置 Heartbeat：\n频率：每天\n停止条件：Goal 完成\n通知：仅在需要我时"
-        : "为当前 Goal 添加定时检查：\n检查内容：\n频率（支持 30 分钟 / 2 小时 / 每天）：每 2 小时\n停止条件：Goal 完成");
+        ? t("composer.heartbeatTemplate")
+        : t("composer.monitorTemplate"));
     }
     setSelection(null);
     window.requestAnimationFrame(() => composerRef.current?.focus());
@@ -1023,7 +1038,7 @@ export function PersonalWorkspacePage({
       return;
     }
     if (!goalId) {
-      setComposer(kind === "heartbeat" ? "为哪个 Goal 设置 Heartbeat？" : "为哪个 Goal 添加定时检查？");
+      setComposer(kind === "heartbeat" ? t("composer.heartbeatGoalQuestion") : t("composer.monitorGoalQuestion"));
       return;
     }
     const timestamp = Date.now().toString(36);
@@ -1042,11 +1057,13 @@ export function PersonalWorkspacePage({
         cadence: cadenceFromMessage(intent),
         goal_id: goalId,
         stop_condition: stopConditionFromMessage(intent),
-        target: monitorTargetFromMessage(intent),
+        target: monitorTargetFromMessage(intent, t),
         target_key: `goal-${goalId}`,
         timezone: "Asia/Shanghai",
       },
-      summary: kind === "heartbeat" ? "为当前 Goal 设置 Heartbeat" : `为当前 Goal 创建定时检查：${monitorTargetFromMessage(intent)}`,
+      summary: kind === "heartbeat"
+        ? t("proposal.summary.heartbeat")
+        : t("proposal.summary.monitor", { target: monitorTargetFromMessage(intent, t) }),
     });
   }
 
@@ -1110,7 +1127,7 @@ export function PersonalWorkspacePage({
           return;
         }
         const result = await applyTypedAction(proposal.previewId);
-        const applied = workspaceProposal(result.proposal);
+        const applied = workspaceProposal(result.proposal, t);
         setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
         setSelection({ item: applied, kind: "proposal" });
         if (result.proposal.status !== "applied" || result.proposal.receipt?.projection_verified !== true) {
@@ -1192,7 +1209,7 @@ export function PersonalWorkspacePage({
       }
     },
     onTransitionProposal: async (proposal, transition) => {
-      const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition));
+      const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition), t);
       setSessionProposalIds((current) => current.includes(transitioned.previewId) ? current : [...current, transitioned.previewId]);
       setProposals((current) => {
         const next = { ...current };
@@ -1303,7 +1320,7 @@ export function PersonalWorkspacePage({
         return;
       }
       if (intentRoute.actionKind === "goal.create") {
-        const intent = structuredGoalIntentFromMessage(message);
+        const intent = structuredGoalIntentFromMessage(message, t);
         const goalId = compactGoalSlug(intent.title);
         await createPreview({
           actionKind: "goal.create",
@@ -1326,7 +1343,7 @@ export function PersonalWorkspacePage({
             title: intent.title,
             workspace_ref: "current",
           },
-          summary: `创建 Goal：${intent.title}`,
+          summary: t("proposal.summary.goalCreate", { title: intent.title }),
         });
         return;
       }
@@ -1335,7 +1352,7 @@ export function PersonalWorkspacePage({
         return;
       }
       if (selectedGoalId && intentRoute.actionKind === "monitor.create") {
-        const scheduleError = unsupportedCalendarScheduleReason(message);
+        const scheduleError = unsupportedCalendarScheduleReason(message, t);
         if (scheduleError) {
           setComposer(message);
           setActionFeedback(scheduleError);
@@ -1437,7 +1454,7 @@ export function PersonalWorkspacePage({
   }
 
   const selectedAgentLabel = agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId;
-  const goalDraftActive = !selectedGoal && composer.startsWith("我想创建一个长期 Goal：");
+  const goalDraftActive = !selectedGoal && composer.startsWith(t("composer.createGoalDraftLead"));
   const goalRunningCount = items.filter((item) =>
     item.kind === "run"
     && Boolean(item.run.sessionId)

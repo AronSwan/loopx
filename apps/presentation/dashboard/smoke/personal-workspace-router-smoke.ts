@@ -17,6 +17,8 @@ const goalContext = {
 equal(routeWorkspaceInput("我现在该做什么？只读回答，不要修改状态", { ...goalContext, goalId: null }).route, "projection", "manager projection");
 equal(routeWorkspaceInput("不要设置 Heartbeat，只回答当前进度", goalContext).route, "agent_chat", "negated heartbeat");
 equal(routeWorkspaceInput("每天推进这个 Goal，设置 heartbeat", goalContext).actionKind, "heartbeat.bind", "heartbeat outranks generic daily monitor");
+equal(routeWorkspaceInput("Set up a Heartbeat for this Goal with daily progress", goalContext).actionKind, "heartbeat.bind", "English heartbeat");
+equal(routeWorkspaceInput("Add a scheduled check every 2 hours", goalContext).actionKind, "monitor.create", "English monitor");
 equal(routeWorkspaceInput("创建一个 Todo：整理发布说明", goalContext).actionKind, "todo.create", "todo create");
 equal(
   routeWorkspaceInput("做一次只读分析：判断刚刚新增的 Todo 是否与当前 Goal 一致。不要修改状态。", goalContext).route,
@@ -42,5 +44,8 @@ const createGoal = routeWorkspaceInput("创建 Goal：整理每周复盘", { ...
 equal(createGoal.route, "typed_action", "goal route");
 equal(createGoal.actionKind, "goal.create", "goal action");
 ok(createGoal.confidence >= 0.9, "goal confidence");
+const createEnglishGoal = routeWorkspaceInput("Create a long-term Goal: prepare my weekly review", { ...goalContext, goalId: null });
+equal(createEnglishGoal.route, "typed_action", "English goal route");
+equal(createEnglishGoal.actionKind, "goal.create", "English goal action");
 
 console.log("personal workspace router smoke passed");

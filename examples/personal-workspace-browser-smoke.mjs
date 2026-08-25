@@ -626,6 +626,67 @@ async function main() {
     await page.getByText("Execution Session", { exact: true }).waitFor({ state: "visible" });
     await page.getByText("Read only", { exact: true }).waitFor({ state: "visible" });
     await page.getByRole("button", { name: /Close details/ }).click();
+
+    const writesBeforeEnglishPreviews = api.durableWriteCount;
+    await page.locator(".personal-manager-link").first().click();
+    await page.getByRole("button", { name: "Create Goal", description: "Insert a Goal template to review before creation" }).click();
+    const englishGoalDraft = await page.getByLabel("Send a message to LoopX").inputValue();
+    for (const field of ["Objective:", "Completion criteria:", "Execution boundary (optional):", "Related repository (optional):", "Notification method (optional):"]) {
+      if (!englishGoalDraft.includes(field)) throw new Error(`English Create Goal draft missing ${field}: ${englishGoalDraft}`);
+    }
+    await page.getByLabel("Send a message to LoopX").fill([
+      "Create a long-term Goal:",
+      "Objective: Prepare my weekly work review",
+      "Completion criteria: List completed work, blockers, and next-week plans",
+      "Execution boundary (optional): Read only; do not call external tools or modify repositories",
+      "Related repository (optional):",
+      "Notification method (optional):",
+    ].join("\n"));
+    await page.locator(".personal-channel-composer > button").last().click();
+    await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Create Goal and start first run", exact: true }).waitFor({ state: "visible" });
+    const englishGoalPreview = api.actionPreviews.at(-1);
+    if (englishGoalPreview?.action_kind !== "goal.create") throw new Error(`English Goal input did not create a Goal preview: ${JSON.stringify(englishGoalPreview)}`);
+    if (englishGoalPreview.normalized_parameters.title !== "Prepare my weekly work review") throw new Error(`English Goal title drifted: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
+    if (englishGoalPreview.normalized_parameters.completion_criteria !== "List completed work, blockers, and next-week plans") throw new Error(`English completion criteria were not preserved: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
+    if (englishGoalPreview.normalized_parameters.execution_boundary !== "Read only; do not call external tools or modify repositories") throw new Error(`English execution boundary was not preserved: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
+    if (englishGoalPreview.normalized_parameters.permission !== "read_only") throw new Error(`English execution boundary did not remain read-only: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+
+    await page.locator(".personal-goal-link").first().click();
+    await page.getByRole("button", { name: "Configure scheduled check", description: "Fill in what to check, frequency, and stop condition before creation" }).click();
+    const englishMonitorDraft = await page.getByLabel("Send a message to LoopX").inputValue();
+    for (const field of ["Check target:", "Frequency", "Stop condition:"]) {
+      if (!englishMonitorDraft.includes(field)) throw new Error(`English monitor draft missing ${field}: ${englishMonitorDraft}`);
+    }
+    const previewsBeforeEnglishCalendarSchedule = api.actionPreviews.length;
+    await page.getByLabel("Send a message to LoopX").fill([
+      "Add a scheduled check for the current Goal:",
+      "Check target: Verify the weekly review",
+      "Frequency: Every Friday at 17:00",
+      "Stop condition: Goal completes",
+    ].join("\n"));
+    await page.locator(".personal-channel-composer > button").last().click();
+    await page.getByText("Scheduled checks do not currently support an exact weekday or time.", { exact: false }).waitFor({ state: "visible" });
+    if (api.actionPreviews.length !== previewsBeforeEnglishCalendarSchedule) throw new Error("Unsupported English calendar schedule created a misleading preview");
+    await page.getByLabel("Send a message to LoopX").fill([
+      "Add a scheduled check for the current Goal:",
+      "Check target: Verify the review includes completed work, blockers, and next-week plans",
+      "Frequency: Every 2 hours",
+      "Stop condition: Goal completes",
+    ].join("\n"));
+    await page.locator(".personal-channel-composer > button").last().click();
+    await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Confirm and apply", exact: true }).waitFor({ state: "visible" });
+    const englishMonitorPreview = api.actionPreviews.at(-1);
+    if (englishMonitorPreview?.action_kind !== "monitor.create") throw new Error(`English monitor input did not create a monitor preview: ${JSON.stringify(englishMonitorPreview)}`);
+    if (englishMonitorPreview.normalized_parameters.cadence !== "2h") throw new Error(`English monitor cadence drifted: ${JSON.stringify(englishMonitorPreview.normalized_parameters)}`);
+    if (englishMonitorPreview.normalized_parameters.target !== "Verify the review includes completed work, blockers, and next-week plans") throw new Error(`English monitor target drifted: ${JSON.stringify(englishMonitorPreview.normalized_parameters)}`);
+    if (englishMonitorPreview.normalized_parameters.stop_condition !== "goal_complete") throw new Error(`English monitor stop condition drifted: ${JSON.stringify(englishMonitorPreview.normalized_parameters)}`);
+    if (api.durableWriteCount !== writesBeforeEnglishPreviews) throw new Error("English write previews mutated durable state before confirmation");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    pass(20, "English Goal and monitor drafts produce localized typed previews without durable writes.");
+
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: /Language/ }).click();
     await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
