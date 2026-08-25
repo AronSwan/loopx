@@ -1008,6 +1008,76 @@ def probe_nokv_adapter_exception_mapping() -> None:
     assert unserializable["result"] == "failed", unserializable
     assert "serializable" in unserializable["error"]
 
+    # The authoritative CAS token is typed state at both ends of the seam.
+    # A bool or otherwise invalid caller expectation is a typed failed
+    # verdict before any client I/O, and a malformed SDK response carrying
+    # generation true / a negative / a string must never be repaired into a
+    # legitimate generation.
+    class ExplodingClient:
+        def __getattr__(self, name):
+            raise AssertionError("no client I/O may happen for invalid input")
+
+    untouchable = NoKVCoordinationProvider(ExplodingClient(), "wb-typed", goal_id)
+    for invalid_expected in (True, False, -1, "1"):
+        verdict = untouchable.compare_and_put(invalid_expected, head)
+        assert verdict["result"] == "failed", (invalid_expected, verdict)
+        assert "non-negative integer" in verdict["error"]
+
+    class MalformedClient(FakeNoKVClient):
+        def __init__(self, generation_value):
+            super().__init__()
+            self.generation_value = generation_value
+
+        def stat(self, workbench, path):
+            return {"generation": self.generation_value}
+
+        def read(self, workbench, path):
+            return {
+                "bytes": b"{}",
+                "metadata": {"generation": self.generation_value},
+            }
+
+    for bad_generation in (True, -3, "7", None):
+        malformed = NoKVCoordinationProvider(
+            MalformedClient(bad_generation), "wb-malformed", goal_id
+        )
+        try:
+            malformed.load()
+        except ProviderProtocolError:
+            pass
+        else:
+            raise AssertionError(f"generation {bad_generation!r} was repaired")
+        try:
+            malformed._generation()
+        except ProviderProtocolError:
+            pass
+        else:
+            raise AssertionError(f"stat generation {bad_generation!r} was repaired")
+
+    class ShapelessClient(FakeNoKVClient):
+        def read(self, workbench, path):
+            return {"metadata": {"generation": 1}}
+
+    shapeless = NoKVCoordinationProvider(ShapelessClient(), "wb-shapeless", goal_id)
+    try:
+        shapeless.load()
+    except ProviderProtocolError as exc:
+        assert "bytes" in str(exc)
+    else:
+        raise AssertionError("missing read bytes escaped untyped")
+
+    class BoolPublishClient(FakeNoKVClient):
+        def publish_bytes(self, workbench, path, data, **options):
+            return {"generation": True}
+
+    bool_publish = NoKVCoordinationProvider(BoolPublishClient(), "wb-boolpub", goal_id)
+    try:
+        bool_publish.compare_and_put(0, head)
+    except ProviderProtocolError:
+        pass
+    else:
+        raise AssertionError("publish generation true was repaired to applied")
+
     out(
         "contract.nokv_adapter_exception_mapping",
         ok=True,
@@ -1020,6 +1090,9 @@ def probe_nokv_adapter_exception_mapping() -> None:
         legacy_prose_unsupported=True,
         corrupt_bytes_typed=True,
         unserializable_head_typed_failed=True,
+        invalid_expected_generation_typed=True,
+        malformed_generation_never_repaired=True,
+        malformed_result_shape_typed=True,
     )
 
 

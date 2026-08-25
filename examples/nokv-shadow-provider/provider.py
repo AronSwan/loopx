@@ -44,13 +44,27 @@ class ProviderUnavailableError(RuntimeError):
     """
 
 
-def _generation_from(metadata) -> int:
-    try:
-        return int(metadata["generation"])
-    except (KeyError, TypeError, ValueError) as exc:
+def _decoded_generation(value, *, source: str) -> int:
+    """The one strict decoder for the authoritative CAS token.
+
+    bool is an int subclass and ``int(True) == 1``: a malformed SDK response
+    carrying ``generation: true`` must never be repaired into generation 1,
+    exactly as the head codec refuses bool-disguised revisions and epochs.
+    Stored generations start at 1; the absent sentinel 0 is synthesized by
+    the adapter, never decoded.
+    """
+
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ProviderProtocolError(
-            f"provider result omitted a usable generation: {exc}"
-        ) from exc
+            f"{source} carried an invalid generation: {value!r}"
+        )
+    return value
+
+
+def _result_field(result, field: str, *, source: str):
+    if not isinstance(result, dict) or field not in result:
+        raise ProviderProtocolError(f"{source} omitted required field {field!r}")
+    return result[field]
 
 
 class NoKVCoordinationProvider:
@@ -82,15 +96,20 @@ class NoKVCoordinationProvider:
             return None, 0
         except self._CLIENT_ERRORS as exc:
             raise ProviderUnavailableError(str(exc)) from exc
+        raw = _result_field(result, "bytes", source="read result")
         try:
-            aggregate = json.loads(bytes(result["bytes"]))
-        except ValueError as exc:
+            aggregate = json.loads(bytes(raw))
+        except (TypeError, ValueError) as exc:
             raise ProviderProtocolError(
                 f"coordination head is not valid JSON: {exc}"
             ) from exc
         if not isinstance(aggregate, dict):
             raise ProviderProtocolError("coordination head must be an object")
-        return aggregate, _generation_from(result["metadata"])
+        metadata = _result_field(result, "metadata", source="read result")
+        return aggregate, _decoded_generation(
+            _result_field(metadata, "generation", source="read metadata"),
+            source="read metadata",
+        )
 
     def _generation(self) -> int:
         try:
@@ -99,7 +118,10 @@ class NoKVCoordinationProvider:
             return 0
         except self._CLIENT_ERRORS as exc:
             raise ProviderUnavailableError(str(exc)) from exc
-        return _generation_from(metadata)
+        return _decoded_generation(
+            _result_field(metadata, "generation", source="stat result"),
+            source="stat result",
+        )
 
     def compare_and_put(
         self,
@@ -107,6 +129,18 @@ class NoKVCoordinationProvider:
         aggregate: dict,
     ) -> dict:
         """Serialize and conditionally store an opaque aggregate."""
+        if (
+            not isinstance(expected_provider_generation, int)
+            or isinstance(expected_provider_generation, bool)
+            or expected_provider_generation < 0
+        ):
+            # The caller's CAS token is typed state exactly like the stored
+            # one: a bool or negative expectation must not reach comparison
+            # or publish arithmetic.
+            return {
+                "result": "failed",
+                "error": "expected_provider_generation must be a non-negative integer",
+            }
         try:
             current = self._generation()
         except ProviderUnavailableError as exc:
@@ -140,13 +174,10 @@ class NoKVCoordinationProvider:
             # response all reload; the authority trusts only its atomically
             # stored receipt index.
             return {"result": "ambiguous"}
-        try:
-            applied_generation = int(result["generation"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ProviderProtocolError(
-                f"publish result omitted a usable generation: {exc}"
-            ) from exc
         return {
             "result": "applied",
-            "provider_generation": applied_generation,
+            "provider_generation": _decoded_generation(
+                _result_field(result, "generation", source="publish result"),
+                source="publish result",
+            ),
         }
