@@ -414,26 +414,54 @@ function proposalFields(parameters: Record<string, unknown>) {
     }));
 }
 
-function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPreview {
-  const lifecycleOperation = proposal.action_kind === "goal.lifecycle"
-    && (["stop", "resume", "delete"] as const).includes(proposal.normalized_parameters.operation as "stop" | "resume" | "delete")
-    ? proposal.normalized_parameters.operation as "stop" | "resume" | "delete"
+type GoalLifecycleOperation = "stop" | "resume" | "delete";
+
+function lifecycleOperationFor(proposal: TypedActionProposal): GoalLifecycleOperation | undefined {
+  if (proposal.action_kind !== "goal.lifecycle") return undefined;
+  const operation = proposal.normalized_parameters.operation;
+  return operation === "stop" || operation === "resume" || operation === "delete"
+    ? operation
     : undefined;
+}
+
+function proposalImpact(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
+  if (proposal.action_kind === "goal.create") {
+    return "确认后会创建 Goal 和首个 Todo，并让选定 Agent 开始首轮推进。";
+  }
+  if (proposal.action_kind === "goal.lifecycle") {
+    if (lifecycleOperation === "stop") {
+      return "确认后会停止自动推进，并将 Goal 移入折叠的「已停止」列表；历史、Todo 和证据都会保留，可随时恢复。";
+    }
+    if (lifecycleOperation === "delete") {
+      return "确认后会从 source registry 和 global registry 移除这个已停止 Goal；项目文件、历史状态文件和备份不会被删除。";
+    }
+    return "确认后会恢复 Goal 的自动调度资格并移回 Active Goals；实际执行仍受 quota、Gate 和 Todo 约束。";
+  }
+  return proposal.permission_classification === "protected"
+    ? "该操作需要通过受保护的 LoopX 写入服务完成。"
+    : "确认后会调用规范 LoopX 服务写入状态。";
+}
+
+function proposalPrimaryLabel(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
+  if (proposal.action_kind === "goal.create") return "创建 Goal 并开始首轮";
+  if (proposal.action_kind === "goal.lifecycle") {
+    if (lifecycleOperation === "stop") return "停止 Goal";
+    if (lifecycleOperation === "delete") return "删除 Goal";
+    return "恢复 Goal";
+  }
+  if (proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true) {
+    return "创建任务并开始执行";
+  }
+  return "确认并应用";
+}
+
+function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPreview {
+  const lifecycleOperation = lifecycleOperationFor(proposal);
   return {
     actionKind: proposal.action_kind,
     fields: proposalFields(proposal.normalized_parameters),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: proposal.action_kind === "goal.create"
-      ? "确认后会创建 Goal 和首个 Todo，并让选定 Agent 开始首轮推进。"
-      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
-        ? "确认后会停止自动推进，并将 Goal 移入折叠的「已停止」列表；历史、Todo 和证据都会保留，可随时恢复。"
-        : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
-          ? "确认后会从 source registry 和 global registry 移除这个已停止 Goal；项目文件、历史状态文件和备份不会被删除。"
-          : proposal.action_kind === "goal.lifecycle"
-            ? "确认后会恢复 Goal 的自动调度资格并移回 Active Goals；实际执行仍受 quota、Gate 和 Todo 约束。"
-      : proposal.permission_classification === "protected"
-      ? "该操作需要通过受保护的 LoopX 写入服务完成。"
-      : "确认后会调用规范 LoopX 服务写入状态。",
+    impact: proposalImpact(proposal, lifecycleOperation),
     previewId: proposal.proposal_id,
     lifecycleOperation,
     gate: proposal.gate ? {
@@ -441,16 +469,7 @@ function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPrevie
       nextAction: typeof proposal.gate.next_action === "string" ? proposal.gate.next_action : undefined,
       summary: String(proposal.gate.summary ?? "需要宿主确认"),
     } : undefined,
-    primaryLabel: proposal.action_kind === "goal.create" ? "创建 Goal 并开始首轮"
-      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
-        ? "停止 Goal"
-        : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
-          ? "删除 Goal"
-          : proposal.action_kind === "goal.lifecycle"
-            ? "恢复 Goal"
-      : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
-        ? "创建任务并开始执行"
-        : "确认并应用",
+    primaryLabel: proposalPrimaryLabel(proposal, lifecycleOperation),
     status: proposalStatus(proposal.status),
     title: proposal.summary,
   };
@@ -943,7 +962,17 @@ export function PersonalWorkspacePage({
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }
 
-  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: "stop" | "resume" | "delete") {
+  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation) {
+    const reasonByOperation: Record<GoalLifecycleOperation, string> = {
+      delete: "Deleted from the owner workspace",
+      resume: "Resumed from the owner workspace",
+      stop: "Stopped from the owner workspace",
+    };
+    const summaryByOperation: Record<GoalLifecycleOperation, string> = {
+      delete: `删除 Goal：${goal.title}`,
+      resume: `恢复 Goal：${goal.title}`,
+      stop: `停止 Goal：${goal.title}`,
+    };
     try {
       await createPreview({
         actionKind: "goal.lifecycle",
@@ -952,17 +981,9 @@ export function PersonalWorkspacePage({
         normalizedParameters: {
           goal_id: goal.goalId,
           operation,
-          reason: operation === "stop"
-            ? "Stopped from the owner workspace"
-            : operation === "resume"
-              ? "Resumed from the owner workspace"
-              : "Deleted from the owner workspace",
+          reason: reasonByOperation[operation],
         },
-        summary: operation === "stop"
-          ? `停止 Goal：${goal.title}`
-          : operation === "resume"
-            ? `恢复 Goal：${goal.title}`
-            : `删除 Goal：${goal.title}`,
+        summary: summaryByOperation[operation],
       });
     } catch (error) {
       setActionFeedback(`操作失败：${error instanceof Error ? error.message : String(error)}`);
