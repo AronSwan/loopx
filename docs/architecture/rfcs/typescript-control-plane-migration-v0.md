@@ -279,6 +279,9 @@ shipped Stage 2B cutovers are in place:
   locked index CAS, and commits JSON, Markdown, index, and transaction receipt
   as one repairable operation. Same-effect retries are idempotent, cross-effect
   drift conflicts, and a prepared transaction repairs a partial artifact set.
+  The receipt binds the pre-append index digest and byte offset, so a retry can
+  repair only its own truncated final JSONL row while unrelated corruption
+  still fails closed.
   Python retains `should-run`/settlement fact projection plus one coarse
   transport call and the legacy kernel index lock; it no longer constructs or
   writes the spend event.

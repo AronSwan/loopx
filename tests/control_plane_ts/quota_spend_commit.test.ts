@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm, unlink } from "node:fs/promises";
+import {
+  readFile,
+  mkdtemp,
+  readdir,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -172,6 +179,64 @@ test("prepared transaction repairs partial artifacts exactly once", async (t) =>
 
   const replayed = await evaluateQuotaSpendCommit(params);
   assert.equal(replayed.status, "replayed");
+});
+
+test("prepared transaction repairs its own truncated final index row", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const firstParams = request(runtimeRoot);
+  const first = await evaluateQuotaSpendCommit(firstParams);
+  const indexPath = String(first.payload.index_path);
+  const firstRow = (await readFile(indexPath, "utf8")).trim();
+  const params = request(runtimeRoot, {
+    effect_id: "quota-spend-effect-2",
+    generated_at: "2026-08-25T12:02:00+08:00",
+    expected_index_digest: await quotaSpendIndexDigest(indexPath),
+  });
+  await evaluateQuotaSpendCommit(params);
+  const transactionDir = join(dirname(indexPath), ".transactions", "quota-spend");
+  const receiptPaths = (await readdir(transactionDir)).map((name) =>
+    join(transactionDir, name)
+  );
+  const receipts = await Promise.all(receiptPaths.map(async (path) => ({
+    path,
+    value: JSON.parse(
+      await readFile(path, "utf8"),
+    ) as Record<string, unknown>,
+  })));
+  const selected = receipts.find(({ value }) => value.effect_id === params.effect_id);
+  assert.ok(selected);
+  const receipt = selected.value;
+  receipt.status = "prepared";
+  await writeFile(selected.path, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+
+  const expectedLine = JSON.stringify(receipt.index_record);
+  await writeFile(
+    indexPath,
+    `${firstRow}\n${
+      expectedLine.slice(0, Math.floor(expectedLine.length / 2))
+    }`,
+    "utf8",
+  );
+
+  const repaired = await evaluateQuotaSpendCommit(params);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.transaction_repaired, true);
+  const rows = (await readFile(indexPath, "utf8")).trim().split("\n");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0], firstRow);
+  assert.equal(
+    (JSON.parse(rows[1]).quota_spend_commit as Record<string, unknown>).effect_id,
+    params.effect_id,
+  );
+
+  const replayed = await evaluateQuotaSpendCommit(params);
+  assert.equal(replayed.status, "replayed");
+
+  await writeFile(indexPath, `${firstRow}\n{\"different\":`, "utf8");
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(params),
+    /quota run index line 2 is malformed/,
+  );
 });
 
 test("effect identity and index CAS reject drift and racing writers", async (t) => {

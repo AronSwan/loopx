@@ -101,6 +101,8 @@ interface QuotaSpendCommitReceipt extends JsonObject {
   json_path: string;
   markdown_path: string;
   index_path: string;
+  expected_index_digest: string | null;
+  expected_index_bytes: number;
   record: JsonObject;
   index_record: JsonObject;
   markdown: string;
@@ -140,6 +142,10 @@ function canonicalJson(value: unknown): string {
 
 function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function sha256Bytes(value: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function safeGoalId(value: unknown): string {
@@ -530,9 +536,18 @@ async function readOptionalText(path: string): Promise<string | null> {
   }
 }
 
+async function readOptionalBytes(path: string): Promise<Buffer | null> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
+}
+
 export async function quotaSpendIndexDigest(indexPath: string): Promise<string | null> {
-  const content = await readOptionalText(indexPath);
-  return content === null ? null : sha256(content);
+  const content = await readOptionalBytes(indexPath);
+  return content === null ? null : sha256Bytes(content);
 }
 
 function indexRecords(content: string | null): JsonObject[] {
@@ -552,6 +567,34 @@ function indexRecords(content: string | null): JsonObject[] {
     records.push(requiredObject(value, `quota run index line ${index + 1}`));
   }
   return records;
+}
+
+function repairedTruncatedTail(
+  content: Buffer,
+  expectedRecord: JsonObject,
+  expectedIndexDigest: string | null,
+  expectedIndexBytes: number,
+): string | null {
+  if (content.length <= expectedIndexBytes) return null;
+  const validPrefix = content.subarray(0, expectedIndexBytes);
+  const truncatedTail = content.subarray(expectedIndexBytes);
+  const expectedLine = Buffer.from(`${JSON.stringify(expectedRecord)}\n`, "utf8");
+  if (
+    truncatedTail.length >= expectedLine.length ||
+    !expectedLine.subarray(0, truncatedTail.length).equals(truncatedTail)
+  ) {
+    return null;
+  }
+  if (
+    expectedIndexDigest === null
+      ? validPrefix.length !== 0
+      : sha256Bytes(validPrefix) !== expectedIndexDigest
+  ) {
+    return null;
+  }
+  const validPrefixText = validPrefix.toString("utf8");
+  indexRecords(validPrefixText);
+  return `${validPrefixText}${expectedLine.toString("utf8")}`;
 }
 
 function matchingIndexRecord(
@@ -750,6 +793,13 @@ function receiptObject(value: unknown): QuotaSpendCommitReceipt {
     ["prepared", "committed"] as const,
     "receipt.status",
   );
+  const expectedIndexBytes = requiredInteger(
+    receipt.expected_index_bytes,
+    "receipt.expected_index_bytes",
+  );
+  if (expectedIndexBytes < 0) {
+    throw new EffectRuntimeRequestError("receipt.expected_index_bytes cannot be negative");
+  }
   return {
     schema_version: QUOTA_SPEND_COMMIT_RECEIPT_SCHEMA,
     effect_id: requiredString(receipt.effect_id, "receipt.effect_id"),
@@ -758,6 +808,11 @@ function receiptObject(value: unknown): QuotaSpendCommitReceipt {
     json_path: requiredString(receipt.json_path, "receipt.json_path"),
     markdown_path: requiredString(receipt.markdown_path, "receipt.markdown_path"),
     index_path: requiredString(receipt.index_path, "receipt.index_path"),
+    expected_index_digest: optionalString(
+      receipt.expected_index_digest,
+      "receipt.expected_index_digest",
+    ),
+    expected_index_bytes: expectedIndexBytes,
     record: requiredObject(receipt.record, "receipt.record"),
     index_record: requiredObject(receipt.index_record, "receipt.index_record"),
     markdown: requiredString(receipt.markdown, "receipt.markdown"),
@@ -831,8 +886,26 @@ async function ensureReceiptArtifacts(
   let repaired = false;
   repaired = await ensureJsonArtifact(receipt.json_path, receipt.record) || repaired;
   repaired = await ensureMarkdownArtifact(receipt.markdown_path, receipt.markdown) || repaired;
-  const content = await readOptionalText(receipt.index_path);
-  const records = indexRecords(content);
+  const indexBytes = await readOptionalBytes(receipt.index_path);
+  let content = indexBytes === null ? null : indexBytes.toString("utf8");
+  let records: JsonObject[];
+  try {
+    records = indexRecords(content);
+  } catch (error) {
+    const recovered = indexBytes === null
+      ? null
+      : repairedTruncatedTail(
+        indexBytes,
+        receipt.index_record,
+        receipt.expected_index_digest,
+        receipt.expected_index_bytes,
+      );
+    if (recovered === null) throw error;
+    await atomicWriteText(receipt.index_path, recovered);
+    content = recovered;
+    records = indexRecords(content);
+    repaired = true;
+  }
   const match = matchingIndexRecord(records, receipt.effect_id);
   if (match) {
     const metadata = jsonObject(match.quota_spend_commit);
@@ -843,7 +916,15 @@ async function ensureReceiptArtifacts(
       );
     }
   } else {
-    await appendJsonLine(receipt.index_path, receipt.index_record);
+    const prefix = content ?? "";
+    if (prefix && !prefix.endsWith("\n")) {
+      await atomicWriteText(
+        receipt.index_path,
+        `${prefix}\n${JSON.stringify(receipt.index_record)}\n`,
+      );
+    } else {
+      await appendJsonLine(receipt.index_path, receipt.index_record);
+    }
     repaired = true;
   }
   return repaired;
@@ -946,7 +1027,13 @@ export async function evaluateQuotaSpendCommit(
       );
     }
 
-    const currentDigest = await quotaSpendIndexDigest(indexPath);
+    const currentIndexBytes = await readOptionalBytes(indexPath);
+    const currentIndexContent = currentIndexBytes === null
+      ? null
+      : currentIndexBytes.toString("utf8");
+    const currentDigest = currentIndexBytes === null
+      ? null
+      : sha256Bytes(currentIndexBytes);
     if (request.expected_index_digest !== currentDigest) {
       return result(
         request,
@@ -959,7 +1046,7 @@ export async function evaluateQuotaSpendCommit(
         { reason_code: "index_digest_conflict" },
       );
     }
-    const currentRecords = indexRecords(await readOptionalText(indexPath));
+    const currentRecords = indexRecords(currentIndexContent);
     const duplicate = matchingIndexRecord(currentRecords, request.effect_id);
     if (duplicate) {
       return result(
@@ -1002,6 +1089,8 @@ export async function evaluateQuotaSpendCommit(
       json_path: jsonPath,
       markdown_path: markdownPath,
       index_path: indexPath,
+      expected_index_digest: currentDigest,
+      expected_index_bytes: currentIndexBytes?.length ?? 0,
       record,
       index_record: indexRecord,
       markdown,

@@ -33,17 +33,17 @@ def _quota_spend_commit_request(
     execute: bool,
     runtime_root: Path | None,
 ) -> dict[str, Any]:
-    before = (
-        preview.get("before")
-        if isinstance(preview.get("before"), dict)
-        else {}
+    # Import lazily because runtime loads history, whose quota compatibility
+    # surface re-exports this module during package initialization.
+    from ...runtime import validate_goal_id_path_segment
+
+    raw_before = preview.get("before")
+    before = raw_before if isinstance(raw_before, dict) else {}
+    raw_after = preview.get("after")
+    after = raw_after if isinstance(raw_after, dict) else {}
+    goal_id = validate_goal_id_path_segment(
+        str(preview.get("goal_id") or "").strip()
     )
-    after = (
-        preview.get("after")
-        if isinstance(preview.get("after"), dict)
-        else {}
-    )
-    goal_id = str(preview.get("goal_id") or "").strip()
     index_path = (
         runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
         if runtime_root is not None
@@ -138,14 +138,20 @@ def record_quota_slot_spend_from_preview(
 ) -> dict[str, Any]:
     if not preview.get("ok"):
         return preview
-    if str(preview.get("goal_id") or goal_id).strip() != str(goal_id).strip():
+    from ...runtime import validate_goal_id_path_segment
+
+    safe_goal_id = validate_goal_id_path_segment(str(goal_id or ""))
+    preview_goal_id = validate_goal_id_path_segment(
+        str(preview.get("goal_id") or safe_goal_id)
+    )
+    if preview_goal_id != safe_goal_id:
         raise ValueError("quota spend preview goal_id does not match commit goal_id")
     raw_runtime_root = status_payload.get("runtime_root")
     if not raw_runtime_root:
         raise ValueError("status payload does not include runtime_root")
     runtime_root = Path(str(raw_runtime_root)).expanduser()
     if execute:
-        index_path = runtime_root / "goals" / str(goal_id) / "runs" / "index.jsonl"
+        index_path = runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl"
         # Legacy Python run writers use this kernel lock. Hold it across the
         # single TS transaction until Stage 3 moves every index writer into the
         # native runtime; the TS owner also serializes native callers itself.

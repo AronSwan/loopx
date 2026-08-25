@@ -137,3 +137,17 @@ def test_python_facade_rejects_malformed_and_semantically_invalid_requests(
             goal_id="other-goal",
             execute=True,
         )
+
+
+def test_python_facade_rejects_unsafe_goal_before_filesystem_effect(
+    tmp_path: Path,
+) -> None:
+    unsafe_goal_id = "../outside"
+    with pytest.raises(ValueError, match="single path segment"):
+        record_quota_slot_spend_from_preview(
+            _preview(goal_id=unsafe_goal_id),
+            {"runtime_root": str(tmp_path)},
+            goal_id=unsafe_goal_id,
+            execute=True,
+        )
+    assert not (tmp_path / "goals").exists()

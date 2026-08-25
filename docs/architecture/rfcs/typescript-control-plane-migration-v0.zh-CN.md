@@ -242,6 +242,8 @@ window 仍需 differential proof 时才保留 characterization corpus；引入�
   canonical public-safe spend event，以带锁 index CAS fence effect，并把 JSON、
   Markdown、index 与 transaction receipt 作为一笔可修复操作提交。同一 effect retry
   幂等，跨 effect 漂移冲突，prepared transaction 可修复 partial artifact set。
+  receipt 绑定 append 前的 index digest 与字节偏移，因此 retry 只会修复属于本事务的
+  截断 JSONL 尾行，其他损坏仍然 fail closed。
   Python 只保留 `should-run`/settlement fact projection、一次 coarse transport call 与
   legacy kernel index lock；它不再构造或写入 spend event。
 
