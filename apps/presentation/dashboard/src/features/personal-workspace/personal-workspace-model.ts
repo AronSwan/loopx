@@ -166,7 +166,7 @@ export type WorkspaceActionPreview = {
   agentLabel?: string;
   fields: Array<{ label: string; value: string }>;
   goalId?: string;
-  lifecycleOperation?: "stop" | "resume";
+  lifecycleOperation?: "stop" | "resume" | "delete";
   impact: string;
   gate?: {
     kind: string;
@@ -299,6 +299,7 @@ export type PersonalWorkspaceCallbacks = {
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onOpenOutput?: (output: WorkspaceOutput) => void;
   onGoalActivationStateChange?: (goalId: string, activationState: "active" | "stopped") => void;
+  onGoalDeleted?: (goalId: string) => void;
   onReconcileStatus?: () => void | Promise<void>;
   onRefresh?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
