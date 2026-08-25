@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
+from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHooks
+from ..control_plane.runtime.goal_project_route import resolve_goal_project_route
 from ..extensions.lark import (
     LARK_COLLECTOR_PERMISSION,
     LARK_EXTENSION_ID,
@@ -14,21 +16,6 @@ from ..extensions.lark import (
     LARK_REPLY_PERMISSION,
     LARK_REVIEWER_NOTIFICATION_PERMISSION,
 )
-from ..extensions.lark.event_inbox import (
-    acknowledge_lark_event_inbox,
-    ingest_lark_event_inbox,
-    inspect_lark_event_inbox,
-    lark_event_inbox_contains_text,
-    project_lark_event_inbox_urgency,
-)
-from ..extensions.lark.inbox_reply import reply_lark_event_inbox
-from ..extensions.lark.inbox_reactions import (
-    complete_lark_event_inbox_reactions,
-    mark_lark_event_inbox_processing,
-)
-from ..extensions.lark.reviewer_notification import (
-    lark_reviewer_notification_sink,
-)
 from ..extensions.lark.event_collector import (
     inspect_lark_event_collector,
     install_lark_event_collector,
@@ -36,12 +23,30 @@ from ..extensions.lark.event_collector import (
     plan_lark_event_collector,
 )
 from ..extensions.lark.event_collector_runtime import run_lark_event_collector
+from ..extensions.lark.event_inbox import (
+    acknowledge_lark_event_inbox,
+    inspect_lark_event_inbox,
+    lark_event_inbox_contains_text,
+)
+from ..extensions.lark.inbox_reactions import (
+    complete_lark_event_inbox_reactions,
+    mark_lark_event_inbox_processing,
+)
+from ..extensions.lark.inbox_reply import reply_lark_event_inbox
+from ..extensions.lark.reviewer_notification import (
+    lark_reviewer_notification_sink,
+)
+from ..extensions.lark.routed_inbox import (
+    acknowledge_routed_lark_event_inbox,
+    ingest_routed_lark_event_inbox,
+    inspect_routed_lark_event_inbox,
+    project_routed_lark_event_inbox_urgency,
+    resolve_routed_lark_inbox_config,
+)
 from ..extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
 )
-from ..capabilities.issue_fix.provider_hooks import IssueFixReviewerProviderHooks
-from ..control_plane.runtime.goal_project_route import resolve_goal_project_route
 
 
 def _goal_inbox_config(
@@ -130,6 +135,11 @@ def register_lark_inbox_commands(
     reply.add_argument("--agent-id")
     reply.add_argument("--message-id", required=True)
     reply.add_argument("--text", required=True)
+    reply.add_argument(
+        "--provider-preflight",
+        action="store_true",
+        help="Run identity, membership, and provider dry-run checks without sending.",
+    )
     reply.add_argument("--execute", action="store_true")
     processing = sub.add_parser(
         "processing",
@@ -232,7 +242,10 @@ def _collector_permissions(
         project=project,
         config_path=config_path,
     )
-    if config["inbox"]["reply"].get("received_reaction_emoji"):
+    if any(
+        route["inbox"]["reply"].get("received_reaction_emoji")
+        for route in config["routes"]
+    ):
         return (LARK_COLLECTOR_PERMISSION, LARK_REPLY_PERMISSION)
     return (LARK_COLLECTOR_PERMISSION,)
 
@@ -254,16 +267,14 @@ def build_lark_operator_inbox_urgency_projector(
 ) -> Callable[..., dict[str, object]]:
     """Compose activation proof with the extension-owned private config read."""
 
-    def project(
-        *, project: str | Path, config_path: str | Path
-    ) -> dict[str, object]:
+    def project(*, project: str | Path, config_path: str | Path) -> dict[str, object]:
         _resolve_lark_activation(
             "drain",
             runtime_root_arg=(
                 str(runtime_root_arg) if runtime_root_arg is not None else None
             ),
         )
-        return project_lark_event_inbox_urgency(
+        return project_routed_lark_event_inbox_urgency(
             project=project,
             config_path=config_path,
         )
@@ -368,42 +379,58 @@ def handle_lark_inbox_command(
                     required_permissions=required_permissions,
                 )
         if args.lark_inbox_command == "drain":
-            payload = inspect_lark_event_inbox(
+            payload = inspect_routed_lark_event_inbox(
                 project=project,
                 config_path=config_path,
                 limit=args.limit,
             )
         elif args.lark_inbox_command == "ack":
-            payload = acknowledge_lark_event_inbox(
+            payload = acknowledge_routed_lark_event_inbox(
                 project=project,
                 config_path=config_path,
                 message_ids=args.message_id,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reply":
-            payload = reply_lark_event_inbox(
+            routed_config = resolve_routed_lark_inbox_config(
                 project=project,
                 config_path=config_path,
                 message_id=args.message_id,
+            )
+            payload = reply_lark_event_inbox(
+                project=project,
+                config_path=routed_config,
+                message_id=args.message_id,
                 text=args.text,
                 execute=args.execute,
+                provider_preflight=args.provider_preflight,
             )
         elif args.lark_inbox_command == "processing":
-            payload = mark_lark_event_inbox_processing(
+            routed_config = resolve_routed_lark_inbox_config(
                 project=project,
                 config_path=config_path,
+                message_id=args.message_id,
+            )
+            payload = mark_lark_event_inbox_processing(
+                project=project,
+                config_path=routed_config,
                 message_id=args.message_id,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reaction-complete":
-            payload = complete_lark_event_inbox_reactions(
+            routed_config = resolve_routed_lark_inbox_config(
                 project=project,
                 config_path=config_path,
+                message_id=args.message_id,
+            )
+            payload = complete_lark_event_inbox_reactions(
+                project=project,
+                config_path=routed_config,
                 message_id=args.message_id,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "ingest":
-            payload = ingest_lark_event_inbox(
+            payload = ingest_routed_lark_event_inbox(
                 project=project,
                 config_path=config_path,
                 events=_read_stdin_events(),
