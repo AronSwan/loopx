@@ -101,15 +101,15 @@ export async function withFileMutationLock<T>(
   }
 }
 
-export async function atomicWriteJson(
+async function atomicWriteTextFile(
   path: string,
-  payload: JsonObject,
+  content: string,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await handle.writeFile(content, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
@@ -118,5 +118,33 @@ export async function atomicWriteJson(
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
+  }
+}
+
+export async function atomicWriteText(
+  path: string,
+  content: string,
+): Promise<void> {
+  await atomicWriteTextFile(path, content);
+}
+
+export async function atomicWriteJson(
+  path: string,
+  payload: JsonObject,
+): Promise<void> {
+  await atomicWriteTextFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+export async function appendJsonLine(
+  path: string,
+  payload: JsonObject,
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const handle = await open(path, "a", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(payload)}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
