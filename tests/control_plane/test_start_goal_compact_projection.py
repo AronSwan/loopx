@@ -149,11 +149,15 @@ def _invoke_ark_start_goal_cli(
     return exit_code, payload
 
 
-def _block_effect_runtime_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+def _block_effect_runtime_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    diagnostic_code: str = "node_unavailable",
+) -> None:
     def unavailable(*_args: object, **_kwargs: object) -> object:
         raise effect_runtime.EffectRuntimeStartupError(
-            "LoopX Effect runtime requires Node.js 22.6.0 or newer",
-            diagnostic_code="node_unavailable",
+            "TypeScript Effect runtime could not serve the request",
+            diagnostic_code=diagnostic_code,
         )
 
     monkeypatch.setattr(
@@ -163,12 +167,31 @@ def _block_effect_runtime_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("diagnostic_code", "expected_action_fragment", "mentions_node_installation"),
+    [
+        ("node_unavailable", "Install or activate Node.js", True),
+        (
+            "startup_lock_timeout",
+            "wait for the active startup to settle",
+            False,
+        ),
+        ("runtime_launch_failed", "runtime still cannot start", False),
+        ("runtime_exited_before_ready", "runtime exits again", False),
+        ("runtime_startup_timeout", "startup continues to time out", False),
+        ("runtime_request_failed", "requests continue to fail", False),
+        ("future_runtime_diagnostic", "runtime remains unavailable", False),
+    ],
+)
 def test_cli_reports_effect_runtime_startup_failure_without_traceback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    diagnostic_code: str,
+    expected_action_fragment: str,
+    mentions_node_installation: bool,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    _block_effect_runtime_startup(monkeypatch)
+    _block_effect_runtime_startup(monkeypatch, diagnostic_code=diagnostic_code)
 
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -197,9 +220,13 @@ def test_cli_reports_effect_runtime_startup_failure_without_traceback(
     assert payload["ok"] is False
     assert payload["schema_version"] == "loopx_start_goal_guided_v0"
     assert payload["error"] == "LoopX TypeScript control-plane runtime is unavailable"
-    assert payload["diagnostic_code"] == "node_unavailable"
+    assert payload["diagnostic_code"] == diagnostic_code
     assert payload["runtime_requirement"]["minimum_node_version"] == "22.6.0"
     assert "loopx doctor --deep" in payload["recommended_action"]
+    assert expected_action_fragment in payload["recommended_action"]
+    assert ("Node.js" in payload["recommended_action"]) is mentions_node_installation
+    if not mentions_node_installation:
+        assert "Install or activate Node.js" not in payload["recommended_action"]
     assert "Traceback" not in raw_output
 
 

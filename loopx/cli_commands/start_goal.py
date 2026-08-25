@@ -31,6 +31,46 @@ _CAPABILITY_ROUTE_PREFIX = re.compile(
 )
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
 
+_EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE = {
+    "node_unavailable": (
+        f"Install or activate Node.js {MINIMUM_NODE_VERSION_TEXT} or newer "
+        "on PATH, then run `loopx doctor --deep` and retry "
+        "`loopx start-goal --guided`."
+    ),
+    "startup_lock_timeout": (
+        "Another LoopX TypeScript control-plane runtime may be starting. Run "
+        "`loopx doctor --deep`, wait for the active startup to settle, and retry "
+        "`loopx start-goal --guided`."
+    ),
+    "runtime_launch_failed": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+        "runtime still cannot start, repair or reinstall LoopX."
+    ),
+    "runtime_exited_before_ready": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+        "runtime exits again, repair or reinstall LoopX."
+    ),
+    "runtime_startup_timeout": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If "
+        "startup continues to time out, repair or reinstall LoopX."
+    ),
+    "runtime_request_failed": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If "
+        "requests continue to fail, repair or reinstall LoopX."
+    ),
+}
+_EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION = (
+    "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+    "TypeScript control-plane runtime remains unavailable, repair or reinstall LoopX."
+)
+
+
+def _effect_runtime_startup_recommended_action(diagnostic_code: str) -> str:
+    return _EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE.get(
+        diagnostic_code,
+        _EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION,
+    )
+
 
 def _effect_runtime_startup_failure_payload(
     exc: EffectRuntimeStartupError,
@@ -46,10 +86,8 @@ def _effect_runtime_startup_failure_payload(
             "minimum_node_version": MINIMUM_NODE_VERSION_TEXT,
             "required_for": ["start-goal", "control_plane"],
         },
-        "recommended_action": (
-            f"Install or activate Node.js {MINIMUM_NODE_VERSION_TEXT} or newer "
-            "on PATH, then run `loopx doctor --deep` and retry "
-            "`loopx start-goal --guided`."
+        "recommended_action": _effect_runtime_startup_recommended_action(
+            diagnostic_code
         ),
     }
 
