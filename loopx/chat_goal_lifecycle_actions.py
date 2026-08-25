@@ -1,4 +1,4 @@
-"""Typed Chat actions for reversible Goal lifecycle transitions."""
+"""Typed Chat actions for Goal lifecycle transitions."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Any
 
 from .control_plane.goals.activation import GoalActivationState, goal_activation_state
 from .control_plane.goals.activation_service import set_goal_activation_state
+from .control_plane.goals.deletion_service import delete_stopped_goal
 
 
 class ChatGoalLifecycleActionMixin:
@@ -23,8 +24,10 @@ class ChatGoalLifecycleActionMixin:
         goal_id = _opaque(values.get("goal_id"), field="goal_id")
         self._goal(goal_id)
         operation = str(values.get("operation") or "").strip().lower()
-        if operation not in {"stop", "resume"}:
-            raise ValueError("goal.lifecycle operation must be stop or resume")
+        if operation not in {"stop", "resume", "delete"}:
+            raise ValueError("goal.lifecycle operation must be stop, resume, or delete")
+        if operation == "delete" and goal_activation_state(self._goal(goal_id)) is not GoalActivationState.STOPPED:
+            raise ValueError("stop the Goal before deleting it")
         result = {"goal_id": goal_id, "operation": operation}
         if values.get("reason"):
             result["reason"] = _text(values["reason"], field="reason", limit=600)
@@ -38,6 +41,35 @@ class ChatGoalLifecycleActionMixin:
         current_fingerprint = self._registry_fingerprint()
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
+        if operation == "delete":
+            result = delete_stopped_goal(
+                registry_path=self.registry_path,
+                goal_id=goal_id,
+                execute=True,
+            )
+            if not result.get("ok") or not (result.get("readback") or {}).get("verified"):
+                raise ValueError(
+                    str(result.get("error") or "Goal deletion did not verify")
+                )
+            receipt = {
+                "receipt_id": _digest(
+                    {
+                        "proposal_id": proposal_id,
+                        "goal_id": goal_id,
+                        "operation": operation,
+                    }
+                )[:32],
+                "outcome": "goal_deleted",
+                "projection_verified": True,
+                "resource_ids": {"goal_id": goal_id},
+            }
+            stored = self.store.apply(
+                proposal_id,
+                current_state_fingerprint=current_fingerprint,
+                receipt=receipt,
+            )
+            return {"proposal": stored, "turn": None}
+
         target_state = (
             GoalActivationState.STOPPED
             if operation == "stop"
