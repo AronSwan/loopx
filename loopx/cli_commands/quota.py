@@ -72,6 +72,7 @@ from ..quota import (
 from ..status import collect_status
 from ..upgrade import resolve_codex_app_automation_rrule
 from .quota_context import QuotaCommandContext, prepare_quota_command_context
+from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .quota_host_poll import attach_host_poll_receipt
 from .quota_monitor_poll import record_quota_monitor_poll_for_cli
 from .quota_registration import (
@@ -416,6 +417,10 @@ def handle_quota_command(
             args,
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
+            status_collector=collect_status,
+            operator_inbox_urgency_projector=build_lark_operator_inbox_urgency_projector(
+                runtime_root_arg=runtime_root_arg,
+            ),
         )
         heartbeat_turn_id = context.heartbeat_turn_id
         detail_sections = context.detail_sections

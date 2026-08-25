@@ -20,7 +20,6 @@ from ..control_plane.scheduler.execution_context import (
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
-from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .quota_request import (
     QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
     QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
@@ -94,6 +93,8 @@ def prepare_quota_command_context(
     *,
     registry_path: Path,
     runtime_root_arg: str | None,
+    status_collector: Callable[..., dict[str, object]] | None = None,
+    operator_inbox_urgency_projector: Callable[..., dict[str, object]],
 ) -> QuotaCommandContext:
     command = args.quota_command
     if bool(getattr(args, "turn_envelope", False)) and command != "should-run":
@@ -180,15 +181,16 @@ def prepare_quota_command_context(
     scan_roots = [Path(item).expanduser() for item in args.scan_path]
     if not scan_roots:
         scan_roots = [Path(args.scan_root).expanduser()]
-    status_limit = max(0, args.limit)
+    try:
+        requested_limit = int(getattr(args, "limit", 0))
+    except (TypeError, ValueError):
+        requested_limit = 0
+    status_limit = max(0, requested_limit)
     if command in QUOTA_SCHEDULER_COMMANDS:
         status_limit = max(status_limit, AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK)
     runtime_root = resolve_status_projection_cache_runtime_root(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-    )
-    operator_inbox_urgency_projector = build_lark_operator_inbox_urgency_projector(
-        runtime_root_arg=runtime_root,
     )
     status_goal_id = args.goal_id if command not in {"status", "plan"} else None
     projection_cache_ttl_seconds = int(
@@ -208,7 +210,8 @@ def prepare_quota_command_context(
             available_capabilities=args.available_capabilities,
         )
     if status_payload is None:
-        status_payload = collect_status(
+        collector = status_collector or collect_status
+        status_payload = collector(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
             scan_roots=scan_roots,
