@@ -94,7 +94,9 @@ def prepare_quota_command_context(
     registry_path: Path,
     runtime_root_arg: str | None,
     status_collector: Callable[..., dict[str, object]] | None = None,
-    operator_inbox_urgency_projector: Callable[..., dict[str, object]],
+    operator_inbox_urgency_projector_factory: Callable[
+        ..., Callable[..., dict[str, object]]
+    ],
 ) -> QuotaCommandContext:
     command = args.quota_command
     if bool(getattr(args, "turn_envelope", False)) and command != "should-run":
@@ -242,7 +244,9 @@ def prepare_quota_command_context(
         status_payload=status_payload,
         cache_metadata=cache_metadata,
         scheduler_context=scheduler_context,
-        operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+        operator_inbox_urgency_projector=operator_inbox_urgency_projector_factory(
+            runtime_root_arg=runtime_root
+        ),
         detail_sections=quota_detail_sections_from_args(args),
         heartbeat_turn_id=heartbeat_turn_id,
     )

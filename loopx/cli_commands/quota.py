@@ -418,8 +418,8 @@ def handle_quota_command(
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
             status_collector=collect_status,
-            operator_inbox_urgency_projector=build_lark_operator_inbox_urgency_projector(
-                runtime_root_arg=runtime_root_arg,
+            operator_inbox_urgency_projector_factory=(
+                build_lark_operator_inbox_urgency_projector
             ),
         )
         heartbeat_turn_id = context.heartbeat_turn_id

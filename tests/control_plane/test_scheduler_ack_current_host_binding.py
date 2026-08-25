@@ -133,8 +133,19 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
     assert app["stateful_backoff"]["apply_needed"] is True
 
 
-def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) -> None:
+def test_scheduler_ack_collects_the_periodic_should_run_lookback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     seen: dict[str, object] = {}
+
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps({"common_runtime_root": str(runtime_root), "goals": []}),
+        encoding="utf-8",
+    )
 
     def fake_collect_status(**kwargs):
         seen["limit"] = kwargs.get("limit")
@@ -150,7 +161,16 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
         seen["output_format"] = output_format
         seen["renderer"] = renderer
 
+    def fake_build_lark_projector(*, runtime_root_arg):
+        seen["lark_runtime_root"] = runtime_root_arg
+        return lambda **_kwargs: {}
+
     monkeypatch.setattr(quota_command, "collect_status", fake_collect_status)
+    monkeypatch.setattr(
+        quota_command,
+        "build_lark_operator_inbox_urgency_projector",
+        fake_build_lark_projector,
+    )
     monkeypatch.setattr(
         quota_command,
         "record_quota_scheduler_ack",
@@ -198,7 +218,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
 
     result = quota_command.handle_quota_command(
         args,
-        registry_path=Path(".loopx/registry.json"),
+        registry_path=registry_path,
         runtime_root_arg=None,
         print_payload=fake_print_payload,
         append_cli_rollout_event=lambda **_: {},
@@ -206,6 +226,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
 
     assert result == 0
     assert seen["limit"] == AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+    assert seen["lark_runtime_root"] == runtime_root
     assert seen["payload"] == {
         "ok": True,
         "mode": "scheduler-ack",
