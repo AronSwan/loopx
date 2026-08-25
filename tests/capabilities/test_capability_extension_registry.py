@@ -40,6 +40,7 @@ BUILTIN_IDS = [
     "value-connectors",
     "explore",
     "auto-research",
+    "deep-research",
     "public-safe-outbound",
     "connector-registry",
 ]
