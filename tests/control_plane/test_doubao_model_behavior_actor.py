@@ -55,7 +55,20 @@ def test_provider_input_does_not_select_a_diagnostic_todo() -> None:
         {
             "mode": "should-run",
             "goal_id": "fixture-goal",
-            "interaction_contract": {},
+            "interaction_contract": {
+                "schema_version": "loopx_interaction_contract_v0",
+                "mode": "waiting",
+                "user_channel": {
+                    "action_required": False,
+                    "notify": "DONT_NOTIFY",
+                },
+                "agent_channel": {
+                    "must_attempt": False,
+                    "delivery_allowed": False,
+                    "quiet_noop_allowed": True,
+                },
+                "cli_channel": {"next_cli_actions": []},
+            },
             "selected_todo": None,
             "agent_todo_summary": {
                 "first_executable_items": [{"todo_id": "todo_diagnostic001"}]
