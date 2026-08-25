@@ -1332,8 +1332,6 @@ def spend_quota_slot(
         preview,
         status_payload,
         goal_id=safe_goal_id,
-        self_repair_spend_actions=SELF_REPAIR_SPEND_ACTIONS,
-        render_markdown=_render_quota_slot_preview_markdown,
         execute=execute,
         source=source,
     )

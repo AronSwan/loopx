@@ -42,6 +42,7 @@ import {
   validateGovernedCapabilitySettlementCallback,
 } from "./governed_capability.ts";
 import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace_causality.ts";
+import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { evaluateDeliveryWorkspace } from "./agents/delivery_workspace.ts";
 import {
   interpretTurnJournal,
@@ -287,6 +288,7 @@ export function createEffectRuntimeHandlers(
       "quota.delivery_workspace_causality.evaluate",
       evaluateDeliveryWorkspaceCausality,
     ],
+    ["quota.spend.commit", evaluateQuotaSpendCommit],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(
