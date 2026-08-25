@@ -19,7 +19,6 @@ from .evidence_packet import (
     RESEARCH_EVIDENCE_EVENT_SCHEMA_VERSION,
     RESEARCH_HYPOTHESIS_SCHEMA_VERSION,
     _compact_public_text,
-    _compact_public_text_list,
     _compact_public_token,
     _derive_hypothesis_status,
     _finite_float,
@@ -318,6 +317,9 @@ def _research_hypothesis_from_rollout_event(event: dict[str, Any]) -> dict[str, 
             "grounding_refs": grounding_refs,
             "novelty_audit_ref": novelty_audit_ref,
             "blocked_by": blocked_by,
+            "wish_id": details.get("wish_id") or None,
+            "contract_ref": details.get("contract_ref") or None,
+            "contract_revision": details.get("contract_revision") or None,
         }
     )
 
@@ -349,6 +351,9 @@ def _research_evidence_from_rollout_event(event: dict[str, Any]) -> dict[str, An
             "remediation_attempt": bool(details.get("remediation_attempt")),
             "artifact_refs": event.get("artifact_refs") or [],
             "protected_scope_clean": bool(details.get("protected_scope_clean")),
+            "wish_id": details.get("wish_id") or None,
+            "contract_ref": details.get("contract_ref") or None,
+            "contract_revision": details.get("contract_revision") or None,
         }
     )
 
@@ -374,6 +379,9 @@ def _synthetic_hypothesis_from_evidence(events: list[dict[str, Any]]) -> dict[st
             "grounding_refs": [],
             "novelty_audit_ref": None,
             "blocked_by": blocked_by,
+            "wish_id": first.get("wish_id"),
+            "contract_ref": first.get("contract_ref"),
+            "contract_revision": first.get("contract_revision"),
         }
     )
 
@@ -453,6 +461,22 @@ def build_research_evidence_graph_from_records(
     events_by_hypothesis: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         events_by_hypothesis.setdefault(event["hypothesis_id"], []).append(event)
+    for hypothesis_id, item_events in events_by_hypothesis.items():
+        hypothesis = hypotheses_by_id.get(hypothesis_id)
+        if not hypothesis:
+            continue
+        hypothesis_revision = str(hypothesis.get("contract_revision") or "")
+        event_revisions = {
+            str(event.get("contract_revision") or "")
+            for event in item_events
+        }
+        if len(event_revisions) > 1 or (
+            event_revisions and event_revisions != {hypothesis_revision}
+        ):
+            raise ValueError(
+                "research evidence contract lineage conflicts for hypothesis "
+                f"{hypothesis_id}"
+            )
     nodes = []
     for item in hypotheses:
         item_events = events_by_hypothesis.get(item["hypothesis_id"], [])
@@ -520,6 +544,15 @@ def build_research_evidence_graph_from_records(
                 "measurement_scope": _failure_measurement_scope(item_events),
                 "remediation_attempt_count": remediation_attempt_count,
                 "source_kind": source,
+                **(
+                    {
+                        "wish_id": item["wish_id"],
+                        "contract_ref": item["contract_ref"],
+                        "contract_revision": item["contract_revision"],
+                    }
+                    if item.get("wish_id")
+                    else {}
+                ),
             }
         )
     return {
@@ -573,6 +606,17 @@ def build_research_evidence_graph_from_rollout_events(
     for hypothesis_id, events in events_by_hypothesis.items():
         if hypothesis_id not in hypotheses_by_id:
             hypotheses_by_id[hypothesis_id] = _synthetic_hypothesis_from_evidence(events)
+    evidence_events = [
+        evidence
+        for evidence in evidence_events
+        if str(evidence.get("contract_revision") or "")
+        == str(
+            hypotheses_by_id.get(evidence["hypothesis_id"], {}).get(
+                "contract_revision"
+            )
+            or ""
+        )
+    ]
 
     first_metric_event = evidence_events[0] if evidence_events else None
     metric = first_metric_event["metric"] if first_metric_event else {}

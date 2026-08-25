@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+from .delivery_contract import AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION
 from .evidence_packet import (
     AUTO_RESEARCH_ROLLOUT_APPEND_SCHEMA_VERSION,
     build_auto_research_rollout_events,
@@ -30,6 +31,22 @@ def _event_content_key(event: Mapping[str, object]) -> str:
     return json.dumps(content, sort_keys=True, ensure_ascii=True)
 
 
+def _delivery_contract_key(event: Mapping[str, object]) -> tuple[str, str] | None:
+    if (
+        event.get("classification")
+        != AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION
+    ):
+        return None
+    details = event.get("details")
+    if not isinstance(details, Mapping):
+        return None
+    wish_id = str(details.get("wish_id") or "")
+    contract_revision = str(details.get("contract_revision") or "")
+    if not wish_id or not contract_revision:
+        return None
+    return wish_id, contract_revision
+
+
 def append_auto_research_rollout_events(
     *,
     packet_path: str,
@@ -52,11 +69,25 @@ def append_auto_research_rollout_events(
         for event in existing_events
         if event.get("event_id")
     }
+    existing_contract_ids = {
+        key: str(event["event_id"])
+        for event in existing_events
+        if event.get("event_id")
+        and (key := _delivery_contract_key(event)) is not None
+    }
     appended_ids: list[str] = []
     skipped_ids: list[str] = []
     effective_ids: list[str] = []
     for event in events:
         event_id = str(event["event_id"])
+        contract_key = _delivery_contract_key(event)
+        existing_contract_id = (
+            existing_contract_ids.get(contract_key) if contract_key else None
+        )
+        if existing_contract_id:
+            skipped_ids.append(existing_contract_id)
+            effective_ids.append(existing_contract_id)
+            continue
         content_key = _event_content_key(event)
         existing_content_id = existing_content_ids.get(content_key)
         if existing_content_id:
@@ -71,6 +102,8 @@ def append_auto_research_rollout_events(
             append_rollout_event(log_path, event)
             existing_ids.add(event_id)
             existing_content_ids[content_key] = event_id
+            if contract_key:
+                existing_contract_ids[contract_key] = event_id
         appended_ids.append(event_id)
         effective_ids.append(event_id)
     counts_by_kind = Counter(str(event.get("event_kind") or "") for event in events)

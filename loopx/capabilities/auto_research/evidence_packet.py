@@ -337,7 +337,7 @@ def validate_research_hypothesis(item: dict[str, Any]) -> dict[str, Any]:
     status = _compact_public_token(item.get("status"), field="hypothesis.status")
     if status not in HYPOTHESIS_STATUSES:
         raise ValueError(f"hypothesis.status must be one of {', '.join(sorted(HYPOTHESIS_STATUSES))}")
-    return {
+    normalized = {
         "schema_version": schema,
         "hypothesis_id": _compact_public_token(item.get("hypothesis_id"), field="hypothesis_id"),
         "parent_hypothesis_id": (
@@ -358,6 +358,14 @@ def validate_research_hypothesis(item: dict[str, Any]) -> dict[str, Any]:
         ),
         "blocked_by": _compact_public_text_list(item.get("blocked_by"), field="blocked_by"),
     }
+    for field in ("wish_id", "contract_ref", "contract_revision"):
+        if item.get(field):
+            normalized[field] = _compact_public_text(
+                item.get(field),
+                field=f"hypothesis.{field}",
+                max_len=180,
+            )
+    return normalized
 
 
 def validate_research_evidence_event(item: dict[str, Any]) -> dict[str, Any]:
@@ -387,7 +395,7 @@ def validate_research_evidence_event(item: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "remediation attempts require data_or_measurement_gap failure_kind"
         )
-    return {
+    normalized = {
         "schema_version": schema,
         "hypothesis_id": _compact_public_token(item.get("hypothesis_id"), field="hypothesis_id"),
         "todo_id": _compact_public_token(item.get("todo_id"), field="todo_id"),
@@ -413,6 +421,14 @@ def validate_research_evidence_event(item: dict[str, Any]) -> dict[str, Any]:
         "raw_logs_recorded": False,
         "private_artifacts_recorded": False,
     }
+    for field in ("wish_id", "contract_ref", "contract_revision"):
+        if item.get(field):
+            normalized[field] = _compact_public_text(
+                item.get(field),
+                field=f"evidence.{field}",
+                max_len=180,
+            )
+    return normalized
 
 
 def _load_json_object(path: str | Path, *, field: str) -> dict[str, Any]:
@@ -527,11 +543,28 @@ def build_auto_research_evidence_packet(
 ) -> dict[str, Any]:
     """Build public-safe research hypothesis/evidence records from eval outputs."""
 
+    from .delivery_contract import (
+        AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
+        build_auto_research_contract_lineage,
+        normalize_auto_research_delivery_contract,
+    )
+
+    delivery_contract: dict[str, Any] | None = None
+    if (
+        contract.get("schema_version")
+        == AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION
+    ):
+        delivery_contract = normalize_auto_research_delivery_contract(contract)
+        contract = delivery_contract["research_contract"]
     normalized_contract, benchmark_context = _normalize_research_contract_for_packet(
         contract,
         contract_root=Path(contract_root).expanduser() if contract_root else None,
     )
     contract = normalized_contract
+    contract_lineage = build_auto_research_contract_lineage(
+        contract,
+        delivery_contract=delivery_contract,
+    )
     if not eval_results:
         raise ValueError("at least one eval result is required")
     hypothesis_token = _compact_public_token(hypothesis_id, field="hypothesis_id")
@@ -550,6 +583,15 @@ def build_auto_research_evidence_packet(
         )
         for index, result in enumerate(eval_results)
     ]
+    if contract_lineage.get("wish_id"):
+        for event in events:
+            event.update(
+                {
+                    "wish_id": contract_lineage["wish_id"],
+                    "contract_ref": contract_lineage["contract_ref"],
+                    "contract_revision": contract_lineage["contract_revision"],
+                }
+            )
     status = _derive_hypothesis_status(events)
     blocked_by = []
     if status == "contradicted":
@@ -567,10 +609,17 @@ def build_auto_research_evidence_packet(
             "grounding_refs": grounding_refs or [],
             "novelty_audit_ref": novelty_audit_ref,
             "blocked_by": blocked_by,
+            "wish_id": contract_lineage.get("wish_id"),
+            "contract_ref": contract_lineage.get("contract_ref"),
+            "contract_revision": (
+                contract_lineage["contract_revision"]
+                if contract_lineage.get("wish_id")
+                else None
+            ),
         }
     )
     negative_count = len([event for event in events if _is_negative_evidence_event(event)])
-    return {
+    packet = {
         "ok": True,
         "schema_version": AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION,
         "research_contract": contract,
@@ -593,6 +642,10 @@ def build_auto_research_evidence_packet(
             "source": "public_eval_result_projection",
         },
     }
+    if delivery_contract:
+        packet["delivery_contract"] = delivery_contract
+        packet["contract_lineage"] = contract_lineage
+    return packet
 
 
 def load_auto_research_evidence_packet_inputs(
@@ -620,6 +673,11 @@ def load_auto_research_evidence_packet(path: str | Path) -> dict[str, Any]:
 
 
 def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str, Any]:
+    from .delivery_contract import (
+        build_auto_research_contract_lineage,
+        normalize_auto_research_delivery_contract,
+    )
+
     payload = _json_obj(payload, field="auto_research_evidence_packet")
     schema = _compact_public_token(payload.get("schema_version"), field="schema_version")
     if schema != AUTO_RESEARCH_EVIDENCE_PACKET_SCHEMA_VERSION:
@@ -627,6 +685,32 @@ def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str,
     if payload.get("ok") is False:
         raise ValueError("auto_research_evidence_packet.ok must not be false")
     contract = validate_research_contract(_json_obj(payload.get("research_contract"), field="research_contract"))
+    delivery_contract = (
+        normalize_auto_research_delivery_contract(
+            _json_obj(
+                payload.get("delivery_contract"),
+                field="delivery_contract",
+            )
+        )
+        if payload.get("delivery_contract") is not None
+        else None
+    )
+    if (
+        delivery_contract
+        and delivery_contract["research_contract"] != contract
+    ):
+        raise ValueError(
+            "delivery_contract.research_contract must match research_contract"
+        )
+    expected_lineage = build_auto_research_contract_lineage(
+        contract,
+        delivery_contract=delivery_contract,
+    )
+    provided_lineage = payload.get("contract_lineage")
+    if provided_lineage is not None and provided_lineage != expected_lineage:
+        raise ValueError(
+            "contract_lineage must match the normalized delivery contract"
+        )
     hypothesis = validate_research_hypothesis(_json_obj(payload.get("hypothesis"), field="hypothesis"))
     evidence_events = [
         validate_research_evidence_event(_json_obj(item, field="evidence_events[]"))
@@ -639,10 +723,24 @@ def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str,
             raise ValueError("evidence event hypothesis_id must match packet hypothesis")
         if event["todo_id"] != hypothesis["todo_id"]:
             raise ValueError("evidence event todo_id must match packet hypothesis")
+        if delivery_contract and any(
+            event.get(field) != expected_lineage[field]
+            for field in ("wish_id", "contract_ref", "contract_revision")
+        ):
+            raise ValueError(
+                "delivery evidence lineage must match the normalized contract"
+            )
+    if delivery_contract and any(
+        hypothesis.get(field) != expected_lineage[field]
+        for field in ("wish_id", "contract_ref", "contract_revision")
+    ):
+        raise ValueError(
+            "delivery hypothesis lineage must match the normalized contract"
+        )
     public_boundary = _json_obj(payload.get("public_boundary"), field="public_boundary")
     if public_boundary.get("raw_logs_recorded") or public_boundary.get("private_artifacts_recorded"):
         raise ValueError("auto_research_evidence_packet must not record raw logs or private artifacts")
-    return {
+    normalized = {
         "ok": True,
         "schema_version": schema,
         "research_contract": contract,
@@ -667,6 +765,10 @@ def validate_auto_research_evidence_packet(payload: dict[str, Any]) -> dict[str,
             "source": "public_eval_result_projection",
         },
     }
+    if delivery_contract:
+        normalized["delivery_contract"] = delivery_contract
+        normalized["contract_lineage"] = expected_lineage
+    return normalized
 
 
 def build_auto_research_rollout_events(
@@ -678,6 +780,7 @@ def build_auto_research_rollout_events(
     contract = packet["research_contract"]
     hypothesis = packet["hypothesis"]
     summary = packet["summary"]
+    lineage = packet.get("contract_lineage") or {}
     goal_id = contract["goal_id"]
     hypothesis_id = hypothesis["hypothesis_id"]
     claimed_by = hypothesis["claimed_by"]
@@ -687,7 +790,56 @@ def build_auto_research_rollout_events(
     ]
     if hypothesis.get("novelty_audit_ref"):
         source_refs.append({"kind": "novelty_audit", "id": hypothesis["novelty_audit_ref"]})
-    events = [
+    hypothesis_details = {
+        "hypothesis_id": hypothesis_id,
+        "parent_hypothesis_id": hypothesis.get("parent_hypothesis_id") or "",
+        "mechanism_family": hypothesis["mechanism_family"],
+        "evidence_event_count": summary["evidence_event_count"],
+        "negative_evidence_count": summary["negative_evidence_count"],
+        "needs_retry_count": summary["needs_retry_count"],
+        "protected_scope_clean": summary["protected_scope_clean"],
+    }
+    if lineage.get("wish_id"):
+        hypothesis_details.update(
+            {
+                "wish_id": lineage["wish_id"],
+                "contract_ref": lineage["contract_ref"],
+                "contract_revision": lineage["contract_revision"],
+            }
+        )
+    events = []
+    if lineage.get("wish_id"):
+        events.append(
+            build_rollout_event(
+                goal_id=goal_id,
+                event_kind="validation",
+                status="recorded",
+                classification=packet["delivery_contract"]["schema_version"],
+                labels=[
+                    "auto_research",
+                    "delivery_contract",
+                    "wish_to_artifact",
+                ],
+                summary=(
+                    "Auto Research delivery contract recorded for "
+                    f"{lineage['wish_id']} at {lineage['contract_revision']}."
+                ),
+                artifact_refs=[lineage["contract_ref"]],
+                details={
+                    "wish_id": lineage["wish_id"],
+                    "contract_ref": lineage["contract_ref"],
+                    "contract_revision": lineage["contract_revision"],
+                    "required_artifact_count": len(
+                        packet["delivery_contract"]["required_artifacts"]
+                    ),
+                    "acceptance_criterion_count": len(
+                        packet["delivery_contract"]["acceptance_criteria"]
+                    ),
+                },
+                recorded_at=recorded_at,
+            )
+        )
+    events.append(
         build_rollout_event(
             goal_id=goal_id,
             event_kind="research_hypothesis",
@@ -708,20 +860,35 @@ def build_auto_research_rollout_events(
                 f"{hypothesis['hypothesis']}"
             ),
             source_refs=source_refs,
-            details={
-                "hypothesis_id": hypothesis_id,
-                "parent_hypothesis_id": hypothesis.get("parent_hypothesis_id") or "",
-                "mechanism_family": hypothesis["mechanism_family"],
-                "evidence_event_count": summary["evidence_event_count"],
-                "negative_evidence_count": summary["negative_evidence_count"],
-                "needs_retry_count": summary["needs_retry_count"],
-                "protected_scope_clean": summary["protected_scope_clean"],
-            },
+            details=hypothesis_details,
             recorded_at=recorded_at,
         )
-    ]
+    )
     for evidence in packet["evidence_events"]:
         metric = evidence["metric"]
+        evidence_details = {
+            "hypothesis_id": evidence["hypothesis_id"],
+            "attempt": evidence["attempt"],
+            "split": evidence["split"],
+            "metric_name": metric["name"],
+            "metric_value": metric["value"],
+            "metric_direction": metric["direction"],
+            "baseline_metric": evidence["baseline_metric"],
+            "primary_metric_status": evidence["primary_metric_status"],
+            "failure_kind": evidence["failure_kind"] or "",
+            "measurement_scope": evidence["measurement_scope"] or "",
+            "remediation_attempt": evidence["remediation_attempt"],
+            "eval_status": evidence["eval_status"],
+            "protected_scope_clean": evidence["protected_scope_clean"],
+        }
+        if lineage.get("wish_id"):
+            evidence_details.update(
+                {
+                    "wish_id": lineage["wish_id"],
+                    "contract_ref": lineage["contract_ref"],
+                    "contract_revision": lineage["contract_revision"],
+                }
+            )
         events.append(
             build_rollout_event(
                 goal_id=goal_id,
@@ -746,21 +913,7 @@ def build_auto_research_rollout_events(
                     f"value={metric['value']}"
                 ),
                 artifact_refs=evidence["artifact_refs"],
-                details={
-                    "hypothesis_id": evidence["hypothesis_id"],
-                    "attempt": evidence["attempt"],
-                    "split": evidence["split"],
-                    "metric_name": metric["name"],
-                    "metric_value": metric["value"],
-                    "metric_direction": metric["direction"],
-                    "baseline_metric": evidence["baseline_metric"],
-                    "primary_metric_status": evidence["primary_metric_status"],
-                    "failure_kind": evidence["failure_kind"] or "",
-                    "measurement_scope": evidence["measurement_scope"] or "",
-                    "remediation_attempt": evidence["remediation_attempt"],
-                    "eval_status": evidence["eval_status"],
-                    "protected_scope_clean": evidence["protected_scope_clean"],
-                },
+                details=evidence_details,
                 recorded_at=recorded_at,
             )
         )
