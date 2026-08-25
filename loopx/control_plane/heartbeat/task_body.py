@@ -569,7 +569,7 @@ def _render_goal_task_body(
 {prequota_block}{HOST_LOOP_QUOTA_DISPATCH_RULE}
 Guard: `{quota_guard_command}`.
 
-`should_run=false`: no delivery/spend; NOTIFY surfaces Chinese action/gate;
+`should_run=false`: no delivery/spend; NOTIFY: Chinese action/gate;
 otherwise wait.{host_wait_rule}
 
 `should_run=true`: take highest-priority unblocked in-scope todo by default; choose any
