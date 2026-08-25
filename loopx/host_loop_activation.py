@@ -1295,6 +1295,7 @@ def build_host_loop_activation_packet(
     goal_id: str,
     cli_bin: str = "loopx",
     runtime_root: str | None = None,
+    identity_runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
     available_capabilities: list[str] | None = None,
@@ -1410,8 +1411,13 @@ def build_host_loop_activation_packet(
             if requested_agent_id
             else "<new-public-safe-agent-id>"
         )
+        registration_runtime_root = (
+            identity_runtime_root
+            if identity_runtime_root is not None
+            else runtime_root
+        )
         register_command = (
-            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=registration_runtime_root)} "
             f"register-agent --goal-id {shell_arg(goal_id)} "
             f"--agent-id {shell_arg(fresh_agent_id)} --require-new"
         )

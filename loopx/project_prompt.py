@@ -107,6 +107,7 @@ def render_quota_guard_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
     runtime_profile: str | None = None,
@@ -146,7 +147,7 @@ def render_quota_guard_command(
         f"--registry {SHARED_GLOBAL_REGISTRY} " if include_shared_registry else ""
     )
     return (
-        f"{shell_arg(cli_bin)} --format json "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
         f"{capability_args}{scheduler_args}{turn_arg}"
@@ -176,6 +177,7 @@ def render_refresh_state_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     project: str | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
@@ -202,7 +204,8 @@ def render_refresh_state_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} refresh-state --goal-id {shell_arg(goal_id)}"
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"refresh-state --goal-id {shell_arg(goal_id)}"
         f"{project_arg}{classification_arg}{scale_arg}{outcome_arg}{agent_arg}{scope_arg}"
     )
 

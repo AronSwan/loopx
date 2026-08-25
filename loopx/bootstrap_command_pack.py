@@ -489,17 +489,38 @@ def _command_runtime_root(
     registry_path: Path,
     runtime_root_arg: str | None,
 ) -> str | None:
-    if runtime_root_arg:
-        return str(
-            resolve_runtime_root(
-                registry or {},
-                override=runtime_root_arg,
-                registry_path=registry_path,
-            )
-        )
-    if not isinstance(registry, dict) or not registry.get("common_runtime_root"):
+    """Return only an explicit override that command cwd cannot recover."""
+
+    if not runtime_root_arg:
         return None
-    return str(resolve_runtime_root(registry, registry_path=registry_path))
+    return str(
+        resolve_runtime_root(
+            registry or {},
+            override=runtime_root_arg,
+            registry_path=registry_path,
+        )
+    )
+
+
+def _identity_runtime_root(
+    registry: dict[str, Any] | None,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+) -> str | None:
+    """Resolve the global runtime used by registration and thread binding."""
+
+    if not runtime_root_arg and (
+        not isinstance(registry, dict) or not registry.get("common_runtime_root")
+    ):
+        return None
+    return str(
+        resolve_runtime_root(
+            registry or {},
+            override=runtime_root_arg,
+            registry_path=registry_path,
+        )
+    )
 
 
 def _select_goal(goals: list[dict[str, Any]], goal_id: str | None) -> tuple[str, dict[str, Any] | None]:
@@ -645,12 +666,13 @@ def _bootstrap_command(
     project: str,
     goal_id: str,
     cli_bin: str,
+    runtime_root: str | None,
     dry_run: bool,
     fine_grained: bool = False,
 ) -> str:
     lines = [
         f"cd {shell_arg(project)}",
-        f"{shell_arg(cli_bin)} bootstrap \\",
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
         "  --project . \\",
         f"  --goal-id {shell_arg(goal_id)} \\",
         f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
@@ -676,12 +698,13 @@ def _goal_start_bootstrap_command(
     goal_id: str,
     goal_text: str | None,
     cli_bin: str,
+    runtime_root: str | None,
     fine_grained: bool,
 ) -> str:
     objective = goal_text or "<exact /loopx goal text>"
     lines = [
         f"cd {shell_arg(project)}",
-        f"{shell_arg(cli_bin)} bootstrap \\",
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
         "  --project . \\",
         f"  --goal-id {shell_arg(goal_id)} \\",
         f"  --objective {shell_arg(objective)} \\",
@@ -794,6 +817,11 @@ def build_loopx_bootstrap_command_pack(
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
     )
+    identity_runtime_root = _identity_runtime_root(
+        registry_payload,
+        registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
+    )
     thread_binding = resolve_thread_agent_binding(
         registry_goal,
         host_surface=host_surface,
@@ -820,6 +848,7 @@ def build_loopx_bootstrap_command_pack(
         project=resolved_project,
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
+        runtime_root=command_runtime_root,
         dry_run=True,
         fine_grained=fine_grained,
     )
@@ -827,6 +856,7 @@ def build_loopx_bootstrap_command_pack(
         project=resolved_project,
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
+        runtime_root=command_runtime_root,
         dry_run=False,
         fine_grained=fine_grained,
     )
@@ -835,6 +865,7 @@ def build_loopx_bootstrap_command_pack(
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
         runtime_root=command_runtime_root,
+        identity_runtime_root=identity_runtime_root,
         agent_id=effective_agent_id,
         registered_agents=registered_agents,
         available_capabilities=available_capabilities,
@@ -866,6 +897,7 @@ def build_loopx_bootstrap_command_pack(
         render_quota_guard_command(
             resolved_goal_id,
             cli_bin=cli_bin,
+            runtime_root=command_runtime_root,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=available_capabilities,
             begin_turn=guided_start_begins_turn,
@@ -876,12 +908,17 @@ def build_loopx_bootstrap_command_pack(
         else None
     )
     goal_start_quota_should_run = quota_guard_command
-    status_command = _project_command(resolved_project, f"{shell_arg(cli_bin)} status")
+    command_prefix = render_cli_command_prefix(
+        cli_bin=cli_bin,
+        runtime_root=command_runtime_root,
+    )
+    status_command = _project_command(resolved_project, f"{command_prefix} status")
     goal_start_bootstrap_command = _goal_start_bootstrap_command(
         project=resolved_project,
         goal_id=resolved_goal_id,
         goal_text=normalized_goal_text,
         cli_bin=cli_bin,
+        runtime_root=command_runtime_root,
         fine_grained=fine_grained,
     )
     goal_start_plan_prompt = build_goal_start_prompt(
@@ -937,7 +974,7 @@ def build_loopx_bootstrap_command_pack(
             {"form": "/loopx <goal text>", "mode": "goal_plan_write_and_activate"},
         ],
         "canonical_cli_command": (
-            f"{shell_arg(cli_bin)} bootstrap-command-pack --project {shell_arg(resolved_project)} "
+            f"{command_prefix} bootstrap-command-pack --project {shell_arg(resolved_project)} "
             f"--goal-id {shell_arg(resolved_goal_id)}"
             + (
                 f" --agent-id {shell_arg(str(selected_agent_id))}"
@@ -989,7 +1026,7 @@ def build_loopx_bootstrap_command_pack(
             fine_grained=fine_grained,
         ),
         "commands": {
-            "doctor": f"{shell_arg(cli_bin)} doctor",
+            "doctor": f"{command_prefix} doctor",
             "status": status_command,
             "quota_guard": quota_guard_command,
             "heartbeat_prompt": heartbeat_prompt_command,
@@ -1001,7 +1038,7 @@ def build_loopx_bootstrap_command_pack(
                 {
                     "goal_start_configure_turn_granularity": _project_command(
                         resolved_project,
-                        f"{shell_arg(cli_bin)} configure-goal --goal-id "
+                        f"{command_prefix} configure-goal --goal-id "
                         f"{shell_arg(resolved_goal_id)} "
                         "--execution-turn-granularity fine --execute",
                     )
@@ -1011,7 +1048,7 @@ def build_loopx_bootstrap_command_pack(
             ),
             "goal_start_plan_prompt": goal_start_plan_prompt,
             "goal_start_bind_thread": (
-                f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
+                f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=identity_runtime_root)} "
                 f"bind-agent-thread --goal-id {shell_arg(resolved_goal_id)} "
                 f"--thread-id {shell_arg(normalized_thread_id)} --host-surface {shell_arg(host_surface)} "
                 f"--agent-id {shell_arg(str(selected_agent_id))} --execute"
@@ -1025,13 +1062,14 @@ def build_loopx_bootstrap_command_pack(
             "goal_start_refresh_state": render_refresh_state_command(
                 resolved_goal_id,
                 cli_bin=cli_bin,
+                runtime_root=command_runtime_root,
                 project=".",
                 agent_id=str(selected_agent_id) if selected_agent_id else None,
                 progress_scope="agent_lane" if selected_agent_id else None,
             ),
             "goal_start_host_loop_activation": host_loop_activation.get("activation_input_command"),
             "goal_start_agent_onboard_recheck": (
-                f"{shell_arg(cli_bin)} agent-onboard "
+                f"{command_prefix} agent-onboard "
                 f"--agent-type {shell_arg(agent_type)} "
                 f"--project {shell_arg(resolved_project)} "
                 f"--goal-id {shell_arg(resolved_goal_id)}"
@@ -1559,7 +1597,8 @@ def build_start_goal_guided_packet(
                 "id": "write_ordered_todos",
                 "kind": "operator_or_agent_actions",
                 "command_template": (
-                    f"{shell_arg(cli_bin)} todo add --goal-id "
+                    f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_pack.get('command_runtime_root'))} "
+                    f"todo add --goal-id "
                     f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
                     "--project . "
                     "--role agent "
