@@ -27,6 +27,8 @@ FALLBACK_TODO_ID = "todo_catalog_canary"
 ARCHIVED_DONE_TODO_ID = "todo_archived_pr_merge"
 ARCHIVE_GATED_MONITOR_ID = "todo_archive_gated_monitor"
 READY_DEFERRED_ID = "todo_ready_deferred_p0"
+MATERIAL_MONITOR_ID = "todo_material_monitor"
+MATERIAL_WAIT_ID = "todo_material_wait"
 GATED_ACTION = "[P0] Review refreshed projection wording."
 FALLBACK_ACTION = "[P1] Continue catalog-driven product canary coverage."
 ARCHIVE_MONITOR_ACTION = "[P1] Monitor product refactor/catalog canary continuation."
@@ -135,6 +137,73 @@ def assert_ready_open_resume_todo_can_run() -> None:
     assert selected_todo_id(quota_payload) == GATED_TODO_ID, quota_payload
     assert runnable_todo_ids(quota_payload)[0] == GATED_TODO_ID, quota_payload
     assert quota_payload["recommended_action"] == GATED_ACTION, quota_payload
+
+
+def assert_monitor_generation_resumes_without_boolean_or_replay_drift() -> None:
+    def summary(generation: int, *, material_change: bool) -> dict:
+        return quota_todo_summary(
+            [
+                quota_todo_item(
+                    todo_id=MATERIAL_MONITOR_ID,
+                    index=1,
+                    text="[P0] Poll the external review lifecycle.",
+                    task_class="continuous_monitor",
+                    claimed_by=AGENT_ID,
+                    material_change=material_change,
+                    material_change_generation=generation,
+                    watch_only=True,
+                ),
+                quota_todo_item(
+                    todo_id=MATERIAL_WAIT_ID,
+                    index=2,
+                    text="[P0] Resume the externally reviewed slice.",
+                    claimed_by=AGENT_ID,
+                    required_capabilities=["shell"],
+                    resume_when=f"monitor_changed:{MATERIAL_MONITOR_ID}",
+                    resume_monitor_generation=4,
+                ),
+                quota_todo_item(
+                    todo_id=FALLBACK_TODO_ID,
+                    index=3,
+                    priority="P1",
+                    text=FALLBACK_ACTION,
+                    claimed_by=AGENT_ID,
+                    required_capabilities=["shell"],
+                ),
+            ],
+            role="agent",
+        )
+
+    same_generation = summary(4, material_change=True)
+    waiting = next(
+        item
+        for item in same_generation["backlog_items"]
+        if item["todo_id"] == MATERIAL_WAIT_ID
+    )
+    assert waiting["resume_ready"] is False, waiting
+    assert waiting["resume_condition"]["generation_fence"] == (
+        "strictly_greater_than_baseline"
+    ), waiting
+    same_quota = build_quota_should_run(
+        status_payload(same_generation, next_action=waiting["text"]),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    assert selected_todo_id(same_quota) == FALLBACK_TODO_ID, same_quota
+
+    next_generation = summary(5, material_change=False)
+    resumed = next(
+        item
+        for item in next_generation["backlog_items"]
+        if item["todo_id"] == MATERIAL_WAIT_ID
+    )
+    assert resumed["resume_ready"] is True, resumed
+    resumed_quota = build_quota_should_run(
+        status_payload(next_generation, next_action=resumed["text"]),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    assert selected_todo_id(resumed_quota) == MATERIAL_WAIT_ID, resumed_quota
 
 
 def assert_ready_deferred_p0_preempts_open_p1_for_successor_replan() -> None:
@@ -256,6 +325,7 @@ def assert_archived_done_resume_target_wakes_claimed_monitor() -> None:
 def main() -> int:
     assert_not_ready_open_resume_todo_is_not_executable()
     assert_ready_open_resume_todo_can_run()
+    assert_monitor_generation_resumes_without_boolean_or_replay_drift()
     assert_ready_deferred_p0_preempts_open_p1_for_successor_replan()
     assert_archived_done_resume_target_wakes_claimed_monitor()
     print("quota-resume-gated-open-todo-smoke ok")

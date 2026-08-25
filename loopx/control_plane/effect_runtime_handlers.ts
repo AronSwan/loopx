@@ -60,6 +60,11 @@ import {
 } from "./todos/completion_state.ts";
 import { reduceTodoCompletionTransaction } from "./todos/completion_transaction.ts";
 import { transitionTodoNextAction } from "./todos/next_action.ts";
+import {
+  evaluateTodoResumeConditions,
+  normalizeTodoResumeWhen,
+  planTodoExternalWaitTransition,
+} from "./todos/resume_condition.ts";
 import { evaluateSchedulerStateTransition } from "./scheduler/state_transition_rules.ts";
 import {
   evaluateSchedulerStateOperation,
@@ -275,6 +280,9 @@ export function createEffectRuntimeHandlers(
     ["todo.completion_state.metadata_updates", buildTodoCompletionMetadataUpdates],
     ["todo.completion.reduce", reduceTodoCompletionTransaction],
     ["todo.next_action.transition", transitionTodoNextAction],
+    ["todo.resume_condition.normalize", normalizeTodoResumeWhen],
+    ["todo.resume_condition.evaluate", evaluateTodoResumeConditions],
+    ["todo.external_wait.plan", planTodoExternalWaitTransition],
     ["scheduler.state_transition.evaluate", evaluateSchedulerStateTransition],
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],
     ["scheduler.state.load", loadSchedulerState],

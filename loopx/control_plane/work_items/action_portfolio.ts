@@ -9,7 +9,7 @@ import {
 
 import type { JsonObject } from "../effect_program.ts";
 
-export const ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v1";
+export const ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v2";
 export const ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION =
   "quota_action_portfolio_request_v0";
 export const ACTION_SELECTION_QUALIFICATION_SCHEMA_VERSION =
@@ -42,6 +42,7 @@ function actionCandidate(value: unknown, label: string): ActionCandidate {
     "selected_by",
     "availability_reason",
     "next_due_at",
+    "continuation_hint",
   ] as const) {
     const normalized = optionalNonEmptyString(raw[field], `${label}.${field}`);
     if (normalized !== null) candidate[field] = normalized;
@@ -88,7 +89,7 @@ function suggestedActionProjection(candidate: ActionCandidate): JsonObject {
     todo_id: candidate.todo_id,
     text: candidate.text,
   };
-  for (const field of ["priority", "action_kind"] as const) {
+  for (const field of ["priority", "action_kind", "continuation_hint"] as const) {
     if (candidate[field] !== undefined) projected[field] = candidate[field];
   }
   for (const field of [

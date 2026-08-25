@@ -159,10 +159,12 @@ def register_todo_linkage_arguments(
     todo_parser.add_argument(
         "--resume-when",
         help=(
-            "For deferred todo add/update, declare a machine-readable resume condition "
-            "such as todo_done:todo_ab12cd34ef56, pr_merged:#532, or "
-            "capacity_available:short_pool. Capacity keys are resolved from quota "
-            "--available-capability declarations."
+            "For deferred todo add/update, or for an open advancement todo update "
+            "paired with --successor-todo-id, declare a machine-readable resume "
+            "condition such as todo_done:todo_ab12cd34ef56, "
+            "monitor_changed:todo_monitor123, pr_merged:#532, or "
+            "capacity_available:short_pool. monitor_changed binds the monitor's "
+            "current material-change generation and resumes only after it advances."
         ),
     )
     todo_parser.add_argument(

@@ -213,10 +213,10 @@ def test_action_portfolio_coverage_migration_requires_review() -> None:
     assert result["ok"] is True
     assert result["review_required"] is True
     assert result["rows"][0]["allowances"] == {
-        "chars": 1_280,
-        "utf8_bytes": 1_280,
-        "lines": 36,
-        "compact_payload_chars": 896,
+        "chars": 1_600,
+        "utf8_bytes": 1_600,
+        "lines": 42,
+        "compact_payload_chars": 1_280,
     }
     assert result["rows"][0]["review_signals"] == [
         "action_signature coverage migrated: "
@@ -228,13 +228,13 @@ def test_action_portfolio_migration_still_fails_above_bounded_growth() -> None:
     candidate = _row(
         action_signature_sha256="oversized-portfolio-semantic-signature",
         action_signature_coverages=["turn_envelope_action_dimensions_v2"],
-        chars=41_281,
+        chars=41_601,
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
 
     assert result["ok"] is False
-    assert "chars grew by 1281; allowance is 1280" in (
+    assert "chars grew by 1601; allowance is 1600" in (
         result["rows"][0]["failures"]
     )
 
@@ -281,9 +281,28 @@ def test_quota_action_portfolio_v1_schema_migration_is_declared() -> None:
     ]
 
 
-def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
+def test_quota_action_portfolio_v2_context_migration_is_declared() -> None:
     candidate = _row(
         action_portfolio_schema_versions=["quota_action_portfolio_v2"],
+        compact_payload_chars=21_280,
+    )
+    base = _row(
+        action_portfolio_schema_versions=["quota_action_portfolio_v1"],
+    )
+
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+
+    assert result["ok"] is True
+    assert result["review_required"] is True
+    assert result["rows"][0]["review_signals"] == [
+        "action_portfolio schema migrated: quota_action_portfolio_v1 -> "
+        "quota_action_portfolio_v2"
+    ]
+
+
+def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
+    candidate = _row(
+        action_portfolio_schema_versions=["quota_action_portfolio_v3"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))

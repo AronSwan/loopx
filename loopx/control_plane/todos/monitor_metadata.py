@@ -37,6 +37,17 @@ def normalize_monitor_metadata(metadata: dict[str, Any] | None) -> dict[str, Any
             int(normalized["consecutive_no_change"])
         except ValueError as exc:
             raise ValueError("--consecutive-no-change must be an integer") from exc
+    if normalized.get("material_change_generation") is not None:
+        try:
+            generation = int(normalized["material_change_generation"])
+        except ValueError as exc:
+            raise ValueError(
+                "--material-change-generation must be an integer"
+            ) from exc
+        if generation < 0:
+            raise ValueError(
+                "--material-change-generation must be a non-negative integer"
+            )
     if normalized.get("material_change") is not None and normalized["material_change"] not in {"true", "false"}:
         raise ValueError("--material-change metadata must be true or false")
     if normalized.get("watch_only") is not None and normalize_todo_watch_only(

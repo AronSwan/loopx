@@ -19,7 +19,7 @@ from .primary_action import protocol_action_text
 
 
 ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION = "quota_action_portfolio_request_v0"
-ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v1"
+ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v2"
 ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION = (
     "action_selection_qualification_request_v0"
 )
@@ -103,7 +103,17 @@ def _unavailable_higher_priority_candidates(
             continue
         candidate = dict(item)
         task_class = todo_item_task_class(candidate)
-        if task_class == TODO_TASK_CLASS_MONITOR and candidate.get("next_due_at"):
+        condition = (
+            candidate.get("resume_condition")
+            if isinstance(candidate.get("resume_condition"), Mapping)
+            else {}
+        )
+        if candidate.get("resume_when") and candidate.get("resume_ready") is False:
+            candidate["availability_reason"] = str(
+                condition.get("availability_reason")
+                or "resume_condition_pending"
+            )
+        elif task_class == TODO_TASK_CLASS_MONITOR and candidate.get("next_due_at"):
             candidate["availability_reason"] = "scheduled_for_future"
         elif candidate.get("status"):
             candidate["availability_reason"] = (

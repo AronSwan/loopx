@@ -16,6 +16,7 @@ CLI_OUTPUT_FIXTURE_CONTRACT_VERSION = "loopx_cli_output_public_fixture_v0"
 CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION = "loopx_cli_output_differential_v0"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V0 = "quota_action_portfolio_v0"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V1 = "quota_action_portfolio_v1"
+ACTION_PORTFOLIO_SCHEMA_VERSION_V2 = "quota_action_portfolio_v2"
 
 Metric = Literal["chars", "utf8_bytes", "lines", "compact_payload_chars"]
 
@@ -101,14 +102,15 @@ _GROWTH_ALLOWANCE_BY_POLICY: dict[str, GrowthAllowance] = {
     ),
 }
 
-# action_dimensions_v2 adds the bounded, executable fallback portfolio to the
-# signed hot path.  This allowance applies only while a base row migrates from
-# v0/v1 to v2; once v2 is the baseline, ordinary policy budgets apply again.
+# quota_action_portfolio_v1/v2 migrations add a bounded executable portfolio
+# and then inline the small action context needed to interpret each choice.
+# This allowance applies only to a declared schema transition; once v2 is the
+# baseline, ordinary policy budgets apply again.
 _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
-    "chars": 1_280,
-    "utf8_bytes": 1_280,
-    "lines": 36,
-    "compact_payload_chars": 896,
+    "chars": 1_600,
+    "utf8_bytes": 1_600,
+    "lines": 42,
+    "compact_payload_chars": 1_280,
 }
 
 
@@ -178,9 +180,18 @@ def _action_portfolio_schema_migration(
     allowed_migrations = {
         ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,)),
         ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,)),
+        ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,)),
         (
             (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,),
             (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,),
+        ),
+        (
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,),
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,),
+        ),
+        (
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,),
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,),
         ),
     }
     migration = (tuple(base_versions or []), tuple(candidate_versions or []))

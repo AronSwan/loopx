@@ -18,6 +18,7 @@ function candidate(todoId: string, text: string, priority: string) {
     claimed_by: "codex-main",
     required_capabilities: [`capability_${todoId}`],
     required_write_scopes: [`artifacts/${todoId}/**`],
+    continuation_hint: `Continue ${todoId} from its latest validated boundary.`,
   };
 }
 
@@ -37,7 +38,7 @@ test("action portfolio exposes one recommendation and bounded selectable alterna
     max_alternative_actions: 2,
   });
 
-  assert.equal(result?.schema_version, "quota_action_portfolio_v1");
+  assert.equal(result?.schema_version, "quota_action_portfolio_v2");
   assert.deepEqual(result?.selection_policy, {
     decision_owner: "agent",
     mode: "explicit_turn_binding",
@@ -55,6 +56,7 @@ test("action portfolio exposes one recommendation and bounded selectable alterna
       priority: "P0",
       required_capabilities: ["capability_todo_primary001"],
       required_write_scopes: ["artifacts/todo_primary001/**"],
+      continuation_hint: "Continue todo_primary001 from its latest validated boundary.",
       selection_role: "recommended",
     },
     {
@@ -63,6 +65,7 @@ test("action portfolio exposes one recommendation and bounded selectable alterna
       priority: "P1",
       required_capabilities: ["capability_todo_fallback001"],
       required_write_scopes: ["artifacts/todo_fallback001/**"],
+      continuation_hint: "Continue todo_fallback001 from its latest validated boundary.",
       selection_role: "alternative",
     },
     {
@@ -71,6 +74,7 @@ test("action portfolio exposes one recommendation and bounded selectable alterna
       priority: "P2",
       required_capabilities: ["capability_todo_fallback002"],
       required_write_scopes: ["artifacts/todo_fallback002/**"],
+      continuation_hint: "Continue todo_fallback002 from its latest validated boundary.",
       selection_role: "alternative",
     },
   ]);
@@ -170,6 +174,7 @@ test("pending selection qualifies only after current hard-lane arbitration", () 
     priority: successor.priority,
     required_capabilities: successor.required_capabilities,
     required_write_scopes: successor.required_write_scopes,
+    continuation_hint: successor.continuation_hint,
     selection_binding: "pending_action_selection",
   });
 

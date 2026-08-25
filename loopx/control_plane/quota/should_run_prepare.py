@@ -65,6 +65,7 @@ from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
     normalize_todo_replan_obligation_id,
+    normalize_todo_resume_when,
     normalize_todo_status,
 )
 from ..todos.projection import (
@@ -220,12 +221,20 @@ def _blocked_priority_fallback(
             and not projection_todo_item_is_expired_monitor(item)
             and not projection_todo_item_is_due_monitor(item)
         )
+        resume_condition_pending = bool(
+            normalize_todo_resume_when(item.get("resume_when"))
+            and item.get("resume_ready") is False
+        )
         if task_class != TODO_TASK_CLASS_ADVANCEMENT and not future_monitor:
             continue
         if item.get("done") is True:
             continue
         status = normalize_todo_status(item.get("status")) or TODO_STATUS_OPEN
-        if status == TODO_STATUS_OPEN and not future_monitor:
+        if (
+            status == TODO_STATUS_OPEN
+            and not future_monitor
+            and not resume_condition_pending
+        ):
             continue
         text = str(item.get("text") or "").strip()
         if not text:

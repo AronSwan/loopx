@@ -245,6 +245,12 @@ def write_monitor_poll_todo_state(
         )
     previous_hash = str(item.get("result_hash") or "").strip()
     previous_no_change = parse_monitor_counter(item.get("consecutive_no_change"))
+    previous_material_change_generation = parse_monitor_counter(
+        item.get("material_change_generation")
+    )
+    material_change_generation = previous_material_change_generation + (
+        1 if material_change and safe_result_hash != previous_hash else 0
+    )
     consecutive_no_change = (
         0
         if material_change or (previous_hash and previous_hash != safe_result_hash)
@@ -255,6 +261,7 @@ def write_monitor_poll_todo_state(
         "result_hash": safe_result_hash,
         "consecutive_no_change": str(consecutive_no_change),
         "material_change": "true" if material_change else "false",
+        "material_change_generation": str(material_change_generation),
     }
     if safe_target_key:
         monitor_metadata["target_key"] = safe_target_key
@@ -341,6 +348,7 @@ def write_monitor_poll_todo_state(
         "target_key": safe_target_key or None,
         "result_hash": safe_result_hash,
         "material_change": material_change,
+        "material_change_generation": material_change_generation,
         "consecutive_no_change": consecutive_no_change,
         "last_checked_at": generated_at,
         "next_due_at": effective_next_due_at,

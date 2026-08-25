@@ -10,7 +10,6 @@ from .file_lock import exclusive_file_lock
 from .history import load_registry
 from .paths import resolve_runtime_root
 from .rollout_event_log import load_rollout_events, rollout_event_log_path
-from .control_plane.runtime.local_state_write_correctness import build_todo_write_correctness_dry_run_packet
 from .state_refresh import now_local, resolve_goal_state
 from .status import (
     MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
@@ -98,6 +97,7 @@ from .control_plane.todos.list_projection import (
     todo_list_projection_contract,
 )
 from .control_plane.todos import monitor_metadata as todo_monitor_metadata
+from .control_plane.todos.external_wait_writeback import plan_todo_external_wait_update
 from .control_plane.todos.mutation_authority import authorize_todo_lifecycle_mutation, todo_update_authority_action
 from .control_plane.todos.todo_summary import compact_todo_group, todo_item_status
 from .control_plane.todos.succession_warning import build_open_parent_successor_advisory
@@ -110,6 +110,9 @@ from .control_plane.todos.unblock_resume import (
     apply_completed_user_todo_lifecycle,
     completion_decision_target,
     require_completion_decision_outcome,
+)
+from .control_plane.todos.write_correctness import (
+    attach_todo_write_correctness_dry_run_packet as _attach_todo_write_correctness_dry_run_packet,
 )
 from .control_plane.todos.write_policy import (
     require_user_gate_scope,
@@ -150,35 +153,6 @@ def require_registered_todo_excluded_agents(
     )
 
 
-def _attach_todo_write_correctness_dry_run_packet(
-    payload: dict[str, Any],
-    *,
-    goal_id: str,
-    write_class: str,
-    state_text: str,
-) -> dict[str, Any]:
-    if not payload.get("dry_run"):
-        return payload
-    todo_id = normalize_todo_id(str(payload.get("todo_id") or "")) or None
-    claimed_by = normalize_todo_claimed_by(payload.get("claimed_by"))
-    changed = bool(
-        payload.get("changed")
-        or payload.get("added")
-        or payload.get("metadata_updated")
-        or payload.get("completed")
-        or payload.get("superseded")
-    )
-    payload["local_state_write_correctness"] = build_todo_write_correctness_dry_run_packet(
-        goal_id=goal_id,
-        write_class=write_class,
-        state_text=state_text,
-        todo_id=todo_id,
-        role=str(payload.get("role") or ""),
-        section=str(payload.get("section") or ""),
-        claimed_by=claimed_by,
-        changed=changed,
-    )
-    return payload
 def resolve_todo_state_path(
     *,
     registry_path: Path,
@@ -1295,6 +1269,8 @@ def update_goal_todo(
         validation_failure = completion_validation_gate.get("failure")
         if validation_failure is not None:
             return validation_failure
+    external_wait_transition: dict[str, Any] | None = None
+    resume_monitor_generation: int | None = None
     with exclusive_file_lock(
         resolved_state_file,
         agent_id=agent_id or claimed_by,
@@ -1532,6 +1508,22 @@ def update_goal_todo(
         )
         if target_status == TODO_STATUS_DEFERRED and not effective_resume_when:
             raise ValueError("transition to deferred requires --resume-when with a supported condition")
+        external_wait_transition, resume_monitor_generation = (
+            plan_todo_external_wait_update(
+                lines=lines,
+                todo_id=todo_id,
+                resume_when=normalized_resume_when,
+                successor_todo_ids=(
+                    normalized_successor_todo_ids
+                    if successor_todo_ids is not None
+                    else None
+                ),
+                existing_successor_todo_ids=existing_block.get("successor_todo_ids"),
+                role=target_role,
+                status=target_status,
+                task_class=target_task_class,
+            )
+        )
         normalized_monitor_metadata = todo_monitor_metadata.require_monitor_metadata_scope(
             monitor_metadata=monitor_metadata,
             role=target_role,
@@ -1590,6 +1582,7 @@ def update_goal_todo(
             unblocks_todo_id=normalized_unblocks_todo_id,
             successor_todo_ids=normalized_successor_todo_ids if successor_todo_ids is not None else None,
             resume_when=normalized_resume_when,
+            resume_monitor_generation=resume_monitor_generation,
             clear_resume_when=clear_resume_when,
             no_followup=no_followup,
             completion_metadata_updates_override=(
@@ -1628,6 +1621,8 @@ def update_goal_todo(
         )
         if parent_successor_advisory:
             payload["parent_successor_advisory"] = parent_successor_advisory
+    if external_wait_transition is not None:
+        payload["external_wait_transition"] = external_wait_transition
     return _attach_todo_write_correctness_dry_run_packet(
         payload,
         goal_id=goal_id,
