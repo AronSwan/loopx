@@ -157,9 +157,19 @@ choice is now implemented rather than hypothetical.
 | Effect runtime and Turn journal ([#3416](https://github.com/huangruiteng/loopx/pull/3416)) | Effect algebra, settlement rules, runtime lifecycle, typed Turn-journal interpretation, and durable checkpoint effects | Python settlement facades still expose fine-grained calls and duplicate DTO/enum shapes |
 | Todo, quota, and scheduler proof slices ([#3431](https://github.com/huangruiteng/loopx/pull/3431)–[#3434](https://github.com/huangruiteng/loopx/pull/3434)) | Completion fence/state, workspace causality, and scheduler transitions each have one TS rule owner | The cuts are mostly leaf-shaped; Python still composes several product transactions |
 | Scheduler durable state ([#3440](https://github.com/huangruiteng/loopx/pull/3440)) | State normalization, persistence, replay, and one coarse transition are TS-owned | The Python compatibility path still pays a cross-runtime transport tax |
-| Scheduler heartbeat/state transaction | TypeScript owns ACK and host-failure validation, state construction, failure-cache transitions, replay/CAS fencing, and atomic writes | Python remains a compact-facts transport and legacy event projection while the external host adapter and CLI still live in Python |
+| Scheduler heartbeat/state transaction | TypeScript owns ACK and host-failure validation, state construction, failure-cache transitions, replay/CAS fencing, and atomic writes | Python retains only a direct native-command transport and legacy event projection; external host mutation remains Python |
 | Runtime decoders ([#3443](https://github.com/huangruiteng/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/huangruiteng/loopx/pull/3464), [#3481](https://github.com/huangruiteng/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown/event results; other domains still need their own bounded cutovers |
+
+The scheduler facade exit is now a concrete migration stage. A native
+`heartbeat_commit_cli.ts` accepts compact scheduler/host facts and owns the
+scoped state read, CAS digest, semantic effect identity, validation, replay,
+and locked write in one process. The managed `scheduler.heartbeat.commit`
+handler and the Python semantic bridge are removed. Python quota code remains
+only as a direct subprocess transport plus the compatibility event projection;
+the host automation adapter and its TOML/SQLite writes are intentionally still
+Python. The final deletion trigger for that retained code is moving the host
+adapter and scheduler CLI/projection to the same native transaction boundary.
 
 These slices proved correctness, packaging, Windows lifecycle, crash recovery,
 real TS-owned writes, and acceptable warm primitive-call latency. They also
