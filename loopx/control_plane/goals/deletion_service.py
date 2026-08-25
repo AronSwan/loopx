@@ -52,8 +52,11 @@ def _backup_path(path: Path, timestamp: str, nonce: str) -> Path:
 def _create_backup(path: Path, *, timestamp: str) -> Path:
     """Create an independent snapshot without ever overwriting an old backup."""
 
+    source_path = path.expanduser().resolve(strict=True)
+    if not source_path.is_file():
+        raise ValueError(f"registry path is not a regular file: {source_path}")
     for _ in range(8):
-        backup = _backup_path(path, timestamp, uuid.uuid4().hex)
+        backup = _backup_path(source_path, timestamp, uuid.uuid4().hex)
         try:
             descriptor = os.open(
                 backup,
@@ -63,16 +66,16 @@ def _create_backup(path: Path, *, timestamp: str) -> Path:
         except FileExistsError:
             continue
         try:
-            with path.open("rb") as source, os.fdopen(descriptor, "wb") as target:
+            with source_path.open("rb") as source, os.fdopen(descriptor, "wb") as target:
                 shutil.copyfileobj(source, target)
                 target.flush()
                 os.fsync(target.fileno())
-            shutil.copystat(path, backup)
+            shutil.copystat(source_path, backup)
         except Exception:
             backup.unlink(missing_ok=True)
             raise
         return backup
-    raise FileExistsError(f"could not allocate a unique Goal deletion backup for {path}")
+    raise FileExistsError(f"could not allocate a unique Goal deletion backup for {source_path}")
 
 
 def _remove_goal(payload: dict[str, Any], goal_id: str) -> tuple[dict[str, Any], bool]:
