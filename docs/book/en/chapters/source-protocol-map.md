@@ -264,8 +264,8 @@ Protocols define cross-module contracts. Bounded contexts identify which change 
 
 On the `v0.5.2` migration baseline, bounded context and implementation language are separate dimensions.
 Some rules under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` already have
-TypeScript semantic owners beside Python modules that may serve only as CLI transport, legacy projection,
-or an explicit external-Provider adapter. Read the shipped baseline in the
+TypeScript semantic owners beside Python facade modules that may serve only as CLI transport, legacy
+projection, or an explicit external-Provider adapter. Read the shipped baseline in the
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
 and trace the active request handler and caller before assigning ownership. A Python entrypoint does not
 prove that Python still owns the decision.

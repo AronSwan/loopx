@@ -99,7 +99,8 @@ Command snippets fall into three categories:
 
 The English and Chinese editions share the same product facts. The Chinese root edition is the editorial
 source of truth; the English edition is organized for English-speaking external developers rather than
-maintained as a separate product specification.
+maintained as a separate product specification. The two editions are semantic mirrors: a material
+difference in version facts, status, commands, boundaries, or conclusions is a documentation defect.
 
 | Subject | Authority |
 | --- | --- |

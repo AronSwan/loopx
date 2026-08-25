@@ -252,8 +252,8 @@ proof。
 
 在 `v0.5.2` 的迁移基线上，bounded context 和实现语言是两个维度。部分
 `goals`、`todos`、`quota`、`scheduler`、`work_items` 与 `turn_driver` 规则已经由同目录下的
-TypeScript module 拥有语义，Python module 可能只是 CLI transport、legacy projection 或外部
-Provider adapter。定位 owner 时应先读
+TypeScript module 拥有语义，Python facade/module 可能只是 CLI transport、legacy projection
+或外部 Provider adapter。定位 owner 时应先读
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
 的 shipped baseline，再沿真实 request handler 和 caller 判断；不要因为入口仍是 Python，就默认
 Python 仍拥有该 decision。
