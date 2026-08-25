@@ -413,7 +413,7 @@ def _adjudicate_touching_contradictions(
     not end up adjudicated against a cited claim: otherwise the citation report
     would back the answer with a side the ledger itself ruled out. Open ones
     are resolved in this transition, but only toward a side that belongs to the
-    answer's evidence.
+    answer's evidence, and the overruled side must not be cited.
     """
     touching = [
         x
@@ -421,50 +421,62 @@ def _adjudicate_touching_contradictions(
         if x["claim_a"] in evidence_claims or x["claim_b"] in evidence_claims
     ]
     for contradiction in touching:
-        if (
-            contradiction["status"] == "resolved"
-            and contradiction["sides_with"] not in evidence_claims
-        ):
-            overruled = next(
-                cid
-                for cid in (contradiction["claim_a"], contradiction["claim_b"])
-                if cid in evidence_claims
+        if contradiction["status"] == "resolved":
+            loser = (
+                contradiction["claim_b"]
+                if contradiction["sides_with"] == contradiction["claim_a"]
+                else contradiction["claim_a"]
             )
-            raise ValueError(
-                f"contradiction {contradiction['id']} was resolved against "
-                f"{overruled}; an answer cannot cite the overruled side — cite the "
-                f"adjudicated {contradiction['sides_with']} instead or drop "
-                f"{overruled} from --evidence-claims"
-            )
+            if loser in evidence_claims:
+                raise ValueError(
+                    f"contradiction {contradiction['id']} was resolved against "
+                    f"{loser}; an answer cannot cite the overruled side — cite the "
+                    f"adjudicated {contradiction['sides_with']} instead or drop "
+                    f"{loser} from --evidence-claims"
+                )
     by_id = {r.get("contradiction_id"): r for r in contradiction_resolutions}
+    validated_resolutions: list[tuple[dict[str, Any], str, str]] = []
     for contradiction in touching:
         if contradiction["status"] != "open":
             continue
-        resolution = by_id.get(contradiction["id"])
+        cid = contradiction["id"]
+        resolution = by_id.get(cid)
         if resolution is None:
             raise ValueError(
-                f"open contradiction {contradiction['id']} involves your evidence; "
+                f"open contradiction {cid} involves your evidence; "
                 "resolve it via --contradiction-resolution with an explicit sides-with "
                 "claim id and rationale"
             )
+        claim_a, claim_b = contradiction["claim_a"], contradiction["claim_b"]
         sides_with = resolution.get("sides_with")
-        if sides_with not in {contradiction["claim_a"], contradiction["claim_b"]}:
+        if sides_with not in {claim_a, claim_b}:
             raise ValueError(
-                f"contradiction {contradiction['id']} resolution must side with "
-                f"{contradiction['claim_a']} or {contradiction['claim_b']}"
+                f"contradiction {cid} resolution must side with "
+                f"{claim_a} or {claim_b}"
             )
         if sides_with not in evidence_claims:
             raise ValueError(
-                f"contradiction {contradiction['id']} resolution sides with "
+                f"contradiction {cid} resolution sides with "
                 f"{sides_with}, which is not among this question's evidence claims "
                 f"{evidence_claims}; the adjudicated side must back the answer — "
                 "cite it in --evidence-claims"
             )
+        loser = claim_b if sides_with == claim_a else claim_a
+        if loser in evidence_claims:
+            raise ValueError(
+                f"contradiction {cid} was resolved against "
+                f"{loser}; an answer cannot cite the overruled side — cite the "
+                f"adjudicated {sides_with} instead or drop "
+                f"{loser} from --evidence-claims"
+            )
         rationale = str(resolution.get("rationale", "")).strip()
         if not rationale:
             raise ValueError(
-                f"contradiction {contradiction['id']} resolution needs a non-empty rationale"
+                f"contradiction {cid} resolution needs a non-empty rationale"
             )
+        validated_resolutions.append((contradiction, sides_with, rationale))
+
+    for contradiction, sides_with, rationale in validated_resolutions:
         contradiction["status"] = "resolved"
         contradiction["sides_with"] = sides_with
         contradiction["resolution"] = rationale

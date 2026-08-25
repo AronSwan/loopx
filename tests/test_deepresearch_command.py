@@ -283,7 +283,7 @@ def test_contradiction_blocks_resolution_until_sides_with_rationale(tmp_path: Pa
     assert status["packet"]["ledger_summary"]["open_contradictions"] == 1
 
     blocked = _resolve_question(
-        tmp_path, question_id="q1", answer="something", evidence=["c1", "c2"]
+        tmp_path, question_id="q1", answer="something", evidence=["c1"]
     )
     assert "open contradiction x1" in json.loads(blocked.stdout)["error"]
 
@@ -292,13 +292,70 @@ def test_contradiction_blocks_resolution_until_sides_with_rationale(tmp_path: Pa
             tmp_path,
             question_id="q1",
             answer="The gate runs per turn; the hourly source described a different cadence.",
-            evidence=["c1", "c2"],
+            evidence=["c1"],
             resolutions=[
                 "contradiction-id=x1 sides-with=c1 rationale='primary source shows per-turn admission'"
             ],
         )
     )
     assert resolved["packet"]["ledger_summary"]["open_contradictions"] == 0
+
+
+def test_in_call_resolution_rejects_citing_both_sides_of_contradiction(tmp_path: Path) -> None:
+    # Reviewer probe (r6): resolving q1 with evidence citing both c1 and c2
+    # while adjudicating sides-with=c1 must be rejected before state mutation.
+    _start(tmp_path)
+    _seed_contradiction(tmp_path)
+    result = _resolve_question(
+        tmp_path,
+        question_id="q1",
+        answer="The gate runs per turn.",
+        evidence=["c1", "c2"],
+        resolutions=[
+            "contradiction-id=x1 sides-with=c1 rationale='primary source shows per-turn admission'"
+        ],
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "resolved against c2" in data["error"]
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["questions"][0]["status"] == "open"
+    assert state["contradictions"][0]["status"] == "open"
+
+
+def test_pre_resolved_contradiction_rejects_citing_both_sides(tmp_path: Path) -> None:
+    _start(tmp_path)
+    _seed_contradiction(tmp_path)
+    _payload(
+        _run_cli(
+            "deepresearch",
+            "resolve-contradiction",
+            "--project",
+            ".",
+            "--contradiction-id",
+            "x1",
+            "--sides-with",
+            "c1",
+            "--rationale",
+            "primary source is authoritative",
+            cwd=tmp_path,
+        )
+    )
+    result = _resolve_question(
+        tmp_path,
+        question_id="q1",
+        answer="Per turn.",
+        evidence=["c1", "c2"],
+    )
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert "resolved against c2" in data["error"]
+    state = json.loads(
+        (tmp_path / ".loopx" / "deepresearch" / "research.json").read_text(encoding="utf-8")
+    )
+    assert state["questions"][0]["status"] == "open"
 
 
 def test_coverage_stop_when_recent_sources_add_no_claims(tmp_path: Path) -> None:
