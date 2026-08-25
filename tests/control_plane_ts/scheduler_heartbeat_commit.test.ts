@@ -117,6 +117,7 @@ test("CAS rejects a stale writer and leaves the newer state unchanged", async (t
     generated_at: "2026-08-24T08:01:00Z",
   }));
   assert.equal(update.status, "written");
+  assert.equal(update.state?.progression_index, 1);
 
   const stale = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
     effect_id: "heartbeat-effect-stale",
@@ -132,6 +133,30 @@ test("CAS rejects a stale writer and leaves the newer state unchanged", async (t
   });
   const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
   assert.equal(persisted.last_applied_rrule, "FREQ=MINUTELY;INTERVAL=30");
+});
+
+test("same-identity progression cannot skip cadence stages", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
+  const path = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const before = await readFile(path, "utf8");
+  const skipped = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    effect_id: "heartbeat-effect-skip",
+    progression_index: 2,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=60",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=60",
+    expected_state_digest: first.state_digest,
+    generated_at: "2026-08-24T08:01:00Z",
+  }));
+  assert.equal(skipped.status, "conflict");
+  assert.equal(skipped.reason_code, "progression_skip_conflict");
+  assert.equal(skipped.state_digest, first.state_digest);
+  assert.equal(await readFile(path, "utf8"), before);
 });
 
 test("host failure increments a matching target/host pair", async (t) => {

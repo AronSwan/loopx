@@ -771,6 +771,21 @@ export async function evaluateSchedulerHeartbeatCommit(
         { reason_code: "progression_regression" },
       );
     }
+    if (
+      existing !== null &&
+      identityMatches &&
+      typeof existing.progression_index === "number" &&
+      request.progression_index > existing.progression_index + 1
+    ) {
+      return result(
+        request,
+        path,
+        "conflict",
+        existing,
+        "scheduler heartbeat progression cannot skip a cadence stage",
+        { reason_code: "progression_skip_conflict" },
+      );
+    }
     const built = request.operation === "ack"
       ? buildAckState(request, existing, path, fingerprint)
       : buildHostFailureState(request, existing, path, fingerprint);
