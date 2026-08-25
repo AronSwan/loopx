@@ -1,5 +1,6 @@
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import { isStringLiteral } from "./runtime_decode.ts";
+import { decodeInteractionContract } from "./work_items/interaction_contract.ts";
 
 export {
   RECEIPT_BOUND_MONITOR_PHASES,
@@ -282,7 +283,7 @@ export function interpretQuotaShouldRunPacket(
   } = {},
 ): EffectTurn<JsonObject, string> {
   const packet = asObject(packetValue);
-  const interaction = asObject(packet.interaction_contract);
+  const interaction = decodeInteractionContract(packet.interaction_contract);
   const lane = asObject(packet.work_lane_contract);
   const scheduler = asObject(packet.scheduler_hint);
   const codexApp = asObject(scheduler.codex_app);
