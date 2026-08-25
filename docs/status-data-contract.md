@@ -1023,8 +1023,12 @@ Item fields:
   the current peer before an agent-scoped no-candidate wait is allowed.
   Open todos may also carry `resume_when`; status should attach
   `resume_condition` / `resume_ready` but keep the item out of executable
-  backlog until `resume_ready=true`. This lets agents see not-yet-unlocked
-  successors without accidentally selecting them as current work.
+  backlog until `resume_ready=true`. A `monitor_changed:<todo_id>` condition
+  additionally carries `resume_monitor_generation`, while the target monitor
+  carries monotonic `material_change_generation`; readiness requires the
+  latter to be strictly greater. This lets agents see not-yet-unlocked
+  successors without accidentally selecting them as current work or waking on
+  an unchanged/replayed monitor result.
   Optional future fields such as `created_at`, lease TTLs, dependencies, or
   evidence links should extend this item shape rather than inventing another
   todo surface.

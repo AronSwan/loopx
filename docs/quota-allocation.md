@@ -423,7 +423,10 @@ Open todos with `resume_when` use the same readiness signal before they enter
 ordinary execution lanes. Until `resume_ready=true`, quota must not include the
 todo in `capability_gate.runnable_candidates` or `agent_lane_next_action`; it
 may continue with a lower-priority executable fallback when the interaction
-contract allows safe scoped fallback work.
+contract allows safe scoped fallback work. The action portfolio keeps a
+higher-priority typed wait visible as `availability_reason=resume_condition_pending`
+while making the runnable fallback and its bounded continuation context the
+default model-facing action.
 
 If an active per-agent vision has no other selectable advancement and its
 existing current-agent or unclaimed successor is blocked by an exact supported

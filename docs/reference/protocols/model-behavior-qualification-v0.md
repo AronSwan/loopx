@@ -313,19 +313,27 @@ retain a retired product arm. Its fixed catalog covers ten core decisions:
 10. a missing executable todo with an actionable projection selects
    `repair_projection`.
 
-It also carries three control-plane composition decisions. These are not wider
+It also carries two action-portfolio decisions:
+
+11. a future higher-priority monitor stays visible while the ready fallback is
+    selected;
+12. an open higher-priority advancement Todo with a pending typed
+    `monitor_changed` condition stays visible while the compact default packet
+    selects the independent fallback and includes its bounded continuation.
+
+It then carries three control-plane composition decisions. These are not wider
 snapshots; each packet is generated through the production quota, interaction,
 and scheduler paths and deliberately contains competing signals:
 
-11. two equivalent typed observations select autonomous replan; quota
+13. two equivalent typed observations select autonomous replan; quota
     host-projects the compact evidence ledger, the model reads the real
     uncovered frontier/source, and it persists a semantic delta. A runnable
     successor is one exact-obligation Todo transition with an immediate turn
     boundary, not a read-plus-ACK sequence;
-12. an open user notice coexists with a ready deferred successor, so the model
+14. an open user notice coexists with a ready deferred successor, so the model
     must surface the notice and execute the successor replan rather than treat
     every `user_action_required` value as a blocking gate;
-13. unavailable capability blocks the visible advancement, while an incomplete
+15. unavailable capability blocks the visible advancement, while an incomplete
     monitor schedule remains as a fallback, so the agent must verify the
     capability at the blocked Todo's real callsite and re-enter quota in the
     same heartbeat rather than create a repair Todo, wait on or update the
@@ -333,12 +341,12 @@ and scheduler paths and deliberately contains competing signals:
 
 Three compaction scenarios exercise the actual default CLI projection:
 
-14. an over-budget packet preserves its selected todo and execute route after
+16. an over-budget packet preserves its selected todo and execute route after
     repeated candidate, warning, and peer diagnostics move to cold paths;
-15. the same selected-work contract is presented once cleanly and once with
+17. the same selected-work contract is presented once cleanly and once with
     over-budget omitted diagnostics, and both must produce the same hard
     behavior fields;
-16. the same blocking user gate is presented cleanly and with over-budget
+18. the same blocking user gate is presented cleanly and with over-budget
     omitted diagnostics, and both must still select `ask_user`.
 
 The portfolio evaluates four bounded contrast groups over those scenario
@@ -364,8 +372,8 @@ action-signature tests; explicit pair/corpus mode retains TurnEnvelope and
 semantic-contract extraction when a packet differential is the thing under
 test. All attempts must align. Actor or transport errors are not retried
 automatically; the portfolio fails closed and stops further calls. The catalog
-has 32 bounded scenario attempts. With the bounded per-scenario tool budgets,
-the maximum regular run is 92 provider turns.
+has 36 bounded scenario attempts. With the bounded per-scenario tool budgets,
+the maximum regular run is 96 provider turns.
 Generic full-versus-candidate pair mode remains available only
 for temporary sensitive differentials or explicit stable-versus-candidate
 outcome claims, not as a permanent regular-behavior baseline.
