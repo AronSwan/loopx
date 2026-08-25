@@ -9,6 +9,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.control_plane.testing.quota_fixtures import (  # noqa: E402
     quota_status_payload,
     quota_todo_item,
@@ -30,6 +33,9 @@ READY_DEFERRED_ID = "todo_ready_deferred_p0"
 GATED_ACTION = "[P0] Review refreshed projection wording."
 FALLBACK_ACTION = "[P1] Continue catalog-driven product canary coverage."
 ARCHIVE_MONITOR_ACTION = "[P1] Monitor product refactor/catalog canary continuation."
+APP_SCHEDULER_CONTEXT = scheduler_execution_context_for_runtime_profile(
+    "codex_app_heartbeat"
+)
 
 
 def build_agent_todos(*, prerequisite_status: str) -> dict:
@@ -65,7 +71,12 @@ def build_agent_todos(*, prerequisite_status: str) -> dict:
     return agent_todos
 
 
-def status_payload(agent_todos: dict, *, next_action: str) -> dict:
+def status_payload(
+    agent_todos: dict,
+    *,
+    next_action: str,
+    user_todos: dict | None = None,
+) -> dict:
     coordination = {
         "agent_model": "peer_v1",
         "registered_agents": [PRIMARY_AGENT, "codex-side-bypass", AGENT_ID],
@@ -76,6 +87,7 @@ def status_payload(agent_todos: dict, *, next_action: str) -> dict:
         recommended_action=next_action,
         next_action=next_action,
         agent_todos=agent_todos,
+        user_todos=user_todos,
         coordination=coordination,
     )
 
@@ -197,6 +209,73 @@ def assert_ready_deferred_p0_preempts_open_p1_for_successor_replan() -> None:
     assert equal_priority["selected_todo"]["todo_id"] == FALLBACK_TODO_ID, equal_priority
 
 
+def assert_nonblocking_user_action_preserves_successor_replan() -> None:
+    deferred_action = "[P0] Resume the validated release successor."
+    agent_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id=BLOCKING_TODO_ID,
+                index=1,
+                text="[P0] Complete the release prerequisite.",
+                status="done",
+                claimed_by=PRIMARY_AGENT,
+            ),
+            quota_todo_item(
+                todo_id=READY_DEFERRED_ID,
+                index=2,
+                text=deferred_action,
+                status="deferred",
+                claimed_by=AGENT_ID,
+                resume_when=f"todo_done:{BLOCKING_TODO_ID}",
+            ),
+        ],
+        role="agent",
+    )
+    user_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id="todo_optional_user_action",
+                index=3,
+                role="user",
+                task_class="user_action",
+                text="Review the optional setting.",
+                bound_agent=AGENT_ID,
+            )
+        ],
+        role="user",
+    )
+    quota_payload = build_quota_should_run(
+        status_payload(
+            agent_todos,
+            next_action=deferred_action,
+            user_todos=user_todos,
+        ),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        scheduler_execution_context=APP_SCHEDULER_CONTEXT,
+    )
+
+    assert quota_payload["decision"] == "successor_replan_required", quota_payload
+    assert quota_payload["selected_todo"]["todo_id"] == READY_DEFERRED_ID, quota_payload
+    obligation = quota_payload["execution_obligation"]
+    contract = quota_payload["interaction_contract"]
+    assert obligation["must_attempt_work"] is True, quota_payload
+    assert obligation["delivery_allowed"] is False, quota_payload
+    assert contract["mode"] == "successor_replan_required", contract
+    assert contract["user_channel"]["action_required"] is False, contract
+    assert contract["user_channel"]["notify"] == "NOTIFY", contract
+    assert contract["user_channel"]["non_blocking"] is True, contract
+    assert contract["agent_channel"]["must_attempt"] is True, contract
+    assert contract["agent_channel"]["delivery_allowed"] is False, contract
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False, contract
+    assert "response_plan" not in contract, contract
+    assert "loopx todo update" in contract["cli_channel"]["next_cli_actions"][0], contract
+    assert READY_DEFERRED_ID in contract["cli_channel"]["next_cli_actions"][0], contract
+    scheduler = quota_payload["scheduler_hint"]
+    assert scheduler["action"] == "run_now", scheduler
+    assert scheduler["cadence_class"] == "active_work", scheduler
+
+
 def assert_archived_done_resume_target_wakes_claimed_monitor() -> None:
     fields = parse_active_state_todos(
         "# Active Goal State\n\n"
@@ -257,6 +336,7 @@ def main() -> int:
     assert_not_ready_open_resume_todo_is_not_executable()
     assert_ready_open_resume_todo_can_run()
     assert_ready_deferred_p0_preempts_open_p1_for_successor_replan()
+    assert_nonblocking_user_action_preserves_successor_replan()
     assert_archived_done_resume_target_wakes_claimed_monitor()
     print("quota-resume-gated-open-todo-smoke ok")
     return 0

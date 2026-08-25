@@ -15,6 +15,9 @@ from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
 from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
+from loopx.control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.control_plane.testing.actual_default_model_behavior_portfolio import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET,
     actual_default_model_behavior_scenario_catalog,
@@ -42,6 +45,11 @@ from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
 )
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+    quota_todo_summary,
+)
 from loopx.control_plane.testing.onboarding_model_behavior_qualification import (
     ONBOARDING_MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION,
     ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION,
@@ -68,6 +76,7 @@ from loopx.control_plane.testing.selected_todo_tool_behavior import (
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
     DoubaoTerminalSettlementToolBehaviorActor,
 )
+from loopx.quota import build_quota_should_run
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
     _build_fixture as _build_terminal_settlement_fixture,
 )
@@ -136,6 +145,75 @@ def _turn_actor(request: Mapping[str, Any]) -> dict[str, Any]:
         "decision": _turn_decision(request),
         "tool_calls": [],
     }
+
+
+def test_weak_turn_actor_executes_required_successor_replan_with_user_notice() -> None:
+    agent_id = "codex-weak-turn-fixture"
+    prerequisite_id = "todo_weak_prerequisite"
+    successor_id = "todo_weak_ready_successor"
+    agent_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id=prerequisite_id,
+                index=1,
+                text="[P0] Complete the predecessor.",
+                status="done",
+                claimed_by=agent_id,
+            ),
+            quota_todo_item(
+                todo_id=successor_id,
+                index=2,
+                text="[P0] Resume the deferred successor.",
+                status="deferred",
+                claimed_by=agent_id,
+                resume_when=f"todo_done:{prerequisite_id}",
+            ),
+        ]
+    )
+    user_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id="todo_weak_optional_notice",
+                index=3,
+                role="user",
+                task_class="user_action",
+                text="Review the optional setting.",
+                bound_agent=agent_id,
+            )
+        ],
+        role="user",
+    )
+    packet = build_quota_should_run(
+        quota_status_payload(
+            goal_id="weak-successor-replan-fixture",
+            status="active",
+            recommended_action="Resume the deferred successor.",
+            agent_todos=agent_todos,
+            user_todos=user_todos,
+            coordination={
+                "agent_model": "peer_v1",
+                "registered_agents": [agent_id],
+            },
+        ),
+        goal_id="weak-successor-replan-fixture",
+        agent_id=agent_id,
+        scheduler_execution_context=(
+            scheduler_execution_context_for_runtime_profile(
+                "codex_app_heartbeat"
+            )
+        ),
+    )
+
+    decision = _turn_decision({"packet": packet})
+
+    assert decision["decision"] == "execute", decision
+    assert decision["selected_todo_id"] == successor_id, decision
+    assert decision["user_action_required"] is False, decision
+    assert decision["must_attempt_work"] is True, decision
+    assert decision["delivery_allowed"] is False, decision
+    assert decision["quiet_noop_allowed"] is False, decision
+    assert packet["interaction_contract"]["user_channel"]["non_blocking"] is True
+    assert "response_plan" not in packet["interaction_contract"]
 
 
 def _onboarding_actor(request: Mapping[str, Any]) -> dict[str, Any]:
