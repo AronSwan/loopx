@@ -335,7 +335,13 @@ function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
   const hostMatchObserved = request.host_match_observed === undefined
     ? false
     : requiredBoolean(request.host_match_observed, "host_match_observed");
-  const source = textOrDefault(request.source, "source", "quota_scheduler_ack");
+  const source = textOrDefault(
+    request.source,
+    "source",
+    operation === "host_failure"
+      ? "quota_scheduler_host_update_failure"
+      : "quota_scheduler_ack",
+  );
   const staleToleranceMinutes = request.stale_tolerance_minutes === undefined
     ? SCHEDULER_ACK_STALE_HINT_TOLERANCE_MINUTES
     : requiredInteger(request.stale_tolerance_minutes, "stale_tolerance_minutes");

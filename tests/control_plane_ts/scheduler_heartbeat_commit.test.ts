@@ -165,6 +165,7 @@ test("host-failure facts advance after the caller observes the failure cache", a
   const first = await evaluateSchedulerHeartbeatHostFacts(initialFacts);
   assert.equal(first.status, "written");
   assert.equal(first.failure_count, 1);
+  assert.equal(first.state?.source, "quota_scheduler_host_update_failure");
 
   const retry = await evaluateSchedulerHeartbeatHostFacts({
     ...initialFacts,
