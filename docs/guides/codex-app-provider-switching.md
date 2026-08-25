@@ -1,284 +1,458 @@
-# Codex App 多 Provider 本地切换 Runbook
+# Codex App 多订阅与多 Provider 切换 Runbook
 
-> 配套文档：多 App 并存（GPT 官方版 + DeepSeek 版）的隔离与排障见
+> 配套文档：需要长期保留两个独立 App / `CODEX_HOME` 时，参见
 > [Codex 多 App 隔离与运维最佳实践（中文）](codex-multi-app-best-practices.zh-CN.md)。
 
 ## 定位
 
-这是一份面向操作者的本地环境 runbook，不是 LoopX capability。它解决一个具体问题：在同一个 Codex App 前端下，把不同的模型 provider 映射到同一个模型 slug，并保持 session、配置、思考过程和工具能力稳定。
+这是一份面向操作者的 qualification runbook，不是 LoopX capability。它描述如何在
+同一个 Codex App 中暴露多个 Codex 订阅与第三方 Responses provider，并把手动模型
+选择、额度耗尽后的自动切换、轨迹兼容和离线迁移放在清晰的责任边界内。
 
-LoopX 的 capability 目录要求至少存在一个真实 CLI entrypoint 和一个 smoke test。这份 runbook 目前没有独立 CLI 或可验证的 capability 产物，因此属于 `docs/guides/` 下的操作知识；只有当其中的切换机制被抽象成可安装、可测试的适配器时，才适合升级到 `docs/integrations/`，或成为 `loopx/capabilities/<capability>/` 下的 package-owned contract。
+LoopX 只记录目标、门禁、证据和回滚状态。它不保存 OAuth token，不成为模型请求代理，
+也不接管 Codex 的 session store。
 
-## 目标
+## 结论先行
 
-- 保持前端始终是同一个 Codex App 实例和同一个 `CODEX_HOME`。
-- 在多个 provider 之间切换，不迁移、不混用 session。
-- 兼容 Codex 只使用 Responses API 的约束。
-- 兼容不同 provider 只有 Chat Completions 上游的情况。
-- 避免把 API key 写入可提交文件。
-- 避免 GPT/DeepSeek 等不同 session 归属互相污染。
+采用 **CPA + AgentSwap**，但不要把两者串成双层代理：
 
-## 非目标
+| 组件 | 唯一职责 | 不负责 |
+| --- | --- | --- |
+| [CLIProxyAPI（CPA）](https://github.com/router-for-me/CLIProxyAPI) | 唯一在线 data plane：多账号选择、请求路由、同一任务的 provider-specific 轨迹投影、首字节前 failover、Responses/SSE 兼容 | 写 Codex 本地 rollout、跨 harness 搬运 session |
+| [AgentSwap](https://github.com/bojieli/agentswap) | 离线 sidecar：显式 `teleport` / `handoff`、超长轨迹机械压缩、隔离迁移与灾难恢复 | 每次请求的热切换、第二层 retry / health / sticky routing |
+| [CC Switch](https://github.com/farion1231/cc-switch) | 登录引导、凭据/profile 导入、升级前快照和回滚入口 | 每 turn 替换 `config.toml`、重启 App、在线路由 |
 
-- 不新增 LoopX kernel 状态、todo 语义或调度权限。
-- 不处理远端开发机与本地机器的双向同步。
-- 不把本地私人配置、key、session id 或日志发布到公开仓库。
+如果只能保留一个核心组件，保留 CPA。没有 AgentSwap，日常在线切换仍可运行；没有 CPA，
+同一 App 内的多订阅选择和透明额度 failover 无法成立。
 
-## 关键约束
+## 锁定的 qualification baseline
 
-1. Codex App / Codex CLI 的 custom provider 配置中，`wire_api` 当前只支持 `responses`。直接指向只提供 `chat/completions` 的上游不会生效。
-2. 同一个 `CODEX_HOME` 下的 session 由 app-server 管理。切换 provider 时如果修改了 session 归属字段，历史会话可能被错误地标记到另一个 provider。
-3. ChatGPT/Codex App 的 GPT 官方 session 与第三方 provider 的 session 不兼容。实践中应使用不同的 `CODEX_HOME`，并通过只读 peer bridge 提供跨 home 查阅能力，而不是让两者共享同一份 SQLite 状态。
-4. 切换 provider 时，`~/.codex/config.toml` 会被替换或合并。MCP server、项目信任、features 等公共配置需要由 CC Switch 的 common config 或 profile 模板统一维护，避免切换后丢失。
-5. 前端显示的模型名可以保持不变，即使底层 provider 变了。这是 feature 而不是 bug：模型 slug 是前端/会话层标识，provider 是请求路由层标识。
+在升级前锁定 commit，不直接跟随上游 `main`：
+
+| 项目 | 锁定版本 | 本 runbook 使用的边界 |
+| --- | --- | --- |
+| CPA self-use pin | [`2aa8c43a3bb6b3a39d969fb0b58981f578016c1e`](https://github.com/huangruiteng/CLIProxyAPI/commit/2aa8c43a3bb6b3a39d969fb0b58981f578016c1e) | 多 Codex OAuth、provider-bound history、commit-before-failover、Ark Responses/SSE normalizer；在上游合并前也可按 digest 构建自用 |
+| CPA upstream release baseline | [`a7e3596b7e351d800e58ed29529fbca3d1c18737`](https://github.com/router-for-me/CLIProxyAPI/commit/a7e3596b7e351d800e58ed29529fbca3d1c18737) | `fill-first`、priority、prefix、session affinity、stream bootstrap buffering、OpenAI-compatible provider 的原始基线 |
+| CPA candidate upstream base | [`ca601db05d858472b25e7c56580555ab62b90e68`](https://github.com/router-for-me/CLIProxyAPI/commit/ca601db05d858472b25e7c56580555ab62b90e68) | [PR #5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220) 自动 retarget 到 `dev` 后使用的集成与回归基线；不是安装 pin |
+| AgentSwap | [`c9b76f4a4adae81274eb8f52d428bba925a1a7ef`](https://github.com/bojieli/agentswap/commit/c9b76f4a4adae81274eb8f52d428bba925a1a7ef) | `teleport` / `handoff`、`--dry-run`、`--compact`、`--budget` |
+| Codex protocol reference | [`40b7560169c7274147a47f9b0c75db89fe016d34`](https://github.com/openai/codex/commit/40b7560169c7274147a47f9b0c75db89fe016d34) | `ResponseItem::Reasoning`、history normalization 和 remote compaction 行为的源码参照 |
+| CC Switch | [`43eaf07355af145aebfee301801779e824d4c221`](https://github.com/farion1231/cc-switch/commit/43eaf07355af145aebfee301801779e824d4c221)（v3.19.2） | 只作为 bootstrap / rollback 基线，不进入请求链路 |
+
+锁定 commit 只是可复现实验起点，不等于四个项目已经共同承诺兼容。每次升级都重新运行
+本文的 compatibility matrix；通过后再修改 pin。
+
+## 当前 qualification snapshot
+
+当前参考部署只有两个有效 Codex 订阅，记为 A、B；C 是未来扩容保留位，不应出现在
+当前生产 selector 或 failover 队列中。目标态仍允许增加 C，但配置和验收必须以“实际
+存在的 credential”为准，不能用空 profile 假装第三个可用账号。
+
+锁定 CPA baseline 上形成的 candidate 已 forward-port 到当前 `dev`，并提交为
+[CLIProxyAPI PR #5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220)。该 PR 的 fork head
+`2aa8c43a` 已作为当前 self-use pin 完成资格验证；上游 merge 仍是升级与公共分发渠道，
+不再是本机自用的前置条件。上游合并后仍须锁定 merge commit，并重新运行本文矩阵。
+当前证据边界如下：
+
+| Surface | 当前进展 | 证据边界 |
+| --- | --- | --- |
+| A → B credential failover | loopback 与 live 均通过 | `fill-first`、priority、session affinity 与 commit 前 stream failover 已验证；live auto 请求在 A 建连失败后由 B 完成 |
+| Provider-bound history normalization | candidate 与 stale-task 投影通过 | 同 provider 的 A → B 也视为 scope 变化；跨 scope 时移除异源 identity / opaque state，保留可移植 summary，并校验 tool call/result 因果链；只读 stale task 投影未改写源 rollout |
+| Ark Responses SSE lifecycle normalizer | candidate 与真实 endpoint 通过 | 只对显式 `is-compat: true` 的模型启用；原生 Codex stream 保持原字节路径；真实 Ark HTTP/SSE 返回完整 lifecycle |
+| A → B → Ark 组合路径 | loopback 与分层 live 证据通过 | 合成 quota 链 5/5 通过；live A → B 在同一请求完成；隔离禁用 A/B 后 auto 由 Ark 完成并恢复 auth 状态 |
+| Codex App selector projection | App Server 与 bundled Codex 通过 | `model/list` 暴露 Auto、A、B、Ark 四个 route，C 不存在；实际 App home 的 auto CLI E2E 退出码为 0 |
+| CPA upstream review | PR 已提交、CI 通过 | PR #5220 目标分支为 `dev`，head `2aa8c43a`；公开 diff 不含 provider endpoint、credential、真实轨迹或本机路径 |
+| 上游回归 | 候选与当前 `dev` 已集成验证 | changed packages、race 与 server build 通过；全仓仅命中既有 `internal/home` 一秒同步 flake，同一失败在干净 `origin/dev` 上 50 次复现 2 次，PR 未改该目录，也不声称该测试通过 |
+| 真实 Ark endpoint qualification | 基础 Responses 与 auto fallback 已通过 | source-built candidate 经隔离 CPA 调用真实 OpenAI-compatible endpoint：HTTP 200、唯一 terminal，output item 严格 `added/done` 配对；额度分类由公开安全的黑盒 fixture 覆盖 |
+| 当前 Codex App | self-use 配置已安装，UI readback 待重启 | 主 App 已指向 loopback CPA 并加载受控 model catalog；旧 App 与旧 home 不复制、不删除，继续作为回滚面 |
+
+这张表刻意区分“adapter 证据”“provider 基础连通证据”和“live 路由证据”。真实 A → B
+来自 commit 前网络失败；A/B → Ark 来自隔离 auth 状态故障注入；真实 quota 耗尽仍由同一
+错误分类的 loopback black-box 覆盖。三层证据合在一起才支持 self-use 灰度，不能把其中
+任意一层单独扩写成所有生产故障都已验证。
 
 ## 总体架构
 
 ```mermaid
 flowchart LR
-  App[Codex App 前端] --> Home[CODEX_HOME<br/>config/auth/sessions]
-  Home --> Switcher[CC Switch / profile switcher]
-  Switcher --> DS[DeepSeek official]
-  Switcher --> Proxy[Local Responses-to-Chat proxy]
-  Proxy --> Go[OpenCode Go]
-  Home --> Peer[GPT peer home<br/>read-only bridge]
+  App[Codex App<br/>一个前端] --> Home[一个 CODEX_HOME<br/>一个 task store]
+  Home --> CPA[CPA<br/>唯一在线代理]
+  CPA --> A[Codex subscription A]
+  CPA --> B[Codex subscription B]
+  CPA -. future expansion .-> C[Codex subscription C<br/>reserved, not configured]
+  CPA --> Ark[Ark DeepSeek V4 Flash]
+  CCS[CC Switch<br/>bootstrap / rollback] -. credentials and profiles .-> CPA
+  Home -. explicit stale-task migration .-> Swap[AgentSwap<br/>offline sidecar]
+  Swap -. new native session .-> Quarantine[隔离 target task]
 ```
 
-## 组件与目录
+硬规则：
 
-建议使用以下目录约定，具体名字可按机器调整，但公开文档中只使用占位符：
+1. Codex App 只连接一个本地 CPA endpoint。
+2. CPA 不再转发到 AgentSwap proxy；AgentSwap 也不反向代理 CPA。
+3. 在线切换优先保持同一个逻辑 task；无法无损投影时才 fork，不覆盖源 task。
+4. 不在两个生产 `CODEX_HOME` 之间复制 rollout 文件或 SQLite 行。
+5. 凭据只进入本机 secret store 或权限受限的 auth 文件，不进入仓库、日志和轨迹。
 
-```text
-<CODEX_HOME>/config.toml
-<CODEX_HOME>/auth.json
-<CODEX_HOME>/cc-switch-model-catalog.json
-<PROFILE_ROOT>/DS/config.toml
-<PROFILE_ROOT>/DS/auth.json
-<PROFILE_ROOT>/DS/cc-switch-model-catalog.json
-<PROFILE_ROOT>/GO/config.toml
-<PROFILE_ROOT>/GO/auth.json
-<PROFILE_ROOT>/GO/cc-switch-model-catalog.json
-<HOME>/Library/LaunchAgents/<service>.plist
+## 用户看到的模型
+
+建议在 Codex App 模型下拉框中暴露稳定的虚拟模型 ID：
+
+| 模型 ID | 行为 |
+| --- | --- |
+| `auto/gpt-5.6-sol` | 当前 self-use pin：Codex A → B；两个订阅都不可用且尚未提交输出时，转 Ark |
+| `codex-a/gpt-5.6-sol` | 手动固定到订阅 A |
+| `codex-b/gpt-5.6-sol` | 手动固定到订阅 B |
+| `codex-c/gpt-5.6-sol` | 预留；只有第三个订阅真实接入并通过矩阵后才暴露 |
+| `ark/deepseek-v4-flash` | 手动固定到 Ark DeepSeek V4 Flash |
+
+模型 ID 是路由契约，不是上游真实 model slug。显示名可本地化，但 ID 一经上线应保持稳定，
+否则已有 task 的 model metadata 会产生第二种方言。
+
+当前 self-use pin 已完成 Codex 多账号、prefix 固定路由和 Codex → Ark heterogeneous
+failover 的分层资格验证，因此 `auto/...` 可以在该锁定 commit 上灰度。升级到其他 commit
+时不能继承这个结论，必须重跑后文矩阵。不要用第二层 AgentSwap proxy 假装补齐缺口。
+
+这里的“开启自动切换开关”不是修改 CPA 的一个全局布尔值，而是让 App selector 暴露并
+允许选择 `auto/...` 虚拟模型。关闭时只暴露显式 `codex-a`、`codex-b` 和 `ark`；打开后
+CPA 才按已验收的 provider pool 执行自动路由。
+
+## CPA：唯一在线 data plane
+
+### 从锁定 commit 构建
+
+```sh
+git clone https://github.com/router-for-me/CLIProxyAPI.git
+cd CLIProxyAPI
+git remote add self-use https://github.com/huangruiteng/CLIProxyAPI.git
+git fetch self-use 2aa8c43a3bb6b3a39d969fb0b58981f578016c1e
+git checkout --detach 2aa8c43a3bb6b3a39d969fb0b58981f578016c1e
+go build -o ./bin/cliproxyapi ./cmd/server
 ```
 
-每个 profile 应包含：
+把二进制 checksum、commit 和本机安装时间写入私有运维记录。升级使用新的隔离目录构建，
+验证通过后原子切换 symlink；不要覆盖唯一可回滚的旧二进制。
 
-- `config.toml`：完整 Codex 配置，包括公共配置和 provider 专属配置。
-- `auth.json`：该 provider 使用的认证。对于走本地代理的 provider，可以只放一个占位 token。
-- `cc-switch-model-catalog.json`：完整 model catalog，包含 reasoning summary、tool 支持等元数据，避免被简化 catalog 覆盖。
+### 基础配置
 
-## 实现细节
+以下是公开安全的配置形状，尖括号内容必须由本地 secret/bootstrap 流程注入：
 
-### DeepSeek 官方 profile
+```yaml
+host: "127.0.0.1"
+port: <CPA_PORT>
+auth-dir: "<CPA_AUTH_DIR>"
 
-```toml
-model_provider = "custom"
-model = "deepseek-v4-flash"
-model_catalog_json = "<PROFILE_ROOT>/DS/cc-switch-model-catalog.json"
-model_reasoning_effort = "max"
-plan_mode_reasoning_effort = "max"
-model_reasoning_summary = "detailed"
+remote-management:
+  allow-remote: false
+  secret-key: ""
 
-[model_providers.custom]
-name = "deepseek"
-base_url = "https://api.deepseek.com"
-wire_api = "responses"
-requires_openai_auth = true
+force-model-prefix: false
+request-retry: 0
+max-retry-credentials: 0
+max-retry-interval: 0
+
+routing:
+  strategy: "fill-first"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+
+codex:
+  stream-bootstrap-buffering: true
+  optimize-multi-agent-v2: false
 ```
 
-### OpenCode Go profile
+`fill-first` 与 auth 记录中的 `priority` 决定冷启动顺序。已建立的 session binding
+优先于恢复后的高优先级账号，避免同一 task 在每个 turn 抖动；当前账号不可用时才重绑。
+该最小 self-use 形状只监听 loopback，且关闭 remote management。若部署环境需要本地 bearer
+auth，CPA 与 Codex provider 必须同时配置同一个由 secret store 注入的 token；不要只在一侧
+声明 `api-keys`，否则 App 请求会被拒绝。
 
-OpenCode Go 官方接入点是 Chat Completions，因此本地必须运行一个 Responses-to-Chat 代理：
+首轮 qualification 使用 `request-retry / max-retry-credentials / max-retry-interval =
+0 / 0 / 0`。这不等于“完全不 failover”：round 0 仍会把每个 eligible credential 最多
+尝试一次；它只禁止 A → B → Ark 之后再开启额外 retry round，也不等待 cooldown。这样
+可以先证明一条有限、可解释的路由链，避免同一 credential 被重复尝试。需要额外 round
+时必须单独增加参数并重跑提交边界测试。
 
-```toml
-model_provider = "custom"
-model = "deepseek-v4-flash"
-model_catalog_json = "<PROFILE_ROOT>/GO/cc-switch-model-catalog.json"
-model_reasoning_effort = "max"
-plan_mode_reasoning_effort = "max"
-model_reasoning_summary = "detailed"
+`stream-bootstrap-buffering` 只允许在首个生成事件提交前吸收 in-band overload / rate-limit
+错误。`multi_agent_v2` 不是这里的默认依赖；只有 compatibility matrix 覆盖 spawn、wait、
+tool result 和 provider 切换后才单独开启。
 
-[model_providers.custom]
-name = "opencode-go"
-base_url = "http://127.0.0.1:<PROXY_PORT>/v1"
-wire_api = "responses"
-experimental_bearer_token = "opencode-go-proxy"
-```
+### Codex 账号记录
 
-`experimental_bearer_token` 只是让 Codex 对本地代理发送一个可用的 Authorization 头；真正的上游 key 由代理从环境变量或系统 Keychain 读取，不写入 profile。
-
-### CC Switch provider 记录
-
-CC Switch 的 `providers` 表保存每个 provider 的认证、配置片段和 model catalog。脱敏后的形状如下：
+每个 Codex OAuth auth 文件使用唯一 prefix 和递减 priority。示意形状如下，不要复制
+token、email 或真实文件名到公共配置：
 
 ```json
 {
-  "auth": {
-    "OPENAI_API_KEY": "<credential-source>"
-  },
-  "config": "model_provider = \"custom\"\nmodel = \"deepseek-v4-flash\"\nmodel_catalog_json = \"<PROFILE_ROOT>/GO/cc-switch-model-catalog.json\"\nmodel_reasoning_effort = \"max\"\nplan_mode_reasoning_effort = \"max\"\nmodel_reasoning_summary = \"detailed\"\n\n[model_providers.custom]\nname = \"opencode-go\"\nbase_url = \"http://127.0.0.1:<PROXY_PORT>/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"opencode-go-proxy\"\n",
-  "modelCatalog": {
-    "models": [
-      {
-        "model": "deepseek-v4-flash",
-        "displayName": "DeepSeek V4 Flash",
-        "contextWindow": 272000,
-        "maxContextWindow": 272000,
-        "effectiveContextWindowPercent": 100
-      }
-    ]
-  }
+  "type": "codex",
+  "prefix": "codex-a",
+  "priority": 300
 }
 ```
 
-`model_catalog_json` 使用 profile 目录的绝对路径，而不是 `CODEX_HOME` 下的副本。这样即使 CC Switch 写入简化 catalog，Codex 仍会加载完整 catalog。
+当前第二个账号使用 `codex-b / 200`。`codex-c / 100` 只是未来约定；没有第三个有效
+credential 时不要创建空 auth 记录。无 prefix 的自动模型路由与手动 prefix 路由必须
+分别测试；不要依赖文件名字典序表达账号优先级。
 
-### 窗口与 compaction 对标官方订阅
+### Ark provider
 
-Codex 官方订阅模型（如 gpt-5.4 / gpt-5.5 / gpt-5.6 系列）在官方 model catalog 里的 `contextWindow` 是 `272000`，Codex 默认在请求输入 token 达到约 `90% × contextWindow` 时自动 compaction（`auto_compact_token_limit` 为 null 时）；`effective_context_window_percent` 决定前端展示与计算使用的安全上限，官方模型不声明该字段，等价于 `100`。
-
-自定义 provider 的 catalog 里 `contextWindow` 决定 Codex 对模型窗口和 compaction 阈值的认知，和上游实际能力是两件事：
-
-- 如果声明 `1048576`，Codex 会按 1M 计算，compaction 要到约 943k 才触发；上游若真实支持 1M，这样能最大化单 turn 上下文。
-- 如果希望自定义 provider 的行为“对标官方订阅”（例如 benchmark 对照、或统一 compaction 节奏），应把 catalog 声明为 `contextWindow: 272000`、`maxContextWindow: 272000`、`effectiveContextWindowPercent: 100`，compaction 阈值会回到约 245k。
-- 若上游真实窗口小于声明值，请求会失败或截断；若上游支持更大窗口而声明偏小，只是人为缩小客户端可用窗口。需要单独调整触发点时可设置 `autoCompactTokenLimit`（null 表示走默认 90%）。
-
-建议以实际上游能力为准，并让 benchmark 对照的三臂（/goal、loopx、loopx fine-grained）使用同一份 catalog 口径，避免窗口差异污染对比结论。
-
-### 本地代理
-
-代理需要满足：
-
-- 只监听 `127.0.0.1`。
-- 将 `/v1/responses` 请求转换为上游 `/v1/chat/completions`。
-- 保留 SSE 流式输出，并把 reasoning summary 转成 Codex 可识别的 reasoning events。
-- 支持 function call / tool call 的往返转换。
-- 从环境变量或系统 Keychain 读取上游 key，不在日志中打印 key。
-- 不暴露非 localhost 地址。
-
-安装示例：
-
-```sh
-uv tool install --from git+https://github.com/<owner>/<proxy-repo> <proxy-bin>
+```yaml
+openai-compatibility:
+  - name: "ark-deepseek"
+    prefix: "ark"
+    base-url: "<ARK_RESPONSES_BASE_URL>"
+    request-retry: 0
+    api-key-entries:
+      - api-key: "<ARK_API_KEY>"
+    models:
+      - name: "<ARK_DEEPSEEK_V4_FLASH_ENDPOINT_ID>"
+        alias: "deepseek-v4-flash"
+        display-name: "Ark DeepSeek V4 Flash"
+        is-compat: true
+        input-modalities: [text, image]
+        output-modalities: [text]
+        thinking:
+          levels: ["low", "medium", "high"]
 ```
 
-Key 存放示例（不记录实际值）：
+`is-compat: true` 是模型级兼容声明，不是“宽松解析所有错误”的开关。它让 handler 对该
+次实际选中的 attempt 启用 Ark lifecycle normalizer；retry 选中另一个模型时必须用新的
+attempt metadata 重置 validator，不能把 Ark 兼容状态泄漏给原生 Codex。
 
-```sh
-security add-generic-password -U -a "$USER" -s <keychain-service> -w <your-key>
+Ark qualification 还要覆盖两类 Responses 方言差异：
+
+- 请求侧移除上游不接受的 `reasoning.summary` 字段；
+- SSE 创建事件补齐 Codex 所需的空数组：reasoning item 的 `summary`、message item 的
+  `content`、output-text part 的 `annotations` 与 `logprobs`。
+
+候选 normalizer 还处理缺失的 lifecycle envelope：为孤立 reasoning / output-text delta
+补出配对的 `response.output_item.added` / `done`，在 reasoning → message 转换时关闭前一
+item，并抑制迟到的重复 added/done。遇到同时存在两个 active item、closed item 又收到
+delta、缺少 terminal，或需要凭空完成 tool/function item 时必须 fail closed，不能猜测
+tool 因果链。
+
+修复只能补 schema 默认值，不能改写 item ID、文本、tool call ID 或事件顺序。若锁定的
+CPA commit 尚未包含这些修复，就使用带可审计补丁的构建并保持 Ark 自动 fallback 关闭，
+直到补丁进入可锁定的 upstream commit。
+
+### Codex App 只指向 CPA
+
+```toml
+model_provider = "local-cpa"
+model = "auto/gpt-5.6-sol"
+model_catalog_json = "<CONTROLLED_MODEL_CATALOG_JSON>"
+
+[model_providers.local-cpa]
+name = "Local CPA"
+base_url = "http://127.0.0.1:<CPA_PORT>/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+request_max_retries = 0
+stream_max_retries = 0
 ```
 
-### LaunchAgent 常驻
+受控 model catalog 同时描述 Auto、A、B、Ark 四个虚拟模型 ID；未配置的 C 不写入 catalog。
+App 的原生模型下拉框就是唯一手动切换入口。Codex client retry 保持为 0，由 CPA 独占
+credential 遍历与 commit barrier，避免双层重试。不要再让 CC Switch 在 App 运行期间
+替换这份 provider 配置。
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string><service-label></string>
-  <key>ProgramArguments</key>
-  <array>
-    <string><HOME>/.local/bin/<proxy-bin></string>
-    <string>--bind</string>
-    <string>127.0.0.1</string>
-    <string>--port</string>
-    <string><PROXY_PORT></string>
-    <string>--chat-base-url</string>
-    <string>https://<provider-domain>/v1</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string><HOME></string>
-    <key>PATH</key>
-    <string><HOME>/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>CODEX_KEYCHAIN_SERVICE</key>
-    <string><keychain-service></string>
-    <key>CODEX_MODEL_CATALOG</key>
-    <string><PROFILE_ROOT>/GO/cc-switch-model-catalog.json</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-```
+## 一键切模型时如何切轨迹
 
-加载：
+“切轨迹”不应理解成修改或覆盖本地 rollout。安全的抽象是：一个逻辑 task 保留一份
+append-only 历史，CPA 针对本次目标 provider 生成 derived projection。
 
-```sh
-launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/<service>.plist"
-```
+这里实际包含两个不同动作：
 
-### 切换脚本行为
+1. 历史可移植时，App 只切模型，CPA 在同一个 task 内投影历史；用户仍停留在原 task。
+2. 遇到 compaction barrier 时，必须创建新 task 并导航过去。没有 Codex App / App Server
+   hook 时系统仍能工作，但会退化为 CPA 返回明确错误，再由用户或外层编排显式 fork；
+   不能承诺 selector 点击本身原子完成“切模型 + 切 task”。
 
-切换脚本应做到：
+### 可原地投影的历史
 
-1. 如果 Codex App 正在运行，先向用户确认，再退出 App。
-2. 原子复制 profile 的 `config.toml`、`auth.json`、`cc-switch-model-catalog.json` 到 `CODEX_HOME`。
-3. 同步 CC Switch 的 `currentProviderCodex` 和 `is_current`，保证 UI 状态一致。
-4. 使用 `CODEX_HOME`、`CODEX_ELECTRON_USER_DATA_PATH`、`CODEX_PROFILE_ROLE` 重新拉起同一个前端。
-5. 切换命令必须对称：`codex-app-go` 能切到 GO，`codex-app-ds` 能切回 DS。
+Provider 边界上的 reasoning item 按以下规则转换：
 
-伪代码：
+1. 保留 `summary`、普通消息、tool call/result、call ID 和可移植 media。
+2. 移除异源 provider 生成的 response item `id`。
+3. 移除异源 `encrypted_content`；它是 provider-bound continuation state，不是通用推理文本。
+4. 不要默认删除整条 reasoning。只有 `summary` 缺失、损坏或目标协议明确拒绝该 item 时才丢弃。
+5. 目标是 OpenAI 时，可以在规范化后让 `remote_compaction_v2` 重新 compact；该协议本身
+   不负责翻译异源 item。
+
+Provider scope 必须至少包含 `provider + credential identity`，不能只记录 provider 名称。
+因此 Codex A → B 也需要 normalization，而不仅是 GPT → Ark。实现只在 scope 变化时改写
+请求；同 scope 续跑保持原始 bytes，不为“统一格式”重复损伤历史。
+
+scope 的提交点与输出提交边界一致：首个 payload 交付前失败，不改变 session 的已记忆
+scope；已经交付 payload 后即使 stream 随后失败或取消，也要记住本次 scope，因为 App
+可能已经持久化部分 provider item。`generate=false` 等不产生模型输出的请求不更新 scope。
+
+示意转换：
 
 ```text
-switch_profile(name, profile_dir, provider_id):
-  if app_running:
-    ask user for confirmation
-    quit app
-  apply_profile(profile_dir, provider_id)
-  launch_app(CODEX_HOME, frontend_data_dir)
+reasoning {
+  id: <foreign-id>,
+  encrypted_content: <foreign-opaque-state>,
+  summary: <portable-summary>
+}
+
+=>
+
+reasoning {
+  summary: <portable-summary>
+}
 ```
 
-## 操作步骤
+CPA 必须通过 typed provenance 记录 item / compact window 的来源；不要仅靠 `rs_` 等字符串
+前缀猜 provider。每个投影都应可重放、可审计，但不得把原始轨迹或凭据写入公共日志。
 
-1. 创建 `<PROFILE_ROOT>/DS` 和 `<PROFILE_ROOT>/GO` 两个 profile。
-2. 安装本地代理并存入 Keychain。
-3. 注册 LaunchAgent 并确认健康检查返回 `{"status":"ok"}`。
-4. 在 CC Switch 中新增两个 Codex provider，config 片段分别指向官方端点和本地代理。
-5. 使用 `codex-app-ds` / `codex-app-go` 或 CC Switch 切换。
-6. 通过 `codex-app-status`、代理日志、实际发送一条消息来验证。
+tool 历史必须在投影时验证：每个 `function_call` 恰好对应一个
+`function_call_output`，call ID 不得重复、丢失或跨 scope 猜配。unsupported item、损坏
+history 或不成对的 tool 链应返回 request-scoped `409`，而不是把坏历史继续发给下一个
+provider。
 
-## 验证
+### Compaction barrier
+
+异源 provider 生成的 opaque compaction item 不是普通摘要，而是只对原 provider 有意义的
+加密 continuation state。目标 provider 没有对应密钥、服务端 item 或内部版本，不能靠
+base64 decode、字段改名或开启 `remote_compaction_v2` 来翻译。
+
+它在短任务里不常见；在接近 context window、tool output 很多、multi-agent 或显式触发
+compaction 的长任务里会成为常态。更换 provider 前应主动保留 neutral checkpoint，
+不要等请求里只剩 foreign blob 后再尝试恢复早期历史。
+
+遇到 barrier 时：
+
+1. 停止原地投影，不向目标 provider 发送明知无效的 blob；
+2. 从仍可读的原始事件，或切换前保存的 neutral checkpoint，重建可移植历史；
+3. 让目标 provider 生成它自己的 compact item；如果原始事件已不可用，则 fork 新 task；
+4. 记录 parent task、源 provider、目标 provider 和 barrier 原因；
+5. 源 task 保持只读且可回滚。
+
+如果 foreign compaction 之前仍有完整的 provider-neutral history，投影可以丢弃 opaque
+blob，并让目标 provider 从 neutral prefix 重新 compact；如果请求里只剩 foreign blob，
+必须返回 `foreign_compaction_requires_rehydration` 一类显式错误。静默丢弃此 blob 会让
+请求看似恢复、实则遗失被压缩的上下文。
+
+普通情况可以做到“模型下拉框一键切换并留在同一 task”。要在 barrier 情况下也一键完成
+“fork + 跳转到新 task”，还需要一个很薄的 Codex App / host hook；CPA 只看到 API 请求，
+没有本地 task 创建与导航权限。这个 hook 只编排本地 task，不取得模型路由或 LoopX
+控制面 authority。
+
+## AgentSwap：只做离线 sidecar
+
+AgentSwap 用于以下情况：
+
+- 显式把 stale task 迁移到另一种 harness；
+- compaction barrier 无法由在线投影解决；
+- 超长历史需要机械压缩并保留可读 archive；
+- 生产 task 损坏后的隔离恢复演练。
+
+先 dry-run，再写 target：
 
 ```sh
-codex-app-status
-curl -sS http://127.0.0.1:<PROXY_PORT>/v1/health
+agentswap teleport codex claude \
+  --session <SOURCE_SESSION_ID> \
+  --cwd <PROJECT_DIR> \
+  --dry-run
+
+agentswap teleport codex claude \
+  --session <SOURCE_SESSION_ID> \
+  --cwd <PROJECT_DIR> \
+  --compact \
+  --budget 80k
 ```
 
-Codex 侧验证：
+`teleport` 的 source 与 target 不能是同一种 harness，因此它不是 Codex provider picker 的
+实现。目标应写入隔离 session store；验收后通过摘要或显式 handoff 返回生产工作流，
+不要复制 SQLite 行。
 
-- `config.toml` 中 `base_url` 指向预期 provider。
-- 发送消息后，代理日志中出现 upstream `chat/completions` 请求。
-- 流式输出中能看到 reasoning summary events。
-- 切换前后 session 列表不变。
+AgentSwap 的 Codex writer 还必须满足一个结构不变量：同一个 `call_id` 的 multipart tool
+result 在目标 Codex rollout 中只能写成一个逻辑 `function_call_output`。若锁定 commit 的
+实现未通过“calls 数量等于唯一 results 数量”的 round-trip test，只允许 `--dry-run`，
+不要把迁移结果恢复到生产任务。
 
-## 常见排障
+## 自动 failover 的提交边界
 
-| 现象 | 原因 | 处理 |
+透明 retry 只允许发生在下游尚未观察到任何不可撤销事件之前：
+
+| 状态 | 是否允许透明切换 | 原因 |
 | --- | --- | --- |
-| 前端模型名没变 | 模型 slug 保持不变是设计行为 | 检查 `base_url` 和代理日志确认路由 |
-| 切换后仍走旧 provider | App 没有热加载配置 | 重启窗口，或使用带自动重启的切换脚本 |
-| reasoning 从 `max` 退回 `high` | CC Switch common config 覆盖 provider 配置 | 将 common config 和 provider config 都固定为 `max / detailed` |
-| 上游返回区域限制 | 模型在中国区托管，需要显式 opt in | 在 provider console 开启对应模型 |
-| 代理返回 401 | Keychain 或环境变量未配置 | 检查 `security find-generic-password` 或环境变量 |
-| 端口被占用 | 代理未退出或已有实例 | 使用 `lsof -i :<PROXY_PORT>` 排查 |
+| 尚未发送生成事件 | 允许 | 下游没有可见输出或副作用 |
+| 只收到可缓冲的 handshake，随后 in-band quota / overload | 允许 | CPA 可丢弃缓冲并重试 |
+| 已发送文本 delta | 禁止 | 重试会重复或分叉可见回答 |
+| 已发送 tool call | 禁止 | 工具可能已产生外部副作用 |
+| tool result 已提交 | 禁止 | call/result 因果链已进入轨迹 |
 
-## 脱敏边界
+提交边界之后失败时，返回明确错误并创建可恢复 checkpoint。不要静默换账号或换模型。
 
-公开 runbook 中允许：
+路由器应把“选择下一个 credential/provider”和“历史 scope 提交”放在同一个 attempt
+状态机里。pre-commit attempt 可以换目标并重新生成 derived projection；post-commit
+attempt 只能向当前 task 报错，不能继续沿 failover 队列。这个原则同时约束 HTTP error、
+in-band SSE error、客户端取消和 handler 自己补出的 lifecycle event。
 
-- 架构图、命令形状、TOML/JSON schema、排障规则。
-- 公开产品名，如 DeepSeek、OpenCode Go、ChatGPT/Codex App、CC Switch。
-- 使用占位符表示路径、key、端口和服务名。
+## Compatibility matrix
 
-公开 runbook 中不允许：
+全面升级前至少在 stale、可回滚 task 上验证：
 
-- 真实 `HOME`、`CODEX_HOME`、profile 绝对路径。
-- API key、token、cookie、session id。
-- 本地 SQLite 内容、原始代理日志、截图。
-- 私人仓库名、账号名、内部文档链接、个人归属信息。
+| 场景 | 验收条件 |
+| --- | --- |
+| Codex A → B → 可选 C | 每次只使用一个真实账号；额度错误触发下一优先级；未配置 C 时跳过而不是创建空 profile；同一 turn 不重复输出 |
+| GPT → Ark | 消息、reasoning summary、tool call/result 可继续；无 active-item / delta 生命周期警告 |
+| Ark → GPT | 异源 reasoning identity 被剥离；保留 summary；`remote_compaction_v2` 可成功重建窗口 |
+| foreign compact → 任意目标 | 明确识别 barrier 并 fork；不发送 opaque foreign blob |
+| 模型下拉框手动切换 | 选中虚拟模型后路由与显示一致，不需要 CC Switch 重启 App |
+| 首字节前 quota / overload | CPA 可重试下一 eligible auth；客户端只看到一条回答 |
+| 文本或 tool call 后失败 | 不透明重试；返回可恢复错误 |
+| multipart tool result round trip | 每个唯一 `call_id` 恰好一个逻辑 result，无重复 |
+| `multi_agent` | spawn / wait / result 在每个 provider 上保持结构一致 |
+| `multi_agent_v2`（可选） | 单独 opt-in；通过相同矩阵后才开启 `optimize-multi-agent-v2` |
 
-如果这套机制将来被抽象成可安装、可测试的 adapter，应迁移到 `docs/integrations/` 并提供真实 CLI entrypoint 与 smoke test；在此之前保持为 operator runbook。
+记录结构化统计和错误分类，不保存真实 prompt、原始轨迹、token、内部路径或完整响应体。
+
+## 上游 PR 规划与非目标
+
+| Upstream | 计划 | 合并门槛 |
+| --- | --- | --- |
+| CPA | **公共分发 PR，已提交 [#5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220)**：provider/credential-scoped history normalizer、attempt commit semantics、`is-compat` Responses SSE lifecycle normalizer 与 focused tests | current upstream `dev` 上可审阅且 CI 通过；review、回归、race、source-built loopback 与真实 provider qualification 分层报告；self-use 可锁定 fork SHA，但不得把它表述为 upstream release |
+| AgentSwap | **条件 PR**：只有 locked commit 的 Codex writer 不能保持 multipart tool-result 1:1，或需要 provider-neutral checkpoint export 时才提交 | round-trip test 先复现真实缺口；不增加在线 retry、模型选择或第二 data plane |
+| Codex App / App Server | **条件 PR**：只为 compaction barrier 提供原子的 fork + navigate host hook | 普通可移植历史在没有该 PR 时仍须可用；hook 不获得 provider 路由、凭据或 LoopX authority |
+| CC Switch | 当前无 PR | 只保留 bootstrap、credential import、snapshot 和 rollback；不重新进入 per-turn 在线切换 |
+| LoopX | 维护本 runbook、pin、门禁和脱敏 evidence contract | 不实现代理、不保存 credential、不接管 Codex session store |
+
+所以近期技术选型不是 CPA 或 AgentSwap 二选一，而是 **CPA online + AgentSwap offline**，
+同时保持单一在线 authority。自用运行锁定 `2aa8c43a`，不等待 #5220 review；上游合并后
+再把 merge commit 作为升级候选并重跑 qualification。AgentSwap 只有在独立、可复现的迁移
+缺口出现时才改。Codex App PR 不阻塞日常切换，只决定 barrier case 能否真正“一键 fork
+并跳转”。
+
+## 分阶段上线与回滚
+
+1. **影子验证（已完成）**：保持现有 App 不变，在隔离 home、loopback fault server 和 stale
+   task 上跑完整矩阵。
+2. **单 App / 手动路由（已完成后端资格验证）**：App 指向固定 CPA；开放 `codex-a`、
+   `codex-b`、`ark`，未配置的 `codex-c` 不出现在 selector。
+3. **Codex pool 自动切换（已完成）**：priority + fill-first + affinity 已通过 loopback 与 live
+   A → B；安全回切发生在新 session / turn 边界。
+4. **跨 provider 自动切换（self-use 灰度中）**：固定 fork 已通过 history projection、Ark SSE、
+   commit barrier、真实 Ark 与故障注入矩阵，`auto/...` 可降级到 Ark；foreign compaction
+   barrier 仍 fail closed 并走显式 fork。
+5. **收敛 App（待 soak）**：重启 App 确认四个 selector 后，在不活跃任务上观察一轮；连续
+   soak 期内无轨迹损坏、重复 tool result 或错误 provider 归属后，才退役第二个 App。
+
+回滚时停止新 CPA，恢复升级前的 Codex provider 配置和旧二进制 symlink。不要回滚 session
+数据库，不删除新 task，也不要把新旧 `CODEX_HOME` 合并。CC Switch 在这里提供 profile
+快照和人工恢复入口，而不是重新进入在线切换路径。
+
+## 公开与私有边界
+
+公开 runbook 可以包含架构、字段形状、虚拟模型 ID、commit pin 和验收规则。不得包含：
+
+- OAuth token、API key、cookie、账号 email；
+- 真实 `HOME` / `CODEX_HOME` / auth 目录和本机端口；
+- session ID、SQLite 内容、原始 rollout、raw SSE 或完整代理日志；
+- 私有 endpoint、内部链接、组织身份或可反推个人账号的 quota 数据。
+
+如果这套机制将来拥有 LoopX-managed 安装、readiness、升级和 rollback CLI，再把它提升为
+optional extension；在此之前保持 operator-owned runbook，避免 LoopX 变成第二个代理或
+凭据 authority。

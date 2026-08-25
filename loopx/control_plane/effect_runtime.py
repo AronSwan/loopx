@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -16,9 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
 EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION = "loopx_effect_runtime_request_v0"
-EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION = "loopx_effect_runtime_response_v0"
+EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION = "loopx_effect_runtime_response_v1"
 EFFECT_RUNTIME_INFO_SCHEMA_VERSION = "loopx_effect_runtime_info_v0"
 EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 MINIMUM_NODE_VERSION = (22, 6, 0)
@@ -29,34 +29,121 @@ STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
-_SOURCE_FILES = (
-    "effect_program.ts",
-    "governed_capability.ts",
-    "effect_runtime_handlers.ts",
-    "effect_runtime_io.ts",
-    "effect_runtime_server.ts",
-    "goals/vision_checkpoint.ts",
-    "quota/settlement_workspace_causality.ts",
-    "scheduler/state_store.ts",
-    "scheduler/state_transition_rules.ts",
-    "todos/completion_fence.ts",
-    "todos/completion_state.ts",
-    "todos/completion_transaction.ts",
-    "todos/completion_validation_plan.ts",
-    "todos/next_action.ts",
-    "turn_driver/turn_journal.ts",
-    "turn_driver/turn_journal_effects.ts",
-    "turn_driver/delivery_continuity.ts",
-    "turn_driver/settlement.ts",
-    "work_items/delivery_outcome.ts",
-    "work_items/action_portfolio.ts",
-    "work_items/replan_settlement.ts",
-    "turn_transaction_contract.json",
-)
+_RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
+_RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+_RuntimeDirectorySnapshot = tuple[tuple[str, int, int], ...]
+_RuntimeSourceTopology = tuple[
+    tuple[str, ...], tuple[str, ...], _RuntimeDirectorySnapshot
+]
+_RUNTIME_SOURCE_TOPOLOGIES: dict[str, _RuntimeSourceTopology] = {}
+_RUNTIME_SOURCE_TOPOLOGY_LOCK = threading.Lock()
 
 
-class EffectRuntimeRejected(RuntimeError):
+class EffectRuntimeRemoteError(RuntimeError):
+    """A typed exception returned by the managed TypeScript runtime."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_kind: str,
+        diagnostic_code: str,
+    ) -> None:
+        super().__init__(message)
+        self.error_kind = error_kind
+        self.diagnostic_code = diagnostic_code
+
+
+class EffectRuntimeRejected(EffectRuntimeRemoteError):
     """A typed request reached the runtime but failed semantic validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_code: str = "invalid_request",
+    ) -> None:
+        super().__init__(
+            message,
+            error_kind="request_rejected",
+            diagnostic_code=diagnostic_code,
+        )
+
+
+class EffectRuntimeConflict(EffectRuntimeRemoteError):
+    """The request conflicted with newer persisted state."""
+
+    def __init__(self, message: str, *, diagnostic_code: str) -> None:
+        super().__init__(
+            message,
+            error_kind="conflict",
+            diagnostic_code=diagnostic_code,
+        )
+
+
+class EffectRuntimeIOError(EffectRuntimeRemoteError):
+    """A managed runtime filesystem operation failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_kind: str,
+        diagnostic_code: str,
+        transient: bool,
+    ) -> None:
+        super().__init__(
+            message,
+            error_kind=error_kind,
+            diagnostic_code=diagnostic_code,
+        )
+        self.transient = transient
+
+
+class EffectRuntimeTransientIOError(EffectRuntimeIOError):
+    """A retryable managed runtime filesystem operation failed."""
+
+    def __init__(self, message: str, *, diagnostic_code: str) -> None:
+        super().__init__(
+            message,
+            error_kind="io_transient",
+            diagnostic_code=diagnostic_code,
+            transient=True,
+        )
+
+
+class EffectRuntimePermanentIOError(EffectRuntimeIOError):
+    """A non-retryable managed runtime filesystem operation failed."""
+
+    def __init__(self, message: str, *, diagnostic_code: str) -> None:
+        super().__init__(
+            message,
+            error_kind="io_permanent",
+            diagnostic_code=diagnostic_code,
+            transient=False,
+        )
+
+
+class EffectRuntimeLockTimeout(EffectRuntimeRemoteError):
+    """A managed mutation lock could not be acquired before its deadline."""
+
+    def __init__(self, message: str, *, diagnostic_code: str) -> None:
+        super().__init__(
+            message,
+            error_kind="lock_timeout",
+            diagnostic_code=diagnostic_code,
+        )
+
+
+class EffectRuntimeInternalError(EffectRuntimeRemoteError):
+    """The managed handler failed outside a declared request or I/O error."""
+
+    def __init__(self, message: str, *, diagnostic_code: str) -> None:
+        super().__init__(
+            message,
+            error_kind="internal_failure",
+            diagnostic_code=diagnostic_code,
+        )
 
 
 class EffectRuntimeStartupError(RuntimeError):
@@ -71,14 +158,120 @@ def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-@lru_cache(maxsize=1)
-def _runtime_fingerprint() -> str:
+def _runtime_directory_snapshot(
+    root: Path,
+    directories: tuple[str, ...],
+) -> _RuntimeDirectorySnapshot:
+    return tuple(
+        (
+            relative,
+            (metadata := (root / relative).stat()).st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        for relative in directories
+    )
+
+
+def _scan_runtime_source_topology(root: Path) -> _RuntimeSourceTopology:
+    files: list[str] = []
+    directories = [""]
+    for directory, child_directories, filenames in os.walk(root):
+        child_directories.sort()
+        relative_directory = os.path.relpath(directory, root)
+        if relative_directory == ".":
+            relative_directory = ""
+        directories.extend(
+            Path(relative_directory, child).as_posix() for child in child_directories
+        )
+        files.extend(
+            Path(relative_directory, filename).as_posix()
+            for filename in sorted(filenames)
+            if Path(filename).suffix in _RUNTIME_SOURCE_SUFFIXES
+            and Path(directory, filename).is_file()
+        )
+    directory_tuple = tuple(sorted(directories))
+    return (
+        tuple(sorted(files)),
+        directory_tuple,
+        _runtime_directory_snapshot(root, directory_tuple),
+    )
+
+
+def _runtime_file_snapshot(
+    root: Path,
+    files: tuple[str, ...],
+) -> _RuntimeSourceSnapshot:
+    return tuple(
+        (
+            relative,
+            (metadata := (root / relative).stat()).st_mtime_ns,
+            metadata.st_ctime_ns,
+            metadata.st_size,
+        )
+        for relative in files
+    )
+
+
+def _runtime_source_snapshot(root: Path | None = None) -> _RuntimeSourceSnapshot:
+    """Return cheap metadata that invalidates the packaged-source hash."""
+
+    source_root = (root or _control_plane_root()).resolve()
+    root_key = os.fspath(source_root)
+    with _RUNTIME_SOURCE_TOPOLOGY_LOCK:
+        topology = _RUNTIME_SOURCE_TOPOLOGIES.get(root_key)
+        if topology is not None:
+            files, directories, previous_directory_snapshot = topology
+            try:
+                current_directory_snapshot = _runtime_directory_snapshot(
+                    source_root, directories
+                )
+            except FileNotFoundError:
+                current_directory_snapshot = ()
+            if current_directory_snapshot != previous_directory_snapshot:
+                topology = None
+        if topology is None:
+            topology = _scan_runtime_source_topology(source_root)
+            if (
+                root_key not in _RUNTIME_SOURCE_TOPOLOGIES
+                and len(_RUNTIME_SOURCE_TOPOLOGIES) >= 8
+            ):
+                _RUNTIME_SOURCE_TOPOLOGIES.pop(next(iter(_RUNTIME_SOURCE_TOPOLOGIES)))
+            _RUNTIME_SOURCE_TOPOLOGIES[root_key] = topology
+        files, _directories, _directory_snapshot = topology
+        try:
+            return _runtime_file_snapshot(source_root, files)
+        except FileNotFoundError:
+            topology = _scan_runtime_source_topology(source_root)
+            _RUNTIME_SOURCE_TOPOLOGIES[root_key] = topology
+            files, _directories, _directory_snapshot = topology
+            return _runtime_file_snapshot(source_root, files)
+
+
+def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
+    """Return the packaged source boundary owned by the managed runtime."""
+
+    return tuple(relative for relative, *_metadata in _runtime_source_snapshot(root))
+
+
+@lru_cache(maxsize=8)
+def _runtime_fingerprint_for_snapshot(
+    root: str,
+    snapshot: _RuntimeSourceSnapshot,
+) -> str:
     digest = hashlib.sha256()
-    root = _control_plane_root()
-    for relative in _SOURCE_FILES:
+    source_root = Path(root)
+    for relative, *_metadata in snapshot:
         digest.update(relative.encode("utf-8"))
-        digest.update((root / relative).read_bytes())
+        digest.update((source_root / relative).read_bytes())
     return digest.hexdigest()
+
+
+def _runtime_fingerprint() -> str:
+    root = _control_plane_root()
+    return _runtime_fingerprint_for_snapshot(
+        os.fspath(root.resolve()),
+        _runtime_source_snapshot(root),
+    )
 
 
 def _runtime_dir() -> Path:
@@ -222,7 +415,10 @@ def _request_with_info(
     }
     encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_REQUEST_BYTES:
-        raise EffectRuntimeRejected("TypeScript Effect runtime request is oversized")
+        raise EffectRuntimeRejected(
+            "TypeScript Effect runtime request is oversized",
+            diagnostic_code="request_too_large",
+        )
     chunks: list[bytes] = []
     size = 0
     with socket.create_connection(
@@ -253,12 +449,49 @@ def _request_with_info(
     ):
         raise RuntimeError("TypeScript Effect runtime response shape mismatch")
     if response.get("ok") is not True:
-        error = response.get("error")
-        message = error.get("message") if isinstance(error, Mapping) else None
-        raise EffectRuntimeRejected(
-            str(message or "TypeScript Effect runtime request failed")
-        )
+        raise _remote_runtime_error(response.get("error"))
     return response
+
+
+def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
+    if not isinstance(value, Mapping):
+        return EffectRuntimeInternalError(
+            "TypeScript Effect runtime returned an invalid error envelope",
+            diagnostic_code="invalid_error_envelope",
+        )
+    kind = value.get("kind")
+    code = value.get("code")
+    message = value.get("message")
+    if (
+        not isinstance(kind, str)
+        or not kind
+        or not isinstance(code, str)
+        or not code
+    ):
+        return EffectRuntimeInternalError(
+            "TypeScript Effect runtime returned an invalid error envelope",
+            diagnostic_code="invalid_error_envelope",
+        )
+    rendered = " ".join(
+        str(message or "TypeScript Effect runtime request failed").split()
+    )
+    rendered = rendered[:240] or "TypeScript Effect runtime request failed"
+    if kind == "request_rejected":
+        return EffectRuntimeRejected(rendered, diagnostic_code=code)
+    if kind == "conflict":
+        return EffectRuntimeConflict(rendered, diagnostic_code=code)
+    if kind == "io_transient":
+        return EffectRuntimeTransientIOError(rendered, diagnostic_code=code)
+    if kind == "io_permanent":
+        return EffectRuntimePermanentIOError(rendered, diagnostic_code=code)
+    if kind == "lock_timeout":
+        return EffectRuntimeLockTimeout(rendered, diagnostic_code=code)
+    if kind == "internal_failure":
+        return EffectRuntimeInternalError(rendered, diagnostic_code=code)
+    return EffectRuntimeInternalError(
+        "TypeScript Effect runtime returned an unsupported error kind",
+        diagnostic_code="unsupported_error_kind",
+    )
 
 
 def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
@@ -385,6 +618,8 @@ def effect_runtime_request(
                 timeout=timeout,
             )
         except EffectRuntimeRejected:
+            raise
+        except EffectRuntimeRemoteError:
             raise
         except (OSError, RuntimeError) as exc:
             last_error = exc

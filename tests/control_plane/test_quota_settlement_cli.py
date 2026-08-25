@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from loopx.bootstrap_command_pack import build_start_goal_guided_packet
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "settlement-cli-fixture"
 AGENT_ID = "codex-settlement-cli"
@@ -121,6 +125,26 @@ def _run_cli(
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
         },
+    )
+    return result.returncode, json.loads(result.stdout)
+
+
+def _run_generated_cli(
+    command: str,
+    *,
+    registry_path: Path,
+) -> tuple[int, dict[str, Any]]:
+    argv = shlex.split(command)
+    assert argv[0] == "loopx"
+    if "--registry" not in argv:
+        argv[1:1] = ["--registry", str(registry_path)]
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", *argv[1:]],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
     )
     return result.returncode, json.loads(result.stdout)
 
@@ -445,6 +469,96 @@ def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     )
 
 
+def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability="filesystem_write",
+    )
+    turn_id = "turn-gitless-settlement"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["should_run"] is True
+    assert (
+        guard["heartbeat_receipt"]["delivery_workspace_causality"]["requirement"]
+        == "required"
+    )
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "gitless_validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["delivery_workspace"] == {
+        "schema_version": "delivery_workspace_v1",
+        "workspace_identity": f"loopx:{GOAL_ID}",
+        "identity_kind": "local_goal",
+        "task_repository": None,
+        "repository_source": "goal_id_fallback",
+        "workspace_kind": "local_goal_workspace",
+        "peer_independent_worktree_required": False,
+    }
+    assert str(project) not in json.dumps(refresh["delivery_workspace"])
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["appended"] is True
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["delivery_workspace"]["workspace_identity"] == f"loopx:{GOAL_ID}"
+    assert _spend_run_count(runtime) == 1
+
+
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     tmp_path: Path,
 ) -> None:
@@ -719,6 +833,51 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert replay["appended"] is False
     assert _spend_run_count(runtime) == 1
 
+    settled_replay_rc, settled_replay = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+        "--scan-path",
+        str(project),
+    )
+    assert settled_replay_rc == 0, settled_replay
+    assert settled_replay["decision"] == "skip"
+    assert settled_replay["effective_action"] == "heartbeat_settled_skip"
+    assert settled_replay["execution_obligation"]["must_attempt_work"] is False
+    assert settled_replay.get("selected_todo") is None
+    assert settled_replay["heartbeat_receipt"]["status"] == "replayed"
+    assert (
+        settled_replay["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == TODO_ID
+    )
+    assert _spend_run_count(runtime) == 1
+
+    fresh_turn_rc, fresh_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-2",
+        "--scan-path",
+        str(project),
+    )
+    assert fresh_turn_rc == 0, fresh_turn
+    assert fresh_turn["selected_todo"]["todo_id"] == successor_id
+
 
 def _assert_material_monitor_writeback_can_add_workspace_before_spend(
     tmp_path: Path,
@@ -829,7 +988,9 @@ def _assert_material_monitor_writeback_can_add_workspace_before_spend(
     assert supplement_rc == 0, supplement
     assert supplement["appended"] is True
     assert supplement["delivery_workspace"] == {
-        "schema_version": "delivery_workspace_v0",
+        "schema_version": "delivery_workspace_v1",
+        "workspace_identity": "git:github.com/example/read-only-settlement-fixture",
+        "identity_kind": "git_repository",
         "task_repository": "git:github.com/example/read-only-settlement-fixture",
         "repository_source": "refresh_state.delivery_workspace_path",
         "workspace_kind": "canonical_checkout",
@@ -1095,6 +1256,137 @@ def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
     ]["identity"]
     assert plan_identity["todo_id"] == ALTERNATIVE_TODO_ID
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
+def test_guided_start_begins_one_turn_and_executes_returned_selection(
+    tmp_path: Path,
+    host_surface: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    packet = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        cli_bin="loopx",
+        host_surface=host_surface,
+        goal_text="Start one accountable delivery turn.",
+    )
+    guard_command = next(
+        step["command"]
+        for step in packet["guided_transaction"]["ordered_steps"]
+        if step["id"] == "quota_guard"
+    )
+
+    assert "--begin-turn" in guard_command
+    assert "--turn-instance-id" not in guard_command
+    first_rc, first = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["cli_channel"][
+        "selection_required"
+    ] is True
+    turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    assert turn_instance_id.startswith("guided-start:")
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    assert f"--turn-instance-id {turn_instance_id}" in selection[
+        "command_args_template"
+    ]
+    selection_command = (
+        f"{selection['route_prefix']} "
+        + selection["command_args_template"].replace(
+            "{todo_id}", ALTERNATIVE_TODO_ID
+        )
+    )
+
+    selected_rc, selected = _run_generated_cli(
+        selection_command,
+        registry_path=registry_path,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert receipt_identity["turn_instance_id"] == turn_instance_id
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    if host_surface == "codex-app":
+        settlement_plan = cli_channel["settlement_plan"]
+        assert settlement_plan["identity"] == receipt_identity
+        assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
+    else:
+        assert "settlement_plan" not in cli_channel
+        assert any(
+            "--source visible-goal" in action
+            for action in cli_channel["next_cli_actions"]
+        )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
+def test_single_todo_guided_start_keeps_direct_delivery_semantics(
+    tmp_path: Path,
+    host_surface: str,
+) -> None:
+    project, _runtime, registry_path = _write_fixture(tmp_path)
+    packet = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        cli_bin="loopx",
+        host_surface=host_surface,
+        goal_text="Start one accountable delivery turn.",
+    )
+    guard_command = next(
+        step["command"]
+        for step in packet["guided_transaction"]["ordered_steps"]
+        if step["id"] == "quota_guard"
+    )
+
+    guard_rc, guard = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert guard_rc == 0, guard
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert guard["interaction_contract"]["cli_channel"].get(
+        "selection_required"
+    ) is None
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["turn_instance_id"].startswith("guided-start:")
+
+
+def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "generic_cli",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+        "--scan-path",
+        str(project),
+    )
+
+    assert guard_rc == 1, guard
+    assert guard["error_code"] == "QUOTA_VALIDATION_FAILED"
+    assert guard["reason"] == (
+        "--begin-turn requires runtime-profile codex_app_heartbeat "
+        "or codex_app_ssh_goal"
+    )
 
 
 def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
@@ -1377,13 +1669,13 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert plan_identity["binding_kind"] == identity["binding_kind"]
     assert plan_identity["binding_id"] == identity["binding_id"]
     assert plan_identity["replan_obligation_id"] == obligation_id
-    assert plan_identity["turn_instance_id"] == "${LOOPX_TURN:?}"
+    assert plan_identity["turn_instance_id"] == turn_instance_id
     actions = cli_channel["next_cli_actions"]
     refresh_command = next(action for action in actions if "refresh-state" in action)
     spend_command = next(action for action in actions if "spend-slot" in action)
     for command in (refresh_command, spend_command):
         assert f"--replan-obligation-id {obligation_id}" in command
-        assert '--turn-instance-id "${LOOPX_TURN:?}"' in command
+        assert f"--turn-instance-id {turn_instance_id}" in command
         assert "--todo-id" not in command
 
     refresh_command = (
@@ -1490,7 +1782,7 @@ def test_todo_bound_autonomous_replan_uses_one_binding_for_refresh_and_spend(
     for command in (refresh_command, spend_command):
         assert f"--todo-id {SELECTED_REPLAN_TODO_ID}" in command
         assert "--replan-obligation-id" not in command
-        assert '--turn-instance-id "${LOOPX_TURN:?}"' in command
+        assert f"--turn-instance-id {turn_instance_id}" in command
 
     refresh_command = (
         refresh_command.replace(

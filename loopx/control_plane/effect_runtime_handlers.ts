@@ -9,8 +9,6 @@ import {
   settlementIdentity,
   settlementIdentityPayload,
   settlementPlanPayload,
-  receiptBoundMonitorPhase,
-  receiptBoundTerminalPhase,
   settlementResultPayload,
   SETTLEMENT_FAILURE_KINDS,
   SETTLEMENT_STEP_KINDS,
@@ -25,6 +23,12 @@ import {
   type SettlementStepKind,
 } from "./effect_program.ts";
 import {
+  receiptBoundMonitorPhase,
+  receiptBoundReplayPhase,
+  receiptBoundTerminalPhase,
+} from "./quota/settlement_phase.ts";
+import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import {
   optionalNonEmptyString as optionalString,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
@@ -38,6 +42,7 @@ import {
   validateGovernedCapabilitySettlementCallback,
 } from "./governed_capability.ts";
 import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace_causality.ts";
+import { evaluateDeliveryWorkspace } from "./agents/delivery_workspace.ts";
 import {
   interpretTurnJournal,
   type TurnJournalInspectionRequest,
@@ -73,6 +78,10 @@ import {
   projectQuotaActionPortfolio,
   qualifyActionSelection,
 } from "./work_items/action_portfolio.ts";
+import {
+  validateInteractionProjectionHookInvocation,
+  validateInteractionProjectionHookRegistration,
+} from "./capability_hooks.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
@@ -159,7 +168,7 @@ function settlementFailureInput(value: unknown, label: string): SettlementFailur
 function settlementResultInput(value: unknown, label: string): SettlementResult {
   const result = requiredObject(value, label);
   if (!Array.isArray(result.receipts)) {
-    throw new Error(`${label}.receipts must be an array`);
+    throw new EffectRuntimeRequestError(`${label}.receipts must be an array`);
   }
   const receipts = result.receipts.map((receipt, index) =>
     settlementReceiptInput(receipt, `${label}.receipts[${index}]`)
@@ -168,7 +177,7 @@ function settlementResultInput(value: unknown, label: string): SettlementResult 
     return { value: result.value, receipts, failure: null };
   }
   if (result.value !== null) {
-    throw new Error(`${label} cannot carry both a value and a failure`);
+    throw new EffectRuntimeRequestError(`${label} cannot carry both a value and a failure`);
   }
   return {
     value: null,
@@ -180,7 +189,7 @@ function settlementResultInput(value: unknown, label: string): SettlementResult 
 function settlementStepInput(value: unknown, label: string): SettlementStep {
   const step = requiredObject(value, label);
   if (step.conditional !== undefined && step.conditional !== true) {
-    throw new Error(`${label}.conditional must be true when present`);
+    throw new EffectRuntimeRequestError(`${label}.conditional must be true when present`);
   }
   return {
     kind: settlementStepKind(step.kind, `${label}.kind`),
@@ -209,7 +218,7 @@ function settlementStepInput(value: unknown, label: string): SettlementStep {
 function settlementPlanInput(value: unknown, label: string): SettlementPlan {
   const plan = requiredObject(value, label);
   if (!Array.isArray(plan.steps)) {
-    throw new Error(`${label}.steps must be an array`);
+    throw new EffectRuntimeRequestError(`${label}.steps must be an array`);
   }
   return {
     identity: settlementIdentity(settlementIdentityInput(plan.identity, `${label}.identity`)),
@@ -227,7 +236,7 @@ function turnJournalInspectionRequest(
     request.schema_version !==
       "loopx_turn_journal_interpretation_request_v0"
   ) {
-    throw new Error("Turn-journal interpretation request schema mismatch");
+    throw new EffectRuntimeRequestError("Turn-journal interpretation request schema mismatch");
   }
   return {
     schema_version: request.schema_version,
@@ -273,6 +282,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.action_portfolio.project", projectQuotaActionPortfolio],
     ["work_item.action_selection.qualify", qualifyActionSelection],
     ["goal.vision_checkpoint.evaluate", buildVisionCheckpoint],
+    ["agent.delivery_workspace.evaluate", evaluateDeliveryWorkspace],
     [
       "quota.delivery_workspace_causality.evaluate",
       evaluateDeliveryWorkspaceCausality,
@@ -334,6 +344,19 @@ export function createEffectRuntimeHandlers(
       (params) => governedCapabilitySettlementStatus(params.failure),
     ],
     [
+      "capability_hook.interaction_projection.validate_registration",
+      (params) => validateInteractionProjectionHookRegistration(
+        params.registration,
+      ),
+    ],
+    [
+      "capability_hook.interaction_projection.validate",
+      (params) => validateInteractionProjectionHookInvocation({
+        registration: params.registration,
+        result: params.result,
+      }),
+    ],
+    [
       "settlement.identity",
       (params) => settlementIdentity(settlementIdentityInput(params)),
     ],
@@ -360,6 +383,14 @@ export function createEffectRuntimeHandlers(
       (params) => receiptBoundMonitorPhase({
         poll_present: params.poll_present === true,
         material_change: params.material_change === true,
+        durable_writeback_present: params.durable_writeback_present === true,
+        quota_spend_present: params.quota_spend_present === true,
+      }),
+    ],
+    [
+      "settlement.receipt_bound_replay_phase",
+      (params) => receiptBoundReplayPhase({
+        completion_receipt_present: params.completion_receipt_present === true,
         durable_writeback_present: params.durable_writeback_present === true,
         quota_spend_present: params.quota_spend_present === true,
       }),
@@ -416,6 +447,11 @@ export async function dispatchEffectRuntimeMethod(
   params: JsonObject,
 ): Promise<unknown> {
   const handler = handlers.get(method);
-  if (!handler) throw new Error("unsupported Effect runtime method");
+  if (!handler) {
+    throw new EffectRuntimeRequestError(
+      "unsupported Effect runtime method",
+      "unsupported_method",
+    );
+  }
   return await handler(params);
 }

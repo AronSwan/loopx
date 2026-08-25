@@ -24,16 +24,16 @@ from .bindings import (
     normalize_periodic_report_sink_bindings,
 )
 from .core import build_periodic_report_run
-from .profile import (
-    build_periodic_report_activation,
-    normalize_periodic_report_profile,
-)
 from .presets import (
     PERIODIC_REPORT_PROFILE_PRESET_ALIASES,
     PERIODIC_REPORT_PROFILE_PRESET_IDS,
     WEEKLY_PROGRESS_PRESET_ID,
     build_periodic_report_preset_activation,
     resolve_periodic_report_profile_preset,
+)
+from .profile import (
+    build_periodic_report_activation,
+    normalize_periodic_report_profile,
 )
 from .project_progress import (
     PROJECT_PROGRESS_PROJECTION_SCHEMA,

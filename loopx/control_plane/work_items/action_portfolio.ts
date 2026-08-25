@@ -1,8 +1,10 @@
+import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
   requireInteger,
   requireJsonObject,
   requireNonEmptyString,
+  requireStringArray,
 } from "../runtime_decode.ts";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -20,6 +22,8 @@ const MAX_ALTERNATIVE_ACTIONS = 3;
 interface ActionCandidate extends JsonObject {
   todo_id: string;
   text: string;
+  required_capabilities?: string[];
+  required_write_scopes?: string[];
 }
 
 function actionCandidate(value: unknown, label: string): ActionCandidate {
@@ -45,6 +49,14 @@ function actionCandidate(value: unknown, label: string): ActionCandidate {
   if (raw.index !== null && raw.index !== undefined) {
     candidate.index = requireInteger(raw.index, `${label}.index`);
   }
+  for (const field of [
+    "required_capabilities",
+    "required_write_scopes",
+  ] as const) {
+    if (raw[field] !== null && raw[field] !== undefined) {
+      candidate[field] = requireStringArray(raw[field], `${label}.${field}`);
+    }
+  }
   if (raw.claim_required_before_work === true) {
     candidate.claim_required_before_work = true;
   }
@@ -60,10 +72,10 @@ function requireRunnableAdvancement(
   label: string,
 ): void {
   if (candidate.status !== "open") {
-    throw new Error(`${label}.status must be open`);
+    throw new EffectRuntimeRequestError(`${label}.status must be open`);
   }
   if (candidate.task_class !== "advancement_task") {
-    throw new Error(`${label}.task_class must be advancement_task`);
+    throw new EffectRuntimeRequestError(`${label}.task_class must be advancement_task`);
   }
 }
 
@@ -77,6 +89,12 @@ function suggestedActionProjection(candidate: ActionCandidate): JsonObject {
     text: candidate.text,
   };
   for (const field of ["priority", "action_kind"] as const) {
+    if (candidate[field] !== undefined) projected[field] = candidate[field];
+  }
+  for (const field of [
+    "required_capabilities",
+    "required_write_scopes",
+  ] as const) {
     if (candidate[field] !== undefined) projected[field] = candidate[field];
   }
   if (candidate.claim_required_before_work === true) {
@@ -124,7 +142,7 @@ function unavailableProjection(candidate: ActionCandidate): JsonObject {
 export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
   const request = requireJsonObject(value, "action_portfolio_request");
   if (request.schema_version !== ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION) {
-    throw new Error(
+    throw new EffectRuntimeRequestError(
       `action_portfolio_request.schema_version must be ${ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION}`,
     );
   }
@@ -137,7 +155,7 @@ export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
       "action_portfolio_request.max_alternative_actions",
     );
   if (maximum < 1 || maximum > MAX_ALTERNATIVE_ACTIONS) {
-    throw new Error(
+    throw new EffectRuntimeRequestError(
       `action_portfolio_request.max_alternative_actions must be between 1 and ${MAX_ALTERNATIVE_ACTIONS}`,
     );
   }
@@ -172,7 +190,7 @@ export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
       `action_portfolio_request.unavailable_higher_priority[${index}]`,
     );
     if (!candidate.availability_reason) {
-      throw new Error(
+      throw new EffectRuntimeRequestError(
         `action_portfolio_request.unavailable_higher_priority[${index}].availability_reason must be a non-empty string`,
       );
     }

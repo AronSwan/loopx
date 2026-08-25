@@ -8,10 +8,14 @@ from pathlib import Path
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
+from ..capabilities.repository_change_window import (
+    repository_delivery_interaction_hook,
+)
 from ..control_plane.quota.cli_projection import (
     compact_quota_monitor_poll_cli_payload,
     compact_quota_should_run_cli_payload,
 )
+from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
     QuotaCommandValidationError,
@@ -35,10 +39,9 @@ from ..control_plane.quota.settlement_cli import (
     quota_rollout_details,
     quota_rollout_replan_obligation_id,
     quota_rollout_todo_id,
-    render_existing_heartbeat_receipt_payload,
     reconcile_existing_heartbeat_receipt_for_turn,
+    render_existing_heartbeat_receipt_payload,
 )
-from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.turn_envelope import build_turn_envelope
 from ..control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
@@ -46,9 +49,11 @@ from ..control_plane.runtime.status_projection_cache import (
     write_status_projection_cache,
 )
 from ..control_plane.scheduler.execution_context import (
+    GUIDED_START_TURN_RUNTIME_PROFILES,
     SchedulerExecutionContextResolution,
     SchedulerRuntimeProfile,
     scheduler_execution_context_for_runtime_profile,
+    scheduler_runtime_profile_for_execution_context,
 )
 from ..control_plane.todos.contract import normalize_todo_id
 from ..file_lock import lock_timeout_error_fields
@@ -74,18 +79,20 @@ from ..quota import (
     void_quota_slot,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
-from ..turn_identity import normalize_turn_instance_id
+from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
 from ..upgrade import resolve_codex_app_automation_rrule
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .quota_host_poll import attach_host_poll_receipt
+from .quota_monitor_poll import record_quota_monitor_poll_for_cli
+from .quota_registration import (
+    register_quota_command as register_quota_command,  # noqa: PLC0414
+)
 from .quota_request import (
     QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
     QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
     quota_detail_sections_from_args,
     validate_quota_command_request,
 )
-from .quota_monitor_poll import record_quota_monitor_poll_for_cli
-from .quota_registration import register_quota_command as register_quota_command
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -212,6 +219,7 @@ def _prepare_quota_command_context(
             "--record-host-poll is only valid with `quota should-run`"
         )
 
+    begin_turn = bool(getattr(args, "begin_turn", False))
     try:
         heartbeat_turn_id = normalize_turn_instance_id(
             getattr(args, "turn_instance_id", None)
@@ -239,17 +247,24 @@ def _prepare_quota_command_context(
         raise QuotaCommandValidationError(
             "turn-scoped quota settlement requires --agent-id"
         )
-    if heartbeat_turn_id and command == "should-run" and bool(args.dry_run):
-        raise QuotaCommandValidationError(
-            "turn-scoped `quota should-run` cannot use --dry-run"
-        )
-
     scheduler_context = (
         _scheduler_execution_context_from_args(args)
         if command in QUOTA_SCHEDULER_COMMANDS
         else None
     )
     validate_quota_command_request(args)
+    if begin_turn:
+        profile = scheduler_runtime_profile_for_execution_context(scheduler_context)
+        if profile not in GUIDED_START_TURN_RUNTIME_PROFILES:
+            raise QuotaCommandValidationError(
+                "--begin-turn requires runtime-profile codex_app_heartbeat "
+                "or codex_app_ssh_goal"
+            )
+        heartbeat_turn_id = mint_turn_instance_id(prefix="guided-start")
+    if heartbeat_turn_id and command == "should-run" and bool(args.dry_run):
+        raise QuotaCommandValidationError(
+            "turn-scoped `quota should-run` cannot use --dry-run"
+        )
 
     scan_roots = [Path(item).expanduser() for item in args.scan_path]
     if not scan_roots:
@@ -544,7 +559,8 @@ def _requested_quota_action_todo_id(
 ) -> str | None:
     if not (
         bool(args.codex_app)
-        or args.runtime_profile == "codex_app_heartbeat"
+        or args.runtime_profile
+        in {profile.value for profile in GUIDED_START_TURN_RUNTIME_PROFILES}
     ):
         return None
     return normalize_todo_id(args.todo_id)
@@ -645,6 +661,9 @@ def handle_quota_command(
         scheduler_context = context.scheduler_context
         operator_inbox_urgency_projector = context.operator_inbox_urgency_projector
         if args.quota_command == "should-run":
+            interaction_projection_hooks = (
+                repository_delivery_interaction_hook(repo_path=Path.cwd()),
+            )
             (
                 heartbeat_receipt_existing,
                 receipt_bound_todo_id,
@@ -679,6 +698,7 @@ def handle_quota_command(
                     receipt_bound_replan_obligation_id
                 ),
                 turn_instance_id=heartbeat_turn_id,
+                interaction_projection_hooks=interaction_projection_hooks,
             )
             _require_requested_quota_action_selection(
                 payload,
@@ -762,6 +782,9 @@ def handle_quota_command(
                                 receipt_bound_replan_obligation_id
                             ),
                             turn_instance_id=heartbeat_turn_id,
+                            interaction_projection_hooks=(
+                                interaction_projection_hooks
+                            ),
                         )
                         cache_metadata = None
                         heartbeat_stall_observation = (

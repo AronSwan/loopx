@@ -9,6 +9,7 @@ from ..effect_program import (
     SETTLEMENT_PLAN_SCHEMA_VERSION,
     SETTLEMENT_RECEIPT_SCHEMA_VERSION,
     ReceiptBoundMonitorPhase,
+    ReceiptBoundReplayPhase,
     ReceiptBoundTerminalPhase,
     SettlementBindingKind,
     SettlementFailure,
@@ -20,6 +21,7 @@ from ..effect_program import (
     SettlementStep,
     SettlementStepKind,
     receipt_bound_monitor_phase,
+    receipt_bound_replay_phase,
     receipt_bound_terminal_phase,
     settlement_result_payload,
 )
@@ -29,6 +31,7 @@ __all__ = [
     "SETTLEMENT_PLAN_SCHEMA_VERSION",
     "SETTLEMENT_RECEIPT_SCHEMA_VERSION",
     "ReceiptBoundMonitorPhase",
+    "ReceiptBoundReplayPhase",
     "ReceiptBoundTerminalPhase",
     "SettlementBindingKind",
     "SettlementFailure",
@@ -42,6 +45,7 @@ __all__ = [
     "build_codex_app_settlement_plan",
     "build_turn_scoped_cli_settlement_plan",
     "receipt_bound_monitor_phase",
+    "receipt_bound_replay_phase",
     "receipt_bound_terminal_phase",
     "settlement_binding_args",
     "settlement_result_payload",
@@ -63,7 +67,7 @@ def build_codex_app_settlement_plan(
     replan_obligation_id: str | None = None,
     scoped_cli_args: str,
     lifecycle_actor_args: str,
-    turn_instance_id_ref: str = "${LOOPX_TURN:?}",
+    turn_instance_id_ref: str | None = None,
     delivery_boundary: str | None = None,
 ) -> SettlementPlan:
     return build_turn_scoped_cli_settlement_plan(
@@ -73,7 +77,7 @@ def build_codex_app_settlement_plan(
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=lifecycle_actor_args,
-        turn_instance_id=turn_instance_id_ref,
+        turn_instance_id=turn_instance_id_ref or "${LOOPX_TURN:?}",
         delivery_boundary=delivery_boundary,
     )
 

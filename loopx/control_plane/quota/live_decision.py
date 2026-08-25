@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from ...quota import build_quota_should_run
+from ..capability_hooks import (
+    InteractionProjectionHookRegistration,
+    dispatch_interaction_projection_hooks,
+)
 from .settlement import (
     receipt_bound_monitor_settlement_phase,
-    receipt_bound_terminal_settlement_phase,
+    receipt_bound_replay_settlement_phase,
 )
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
@@ -142,6 +146,10 @@ def build_live_quota_should_run_decision(
     requested_action_todo_id: str | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
+    interaction_projection_hooks: Sequence[
+        InteractionProjectionHookRegistration
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
 
@@ -182,7 +190,7 @@ def build_live_quota_should_run_decision(
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
     )
-    receipt_bound_terminal_phase = receipt_bound_terminal_settlement_phase(
+    receipt_bound_replay_phase = receipt_bound_replay_settlement_phase(
         runtime_root,
         goal_id=goal_id,
         agent_id=agent_id,
@@ -203,10 +211,24 @@ def build_live_quota_should_run_decision(
         receipt_bound_todo_id=receipt_bound_todo_id,
         requested_action_todo_id=requested_action_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
-        receipt_bound_terminal_phase=receipt_bound_terminal_phase,
+        receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
     )
+    hook_dispatch = dispatch_interaction_projection_hooks(
+        interaction_projection_hooks
+    )
+    interaction = payload.get("interaction_contract")
+    if isinstance(interaction, dict):
+        projections = hook_dispatch["projections"]
+        if isinstance(projections, Mapping):
+            interaction.update(projections)
+    if hook_dispatch["failures"]:
+        payload["capability_hook_dispatch"] = {
+            key: value
+            for key, value in hook_dispatch.items()
+            if key != "projections"
+        }
     bind_scheduler_followup_cli_routes(
         payload,
         registry_path=registry_path,
