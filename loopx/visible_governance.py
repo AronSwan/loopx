@@ -59,17 +59,16 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
                 "authority_revision, todo_revision, lease_epoch, "
                 "receipt_index, eligibility projections"
             ),
-            "shipped": True,
+            "shipped": False,
             "shipped_equivalent": (
-                "loopx.control_plane.coordination.head (production "
-                "loopx_coordination_head_v0 codec) + file/NoKV providers "
-                "behind one CAS seam -- coverage-only, not yet the runtime "
-                "source of truth"
+                "loopx.control_plane.coordination head codec + file/NoKV "
+                "providers behind one CAS seam -- coverage-only modules, "
+                "not the runtime source of truth"
             ),
             "gap": (
-                "Production callers still write Markdown/lease files; "
-                "promotion to canonical waits on the Stage 3 gates "
-                "(retention, lineage fence, lease lifecycle)"
+                "Runtime still writes Markdown/lease files; no production "
+                "coordination head document exists, and canonical promotion "
+                "waits on the Stage 3 gates"
             ),
         },
         {
