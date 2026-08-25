@@ -618,7 +618,13 @@ def effect_runtime_request(
                 params=params,
                 timeout=timeout,
             )
-        except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        except EffectRuntimeRemoteError:
+            raise
+        except EffectRuntimeStartupError as exc:
+            last_error = exc
+            if attempt == 0 and retry_safe:
+                info_path.unlink(missing_ok=True)
+                continue
             raise
         except (OSError, RuntimeError) as exc:
             last_error = exc
