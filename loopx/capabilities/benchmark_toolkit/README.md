@@ -139,8 +139,12 @@ skill files or importing an arbitrary checkout:
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import NativeGoalConfig
 from loopx.capabilities.benchmark_toolkit.native_codex_profile import (
     install_native_codex_profile,
-    native_codex_app_server_environment,
+    native_codex_app_server_shell_policy_args,
+    native_codex_profile_environment,
     render_native_codex_goal_prompt,
+)
+from loopx.capabilities.benchmark_toolkit.provider_gateway import (
+    serve_runner_owned_provider_gateway,
 )
 
 profile = install_native_codex_profile(loopx_source, isolated_profile_root)
@@ -157,11 +161,20 @@ config = NativeGoalConfig(
     task_instruction=task_instruction,
     required_skill_ids=profile.required_skill_ids,
 )
-process_env = native_codex_app_server_environment(
-    profile,
-    provider_env_key=runner_provider_env_key,
-    base_env=runner_environment,
+process_env = native_codex_profile_environment(profile, base_env=runner_environment)
+process_env["LOOPX_MODEL_PROVIDER_SENTINEL"] = (
+    "runner-owned-gateway-no-upstream-secret"
 )
+shell_policy = native_codex_app_server_shell_policy_args(
+    excluded_env_keys=("LOOPX_MODEL_PROVIDER_SENTINEL",),
+)
+with serve_runner_owned_provider_gateway(
+    upstream_base_url=runner_provider_base_url,
+    upstream_bearer_token=runner_provider_credential,
+) as gateway:
+    # Configure app-server's provider with gateway.base_url and the sentinel,
+    # then launch it inside build_native_codex_isolation_envelope(...).
+    ...
 ```
 
 The profile installer redirects the release, executable, manual, home, and Codex
@@ -175,12 +188,19 @@ source by default, skill-tree digests, and `doctor --agent-type codex-app-ssh`.
 release-snapshot CLI, requires the `codex_app_ssh_goal` profile and interface budget,
 and proves that the returned body names that installed CLI. For an isolated case it
 also replaces the generic global-registry token with the explicit case registry.
-Use `native_codex_app_server_environment` for app-server so the same profile
-supplies `HOME`, `CODEX_HOME`, and `PATH` while exactly one runner-declared model
-provider value is restored. The lower-level `native_codex_profile_environment`
-remains credential-free by default. The runner must still exclude the provider
-key from agent shell and tool environments; this helper grants no such tool
-access. Setting `required_skill_ids` makes the native runtime call the real
+Keep app-server on `native_codex_profile_environment`; it supplies only the
+formal profile's `HOME`, `CODEX_HOME`, and `PATH`. The upstream provider value
+must remain in `serve_runner_owned_provider_gateway`, while app-server receives
+only the loopback gateway URL and a fixed non-secret sentinel. On Linux, place
+app-server inside `native_codex_isolation` so its fresh PID namespace and
+synthetic root hide the runner process, ambient HOME, provider files, and the
+controller-private root. Environment filtering without that OS boundary is not
+credential isolation: a danger-full-access child can otherwise inspect parent
+process environments. `native_codex_app_server_shell_policy_args` keeps a small
+model-created shell environment as defense in depth. Platforms without an
+equivalent authority boundary must fail closed or use a container/VM path such
+as Pier; they must not fall back to ambient native execution. Setting
+`required_skill_ids` makes the native runtime call the real
 app-server `skills/list` surface before `thread/start`;
 missing skills, discovery errors, or a wrong cwd fail before any model turn. The
 path-free profile, prompt, and Goal receipts can then prove all three inputs without

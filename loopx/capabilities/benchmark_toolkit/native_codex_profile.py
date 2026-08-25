@@ -45,6 +45,21 @@ _INSTALL_ENV_PASSTHROUGH = (
     "TERM",
     "TZ",
 )
+_AGENT_SHELL_ENV_INCLUDE_ONLY = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+    "USER",
+)
 
 
 class NativeCodexProfileError(RuntimeError):
@@ -232,30 +247,36 @@ def native_codex_profile_environment(
     return env
 
 
-def native_codex_app_server_environment(
-    profile: NativeCodexProfile,
+def native_codex_app_server_shell_policy_args(
     *,
-    provider_env_key: str,
-    base_env: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    """Admit one runner-owned provider value into the formal profile environment.
+    excluded_env_keys: Sequence[str],
+) -> tuple[str, ...]:
+    """Build a minimal Codex shell environment as defense in depth.
 
-    The underlying profile environment remains credential-free by default. The
-    runner must name the provider key explicitly and separately deny that key to
-    agent shell or tool processes.
+    Credential isolation must come from a separate OS authority boundary. This
+    helper only prevents ordinary inheritance of explicitly named non-secret
+    runtime values such as a runner-gateway sentinel.
     """
 
-    if not _SAFE_ENV_KEY.fullmatch(provider_env_key):
-        raise ValueError("provider_env_key must be a safe environment variable name")
-    source = os.environ if base_env is None else base_env
-    provider_value = source.get(provider_env_key)
-    if not isinstance(provider_value, str) or not provider_value.strip():
-        raise NativeCodexProfileError(
-            f"provider_environment_value_missing:{provider_env_key}"
+    normalized = _normalized_ids(
+        excluded_env_keys,
+        field="excluded_env_keys",
+    )
+    invalid = [key for key in normalized if not _SAFE_ENV_KEY.fullmatch(key)]
+    if invalid:
+        raise ValueError(
+            "excluded_env_keys must contain safe environment variable names"
         )
-    env = native_codex_profile_environment(profile, base_env=base_env)
-    env[provider_env_key] = provider_value
-    return env
+    return (
+        "-c",
+        'shell_environment_policy.inherit="core"',
+        "-c",
+        "shell_environment_policy.ignore_default_excludes=false",
+        "-c",
+        f"shell_environment_policy.include_only={json.dumps(_AGENT_SHELL_ENV_INCLUDE_ONLY)}",
+        "-c",
+        f"shell_environment_policy.exclude={json.dumps(normalized)}",
+    )
 
 
 def render_native_codex_goal_prompt(
@@ -614,7 +635,7 @@ __all__ = [
     "compact_native_codex_profile_receipt",
     "inspect_native_codex_profile",
     "install_native_codex_profile",
-    "native_codex_app_server_environment",
+    "native_codex_app_server_shell_policy_args",
     "native_codex_profile_environment",
     "render_native_codex_goal_prompt",
 ]
