@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   evaluateSchedulerHeartbeatCommit,
+  evaluateSchedulerHeartbeatHostFacts,
   schedulerHeartbeatCommitStateDigest,
   SCHEDULER_ACK_STALE_HINT_TOLERANCE_MINUTES,
   SCHEDULER_HEARTBEAT_COMMIT_REQUEST_SCHEMA,
@@ -94,15 +95,96 @@ test("effect identity cannot be reused for a different payload", async (t) => {
   assert.equal(changed.reason_code, "effect_id_conflict");
 });
 
-test("effect identity cannot be reused with a different CAS precondition", async (t) => {
+test("effect identity replays when a response-loss retry sees a different CAS precondition", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
   const changed = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
     expected_state_digest: "sha256:stale-precondition",
   }));
-  assert.equal(changed.status, "conflict");
-  assert.equal(changed.reason_code, "effect_id_conflict");
+  assert.equal(changed.status, "replayed");
+  assert.equal(changed.replayed, true);
   assert.equal(changed.state_digest, first.state_digest);
+});
+
+test("host facts own state CAS and stable effect identity", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const hostFacts = {
+    schema_version: "loopx_scheduler_heartbeat_host_facts_v0",
+    operation: "ack",
+    runtime_root: runtimeRoot,
+    ...scope,
+    reset_token: "reset-1",
+    identity_signature: "identity-1",
+    progression_index: 0,
+    progression_minutes: [15, 30, 60],
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    cadence_class: "active_work",
+    generated_at: "2026-08-24T08:00:00Z",
+  };
+  const first = await evaluateSchedulerHeartbeatHostFacts(hostFacts);
+  assert.equal(first.status, "written");
+  const replay = await evaluateSchedulerHeartbeatHostFacts({
+    ...hostFacts,
+    generated_at: "2026-08-24T08:01:00Z",
+    execute: true,
+    prior_host_update_failures: [{
+      schema_version: "scheduler_host_update_failure_v0",
+      target_rrule: "FREQ=MINUTELY;INTERVAL=30",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      failure_kind: "timeout",
+      failure_count: 1,
+      failed_at: "2026-08-24T07:59:00Z",
+    }],
+  });
+  assert.equal(replay.status, "replayed");
+  assert.equal(replay.effect_id, first.effect_id);
+  assert.equal(replay.expected_state_digest, first.state_digest);
+  assert.equal(replay.state_digest, first.state_digest);
+});
+
+test("host-failure facts advance after the caller observes the failure cache", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const initialFacts = {
+    schema_version: "loopx_scheduler_heartbeat_host_facts_v0",
+    operation: "host_failure",
+    runtime_root: runtimeRoot,
+    ...scope,
+    reset_token: "reset-1",
+    identity_signature: "identity-1",
+    progression_index: 0,
+    progression_minutes: [15, 30, 60],
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
+    cadence_class: "active_work",
+    generated_at: "2026-08-24T08:00:00Z",
+    apply_needed: true,
+    failure_kind: "timeout",
+  };
+  const first = await evaluateSchedulerHeartbeatHostFacts(initialFacts);
+  assert.equal(first.status, "written");
+  assert.equal(first.failure_count, 1);
+
+  const retry = await evaluateSchedulerHeartbeatHostFacts({
+    ...initialFacts,
+    generated_at: "2026-08-24T08:00:30Z",
+  });
+  assert.equal(retry.status, "replayed");
+  assert.equal(retry.effect_id, first.effect_id);
+
+  const second = await evaluateSchedulerHeartbeatHostFacts({
+    ...initialFacts,
+    generated_at: "2026-08-24T08:01:00Z",
+    prior_host_update_failures: first.state?.host_update_failures,
+  });
+  assert.equal(second.status, "written");
+  assert.equal(second.failure_count, 2);
+  assert.equal(
+    (second.state?.host_update_failures as Array<Record<string, unknown>>)[0]
+      .failure_count,
+    2,
+  );
 });
 
 test("CAS rejects a stale writer and leaves the newer state unchanged", async (t) => {
