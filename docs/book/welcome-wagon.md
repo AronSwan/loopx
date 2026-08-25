@@ -109,7 +109,9 @@ Host 没有原生 `/loopx` 入口时，使用
 
 第一次成功至少应满足：
 
-- `loopx doctor` 能识别发布物、skill、Host 与 Effect runtime；
+- `loopx doctor` 能检查发布物、skill 与 Effect runtime；需要 Host-specific
+  检查时，先用 `loopx agent-onboard --list-agent-types` 选择准确类型，再运行
+  `loopx doctor --agent-type <agent-type>`；
 - `loopx status` 能看到精确 Goal、当前 Gate 和下一项 Todo；
 - `.loopx/`、`.codex/goals/` 与 `.local/` 没有进入 Git；
 - 当前 Host 的 loop driver 已激活，或返回了明确的人工启动步骤；

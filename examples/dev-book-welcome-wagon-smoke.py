@@ -51,6 +51,8 @@ SHARED_COMMANDS = (
     "git status --short --branch",
     "python3 -m pip install --upgrade loopx",
     "loopx workflow-skills --install",
+    "loopx agent-onboard --list-agent-types",
+    "loopx doctor --agent-type <agent-type>",
     "loopx connect --dry-run",
     "loopx connect",
     "loopx status",

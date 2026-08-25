@@ -114,7 +114,9 @@ When the Host has no native `/loopx` entry, follow the guided route in the
 
 A successful first run should prove at least:
 
-- `loopx doctor` recognizes the release, skills, Host, and Effect runtime;
+- `loopx doctor` checks the release, skills, and Effect runtime; for
+  Host-specific checks, first use `loopx agent-onboard --list-agent-types` to
+  select the exact type, then run `loopx doctor --agent-type <agent-type>`;
 - `loopx status` shows the exact Goal, current Gate, and next Todo;
 - `.loopx/`, `.codex/goals/`, and `.local/` remain outside Git;
 - the current Host loop driver is active, or the output gives an explicit manual start step;
