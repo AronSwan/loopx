@@ -23,6 +23,7 @@ import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
+import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import { MarkdownText } from "./markdown";
 import type {
   PersonalWorkspaceCallbacks,
@@ -38,7 +39,7 @@ import type {
   WorkspaceSystemHealth,
   WorkspaceTimelineItem,
 } from "./personal-workspace-model";
-import { goalTitleFor, workspaceHomeLaneForGoal, workspaceSessionStatusLabel } from "./personal-workspace-model";
+import { goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { routeWorkspaceInput } from "./personal-workspace-router";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { WorkspaceShell } from "./workspace-shell";
@@ -71,21 +72,14 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   return [...latest.values()];
 }
 
-const activeHomeLanes = [
-  { description: "等待你的决定、授权或补充信息", key: "needs_you", label: "需要你" },
-  { description: "Agent 正在推进并持续回传进展", key: "running", label: "执行中" },
-  { description: "持续监控，出现变化时再提醒你", key: "observing", label: "观察中" },
-  { description: "已经安排，等待时间或前置条件", key: "scheduled", label: "已安排" },
-] as const;
-
-function activityTimeLabel(value?: string) {
-  if (!value) return "等待首次活动";
+function activityTimeLabel(value: string | undefined, locale: string, t: WorkspaceTranslate) {
+  if (!value) return t("home.noFirstActivity");
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   const today = new Date();
-  const time = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
-  if (parsed.toDateString() === today.toDateString()) return `今天 ${time}`;
-  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
+  const time = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
+  if (parsed.toDateString() === today.toDateString()) return t("home.todayAt", { time });
+  return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
 }
 
 function ManagerHomeBoard({
@@ -97,6 +91,13 @@ function ManagerHomeBoard({
   onSelectGoal: (goalId: string) => void;
   systemHealth?: WorkspaceSystemHealth;
 }) {
+  const { locale, t } = useWorkspaceI18n();
+  const activeHomeLanes = [
+    { description: t("home.lane.needsYouDescription"), key: "needs_you", label: t("home.lane.needsYou") },
+    { description: t("home.lane.runningDescription"), key: "running", label: t("home.lane.running") },
+    { description: t("home.lane.observingDescription"), key: "observing", label: t("home.lane.observing") },
+    { description: t("home.lane.scheduledDescription"), key: "scheduled", label: t("home.lane.scheduled") },
+  ] as const;
   const active = Object.fromEntries(activeHomeLanes.map((lane) => [lane.key, [] as WorkspaceGoal[]])) as Record<(typeof activeHomeLanes)[number]["key"], WorkspaceGoal[]>;
   const history: WorkspaceGoal[] = [];
   const stopped: WorkspaceGoal[] = [];
@@ -111,16 +112,16 @@ function ManagerHomeBoard({
       <span className="personal-home-goal-meta"><i />{goal.agentLabel ?? goal.agentId}</span>
       <strong>{goal.title}</strong>
       <p>{goal.needsYou ?? goal.nextSentence}</p>
-      <footer><span>{goal.state}</span><small title={goal.latestActivity}>{goal.latestActivity ? activityTimeLabel(goal.latestActivity) : goal.agentTodos.length ? `${goal.agentTodos.length} 个 Task` : "尚无活动"}</small></footer>
+      <footer><span>{localizedGoalState(goal.state, locale)}</span><small title={goal.latestActivity}>{goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
     </button>
   );
   return (
-    <section aria-label="Goal 工作区" className="personal-home-board">
+    <section aria-label={t("home.workspace")} className="personal-home-board">
       {systemHealth && (!systemHealth.ok || systemHealth.issues.length > 0 || systemHealth.freshnessWarning) ? (
         <div className="personal-system-health-banner" role="alert">
           <div className="personal-system-health-header">
             <AlertCircle size={15} />
-            <strong>系统健康：{systemHealth.summary}</strong>
+            <strong>{t("home.systemHealth", { summary: systemHealth.summary })}</strong>
             {systemHealth.freshnessWarning ? <small>（{systemHealth.freshnessWarning}）</small> : null}
           </div>
           {systemHealth.issues.length > 0 ? (
@@ -138,18 +139,18 @@ function ManagerHomeBoard({
             <header><span><i />{lane.label}</span><b>{active[lane.key].length}</b></header>
             <p>{lane.description}</p>
             <div className="personal-home-lane-list">
-              {active[lane.key].length ? active[lane.key].map(goalCard) : <span className="personal-home-empty">当前没有</span>}
+              {active[lane.key].length ? active[lane.key].map(goalCard) : <span className="personal-home-empty">{t("home.empty")}</span>}
             </div>
           </section>
         ))}
       </div>
       <details className="personal-home-history">
-        <summary><span>历史</span><b>{history.length}</b><small>已完成的 Goal</small></summary>
-        <div>{history.length ? history.map(goalCard) : <span className="personal-home-empty">还没有已完成的 Goal</span>}</div>
+        <summary><span>{t("home.history")}</span><b>{history.length}</b><small>{t("home.completedGoals")}</small></summary>
+        <div>{history.length ? history.map(goalCard) : <span className="personal-home-empty">{t("home.noCompletedGoals")}</span>}</div>
       </details>
       {stopped.length ? (
         <details className="personal-home-history is-stopped">
-          <summary><span>已停止</span><b>{stopped.length}</b><small>保留状态，可随时恢复</small></summary>
+          <summary><span>{t("home.stopped")}</span><b>{stopped.length}</b><small>{t("home.preservedState")}</small></summary>
           <div>{stopped.map(goalCard)}</div>
         </details>
       ) : null}
@@ -172,6 +173,7 @@ function ManagerConversationTray({
   onOpenConversation: () => void;
   title?: string;
 }) {
+  const { t } = useWorkspaceI18n();
   const latestUserIndex = messages.reduce((latest, message, index) => message.role === "user" ? index : latest, 0);
   const latestExchange = messages.slice(Math.max(0, latestUserIndex));
   const visibleMessages = latestExchange.slice(-3);
@@ -187,32 +189,32 @@ function ManagerConversationTray({
   }, [onClose]);
 
   return (
-    <aside aria-label="对话回执" className="personal-manager-conversation-tray">
+    <aside aria-label={t("conversation.receipt")} className="personal-manager-conversation-tray">
       <header>
         <span>
           <Bot size={16} />
-          <strong>{title ?? "管家对话"}</strong>
-          <small>{messages.at(-1)?.pending ? "正在回复" : "刚刚"}</small>
+          <strong>{title ?? t("conversation.title")}</strong>
+          <small>{messages.at(-1)?.pending ? t("conversation.replying") : t("common.recently")}</small>
         </span>
         <div className="personal-manager-conversation-actions">
           {onDraftTask && latestAssistantMessage ? (
             <button
               className="personal-manager-conversation-btn"
               onClick={() => onDraftTask(latestAssistantMessage.text)}
-              title="将 Agent 最新回复转为 Task 草稿"
+              title={t("conversation.convertHint")}
               type="button"
             >
               <ListPlus size={13} />
-              <span>转为 Task</span>
+              <span>{t("conversation.toTask")}</span>
             </button>
           ) : null}
-          <button className="personal-manager-conversation-link" onClick={onOpenConversation} type="button">查看完整对话</button>
+          <button className="personal-manager-conversation-link" onClick={onOpenConversation} type="button">{t("conversation.full")}</button>
           {onClose ? (
             <button
-              aria-label="关闭对话回执"
+              aria-label={t("conversation.close")}
               className="personal-manager-conversation-close"
               onClick={onClose}
-              title="关闭对话回执"
+              title={t("conversation.close")}
               type="button"
             >
               <X size={14} />
@@ -223,10 +225,10 @@ function ManagerConversationTray({
       <div aria-live="polite" className="personal-manager-conversation-messages">
         {visibleMessages.map((message) => (
           <article className={`is-${message.role}`} key={message.id}>
-            <strong>{message.role === "user" ? "你" : message.agentLabel ?? agentLabel ?? "LoopX 管家"}</strong>
+            <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.pending ? <small>正在整理…</small> : null}
+              {message.pending ? <small>{t("conversation.agentPending")}</small> : null}
             </div>
           </article>
         ))}
@@ -240,22 +242,23 @@ function SessionRecordHeader({ onClose, onOpenDetails, run }: {
   onOpenDetails: () => void;
   run: WorkspaceRun;
 }) {
+  const { t } = useWorkspaceI18n();
   return (
-    <section aria-label="执行 Session 运行记录" className="personal-session-record">
+    <section aria-label={t("session.record")} className="personal-session-record">
       <header>
-        <span><Bot size={17} />执行 Session · 运行记录</span>
-        <button aria-label="退出运行记录" onClick={onClose} type="button"><X size={15} /></button>
+        <span><Bot size={17} />{t("session.record")}</span>
+        <button aria-label={t("session.closeRecord")} onClick={onClose} type="button"><X size={15} /></button>
       </header>
       <div>
         <strong>{run.title}</strong>
-        <p>当前时间线已切换到这次 Session 的消息与 Turn 记录。</p>
+        <p>{t("session.recordDescription")}</p>
       </div>
       <dl>
         <div><dt>Agent</dt><dd>{run.agentLabel}</dd></div>
-        <div><dt>状态</dt><dd>{workspaceSessionStatusLabel(run.sessionStatus ?? run.status)}</dd></div>
+        <div><dt>{t("common.status")}</dt><dd>{localizedSessionStatus(run.sessionStatus ?? run.status, t)}</dd></div>
         <div><dt>Session</dt><dd title={run.sessionId}>{run.sessionId}</dd></div>
       </dl>
-      <button className="personal-secondary-action" onClick={onOpenDetails} type="button">Session 详情</button>
+      <button className="personal-secondary-action" onClick={onOpenDetails} type="button">{t("session.details")}</button>
     </section>
   );
 }
@@ -588,10 +591,10 @@ const acceptedImageTypes = new Set(["image/png", "image/jpeg", "image/webp", "im
 const maxImageAttachmentBytes = 5 * 1024 * 1024;
 const maxImageAttachmentCount = 4;
 
-function readImageAttachment(file: File): Promise<WorkspaceImageAttachment> {
+function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`无法读取图片 ${file.name}`));
+    reader.onerror = () => reject(new Error(t("composer.imageReadError", { name: file.name })));
     reader.onload = () => resolve({
       dataUrl: String(reader.result ?? ""),
       id: crypto.randomUUID(),
@@ -621,6 +624,7 @@ export function PersonalWorkspacePage({
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
 }) {
+  const { locale, t } = useWorkspaceI18n();
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const [selection, setSelection] = useState<WorkspaceDrawerSelection | null>(null);
@@ -916,7 +920,7 @@ export function PersonalWorkspacePage({
   }, [readOnly, selectedGoalId]);
 
   async function createPreview(request: WorkspaceActionPreviewRequest) {
-    if (readOnly) throw new Error("远端 SSH 隧道来源是只读投影，不能执行控制面写入。");
+    if (readOnly) throw new Error(t("source.readOnlyWriteError"));
     let local: WorkspaceActionPreview;
     try {
       local = callbacks.onPreviewAction
@@ -1080,7 +1084,7 @@ export function PersonalWorkspacePage({
               ?? (proposal.lifecycleOperation === "stop" ? "active" as const : "stopped" as const),
           }
         : null;
-      setActionFeedback(`正在执行：${proposal.title}`);
+      setActionFeedback(t("feedback.applying", { title: proposal.title }));
       setProposals((current) => ({ ...current, [proposal.previewId]: { ...proposal, status: "applying" } }));
       setSelection({ item: { ...proposal, status: "applying" }, kind: "proposal" });
       if (lifecycleChange) {
@@ -1092,7 +1096,7 @@ export function PersonalWorkspacePage({
           const applied = { ...proposal, status: "applied" as const };
           setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
           setSelection({ item: applied, kind: "proposal" });
-          setActionFeedback(`已完成：${proposal.title}`);
+          setActionFeedback(t("feedback.completed", { title: proposal.title }));
           if (proposal.actionKind === "goal.lifecycle") {
             if (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "delete") {
               selectGoal(null);
@@ -1115,12 +1119,12 @@ export function PersonalWorkspacePage({
           }
           setActionFeedback(
             result.proposal.status === "stale"
-              ? "状态已变化，操作未执行，请重新生成确认预览。"
-              : `操作未完成：${result.proposal.status}`,
+              ? t("feedback.stale")
+              : t("feedback.notCompleted", { status: result.proposal.status }),
           );
           return;
         }
-        setActionFeedback(`已完成：${applied.title}`);
+        setActionFeedback(t("feedback.completed", { title: applied.title }));
         // Keep the success receipt visible. Refresh and navigation happen when
         // the user chooses the explicit "进入 Goal" action in the drawer.
         if (applied.actionKind === "todo.create") {
@@ -1154,7 +1158,7 @@ export function PersonalWorkspacePage({
           };
           setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
           setSelection({ item: gated, kind: "proposal" });
-          setActionFeedback(`需要你确认：${gated.gate.summary}`);
+          setActionFeedback(t("feedback.gateRequired", { summary: gated.gate.summary }));
           if (proposal.actionKind === "goal.create" && proposal.goalId) {
             callbacks.onRefresh?.();
             selectGoal(proposal.goalId);
@@ -1169,7 +1173,7 @@ export function PersonalWorkspacePage({
         };
         setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
         setSelection({ item: failed, kind: "proposal" });
-        setActionFeedback(`执行失败：${failed.errorMessage}`);
+        setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
       }
     },
     onCancelProposal: async (proposal) => {
@@ -1184,7 +1188,7 @@ export function PersonalWorkspacePage({
         if (!callbacks.onCancelProposal) await cancelTypedAction(proposal.previewId);
       } catch (error) {
         setProposals((current) => ({ ...current, [proposal.previewId]: proposal }));
-        setActionFeedback(`取消失败：${error instanceof Error ? error.message : String(error)}`);
+        setActionFeedback(t("feedback.cancelFailed", { error: error instanceof Error ? error.message : String(error) }));
       }
     },
     onTransitionProposal: async (proposal, transition) => {
@@ -1271,7 +1275,7 @@ export function PersonalWorkspacePage({
 
   async function sendMessage(messageOverride?: string) {
     const pendingImages = messageOverride ? [] : imageAttachments;
-    const message = (messageOverride ?? composer).trim() || (pendingImages.length ? "请结合这些图片分析当前 Goal，并告诉我下一步。" : "");
+    const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || sending) return;
     if (!messageOverride) {
       setComposer("");
@@ -1294,8 +1298,8 @@ export function PersonalWorkspacePage({
       if (intentRoute.route === "clarify") {
         setComposer(message);
         setActionFeedback(intentRoute.missingFields.includes("resume_when")
-          ? "暂缓 Todo 需要可自动判断的恢复条件。请补充 todo_done:<todo_id>、pr_merged:[owner/repo]#<number> 或 capacity_available:<capability>。"
-          : "这句话包含多个可能修改状态的操作。请一次描述一项操作，我会逐项展示确认预览。");
+          ? t("composer.clarifyDefer")
+          : t("composer.clarifySingleAction"));
         return;
       }
       if (intentRoute.actionKind === "goal.create") {
@@ -1425,8 +1429,8 @@ export function PersonalWorkspacePage({
         setComposer(message);
         setImageAttachments(pendingImages);
       }
-      const errorMessage = error instanceof Error ? error.message : "消息发送失败，请稍后重试。";
-      setActionFeedback(`发送失败：${errorMessage}`);
+      const errorMessage = error instanceof Error ? error.message : t("feedback.sendGenericError");
+      setActionFeedback(t("feedback.sendFailed", { error: errorMessage }));
     } finally {
       setSending(false);
     }
@@ -1448,23 +1452,23 @@ export function PersonalWorkspacePage({
     const invalid = selected.find((file) => !acceptedImageTypes.has(file.type));
     const oversized = selected.find((file) => file.size > maxImageAttachmentBytes);
     if (available <= 0) {
-      setImageAttachmentError(`最多添加 ${maxImageAttachmentCount} 张图片。`);
+      setImageAttachmentError(t("composer.imageCountError", { count: maxImageAttachmentCount }));
       return;
     }
     if (invalid) {
-      setImageAttachmentError("支持 PNG、JPEG、WebP 和 GIF 图片。");
+      setImageAttachmentError(t("composer.imageTypeError"));
       return;
     }
     if (oversized) {
-      setImageAttachmentError(`单张图片不能超过 ${maxImageAttachmentBytes / 1024 / 1024}MB。`);
+      setImageAttachmentError(t("composer.imageSizeError", { size: maxImageAttachmentBytes / 1024 / 1024 }));
       return;
     }
     try {
-      const loaded = await Promise.all(selected.map(readImageAttachment));
+      const loaded = await Promise.all(selected.map((file) => readImageAttachment(file, t)));
       setImageAttachments((current) => [...current, ...loaded].slice(0, maxImageAttachmentCount));
-      setImageAttachmentError(files.length > selected.length ? `最多添加 ${maxImageAttachmentCount} 张图片。` : null);
+      setImageAttachmentError(files.length > selected.length ? t("composer.imageCountError", { count: maxImageAttachmentCount }) : null);
     } catch (error) {
-      setImageAttachmentError(error instanceof Error ? error.message : "图片读取失败。");
+      setImageAttachmentError(error instanceof Error ? error.message : t("composer.imageReadGenericError"));
     } finally {
       if (imageInputRef.current) imageInputRef.current.value = "";
     }
@@ -1571,19 +1575,19 @@ export function PersonalWorkspacePage({
           />
           <div className="personal-channel-scroll" ref={channelScrollRef}>
             {!selectedGoal && !managerChatOpen && digest && (digest.done + digest.failed + digest.attention) > 0 ? (
-              <section className="personal-digest-card" aria-label="你不在的时候">
-                <strong>你不在的时候</strong>
+              <section className="personal-digest-card" aria-label={t("digest.away")}>
+                <strong>{t("digest.away")}</strong>
                 <div className="personal-digest-stats">
-                  <span><b>{digest.done}</b>完成</span>
-                  <span><b>{digest.failed}</b>异常</span>
-                  <span><b>{digest.attention}</b>等你确认</span>
+                  <span><b>{digest.done}</b>{t("digest.completed")}</span>
+                  <span><b>{digest.failed}</b>{t("digest.failed")}</span>
+                  <span><b>{digest.attention}</b>{t("digest.needsYou")}</span>
                 </div>
               </section>
             ) : null}
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><strong>你好，我是 LoopX 管家</strong><p>你有 {managerNeedsYouCount} 项需要处理，其中 {managerBlockingCount} 项正在阻塞 Agent。</p></div>
+                <div><strong>{t("home.greeting")}</strong><p>{t("home.waitingCount", { count: managerNeedsYouCount })} {t("home.blockingSummary", { count: managerBlockingCount })}</p></div>
               </section>
             ) : null}
             {selectedGoal && selectedGoalTab === "tasks" ? (
@@ -1593,7 +1597,7 @@ export function PersonalWorkspacePage({
                 onDraftTaskFromMessage={readOnly ? undefined : (reply) => {
                   const taskDraft = sanitizeTaskDraftFromReply(reply);
                   setComposer(`创建一个 Task：${taskDraft}`);
-                  setActionFeedback("已根据回复生成 Task 草稿。编辑后发送，LoopX 会先展示确认预览。");
+                  setActionFeedback(t("feedback.taskDraftCreated"));
                   window.requestAnimationFrame(() => composerRef.current?.focus());
                 }}
                 onOpenChat={() => setSelectedGoalTab("chat")}
@@ -1608,7 +1612,7 @@ export function PersonalWorkspacePage({
                 userTodos={model.userTodos}
               />
             ) : selectedGoal && selectedGoalTab === "files" ? (
-              <section className="personal-object-list"><header><strong>Files & Outputs</strong><span>{items.filter((item) => item.kind === "output").length}</span></header>{items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "output" }> => item.kind === "output").map((item) => <button key={item.id} onClick={() => setSelection({ item: item.output, kind: "output" })} type="button"><span>↗</span><strong>{item.output.title}</strong><p>{item.output.summary ?? item.output.safePreview ?? item.output.kind ?? "公开安全产出"}</p><small title={item.output.createdAt}>{[item.output.goalTitle, item.output.todoId ? `Task ${item.output.todoId}` : null, activityTimeLabel(item.output.createdAt)].filter(Boolean).join(" · ")}</small></button>)}</section>
+              <section className="personal-object-list"><header><strong>{t("files.title")}</strong><span>{items.filter((item) => item.kind === "output").length}</span></header>{items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "output" }> => item.kind === "output").map((item) => <button key={item.id} onClick={() => setSelection({ item: item.output, kind: "output" })} type="button"><span>↗</span><strong>{item.output.title}</strong><p>{item.output.summary ?? item.output.safePreview ?? item.output.kind ?? t("files.emptySummary")}</p><small title={item.output.createdAt}>{[item.output.goalTitle, item.output.todoId ? `${t("common.task")} ${item.output.todoId}` : null, activityTimeLabel(item.output.createdAt, locale, t)].filter(Boolean).join(" · ")}</small></button>)}</section>
             ) : !selectedGoal && !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
             ) : !selectedGoal ? (
@@ -1628,7 +1632,7 @@ export function PersonalWorkspacePage({
           </div>
           <div className="personal-composer-wrap">
             {readOnly ? (
-              <div className="personal-read-only-notice"><strong>远端只读投影</strong><span>你可以查看 Goal、Task、证据与运行状态；写入、纠偏和 Agent 会话仍留在来源主机。</span></div>
+              <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
             ) : <>
             {!selectedGoal && !managerChatOpen && managerConversationReceiptVisible && managerMessages.length ? (
               <ManagerConversationTray
@@ -1647,7 +1651,7 @@ export function PersonalWorkspacePage({
                 onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
                   const taskDraft = sanitizeTaskDraftFromReply(reply);
                   setComposer(`创建一个 Task：${taskDraft}`);
-                  setActionFeedback("已根据回复生成 Task 草稿。编辑后发送，LoopX 会先展示确认预览。");
+                  setActionFeedback(t("feedback.taskDraftCreated"));
                   window.requestAnimationFrame(() => composerRef.current?.focus());
                 } : undefined}
                 onOpenConversation={() => {
@@ -1660,34 +1664,34 @@ export function PersonalWorkspacePage({
             {actionFeedback ? (
               <div className="personal-action-feedback" role="status">
                 <span>{actionFeedback}</span>
-                <button aria-label="关闭操作回执" onClick={() => setActionFeedback(null)} type="button"><X size={14} /></button>
+                <button aria-label={t("common.closeActionReceipt")} onClick={() => setActionFeedback(null)} type="button"><X size={14} /></button>
               </div>
             ) : null}
             <p className="personal-composer-hint">
               {selectedGoal
                 ? goalRunningCount > 0
-                  ? `${selectedAgentLabel} 正在执行 ${goalRunningCount} 个任务 · 你的消息作为纠偏进入本会话，不会打断执行`
-                  : `你的消息由 ${selectedAgentLabel} 在本 Goal 的会话中接收`
-                : "你的消息由 LoopX 管家跨 Goal 接收，支持全局询问与创建 Goal"}
+                  ? t("composer.goalRunningHint", { agent: selectedAgentLabel, count: goalRunningCount })
+                  : t("composer.goalMessageHint", { agent: selectedAgentLabel })
+                : t("composer.managerMessageHint")}
             </p>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
-                <button aria-label="将“我现在该做什么”填入编辑框" className="is-draft" onClick={() => fillQuickPrompt("我现在该做什么？")} title="填入编辑框，确认后再发送" type="button"><MessageCircleQuestion size={13} /><span>询问下一步</span><small className="personal-prompt-subtle">草稿</small></button>
-                <button className="is-immediate" disabled={sending} onClick={() => void sendMessage("请给我一份当前 Goal 的进度报告：已完成、执行中、阻塞和下一步。")} title="点击后立即向当前 Agent 发送请求" type="button"><Send size={13} /><span>向 Agent 获取进度报告</span><em className="personal-prompt-badge">立即发送</em></button>
-                <button aria-label="配置定时检查" className="is-draft" onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title="先填写检查内容、频率和停止条件，不会立即创建" type="button"><CalendarClock size={13} /><span>配置定时检查</span><small className="personal-prompt-subtle">草稿</small></button>
+                <button aria-label={t("composer.nextAction")} className="is-draft" onClick={() => fillQuickPrompt(t("composer.nextActionPrompt"))} title={t("composer.prepareDraft")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span><small className="personal-prompt-subtle">{t("composer.draft")}</small></button>
+                <button className="is-immediate" disabled={sending} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.immediate")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span><em className="personal-prompt-badge">{t("composer.immediate")}</em></button>
+                <button aria-label={t("composer.monitor")} className="is-draft" onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.monitorHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span><small className="personal-prompt-subtle">{t("composer.draft")}</small></button>
               </div>
             ) : (
               <div className="personal-quick-prompts">
-                <button aria-label="将“有哪些 Goal 正在等我”填入编辑框" className="is-draft" onClick={() => fillQuickPrompt("有哪些 Goal 正在等我？我现在该优先处理什么？")} title="填入编辑框，确认后再发送" type="button"><MessageCircleQuestion size={13} /><span>询问全局待办</span><small className="personal-prompt-subtle">草稿</small></button>
-                <button className="is-immediate" disabled={sending} onClick={() => void sendMessage("请帮我汇总所有活跃 Goal 的最新进展与阻塞。")} title="点击后立即向 LoopX 管家获取全局进展" type="button"><Send size={13} /><span>汇总所有 Goal 进展</span><em className="personal-prompt-badge">立即发送</em></button>
-                <button aria-label="创建新 Goal" className="is-draft" onClick={requestGoalCreate} title="填入 Goal 模板草稿，检查后再创建" type="button"><Plus size={13} /><span>创建新 Goal</span><small className="personal-prompt-subtle">草稿</small></button>
+                <button aria-label={t("composer.globalTasks")} className="is-draft" onClick={() => fillQuickPrompt(t("composer.globalTasksPrompt"))} title={t("composer.prepareDraft")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span><small className="personal-prompt-subtle">{t("composer.draft")}</small></button>
+                <button className="is-immediate" disabled={sending} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.immediate")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span><em className="personal-prompt-badge">{t("composer.immediate")}</em></button>
+                <button aria-label={t("composer.createGoal")} className="is-draft" onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span><small className="personal-prompt-subtle">{t("composer.draft")}</small></button>
               </div>
             )}
-            {goalDraftActive ? <div className="personal-goal-draft-status" role="status"><strong>Goal 草稿</strong><span>补充内容后发送，LoopX 会先展示待确认操作。</span></div> : null}
-            {imageAttachments.length ? <div className="personal-composer-images" aria-label="待发送图片">{imageAttachments.map((attachment) => (
+            {goalDraftActive ? <div className="personal-goal-draft-status" role="status"><strong>{t("composer.createGoalDraft")}</strong><span>{t("composer.createGoalDraftDescription")}</span></div> : null}
+            {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
                 <img alt={attachment.name} src={attachment.dataUrl} />
-                <button aria-label={`移除图片 ${attachment.name}`} onClick={() => setImageAttachments((current) => current.filter((item) => item.id !== attachment.id))} type="button"><X size={13} /></button>
+                <button aria-label={t("composer.sentImageAlt", { name: attachment.name })} onClick={() => setImageAttachments((current) => current.filter((item) => item.id !== attachment.id))} type="button"><X size={13} /></button>
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
@@ -1707,18 +1711,18 @@ export function PersonalWorkspacePage({
             >
               <span><Bot size={17} />{agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId}</span>
               <button
-                aria-label="添加图片"
+                aria-label={t("composer.addImage")}
                 className="personal-composer-attach"
                 disabled={sending || imageAttachments.length >= maxImageAttachmentCount}
                 onClick={() => imageInputRef.current?.click()}
-                title="选择、粘贴或拖入图片"
+                title={t("composer.attachImageHint")}
                 type="button"
               >
                 <Paperclip size={17} />
               </button>
-              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label="图片文件选择器" className="personal-composer-file-input" disabled={sending || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
+              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={sending || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
-                aria-label="向 LoopX 发送消息"
+                aria-label={t("composer.sendMessage")}
                 onChange={(event) => setComposer(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -1727,12 +1731,12 @@ export function PersonalWorkspacePage({
                   }
                 }}
                 onPaste={handleComposerPaste}
-                placeholder={selectedGoal ? `询问或纠偏 ${selectedGoal.title}…` : "问问 LoopX 管家，或描述一个新 Goal…"}
+                placeholder={selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : t("composer.managerPlaceholder")}
                 ref={composerRef}
                 rows={1}
                 value={composer}
               />
-              <button aria-label={goalDraftActive ? "检查并创建 Goal" : "发送"} disabled={(!composer.trim() && imageAttachments.length === 0) || sending} onClick={() => void sendMessage()} title={goalDraftActive ? "检查 Goal 内容并进入确认" : "发送消息"} type="button"><Send size={18} /></button>
+              <button aria-label={goalDraftActive ? t("composer.createGoal") : t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || sending} onClick={() => void sendMessage()} title={goalDraftActive ? t("composer.createGoalHint") : t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
             </>}
           </div>

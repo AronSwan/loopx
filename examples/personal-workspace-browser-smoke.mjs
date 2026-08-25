@@ -606,6 +606,35 @@ async function main() {
     pass(4, "First viewport exposes needs-you, running, observing, and scheduled Goal lanes with collapsed history.");
     pass(15, "Desktop viewport matches the approved single-sidebar/channel/drawer composition.");
 
+    if (await page.locator("html").getAttribute("lang") !== "zh-CN") throw new Error("Desktop did not start in Simplified Chinese");
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("region", { name: "设置", exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: /语言/ }).click();
+    const englishLocale = page.getByRole("radio", { name: /English/ });
+    await englishLocale.click();
+    await page.getByRole("heading", { level: 1, name: "Language", exact: true }).waitFor({ state: "visible" });
+    if (await page.locator("html").getAttribute("lang") !== "en") throw new Error("Language switch did not update the document locale");
+    if (await page.evaluate(() => localStorage.getItem("loopx-pw-locale")) !== "en") throw new Error("English locale was not persisted");
+    await page.screenshot({ path: resolve(outputDir, "desktop-settings-english.png"), fullPage: false, animations: "disabled" });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+    await page.getByText("LoopX Manager", { exact: true }).first().waitFor({ state: "visible" });
+    if (await page.locator("html").getAttribute("lang") !== "en") throw new Error("English locale did not survive reload");
+    await page.locator(".personal-goal-link").first().click();
+    await page.getByRole("button", { name: "Goal details" }).click();
+    await page.getByText("Repository", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("Execution Session", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("Read only", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: /Close details/ }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: /Language/ }).click();
+    await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
+    await page.getByRole("heading", { level: 1, name: "语言", exact: true }).waitFor({ state: "visible" });
+    if (await page.evaluate(() => localStorage.getItem("loopx-pw-locale")) !== "zh-CN") throw new Error("Simplified Chinese locale was not persisted");
+    await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+    await page.locator(".personal-manager-link").first().click();
+    await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+
     if (await page.locator(".personal-manager-conversation-tray").count()) {
       throw new Error("Historical manager messages kept a conversation receipt permanently visible before a new send");
     }
@@ -632,7 +661,7 @@ async function main() {
     await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
     if (!(await page.getByTestId("personal-home-lane-running").isVisible())) throw new Error("Manager send replaced the four-lane home overview");
     const managerUrlBefore = page.url();
-    await page.getByRole("button", { name: "将“有哪些 Goal 正在等我”填入编辑框" }).click();
+    await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
     await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await page.getByText(/^先处理「.+」：.+/u).waitFor({ state: "visible" });
@@ -690,7 +719,7 @@ async function main() {
       "关联仓库（可选）：",
       "通知方式（可选）：",
     ].join("\n"));
-    await page.getByRole("button", { name: "检查并创建 Goal", exact: true }).click();
+    await page.locator(".personal-channel-composer > button").last().click();
     await page.getByText("确认执行").waitFor({ state: "visible" });
     const goalPreview = api.actionPreviews.at(-1);
     for (const field of ["agent_id", "goal_id", "heartbeat", "initial_todos", "permission", "stop_condition", "workspace_ref"]) {
@@ -750,10 +779,18 @@ async function main() {
       await page.locator(".personal-goal-link").first().click();
       await page.locator(".personal-task-kanban").waitFor({ state: "visible" });
     };
+    const selectProductReleaseGoal = async () => {
+      const goal = page.locator(".personal-goal-link", { hasText: "Product Release" }).first();
+      if (!await goal.isVisible()) {
+        const stoppedGoals = page.locator(".personal-stopped-goals");
+        if (await stoppedGoals.getAttribute("open") === null) await stoppedGoals.locator("summary").click();
+      }
+      await goal.click();
+      await page.locator(".personal-task-kanban").waitFor({ state: "visible" });
+    };
     const populatedGeometry = await readBoardGeometry();
     assertBoardGeometry("populated board", populatedGeometry);
-    await page.locator(".personal-goal-link", { hasText: "Product Release" }).first().click();
-    await page.locator(".personal-task-kanban").waitFor({ state: "visible" });
+    await selectProductReleaseGoal();
     const emptyGeometry = await readBoardGeometry();
     assertBoardGeometry("empty board", emptyGeometry);
     if (Math.abs(emptyGeometry.kanbanBox.width - populatedGeometry.kanbanBox.width) > 2) {
@@ -765,8 +802,7 @@ async function main() {
     await selectFirstGoal();
     const populatedWide = await readBoardGeometry();
     assertBoardGeometry("populated board (wide)", populatedWide);
-    await page.locator(".personal-goal-link", { hasText: "Product Release" }).first().click();
-    await page.locator(".personal-task-kanban").waitFor({ state: "visible" });
+    await selectProductReleaseGoal();
     const emptyWide = await readBoardGeometry();
     assertBoardGeometry("empty board (wide)", emptyWide);
     if (Math.abs(emptyWide.kanbanBox.width - populatedWide.kanbanBox.width) > 2) {
@@ -777,9 +813,9 @@ async function main() {
     await selectFirstGoal();
     await page.locator(".personal-object-list").first().waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Goal 详情" }).click();
-    await page.getByText("Repository", { exact: true }).waitFor({ state: "visible" });
-    await page.getByText("Execution Session", { exact: true }).waitFor({ state: "visible" });
-    await page.getByText("Read only", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("仓库", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("执行 Session", { exact: true }).waitFor({ state: "visible" });
+    await page.getByText("只读", { exact: true }).waitFor({ state: "visible" });
     if (!(await page.getByText("loopx-ai/loopx", { exact: true }).isVisible())) throw new Error("Goal drawer did not show the read-only repository context");
     await page.getByRole("button", { name: /关闭详情/ }).click();
 
@@ -789,20 +825,20 @@ async function main() {
     if (await page.locator(".personal-channel-composer").count()) throw new Error("Workspace Settings left the chat composer visible");
     if (await page.locator("[data-context-drawer]").count()) throw new Error("Workspace Settings left the context drawer visible");
     await page.screenshot({ path: resolve(outputDir, "workspace-settings.png"), fullPage: false, animations: "disabled" });
-    await page.getByRole("button", { name: /Connect Lark App/ }).click();
-    const connectDialog = page.getByRole("dialog", { name: "Connect Lark App" });
+    await page.getByRole("button", { name: /连接 Lark App/ }).click();
+    const connectDialog = page.getByRole("dialog", { name: "连接 Lark App" });
     await connectDialog.waitFor({ state: "visible" });
     await connectDialog.getByRole("option", { name: "Product group" }).waitFor({ state: "attached" });
-    await connectDialog.getByLabel("Group chat").selectOption({ label: "Product group" });
-    await connectDialog.getByLabel("Capture scope").selectOption("configured_chat_all");
-    const ingressGroup = connectDialog.getByRole("group", { name: "Agent ingress" });
+    await connectDialog.getByLabel("群聊").selectOption({ label: "Product group" });
+    await connectDialog.getByLabel("接收范围").selectOption("configured_chat_all");
+    const ingressGroup = connectDialog.getByRole("group", { name: "Agent 入站方式" });
     const ingressOptions = await ingressGroup.locator("input[type=radio]").evaluateAll((options) => options.map((option) => option.value));
     if (JSON.stringify(ingressOptions) !== JSON.stringify(["live_steering", "session_queue", "async_inbox"])) throw new Error(`Lark Agent ingress modes drifted: ${JSON.stringify(ingressOptions)}`);
-    await ingressGroup.getByLabel("Async inbox").check();
-    await connectDialog.getByLabel("Target Agent").waitFor({ state: "visible" });
-    await connectDialog.getByLabel("Reply mode").selectOption("topic_reply");
+    await ingressGroup.getByLabel("异步收件箱").check();
+    await connectDialog.getByLabel("目标 Agent").waitFor({ state: "visible" });
+    await connectDialog.getByLabel("回复方式").selectOption("topic_reply");
     await page.screenshot({ path: resolve(outputDir, "lark-routing-modes.png"), fullPage: false, animations: "disabled" });
-    await connectDialog.getByRole("button", { name: "Connect", exact: true }).click();
+    await connectDialog.getByRole("button", { name: "连接", exact: true }).click();
     await connectDialog.waitFor({ state: "hidden" });
     const connectionReadback = await page.evaluate(async () => (await fetch("/api/chat/lark/connections")).json());
     if (connectionReadback.connections?.length !== 1) throw new Error(`Lark connection API readback mismatch: ${JSON.stringify(connectionReadback)}`);
@@ -841,12 +877,12 @@ async function main() {
     }
     await routeMismatchRow.getByText("请重新选择群聊并连接该 Goal", { exact: false }).waitFor({ state: "visible" });
     await page.locator(".personal-lark-table-row", { hasText: "Product group" }).getByRole("button", { name: /配置/ }).click();
-    const editDialog = page.getByRole("dialog", { name: "Edit Lark Connection" });
+    const editDialog = page.getByRole("dialog", { name: "编辑 Lark 连接" });
     await editDialog.waitFor({ state: "visible" });
-    if (await editDialog.getByLabel("Capture scope").inputValue() !== "configured_chat_all") throw new Error("Lark edit mode did not restore capture_scope");
-    if (!await editDialog.getByRole("group", { name: "Agent ingress" }).getByLabel("Async inbox").isChecked()) throw new Error("Lark edit mode did not restore ingress_mode");
-    if (await editDialog.getByLabel("Target Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
-    await editDialog.getByRole("button", { name: "Cancel" }).click();
+    if (await editDialog.getByLabel("接收范围").inputValue() !== "configured_chat_all") throw new Error("Lark edit mode did not restore capture_scope");
+    if (!await editDialog.getByRole("group", { name: "Agent 入站方式" }).getByLabel("异步收件箱").isChecked()) throw new Error("Lark edit mode did not restore ingress_mode");
+    if (await editDialog.getByLabel("目标 Agent").inputValue() !== api.larkWrites[0].agent_id) throw new Error("Lark edit mode did not restore agent_id");
+    await editDialog.getByRole("button", { name: "取消" }).click();
     await page.screenshot({ path: resolve(outputDir, "lark-goal-connections.png"), fullPage: false, animations: "disabled" });
     await page.getByRole("button", { name: "返回工作区", exact: true }).click();
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();
@@ -868,7 +904,7 @@ async function main() {
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();
     await composer.fill("做一次只读分析：判断刚刚新增的 Todo 是否与当前 Goal 一致，并在当前 Chat 返回两点理由。不要修改状态。");
     await page.getByRole("button", { name: "发送", exact: true }).click();
-    const taskConversationReceipt = page.getByRole("region", { name: "最近对话与 Task 状态" });
+    const taskConversationReceipt = page.getByRole("region", { name: "最近对话" });
     await taskConversationReceipt.getByText("Agent 已回复", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
     await taskConversationReceipt.getByText("本次对话没有直接修改 Tasks。需要执行时，可先转成 Task 草稿并确认。", { exact: true }).waitFor({ state: "visible" });
     if (api.actionPreviews.length !== previewCountBeforeAnalysis) throw new Error("A read-only reference to an existing Todo created another Todo preview");
@@ -877,7 +913,7 @@ async function main() {
     await taskConversationReceipt.getByRole("button", { name: "查看回复" }).click();
     await page.getByText("已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。", { exact: true }).last().waitFor({ state: "visible", timeout: 10_000 });
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "Tasks" }).click();
-    await page.getByRole("region", { name: "最近对话与 Task 状态" }).getByRole("button", { name: "转为 Task" }).click();
+    await page.getByRole("region", { name: "最近对话" }).getByRole("button", { name: "转为 Task" }).click();
     if (!(await composer.inputValue()).startsWith("创建一个 Task：")) throw new Error("Converting the latest reply did not create an editable Task draft");
     await page.getByText("已根据回复生成 Task 草稿。编辑后发送，LoopX 会先展示确认预览。", { exact: true }).waitFor({ state: "visible" });
     await composer.fill("");
@@ -920,9 +956,9 @@ async function main() {
     await authoritativeRun.click();
     await page.getByText("执行 Session", { exact: true }).waitFor({ state: "visible" });
     if (await page.getByRole("tab", { name: "执行过程与结果" }).getAttribute("aria-selected") !== "true") throw new Error("Session drawer did not open on the execution record");
-    const authoritativeRecord = page.getByRole("region", { name: "执行记录" });
+    const authoritativeRecord = page.locator(".personal-session-message-record");
     try {
-      await authoritativeRecord.getByText("已完成", { exact: true }).waitFor({ state: "visible", timeout: 8_000 });
+      await authoritativeRecord.locator("header strong").filter({ hasText: "已完成" }).first().waitFor({ state: "visible", timeout: 8_000 });
     } catch (error) {
       await page.screenshot({ path: resolve(outputDir, "session-authority-refresh-failed.png"), fullPage: true, animations: "disabled" });
       throw new Error(`${error.message}; body=${(await page.locator("body").innerText()).slice(-5000)}`);
@@ -970,7 +1006,7 @@ async function main() {
     const taskRow = page.locator(".personal-object-list", { hasText: "进行中" }).locator("button").first();
     await taskRow.click();
     await page.getByText("Todo 详情").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "检查变更" }).click();
+    await page.getByRole("button", { name: "查看处理方式" }).click();
     await page.getByText("确认执行").waitFor({ state: "visible" });
     if (!api.actionPreviews.some((preview) => preview.action_kind === "todo.update" && preview.normalized_parameters.operation === "reassign")) throw new Error("Todo reassign did not create a typed preview");
     await page.getByRole("button", { name: "关闭", exact: true }).click();
