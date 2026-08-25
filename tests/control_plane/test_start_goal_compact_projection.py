@@ -767,13 +767,18 @@ def test_cli_codex_app_reuses_ambient_thread_binding(
 
 
 def test_start_goal_binds_selected_lane_before_todo_writeback(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["common_runtime_root"] = str(runtime)
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
     global_payload = {
         **source_payload,
         "registry_role": "global-local",
@@ -783,8 +788,6 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
         json.dumps(global_payload, indent=2) + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime))
-
     first = build_start_goal_guided_packet(
         project=project,
         goal_id=GOAL_ID,
@@ -813,8 +816,9 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
 
     output = io.StringIO()
     bind_argv = shlex.split(bind_step["command"])
+    assert bind_argv[bind_argv.index("--runtime-root") + 1] == str(runtime)
     with contextlib.redirect_stdout(output):
-        exit_code = cli_main(["--runtime-root", str(runtime), *bind_argv[1:]])
+        exit_code = cli_main(bind_argv[1:])
     assert exit_code == 0, output.getvalue()
 
     second = build_start_goal_guided_packet(
@@ -833,6 +837,192 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
     assert "bind_thread_identity" not in {
         step["id"] for step in second["guided_transaction"]["ordered_steps"]
     }
+
+
+def test_fresh_agent_registration_preserves_guided_runtime_root(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    source_registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["common_runtime_root"] = str(runtime)
+    source_payload["goals"][0]["coordination"]["registered_agents"] = []
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    global_payload = {
+        **source_payload,
+        "registry_role": "global-local",
+    }
+    global_payload["goals"][0]["source_registry"] = str(source_registry)
+    global_registry = runtime / "registry.global.json"
+    global_registry.write_text(
+        json.dumps(global_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id="fresh-agent",
+        thread_id="thread-fresh-agent",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+    )
+
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    fresh_registration = gate["fresh_agent_registration"]
+    execute_command = fresh_registration["execute_command"]
+    rerun_command = fresh_registration["rerun_start_goal_command"]
+    execute_args = shlex.split(execute_command)
+    rerun_args = shlex.split(rerun_command)
+    assert execute_args[execute_args.index("--runtime-root") + 1] == str(runtime)
+    assert "--runtime-root" not in rerun_args
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(execute_args[1:])
+    assert exit_code == 0, output.getvalue()
+
+    registered_source = json.loads(source_registry.read_text(encoding="utf-8"))
+    registered_global = json.loads(global_registry.read_text(encoding="utf-8"))
+    assert registered_source["goals"][0]["coordination"]["registered_agents"] == [
+        "fresh-agent"
+    ]
+    assert registered_global["goals"][0]["coordination"]["registered_agents"] == [
+        "fresh-agent"
+    ]
+
+
+def test_start_goal_cli_preserves_explicit_runtime_root_in_registration_command(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    source_registry = project / ".loopx" / "registry.json"
+    runtime = project / "explicit-runtime"
+    runtime.mkdir()
+    source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["goals"][0]["coordination"]["registered_agents"] = []
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    global_payload = {
+        **source_payload,
+        "registry_role": "global-local",
+        "common_runtime_root": str(runtime),
+    }
+    global_payload["goals"][0]["source_registry"] = str(source_registry)
+    global_registry = runtime / "registry.global.json"
+    global_registry.write_text(
+        json.dumps(global_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--runtime-root",
+                "explicit-runtime",
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                "explicit-runtime-agent",
+                "--thread-id",
+                "thread-explicit-runtime",
+                "--host-surface",
+                "codex-app",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+    assert exit_code == 0, output.getvalue()
+
+    payload = json.loads(output.getvalue())
+    registration = payload["guided_transaction"]["identity_selection_gate"][
+        "fresh_agent_registration"
+    ]
+    execute_args = shlex.split(registration["execute_command"])
+    assert execute_args[execute_args.index("--runtime-root") + 1] == str(runtime)
+
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(execute_args[1:])
+    assert exit_code == 0, output.getvalue()
+
+    registered_source = json.loads(source_registry.read_text(encoding="utf-8"))
+    registered_global = json.loads(global_registry.read_text(encoding="utf-8"))
+    assert registered_source["goals"][0]["coordination"]["registered_agents"] == [
+        "explicit-runtime-agent"
+    ]
+    assert registered_global["goals"][0]["coordination"]["registered_agents"] == [
+        "explicit-runtime-agent"
+    ]
+
+
+def test_guided_state_commands_share_explicit_runtime_root(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    runtime = project / "explicit-runtime"
+    runtime.mkdir()
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        thread_id="thread-runtime-consistency",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+        runtime_root_arg="explicit-runtime",
+        include_command_pack_detail=True,
+    )
+
+    expected_runtime = str(runtime)
+    command_pack = payload["command_pack"]
+    commands = command_pack["commands"]
+
+    def assert_runtime(command: str) -> None:
+        tokens = shlex.split(command)
+        runtime_index = tokens.index("--runtime-root")
+        assert tokens[runtime_index + 1] == expected_runtime
+
+    assert_runtime(command_pack["canonical_cli_command"])
+    for command_key in (
+        "goal_start_connect_if_needed",
+        "goal_start_bind_thread",
+        "goal_start_refresh_state",
+        "goal_start_host_loop_activation",
+        "goal_start_agent_onboard_recheck",
+        "goal_start_quota_should_run",
+    ):
+        command = commands[command_key]
+        assert command is not None
+        assert_runtime(command)
+
+    ordered_steps = payload["guided_transaction"]["ordered_steps"]
+    for step_id, command_key in (
+        ("write_ordered_todos", "command_template"),
+        ("refresh_state", "command"),
+        ("quota_guard", "command"),
+    ):
+        step = next(step for step in ordered_steps if step["id"] == step_id)
+        command = step[command_key]
+        assert command is not None
+        assert_runtime(command)
 
 
 def test_dsh_native_start_goal_binds_the_exact_same_session_lane(

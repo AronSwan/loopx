@@ -193,6 +193,8 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
 def handle_start_goal_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
+    *,
+    runtime_root_arg: str | None = None,
 ) -> int:
     if not bool(getattr(args, "guided", False)):
         payload = {
@@ -230,6 +232,7 @@ def handle_start_goal_command(
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=bool(args.include_command_pack_detail),
+            runtime_root_arg=runtime_root_arg,
         )
         print_payload(payload, args.format, render_start_goal_guided_markdown)
         return 0
@@ -246,6 +249,7 @@ def handle_start_goal_command(
         capability_route=capability_route,
         fine_grained=fine_grained,
         include_command_pack_detail=bool(args.include_command_pack_detail),
+        runtime_root_arg=runtime_root_arg,
     )
     print_payload(payload, args.format, render_start_goal_guided_markdown)
     return 0
