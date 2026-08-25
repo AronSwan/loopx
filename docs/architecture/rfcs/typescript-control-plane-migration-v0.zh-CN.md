@@ -137,6 +137,7 @@ replay、receipt 与 settlement。这个架构选择已经落地，不再是假�
 | Todo、quota 与 scheduler 证明切片（[#3431](https://github.com/huangruiteng/loopx/pull/3431)–[#3434](https://github.com/huangruiteng/loopx/pull/3434)） | Completion fence/state、workspace causality 与 scheduler transition 各有一个 TS rule owner | 切口大多仍是 leaf-shaped；Python 继续组合多个产品 transaction |
 | Scheduler durable state（[#3440](https://github.com/huangruiteng/loopx/pull/3440)） | State normalization、persistence、replay 与一笔粗粒度 transition 由 TS 拥有 | Python compatibility path 仍承担跨 runtime transport 税 |
 | Scheduler heartbeat/state transaction | TypeScript 拥有 ACK 与 host-failure validation、state construction、failure-cache transition、replay/CAS fencing 与 atomic write | Python 只保留 native command transport 与 legacy event projection；external host mutation 仍在 Python |
+| Quota spend commit transaction | TypeScript 拥有最终 spend transition 校验、typed event 构造、effect replay/CAS fencing、crash repair，以及 JSON/Markdown/index write set | Python 仍投影 `should-run` 与 settlement readback facts，并在 CLI/index writer 进程内迁移前持有 legacy cross-writer index lock |
 | Runtime decoder（[#3443](https://github.com/huangruiteng/loopx/pull/3443)） | 稳定 primitive decoding 进入一个很小的共享模块；domain decoder 仍留在本地 | 没有理由建设更大的 schema framework |
 | Transaction 兑现（[#3464](https://github.com/huangruiteng/loopx/pull/3464)、[#3481](https://github.com/huangruiteng/loopx/pull/3481) 与 Todo completion） | Turn settlement、quota delivery routing 与 Todo completion 均只跨一个粗粒度 TS boundary；Todo transaction 拥有 identity、replay fence、validation planning/result reduction、continuation/recovery 与 completion metadata | Python 仍执行显式 external provider，并物化 legacy Markdown/event result；其他 domain 仍需各自的 bounded cutover |
 
@@ -204,9 +205,10 @@ leaf pattern 会增加总复杂度。
 ### Stage 2B — 完整 transaction cutover（进行中）
 
 按删除杠杆与 runtime traffic 选切口，而不是按翻译难度选。已经交付的 Turn
-settlement、quota delivery routing 与 Todo completion cutover 建立了这一模式。后续
-候选是 quota spend/settlement 与 scheduler heartbeat/state transaction；只有当每个
-PR 能删除既有 facade，或使它物质变薄时才选择。
+settlement、quota delivery routing、Todo completion、scheduler heartbeat 与 quota
+spend commit cutover 建立了这一模式。后续候选必须明确剩余 transaction 及其删除
+杠杆；剩余 quota settlement readback 只有在能退出或显著收窄 facade，而不是再增加
+leaf handler 时才适合迁移。
 
 每完成一笔 transaction，就用 native TS semantic/invariant test 加一个持久的
 end-to-end adapter contract，替换 migration-only characterization worker 与 Python
@@ -236,8 +238,17 @@ window 仍需 differential proof 时才保留 characterization corpus；引入�
   compact scheduler facts，再把 typed state 投影成 legacy event shape。剩余 facade
   会在 scheduler CLI 与 host adapter 原生调用这笔 transaction 后退出；在此之前，
   它的 state preflight 仅限于 external-provider boundary。
+- Quota spend commit：TypeScript 重新校验 compact before/after transition，构造
+  canonical public-safe spend event，以带锁 index CAS fence effect，并把 JSON、
+  Markdown、index 与 transaction receipt 作为一笔可修复操作提交。同一 effect retry
+  幂等，跨 effect 漂移冲突，prepared transaction 可修复 partial artifact set。
+  Python 只保留 `should-run`/settlement fact projection、一次 coarse transport call 与
+  legacy kernel index lock；它不再构造或写入 spend event。
 
-Todo cutover 删除了 Python state-evaluation dataclass、local identity projection、
+Quota-spend cutover 删除了 Python spend-event builder 与三文件 writer。它的 bounded
+facade 会在 quota CLI 和剩余 run-index writer 进程内执行 transaction 后退出；在此
+之前，它只提供 compact projection facts，并与未迁 writer 共享 legacy Python index
+lock。Todo cutover 删除了 Python state-evaluation dataclass、local identity projection、
 replay helper，以及这些 implementation leaf 的 public runtime handler。剩余 Python
 Todo facade 只拥有 transport、external command execution、source compare-and-swap、
 legacy response projection 与实际 Markdown/event write；当 writer 与 CLI 进入 native
