@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .agent_registry import normalize_registered_agents
-from .agy_goal_mode import agy_activation_extras
+from .agy_goal_mode import AGY_ACCEPTED_INPUTS, agy_activation_extras
 from .control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from .control_plane.todos.contract import (
     normalize_required_capabilities,
@@ -257,14 +257,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "display_name": "Antigravity CLI",
         "host_loop": "Antigravity CLI native /goal loop with schedule self-wakes (LoopX quota pacing is advisory)",
         "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
-        "accepted_inputs": [
-            "agy",
-            "antigravity",
-            "antigravity-cli",
-            "antigravity_cli",
-            "antigravity cli",
-            "google antigravity",
-        ],
+        "accepted_inputs": list(AGY_ACCEPTED_INPUTS),
     },
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
@@ -1188,8 +1181,6 @@ def _zcode_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
 
 
 def _agy_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
-    # The agy-specific goal/wake facts and activation steps live in
-    # loopx.agy_goal_mode so this module stays within its metric budget.
     return _skill_facade_cli_activation(
         commands,
         cli_bin,

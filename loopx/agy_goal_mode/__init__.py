@@ -7,6 +7,14 @@ AGY_INSTALL_SURFACE = "agy"
 DEFAULT_AGY_HOME = ".gemini/antigravity-cli"
 SKILLS_SUBDIR = "skills"
 SKILLS_ROOT_LABEL = "~/.gemini/antigravity-cli/skills"
+AGY_ACCEPTED_INPUTS = (
+    "agy",
+    "antigravity",
+    "antigravity-cli",
+    "antigravity_cli",
+    "antigravity cli",
+    "google antigravity",
+)
 
 # Native in-session automation primitives agy ships (verified against agy
 # 1.1.18 live; no external driver involved). The `schedule` tool takes
