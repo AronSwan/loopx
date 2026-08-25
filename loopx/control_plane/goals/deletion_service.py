@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import hashlib
+import os
 from pathlib import Path
+import re
 import shutil
 from typing import Any
+import uuid
 
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
@@ -22,11 +26,45 @@ from .activation_service import (
 
 
 GOAL_DELETION_SCHEMA_VERSION = "loopx_goal_deletion_v1"
+_BACKUP_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _backup_path(path: Path, timestamp: str) -> Path:
+def _registry_fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _backup_path(path: Path, timestamp: str, goal_id: str, nonce: str) -> Path:
     compact_timestamp = timestamp.replace(":", "").replace("-", "")
-    return path.with_name(f"{path.name}.goal-delete-{compact_timestamp}.bak")
+    safe_goal_id = _BACKUP_TOKEN_RE.sub("-", goal_id).strip("-") or "goal"
+    return path.with_name(
+        f"{path.name}.goal-delete-{compact_timestamp}-{safe_goal_id}-{nonce}.bak"
+    )
+
+
+def _create_backup(path: Path, *, timestamp: str, goal_id: str) -> Path:
+    """Create an independent snapshot without ever overwriting an old backup."""
+
+    for _ in range(8):
+        backup = _backup_path(path, timestamp, goal_id, uuid.uuid4().hex)
+        try:
+            descriptor = os.open(
+                backup,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError:
+            continue
+        try:
+            with path.open("rb") as source, os.fdopen(descriptor, "wb") as target:
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+            shutil.copystat(path, backup)
+        except Exception:
+            backup.unlink(missing_ok=True)
+            raise
+        return backup
+    raise FileExistsError(f"could not allocate a unique Goal deletion backup for {path}")
 
 
 def _remove_goal(payload: dict[str, Any], goal_id: str) -> tuple[dict[str, Any], bool]:
@@ -51,12 +89,14 @@ def delete_stopped_goal(
     registry_path: Path,
     goal_id: str,
     execute: bool = False,
+    expected_state_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Preview or permanently remove one stopped Goal from its registries.
 
     Goal data such as state files and project files is intentionally retained;
     deletion removes only the registry entries that make the Goal visible to
-    the LoopX control plane.
+    the LoopX control plane. When an expected fingerprint is supplied, the
+    target registry is checked again while both registry locks are held.
     """
 
     normalized_goal_id = str(goal_id or "").strip()
@@ -126,70 +166,87 @@ def delete_stopped_goal(
 
     original_payloads: dict[Path, dict[str, Any]] = {}
     written_paths: list[Path] = []
-    try:
-        with ExitStack() as stack:
-            for path in sorted(paths, key=lambda item: str(item)):
-                stack.enter_context(
-                    exclusive_file_lock(path, operation="delete_stopped_goal")
-                )
-            current_source = load_registry(source_registry) if source_available else None
-            current_target = load_registry(target_registry)
-            locked_source_goal = (
-                _goal_or_none(current_source, normalized_goal_id)
-                if current_source is not None
-                else None
+    with ExitStack() as stack:
+        for path in sorted(paths, key=lambda item: str(item)):
+            stack.enter_context(
+                exclusive_file_lock(path, operation="delete_stopped_goal")
             )
-            locked_target_goal = _goal_or_none(current_target, normalized_goal_id)
-            locked_goal = locked_source_goal or locked_target_goal
-            if locked_goal is None or locked_target_goal is None:
+        current_source = load_registry(source_registry) if source_available else None
+        current_target = load_registry(target_registry)
+        if expected_state_fingerprint is not None:
+            current_fingerprint = _registry_fingerprint(target_registry)
+            if current_fingerprint != expected_state_fingerprint:
+                payload.update(
+                    {
+                        "ok": False,
+                        "stale": True,
+                        "error_kind": "goal_registry_changed",
+                        "error": "Goal registry changed after preview; regenerate the deletion preview",
+                        "current_state_fingerprint": current_fingerprint,
+                    }
+                )
+                return payload
+
+        locked_source_goal = (
+            _goal_or_none(current_source, normalized_goal_id)
+            if current_source is not None
+            else None
+        )
+        locked_target_goal = _goal_or_none(current_target, normalized_goal_id)
+        locked_goal = locked_source_goal or locked_target_goal
+        if locked_goal is None or locked_target_goal is None:
+            raise ValueError("Goal disappeared before deletion; refresh and retry")
+        if goal_activation_state(locked_goal) is not GoalActivationState.STOPPED:
+            raise ValueError("Goal activation changed; stop the Goal before deleting it")
+
+        current_payloads = {target_registry: current_target}
+        if source_available and not same_registry:
+            if current_source is None or locked_source_goal is None:
+                raise ValueError("Goal source registry changed; refresh and retry")
+            current_payloads[source_registry] = current_source
+        original_payloads = current_payloads
+        updated_payloads: dict[Path, dict[str, Any]] = {}
+        for path, current in current_payloads.items():
+            updated, changed = _remove_goal(current, normalized_goal_id)
+            if not changed:
                 raise ValueError("Goal disappeared before deletion; refresh and retry")
-            if goal_activation_state(locked_goal) is not GoalActivationState.STOPPED:
-                raise ValueError("Goal activation changed; stop the Goal before deleting it")
+            updated_payloads[path] = updated
 
-            current_payloads = {target_registry: current_target}
-            if source_available and not same_registry:
-                if current_source is None or locked_source_goal is None:
-                    raise ValueError("Goal source registry changed; refresh and retry")
-                current_payloads[source_registry] = current_source
-            original_payloads = current_payloads
-            updated_payloads: dict[Path, dict[str, Any]] = {}
-            for path, current in current_payloads.items():
-                updated, changed = _remove_goal(current, normalized_goal_id)
-                if not changed:
-                    raise ValueError("Goal disappeared before deletion; refresh and retry")
-                updated_payloads[path] = updated
-
+        try:
             timestamp = now_local_iso()
-            for path, current in current_payloads.items():
-                backup = _backup_path(path, timestamp)
-                shutil.copy2(path, backup)
+            for path in current_payloads:
+                backup = _create_backup(
+                    path,
+                    timestamp=timestamp,
+                    goal_id=normalized_goal_id,
+                )
                 payload["backup_paths"].append(str(backup))
             for path in sorted(updated_payloads, key=lambda item: str(item)):
                 atomic_write_json(path, updated_payloads[path], preserve_mode=True)
                 written_paths.append(path)
-    except Exception:
-        for path in written_paths:
-            original = original_payloads.get(path)
-            if original is not None:
-                atomic_write_json(path, original, preserve_mode=True)
-        raise
 
-    source_after = load_registry(source_registry) if source_available else None
-    target_after = load_registry(target_registry)
-    source_missing = (
-        _goal_or_none(source_after, normalized_goal_id) is None
-        if source_after is not None
-        else True
-    )
-    global_missing = _goal_or_none(target_after, normalized_goal_id) is None
-    payload["readback"] = {
-        "source_missing": source_missing,
-        "global_missing": global_missing,
-        "verified": source_missing and global_missing,
-    }
-    payload["written"] = bool(written_paths)
-    payload["ok"] = bool(payload["readback"]["verified"])
-    payload["partial_write"] = bool(payload["written"] and not payload["ok"])
-    if not payload["ok"]:
-        payload["error"] = "Goal deletion readback did not verify"
+            source_after = load_registry(source_registry) if source_available else None
+            target_after = load_registry(target_registry)
+            source_missing = (
+                _goal_or_none(source_after, normalized_goal_id) is None
+                if source_after is not None
+                else True
+            )
+            global_missing = _goal_or_none(target_after, normalized_goal_id) is None
+            payload["readback"] = {
+                "source_missing": source_missing,
+                "global_missing": global_missing,
+                "verified": source_missing and global_missing,
+            }
+            payload["written"] = bool(written_paths)
+            payload["ok"] = bool(payload["readback"]["verified"])
+            payload["partial_write"] = bool(payload["written"] and not payload["ok"])
+            if not payload["ok"]:
+                payload["error"] = "Goal deletion readback did not verify"
+        except Exception:
+            for path in written_paths:
+                original = original_payloads.get(path)
+                if original is not None:
+                    atomic_write_json(path, original, preserve_mode=True)
+            raise
     return payload

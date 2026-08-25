@@ -1082,6 +1082,17 @@ export function PersonalWorkspacePage({
         const applied = workspaceProposal(result.proposal);
         setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
         setSelection({ item: applied, kind: "proposal" });
+        if (result.proposal.status !== "applied" || result.proposal.receipt?.projection_verified !== true) {
+          if (lifecycleChange) {
+            callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
+          }
+          setActionFeedback(
+            result.proposal.status === "stale"
+              ? "状态已变化，操作未执行，请重新生成确认预览。"
+              : `操作未完成：${result.proposal.status}`,
+          );
+          return;
+        }
         setActionFeedback(`已完成：${applied.title}`);
         // Keep the success receipt visible. Refresh and navigation happen when
         // the user chooses the explicit "进入 Goal" action in the drawer.

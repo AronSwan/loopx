@@ -42,11 +42,29 @@ class ChatGoalLifecycleActionMixin:
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
         if operation == "delete":
+            expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
+            if current_fingerprint != expected_fingerprint:
+                stale = self.store.apply(
+                    proposal_id,
+                    current_state_fingerprint=current_fingerprint,
+                    receipt={},
+                )
+                return {"proposal": stale, "turn": None}
             result = delete_stopped_goal(
                 registry_path=self.registry_path,
                 goal_id=goal_id,
                 execute=True,
+                expected_state_fingerprint=expected_fingerprint,
             )
+            if result.get("stale"):
+                stale = self.store.apply(
+                    proposal_id,
+                    current_state_fingerprint=str(
+                        result.get("current_state_fingerprint") or current_fingerprint
+                    ),
+                    receipt={},
+                )
+                return {"proposal": stale, "turn": None}
             if not result.get("ok") or not (result.get("readback") or {}).get("verified"):
                 raise ValueError(
                     str(result.get("error") or "Goal deletion did not verify")
