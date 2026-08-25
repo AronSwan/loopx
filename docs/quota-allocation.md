@@ -419,6 +419,15 @@ successor so the worker can reopen, supersede, or close it explicitly, while
 same lifecycle target. An equal-priority open todo remains executable, avoiding
 unnecessary lifecycle churn within a priority bucket.
 
+An unrelated `user_action` may add a visible `NOTIFY` notice to this turn, but
+it cannot replace the selected lifecycle obligation or turn it into a user
+wait. `delivery_allowed=false` here forbids ordinary material delivery; it does
+not cancel `execution_obligation.must_attempt_work=true`. The final interaction
+contract therefore keeps `mode=successor_replan_required`, projects the notice
+as `non_blocking=true`, retains the Todo lifecycle CLI action, and leaves the
+scheduler on active-work cadence. An explicit `user_gate` still takes
+precedence when its decision scope covers the selected lifecycle action.
+
 Open todos with `resume_when` use the same readiness signal before they enter
 ordinary execution lanes. Until `resume_ready=true`, quota must not include the
 todo in `capability_gate.runnable_candidates` or `agent_lane_next_action`; it
