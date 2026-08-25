@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
+import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -214,6 +215,31 @@ def main() -> int:
         assert "MkDocs Material" in text
     assert "/loopx/docs/book/en/" in read(BOOK / "index.md")
     assert "/loopx/docs/book/" in read(BOOK / "en" / "index.md")
+
+    project_version = tomllib.loads(read(REPO_ROOT / "pyproject.toml"))["project"]["version"]
+    release_tag = f"v{project_version}"
+    release_markers = {
+        "index.md": (
+            f"LoopX 发布锚点：`{release_tag}`",
+            "TypeScript Control-Plane Migration RFC",
+        ),
+        "chapters/00-reading-guide.md": (
+            f"release `{release_tag}`",
+            "transaction-payoff phase",
+        ),
+        "en/index.md": (
+            f"LoopX release anchor: `{release_tag}`",
+            "TypeScript Control-Plane Migration RFC",
+        ),
+        "en/chapters/00-reading-guide.md": (
+            f"release `{release_tag}`",
+            "transaction-payoff phase",
+        ),
+    }
+    for relative_path, markers in release_markers.items():
+        text = read(BOOK / relative_path)
+        for marker in markers:
+            assert marker in text, f"{relative_path}: missing release-baseline marker {marker}"
 
     for page in COURSE_PAGES:
         assert (CONTROL_PLANE_COURSE / f"{page}.md").is_file(), page
