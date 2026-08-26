@@ -6,6 +6,7 @@ from pathlib import Path
 
 from examples.control_plane.quota_plan_fixtures import SCOPED_AGENT_ID, write_cli_fixture
 from loopx.cli_commands import quota as quota_command
+from loopx.cli_commands import quota_scheduler_followup
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
 
@@ -172,7 +173,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(
         fake_build_lark_projector,
     )
     monkeypatch.setattr(
-        quota_command,
+        quota_scheduler_followup,
         "record_quota_scheduler_ack",
         fake_record_quota_scheduler_ack,
     )
