@@ -791,11 +791,15 @@ def assert_slot_spend_execute(payload: dict, next_should_run: dict, registry_bef
         for line in index_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert any(
-        item.get("classification") == "quota_slot_spent"
+    quota_records = [
+        item
         for item in index_records
+        if item.get("classification") == "quota_slot_spent"
+    ]
+    assert quota_records, index_records
+    assert any(
+        item.get("agent_id") == SCOPED_AGENT_ID for item in quota_records
     ), index_records
-    assert any(item.get("agent_id") == SCOPED_AGENT_ID for item in index_records), index_records
 
     assert next_should_run["goal_id"] == "near-limit-half", next_should_run
     assert next_should_run["should_run"] is False, next_should_run
