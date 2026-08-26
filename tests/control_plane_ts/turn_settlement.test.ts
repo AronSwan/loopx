@@ -118,6 +118,27 @@ test("successor completion requires durable successor Todo ids", () => {
   );
 });
 
+test("terminal closeout requires a validated completion result", () => {
+  const reduced = reduceTurnSettlementTransaction(
+    request({
+      turn_result_kind: "validated_progress",
+      terminal_closeout_required: true,
+      terminal_closeout_payload: {
+        ok: true,
+        appended: true,
+        completion: { todo_id: "todo", continuation: "no_followup" },
+      },
+    }),
+  );
+
+  assert.equal(reduced.result.failure?.kind, "terminal_closeout_rejected");
+  assert.equal(reduced.result.failure?.step_kind, "terminal_closeout");
+  assert.match(
+    reduced.result.failure?.reason ?? "",
+    /terminal closeout requires a validated completion result/,
+  );
+});
+
 test("preflight authorizes ordered providers without settling early", () => {
   const reduced = reduceTurnSettlementTransaction(
     request({

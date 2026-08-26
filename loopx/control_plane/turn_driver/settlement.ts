@@ -722,6 +722,20 @@ function reduceTurnSettlementRequest(
 
   let receipts = [...base.result.receipts];
   if (
+    request.terminal_closeout_required &&
+    request.turn_result_kind !== null &&
+    request.turn_result_kind !== "validated_completion"
+  ) {
+    return reduction(
+      settlementFailed({
+        kind: "terminal_closeout_rejected",
+        step_kind: "terminal_closeout",
+        reason: "terminal closeout requires a validated completion result",
+        receipts,
+      }),
+    );
+  }
+  if (
     request.turn_result_kind === "validated_completion" &&
     !request.terminal_closeout_required
   ) {
