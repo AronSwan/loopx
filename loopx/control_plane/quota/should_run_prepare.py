@@ -14,6 +14,8 @@ from ..agents.agent_lane_recommendation import (
     build_explicit_advancement_next_action,
     build_receipt_bound_advancement_next_action,
     build_receipt_bound_monitor_next_action,
+)
+from ..agents.agent_lane_recommendation import (
     scope_status_item_to_agent_lane as _scope_status_item_to_agent_lane,
 )
 from ..agents.agent_scope import (
@@ -24,14 +26,17 @@ from ..agents.identity import (
     build_identity_aware_prompt_upgrade,
     build_quota_agent_identity,
 )
+from ..effect_program import ReceiptBoundMonitorPhase, ReceiptBoundReplayPhase
 from ..goals.goal_frontier import (
     build_goal_frontier_projection_context_from_status,
 )
+from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..quota.goal_boundary import (
     effective_available_capabilities as _effective_available_capabilities,
+)
+from ..quota.goal_boundary import (
     goal_boundary as _goal_boundary,
 )
-from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..quota.policy_constants import (
     MONITOR_DUE_ITEM_LIMIT,
 )
@@ -41,12 +46,18 @@ from ..quota.projection_repair import (
 )
 from ..quota.recent_runs import (
     build_monitor_debt_arbitration as _build_monitor_debt_arbitration,
+)
+from ..quota.recent_runs import (
     goal_latest_runs as _goal_latest_runs,
+)
+from ..quota.recent_runs import (
     latest_accountable_agent_delivery as _latest_accountable_agent_delivery,
 )
 from ..quota.stall_repair import (
     apply_stall_repair_delivery_guard,
     build_quota_stall_self_repair_hint,
+)
+from ..quota.stall_repair import (
     standing_decision_authority_from_status_item as _standing_decision_authority_from_status_item,
 )
 from ..quota.task_orchestration import (
@@ -70,9 +81,17 @@ from ..todos.contract import (
 )
 from ..todos.projection import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
+)
+from ..todos.projection import (
     todo_item_is_due_monitor as projection_todo_item_is_due_monitor,
+)
+from ..todos.projection import (
     todo_item_is_expired_monitor as projection_todo_item_is_expired_monitor,
+)
+from ..todos.projection import (
     todo_item_next_due_at as projection_todo_item_next_due_at,
+)
+from ..todos.projection import (
     todo_item_task_class as projection_todo_item_task_class,
 )
 from ..todos.quota_summary import (
@@ -88,13 +107,14 @@ from ..todos.user_gate import (
 from ..work_items.capability_monitor_fallback import (
     build_capability_gate_with_monitor_fallback,
 )
-from ..effect_program import ReceiptBoundMonitorPhase, ReceiptBoundReplayPhase
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
 from ..work_items.work_lane import (
     lark_inbox_reply_due_work_lane_contract,
+    operator_inbox_material_review_due_work_lane_contract,
     preserve_heartbeat_receipt_bound_work_lane,
     scoped_user_gate_due_monitor_contract,
     work_lane_contract_is_lark_inbox_reply_due,
+    work_lane_contract_is_operator_inbox_material_review_due,
 )
 
 
@@ -141,6 +161,7 @@ class _QuotaDecisionPreparation:
     capability_monitor_fallback: dict[str, Any] | None
     scoped_user_gate_fallback: dict[str, Any] | None
     inbox_reply_due: bool
+    inbox_material_review_due: bool
     workspace_guard: dict[str, Any] | None
     guarded_agent_lane_next_action: dict[str, Any] | None
     agent_frontier_id: str | None
@@ -156,6 +177,10 @@ class _QuotaDecisionPreparation:
     resolved_scheduler_context: SchedulerExecutionContextResolution
     delivery_continuity_anchor: dict[str, Any] | None
     delivery_continuity_todo: dict[str, Any] | None
+
+    @property
+    def inbox_priority_due(self) -> bool:
+        return self.inbox_reply_due or self.inbox_material_review_due
 
 
 def _preserve_receipt_bound_replan_obligation(
@@ -634,15 +659,23 @@ def _prepare_quota_should_run_item(
         )
         or work_lane_contract
     )
+    work_lane_contract = operator_inbox_material_review_due_work_lane_contract(
+        goal_boundary,
+        current_contract=work_lane_contract,
+    )
     work_lane_contract = lark_inbox_reply_due_work_lane_contract(
         goal_boundary,
         current_contract=work_lane_contract,
     )
     inbox_reply_due = work_lane_contract_is_lark_inbox_reply_due(work_lane_contract)
+    inbox_material_review_due = (
+        work_lane_contract_is_operator_inbox_material_review_due(work_lane_contract)
+    )
+    inbox_priority_due = inbox_reply_due or inbox_material_review_due
     receipt_bound_agent_next_action = None
     if (
         receipt_bound_todo_id
-        and not inbox_reply_due
+        and not inbox_priority_due
         and not task_orchestration_contract_is_actionable(task_orchestration_contract)
     ):
         candidate = build_agent_lane_next_action(
@@ -692,7 +725,7 @@ def _prepare_quota_should_run_item(
             )
             if isinstance(preserved_work_lane, dict):
                 work_lane_contract = preserved_work_lane
-    if inbox_reply_due:
+    if inbox_priority_due:
         task_orchestration_contract = capability_gate = capability_monitor_contract = None
         capability_monitor_fallback = scoped_user_gate_fallback = workspace_guard = None
     else:
@@ -802,6 +835,7 @@ def _prepare_quota_should_run_item(
         capability_monitor_fallback=capability_monitor_fallback,
         scoped_user_gate_fallback=scoped_user_gate_fallback,
         inbox_reply_due=inbox_reply_due,
+        inbox_material_review_due=inbox_material_review_due,
         workspace_guard=workspace_guard,
         guarded_agent_lane_next_action=None,
         agent_frontier_id=agent_frontier_id,
