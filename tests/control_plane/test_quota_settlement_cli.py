@@ -1524,6 +1524,118 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     assert _spend_run_count(runtime) == 1
 
 
+def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = _configure_repository_write_todo(project)
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "required_capabilities=filesystem_write",
+            "required_capabilities=filesystem_write%2Cnetwork",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_git_checkout(project)
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "network",
+        "--begin-turn",
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+
+    assert guard_rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "capability_replan_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_identity"] == identity
+    assert refresh["delivery_workspace_causality"]["requirement"] == "required"
+
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "visible-goal",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+        "--scan-path",
+        str(project),
+    )
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+        cwd=project,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+        cwd=project,
+    )
+
+    assert spend_rc == 0, spend
+    assert spend["todo_id"] == TODO_ID
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == identity
+    assert spend["delivery_completion_spend"] is True
+    assert spend["capability_repair_spend"] is False
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["delivery_workspace_causality"]["todo_id"] == TODO_ID
+    assert spend["delivery_workspace_causality"]["requirement"] == "required"
+    assert replay_rc == 0, replay
+    assert replay.get("idempotent_replay") is True, replay
+    assert replay["appended"] is False
+    assert replay["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+
 def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     tmp_path: Path,
 ) -> None:

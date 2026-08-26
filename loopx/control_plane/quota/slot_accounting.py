@@ -163,6 +163,11 @@ def _resolve_preview_settlement(
             goal_id=goal_id,
             agent_id=agent_id,
             todo_id=todo_id,
+            allow_unbound_binding=(
+                source == VISIBLE_GOAL_SLOT_SPEND_SOURCE
+                and not todo_id
+                and not replan_obligation_id
+            ),
         )
     )
     if result is None:
@@ -705,6 +710,8 @@ def build_quota_slot_preview_for_decision(
         and not safe_bypass_spend
         and str(before.get("state") or "") in {"waiting", "focus_wait", "operator_gate", "eligible"}
     )
+    if delivery_completion_spend:
+        capability_repair_spend = False
     if not before.get("ok") or (
         not before.get("should_run")
         and not safe_bypass_spend

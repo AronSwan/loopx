@@ -137,6 +137,48 @@ test("illegal spend transitions fail before any durable effect", async () => {
   );
 });
 
+test("delivery completion attribution survives later repair frontiers", async () => {
+  const repairFrontiers = [
+    {
+      effective_action: "capability_bridge_repair",
+      capability_repair_allowed: true,
+    },
+    {
+      effective_action: "control_plane_projection_repair",
+      self_repair_allowed: true,
+    },
+  ];
+  for (const repairFrontier of repairFrontiers) {
+    const before = decision(0, repairFrontier);
+    const after = decision(1, repairFrontier);
+    const value = preview({
+      delivery_completion_spend: true,
+      delivery_run_classification: "state_refreshed",
+      delivery_run_recommended_action: "inspect the next delivery frontier",
+    });
+    const result = await evaluateQuotaSpendCommit(request(null, {
+      source: "visible-goal",
+      preview: value,
+      before,
+      after,
+    }));
+
+    assert.equal(
+      result.record?.health_check,
+      "quota validated delivery completion; quota slot spend event public-safe",
+    );
+    const event = result.record?.quota_event as Record<string, unknown>;
+    assert.match(
+      String(event.reason_summary),
+      /accounted after validated delivery state_refreshed/,
+    );
+    assert.equal(
+      result.record?.recommended_action,
+      "inspect the next delivery frontier",
+    );
+  }
+});
+
 test("commit owns JSON, Markdown, index, and exact-effect replay", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const params = request(runtimeRoot);

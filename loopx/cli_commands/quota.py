@@ -99,6 +99,46 @@ def _heartbeat_receipt_settlement_bindings(
     )
 
 
+def _effective_spend_turn_instance_id(
+    payload: Mapping[str, object],
+    *,
+    heartbeat_turn_id: str | None,
+) -> str | None:
+    """Use an exact spend recovery as rollout receipt authority.
+
+    A visible-goal spend may intentionally omit CLI settlement arguments.  When
+    quota accounting recovers the exact persisted identity, the receipt must be
+    written under that recovered Turn or a replay cannot find the committed
+    effect.  Do not project a loose payload field into receipt authority: require
+    the typed identity and payload Turn to agree.
+    """
+
+    if heartbeat_turn_id:
+        return heartbeat_turn_id
+    identity_value = payload.get("settlement_identity")
+    if not isinstance(identity_value, Mapping):
+        return None
+    payload_turn_id = str(payload.get("turn_instance_id") or "").strip()
+    identity_turn_id = str(identity_value.get("turn_instance_id") or "").strip()
+    effect_id = str(identity_value.get("effect_id") or "").strip()
+    if not payload_turn_id or payload_turn_id != identity_turn_id or not effect_id:
+        return None
+    return payload_turn_id
+
+
+def _should_log_quota(command: str, payload: Mapping[str, object]) -> bool:
+    return command in QUOTA_EVENT_KINDS and (
+        command == "should-run"
+        or (
+            bool(payload.get("ok"))
+            and (
+                bool(payload.get("appended"))
+                or bool(payload.get("receipt_repair_required"))
+            )
+        )
+    )
+
+
 def _verbose_debug_fields(error: Exception, *, verbose: bool) -> dict[str, object]:
     if not verbose:
         return {}
@@ -641,17 +681,11 @@ def handle_quota_command(
             runtime_root_arg=runtime_root_arg,
             error=exc,
         )
-    should_log_quota = args.quota_command in QUOTA_EVENT_KINDS and (
-        args.quota_command == "should-run"
-        or (
-            payload.get("ok")
-            and (
-                bool(payload.get("appended"))
-                or bool(payload.get("receipt_repair_required"))
-            )
+    if _should_log_quota(args.quota_command, payload):
+        spend_turn_instance_id = _effective_spend_turn_instance_id(
+            payload,
+            heartbeat_turn_id=heartbeat_turn_id,
         )
-    )
-    if should_log_quota:
         rollout_todo_id = quota_rollout_todo_id(payload, args)
         rollout_replan_obligation_id = quota_rollout_replan_obligation_id(payload, args)
         rollout_details = quota_rollout_details(
@@ -771,7 +805,9 @@ def handle_quota_command(
                 agent_id=args.agent_id,
                 todo_id=rollout_todo_id,
                 run_id=(
-                    heartbeat_turn_id if args.quota_command == "spend-slot" else None
+                    spend_turn_instance_id
+                    if args.quota_command == "spend-slot"
+                    else None
                 ),
                 status=str(
                     payload.get("effective_action")
@@ -787,14 +823,14 @@ def handle_quota_command(
                 details=rollout_details,
                 allow_failed=args.quota_command == "should-run",
             )
-            if args.quota_command == "spend-slot" and heartbeat_turn_id:
+            if args.quota_command == "spend-slot" and spend_turn_instance_id:
                 attach_spend_settlement_result(
                     payload,
                     runtime_root=runtime_root,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
                     todo_id=rollout_todo_id,
-                    turn_instance_id=heartbeat_turn_id,
+                    turn_instance_id=spend_turn_instance_id,
                     replan_obligation_id=rollout_replan_obligation_id,
                 )
     if bool(getattr(args, "turn_envelope", False)):
