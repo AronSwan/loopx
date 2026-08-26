@@ -53,6 +53,14 @@ payload. Inbox and cursor directories are restricted to the owner, and their
 state files are written with mode `0600`. Product-specific URL classification
 and field-enrichment policy remain with the consuming product or private skill.
 
+The cursor binding includes the route key, Bot profile, chat, inbox config,
+resolved inbox destination, and capture scope. If any of those inputs changes,
+catch-up fails closed with `Lark group-history cursor source binding changed`
+before reading the provider. Restore the original route to resume, or move the
+owner-local `.loopx/inbox/.history/<route-key>.json` cursor aside and restart
+from an explicit `--start`; canonical message ids keep inbox ingestion
+idempotent while the replacement cursor rebuilds coverage.
+
 Group-history reads use the configured Bot identity and require the Bot to be a
 member of the group, the application to be published, and
 `im:message:readonly` plus `im:chat:read`. Permission error `230027` is returned

@@ -25,8 +25,25 @@ def normalize_group_history_timestamp(value: str, *, field: str) -> str:
     return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def group_history_source_fingerprint(*, profile: str, chat_id: str) -> str:
-    value = f"{profile}\0{chat_id}".encode()
+def group_history_source_fingerprint(
+    *,
+    route_key: str,
+    profile: str,
+    chat_id: str,
+    event_inbox_config_ref: str,
+    inbox_path_ref: str,
+    capture_scope: str,
+) -> str:
+    value = "\0".join(
+        (
+            route_key,
+            profile,
+            chat_id,
+            event_inbox_config_ref,
+            inbox_path_ref,
+            capture_scope,
+        )
+    ).encode()
     return f"sha256:{hashlib.sha256(value).hexdigest()[:24]}"
 
 

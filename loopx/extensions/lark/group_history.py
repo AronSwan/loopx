@@ -60,9 +60,15 @@ def _route_context(
             "Lark group-history catch-up requires configured_chat_all capture"
         )
     project_root = Path(config["project"])
+    inbox_path = Path(route["inbox"]["inbox_path"])
+    inbox_path_ref = inbox_path.relative_to(project_root).as_posix()
     fingerprint = group_history_source_fingerprint(
+        route_key=route_key,
         profile=str(config["profile"]),
         chat_id=str(route["chat_id"]),
+        event_inbox_config_ref=str(route["event_inbox_config_ref"]),
+        inbox_path_ref=inbox_path_ref,
+        capture_scope=str(route["inbox"]["capture_scope"]),
     )
     return (
         config,

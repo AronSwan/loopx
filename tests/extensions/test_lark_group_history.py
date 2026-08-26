@@ -279,6 +279,50 @@ def test_cursor_resumes_then_replays_completed_history_without_provider_read(
     assert replay_runner.calls == []
 
 
+def test_completed_cursor_rejects_inbox_destination_drift(tmp_path: Path) -> None:
+    project, config = _project(tmp_path)
+    _catch_up(
+        project,
+        config,
+        PageRunner(
+            [
+                {
+                    "messages": [_message("om_original", "original")],
+                    "total": 1,
+                    "has_more": False,
+                    "page_token": "",
+                }
+            ]
+        ),
+        execute=True,
+    )
+    replacement_config = project / ".loopx" / "config" / "replacement-inbox.json"
+    replacement_config.write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_inbox_config_v0",
+                "enabled": True,
+                "inbox_dir": ".loopx/inbox/replacement",
+                "capture_scope": "configured_chat_all",
+                "reply": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    collector = json.loads(config.read_text(encoding="utf-8"))
+    collector["routes"][0]["event_inbox_config"] = (
+        ".loopx/config/replacement-inbox.json"
+    )
+    config.write_text(json.dumps(collector), encoding="utf-8")
+    replay_runner = PageRunner([])
+
+    with pytest.raises(ValueError, match="source binding changed"):
+        _catch_up(project, config, replay_runner, execute=True)
+
+    assert replay_runner.calls == []
+    assert not (project / ".loopx" / "inbox" / "replacement").exists()
+
+
 def test_completed_history_allows_one_earlier_start_window(tmp_path: Path) -> None:
     project, config = _project(tmp_path)
     initial = PageRunner(
