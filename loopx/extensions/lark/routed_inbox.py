@@ -19,6 +19,7 @@ from .event_inbox import (
     inspect_lark_event_inbox,
     load_lark_event_inbox_config,
     project_lark_event_inbox_urgency,
+    settle_lark_event_inbox_material_review,
 )
 
 
@@ -173,6 +174,8 @@ def project_routed_lark_event_inbox_urgency(
         "direct_mention_count",
         "reply_to_bot_count",
         "attention_required_count",
+        "material_review_count",
+        "material_attachment_count",
     )
     result: dict[str, Any] = {
         "schema_version": "lark_event_inbox_urgency_v1",
@@ -189,6 +192,18 @@ def project_routed_lark_event_inbox_urgency(
         "reply_due": any(
             projection.get("reply_due") is True for projection in projections
         ),
+        "material_review_due": any(
+            projection.get("material_review_due") is True
+            for projection in projections
+        ),
+        "material_review_drain_limit": min(
+            (
+                int(projection.get("material_review_drain_limit") or 20)
+                for projection in projections
+                if projection.get("material_review_due") is True
+            ),
+            default=20,
+        ),
         "local_private_content_returned": False,
         "chat_ids_returned": False,
         "profiles_returned": False,
@@ -200,6 +215,32 @@ def project_routed_lark_event_inbox_urgency(
         }
     )
     return result
+
+
+def settle_routed_lark_event_inbox_material_review(
+    *,
+    project: str | Path,
+    config_path: str | Path,
+    message_id: str,
+    effect_receipt: Mapping[str, Any] | None = None,
+    no_follow_up_reason: str | None = None,
+    execute: bool = False,
+) -> dict[str, Any]:
+    """Settle one material against the unique inbox that captured it."""
+
+    routed_config = resolve_routed_lark_inbox_config(
+        project=project,
+        config_path=config_path,
+        message_id=message_id,
+    )
+    return settle_lark_event_inbox_material_review(
+        project=project,
+        config_path=routed_config,
+        message_id=message_id,
+        effect_receipt=effect_receipt,
+        no_follow_up_reason=no_follow_up_reason,
+        execute=execute,
+    )
 
 
 def resolve_routed_lark_inbox_config(

@@ -13,17 +13,19 @@ from ..agents.identity import (
     build_quota_agent_identity,
 )
 from ..agents.workspace_guard import build_agent_workspace_guard
-from ..quota.goal_boundary import (
-    registry_goal_by_id as _registry_goal_by_id,
-)
 from ..quota.decision_summary import (
     quota_plan_items as _quota_plan_items,
+)
+from ..quota.goal_boundary import (
+    registry_goal_by_id as _registry_goal_by_id,
 )
 from ..quota.projection_repair import build_boundary_projection_repair_hint
 from ..quota.selected_todo_projection import selected_todo_projection
 from ..quota.states import (
     AutomaticTurnPauseCause,
     automatic_turn_pause_cause,
+)
+from ..quota.states import (
     quota_item_is_paused as _quota_item_is_paused,
 )
 from ..scheduler.automation_liveness import build_automation_liveness
@@ -41,20 +43,18 @@ from .effect_program import (
     ReceiptBoundReplayPhase,
     ReceiptBoundTerminalPhase,
 )
-
+from .settlement_precedence import apply_settled_replay_route_precedence
 from .should_run_packet import (
-    _QuotaDecisionRoute,
     _build_quota_should_run_payload,
     _execution_obligation,
+    _QuotaDecisionRoute,
     _resolve_quota_should_run_route,
     _scheduler_hint,
 )
 from .should_run_prepare import (
-    _QuotaDecisionPreparation,
     _prepare_quota_should_run_item,
+    _QuotaDecisionPreparation,
 )
-from .settlement_precedence import apply_settled_replay_route_precedence
-
 
 QUOTA_PAUSED_MODE = "quota_paused"
 GOAL_STOPPED_MODE = "goal_stopped"
@@ -88,7 +88,7 @@ def _apply_selected_todo_guards(
         agent_scope_frontier=route.agent_scope_frontier,
     )
     workspace_guard = None
-    if not prepared.inbox_reply_due:
+    if not prepared.inbox_priority_due:
         workspace_guard = build_agent_workspace_guard(
             prepared.item,
             prepared.agent_identity,
