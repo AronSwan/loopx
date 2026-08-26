@@ -181,6 +181,42 @@ test("prepared transaction repairs partial artifacts exactly once", async (t) =>
   assert.equal(replayed.status, "replayed");
 });
 
+test("prepared transactions keep artifact paths reserved across later spends", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const firstParams = request(runtimeRoot);
+  const first = await evaluateQuotaSpendCommit(firstParams);
+  const firstJsonPath = String(first.payload.json_path);
+  const firstMarkdownPath = String(first.payload.markdown_path);
+  const indexPath = String(first.payload.index_path);
+  const transactionDir = join(dirname(indexPath), ".transactions", "quota-spend");
+  const receiptPaths = (await readdir(transactionDir)).map((name) =>
+    join(transactionDir, name)
+  );
+  const firstReceiptPath = receiptPaths[0];
+  assert.ok(firstReceiptPath);
+  const firstReceipt = JSON.parse(
+    await readFile(firstReceiptPath, "utf8"),
+  ) as Record<string, unknown>;
+  firstReceipt.status = "prepared";
+  await writeFile(firstReceiptPath, `${JSON.stringify(firstReceipt, null, 2)}\n`, "utf8");
+  await Promise.all([
+    unlink(firstJsonPath),
+    unlink(firstMarkdownPath),
+    unlink(indexPath),
+  ]);
+
+  const second = await evaluateQuotaSpendCommit(request(runtimeRoot, {
+    effect_id: "quota-spend-effect-2",
+  }));
+  assert.equal(second.status, "written");
+  assert.notEqual(second.payload.json_path, firstJsonPath);
+  assert.notEqual(second.payload.markdown_path, firstMarkdownPath);
+
+  const repaired = await evaluateQuotaSpendCommit(firstParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.transaction_repaired, true);
+});
+
 test("prepared transaction repairs its own truncated final index row", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const firstParams = request(runtimeRoot);

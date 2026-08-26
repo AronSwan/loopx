@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import loopx.bootstrap_command_pack as command_pack_module
 from loopx.bootstrap_command_pack import (
     GUIDED_COMMAND_PACK_PROJECTION_SCHEMA_VERSION,
     build_loopx_bootstrap_command_pack,
@@ -25,6 +26,7 @@ from loopx.cli_commands.todo_argument_validation import (
     validate_shared_todo_options,
     validate_todo_add_options,
 )
+from loopx.control_plane import effect_runtime
 
 GOAL_ID = "guided-projection-goal"
 AGENT_ID = "codex-guided-projection"
@@ -145,6 +147,122 @@ def _invoke_ark_start_goal_cli(
     payload = json.loads(output.getvalue())
     assert isinstance(payload, dict)
     return exit_code, payload
+
+
+def _block_effect_runtime_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    diagnostic_code: str = "node_unavailable",
+) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> object:
+        raise effect_runtime.EffectRuntimeStartupError(
+            "TypeScript Effect runtime could not serve the request",
+            diagnostic_code=diagnostic_code,
+        )
+
+    monkeypatch.setattr(
+        command_pack_module,
+        "effect_program_from_ordered_steps",
+        unavailable,
+    )
+
+
+@pytest.mark.parametrize(
+    ("diagnostic_code", "expected_action_fragment", "mentions_node_installation"),
+    [
+        ("node_unavailable", "Install or activate Node.js", True),
+        (
+            "startup_lock_timeout",
+            "wait for the active startup to settle",
+            False,
+        ),
+        ("runtime_launch_failed", "runtime still cannot start", False),
+        ("runtime_exited_before_ready", "runtime exits again", False),
+        ("runtime_startup_timeout", "startup continues to time out", False),
+        ("runtime_request_failed", "requests continue to fail", False),
+        ("future_runtime_diagnostic", "runtime remains unavailable", False),
+    ],
+)
+def test_cli_reports_effect_runtime_startup_failure_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic_code: str,
+    expected_action_fragment: str,
+    mentions_node_installation: bool,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    _block_effect_runtime_startup(monkeypatch, diagnostic_code=diagnostic_code)
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--host-surface",
+                "shell",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+
+    raw_output = output.getvalue()
+    payload = json.loads(raw_output)
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["schema_version"] == "loopx_start_goal_guided_v0"
+    assert payload["error"] == "LoopX TypeScript control-plane runtime is unavailable"
+    assert payload["diagnostic_code"] == diagnostic_code
+    assert payload["runtime_requirement"]["minimum_node_version"] == "22.6.0"
+    assert "loopx doctor --deep" in payload["recommended_action"]
+    assert expected_action_fragment in payload["recommended_action"]
+    assert ("Node.js" in payload["recommended_action"]) is mentions_node_installation
+    if not mentions_node_installation:
+        assert "Install or activate Node.js" not in payload["recommended_action"]
+    assert "Traceback" not in raw_output
+
+
+def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    _block_effect_runtime_startup(monkeypatch)
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--host-surface",
+                "shell",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+
+    raw_output = output.getvalue()
+    assert exit_code == 1
+    assert "# Guided Start Goal" in raw_output
+    assert "LoopX TypeScript control-plane runtime is unavailable" in raw_output
+    assert "diagnostic_code: `node_unavailable`" in raw_output
+    assert "loopx doctor --deep" in raw_output
+    assert "Traceback" not in raw_output
 
 
 def test_default_projection_preserves_host_actions_and_json_anchors(

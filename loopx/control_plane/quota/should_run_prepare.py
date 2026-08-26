@@ -76,6 +76,7 @@ from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
     normalize_todo_replan_obligation_id,
+    normalize_todo_resume_when,
     normalize_todo_status,
 )
 from ..todos.projection import (
@@ -94,6 +95,7 @@ from ..todos.projection import (
     todo_item_task_class as projection_todo_item_task_class,
 )
 from ..todos.quota_summary import (
+    select_planning_inventory_source_items,
     select_quota_todo_source_items,
     select_quota_todo_summary,
     select_task_orchestration_authority_items,
@@ -142,6 +144,7 @@ class _QuotaDecisionPreparation:
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
+    agent_todo_planning_source_items: list[dict[str, Any]]
     agent_scoped_user_todo_override: dict[str, Any] | None
     goal_boundary: dict[str, Any] | None
     automation_prompt_upgrade: dict[str, Any] | None
@@ -245,12 +248,20 @@ def _blocked_priority_fallback(
             and not projection_todo_item_is_expired_monitor(item)
             and not projection_todo_item_is_due_monitor(item)
         )
+        resume_condition_pending = bool(
+            normalize_todo_resume_when(item.get("resume_when"))
+            and item.get("resume_ready") is False
+        )
         if task_class != TODO_TASK_CLASS_ADVANCEMENT and not future_monitor:
             continue
         if item.get("done") is True:
             continue
         status = normalize_todo_status(item.get("status")) or TODO_STATUS_OPEN
-        if status == TODO_STATUS_OPEN and not future_monitor:
+        if (
+            status == TODO_STATUS_OPEN
+            and not future_monitor
+            and not resume_condition_pending
+        ):
             continue
         text = str(item.get("text") or "").strip()
         if not text:
@@ -481,6 +492,10 @@ def _prepare_quota_should_run_item(
         project_asset.get("user_todos") if project_asset else None,
     )
     agent_todo_source_items = select_quota_todo_source_items(
+        item.get("agent_todos"),
+        project_asset.get("agent_todos") if project_asset else None,
+    )
+    agent_todo_planning_source_items = select_planning_inventory_source_items(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
     )
@@ -803,6 +818,7 @@ def _prepare_quota_should_run_item(
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
+        agent_todo_planning_source_items=agent_todo_planning_source_items,
         agent_scoped_user_todo_override=agent_scoped_user_todo_override,
         goal_boundary=goal_boundary,
         automation_prompt_upgrade=automation_prompt_upgrade,
