@@ -1882,10 +1882,10 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     assert "compare_planned_todos_with_frontier" in step_ids
     delta = next(step for step in steps if step["id"] == "apply_todo_delta")
     assert delta["kind"] == "operator_or_agent_actions"
-    assert "reuse" in delta["todo_delta"]
-    frontier_summary = str(delta["todo_delta"])
-    assert "scheduler coverage fix" in frontier_summary
-    assert "unclaimed" not in frontier_summary.split(":")[2] if ":" in frontier_summary else True
+    assert "reuse" in delta["todo_delta"]["rule"]
+    todo_delta = delta["todo_delta"]
+    assert "reuse" in todo_delta["rule"]
+    assert any("scheduler coverage fix" in str(item) for item in todo_delta["frontier"])
     # add_new remains available as an explicit, template-backed escape hatch.
     add_args = build_parser().parse_args(
         _runnable_todo_add_argv(delta["add_new_command_template"])

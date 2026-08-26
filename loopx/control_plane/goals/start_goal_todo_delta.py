@@ -171,18 +171,21 @@ def todo_authoring_steps(
         {
             "id": "apply_todo_delta",
             "kind": "operator_or_agent_actions",
-            "todo_delta": (
-                f"{GUIDED_TODO_DELTA_SCHEMA_VERSION}: "
-                "reuse|update|link_successor|add_new; "
-                f"runnable frontier={len(existing_runnable_frontier)}: "
-                + "; ".join(
+            "todo_delta": {
+                "schema_version": GUIDED_TODO_DELTA_SCHEMA_VERSION,
+                "rule": (
+                    "reuse|update|link_successor|add_new; "
+                    "reuse when the frontier covers the request, update instead "
+                    "of duplicating, link a successor only after completion "
+                    "evidence, add_new only for uncovered work"
+                ),
+                "runnable_frontier_count": len(existing_runnable_frontier),
+                "frontier": [
                     f"{item.get('title') or item.get('text')} "
                     f"[{item.get('todo_id')}, {item.get('claimed_by') or 'unclaimed'}]"
                     for item in existing_runnable_frontier[:_FRONTIER_PROJECTION_LIMIT]
-                )
-                + "; reuse when covered, update instead of duplicating, "
-                "link successor only after completion evidence"
-            ),
+                ],
+            },
             "add_new_command_template": add_template,
             "purpose": "takeover continues the frontier; authoring is a delta",
         },
@@ -195,9 +198,12 @@ def append_todo_delta_render_line(
 ) -> None:
     """Render the Todo-delta decision rule compactly for the markdown packet."""
     todo_delta = raw_step.get("todo_delta")
-    if not isinstance(todo_delta, str) or not todo_delta:
+    if not isinstance(todo_delta, Mapping):
         return
-    step_lines.append(f"   - todo_delta: {todo_delta}")
+    step_lines.append(
+        f"   - todo_delta: {todo_delta.get('rule')} "
+        f"(runnable frontier: {todo_delta.get('runnable_frontier_count')})"
+    )
 
 
 def _read_registry(registry_path: Path) -> tuple[dict[str, Any] | None, str | None]:
