@@ -566,6 +566,15 @@ def register_todo_command(
         ),
     )
     todo_parser.add_argument(
+        "--thin",
+        dest="todo_thin",
+        action="store_true",
+        help=(
+            "For todo list, return the explicit field-only projection and omit "
+            "detail lanes; compose with --limit for a bounded item count."
+        ),
+    )
+    todo_parser.add_argument(
         "--trigger",
         dest="suggestion_trigger",
         choices=ALLOWED_TODO_SUGGESTION_TRIGGERS,
@@ -617,6 +626,7 @@ def handle_todo_command(
                 todo_id=args.todo_id,
                 agent_id=args.agent_id,
                 limit=args.todo_limit,
+                thin=bool(args.todo_thin),
                 **_todo_path_args(args),
                 runtime_root_arg=runtime_root_arg,
             )

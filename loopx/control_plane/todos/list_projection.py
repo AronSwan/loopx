@@ -9,12 +9,15 @@ AGENT_LANE_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
 EXPLICIT_LIMIT_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
     "explicit_limit_todo_list_summary_compaction_v0"
 )
+THIN_TODO_LIST_PROJECTION_SCHEMA_VERSION = "todo_list_thin_projection_v0"
+THIN_TODO_LIST_SUMMARY_SCHEMA_VERSION = "todo_list_thin_summary_compaction_v0"
 AGENT_LANE_TODO_LIST_ITEM_LIMIT = 12
 AGENT_LANE_TODO_LIST_TEXT_LIMIT = 180
 AGENT_LANE_HOT_PATH_VIEW: Literal["agent_lane_hot_path"] = "agent_lane_hot_path"
 EXPLICIT_LIMIT_COLD_PATH_VIEW: Literal["explicit_limit_cold_path"] = (
     "explicit_limit_cold_path"
 )
+THIN_EXPLICIT_VIEW: Literal["thin_explicit_view"] = "thin_explicit_view"
 TodoListProjectionView = Literal[
     "agent_lane_hot_path",
     "explicit_limit_cold_path",
@@ -74,6 +77,34 @@ _ITEM_FIELDS = (
     "watch_only",
 )
 
+THIN_TODO_LIST_ITEM_FIELDS = (
+    "todo_id",
+    "role",
+    "status",
+    "priority",
+    "text",
+    "title",
+    "task_class",
+    "action_kind",
+    "claimed_by",
+    "bound_agent",
+    "goal_bound",
+    "blocks_agent",
+    "global_gate",
+    "unblocks_todo_id",
+    "decision_scope",
+    "required_decision_scopes",
+    "resume_when",
+    "resume_ready",
+    "target_key",
+    "cadence",
+    "next_due_at",
+    "expires_at",
+    "watch_only",
+)
+_COMPACT_ITEM_TEXT_FIELDS = frozenset({"text", "title", "note"})
+_THIN_ITEM_TEXT_FIELDS = frozenset({"text", "title"})
+
 
 def _compact_text(value: Any) -> Any:
     if not isinstance(value, str):
@@ -84,17 +115,157 @@ def _compact_text(value: Any) -> Any:
     return text[: AGENT_LANE_TODO_LIST_TEXT_LIMIT - 3].rstrip() + "..."
 
 
-def _compact_item(value: Any) -> Any:
+def _project_item_fields(
+    value: Any,
+    *,
+    fields: tuple[str, ...],
+    text_fields: frozenset[str],
+) -> Any:
     if not isinstance(value, dict):
         return value
     compact: dict[str, Any] = {}
-    for key in _ITEM_FIELDS:
+    for key in fields:
         child = value.get(key)
         if child is None:
             continue
         compact[key] = (
-            _compact_text(child) if key in {"text", "title", "note"} else child
+            _compact_text(child) if key in text_fields else child
         )
+    return compact
+
+
+def _compact_item(value: Any) -> Any:
+    return _project_item_fields(
+        value,
+        fields=_ITEM_FIELDS,
+        text_fields=_COMPACT_ITEM_TEXT_FIELDS,
+    )
+
+
+def _compact_thin_item(value: Any) -> Any:
+    return _project_item_fields(
+        value,
+        fields=THIN_TODO_LIST_ITEM_FIELDS,
+        text_fields=_THIN_ITEM_TEXT_FIELDS,
+    )
+
+
+def _summary_source_view(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "full_detail"
+    view = value.get("view")
+    if isinstance(view, str) and view:
+        return view
+    if value.get("schema_version") == AGENT_LANE_TODO_LIST_SUMMARY_SCHEMA_VERSION:
+        return AGENT_LANE_HOT_PATH_VIEW
+    return "full_detail"
+
+
+def compact_thin_todo_summary(
+    summary: dict[str, Any],
+    *,
+    role: str,
+) -> dict[str, Any]:
+    """Project one role summary to an explicit field-only Todo list view."""
+
+    compact: dict[str, Any] = {}
+    omitted_nonempty_lane_count = 0
+    omitted_nonempty_dict_count = 0
+    source_view = "full_detail"
+    for key, value in summary.items():
+        if isinstance(value, list):
+            omitted_nonempty_lane_count += bool(value)
+            continue
+        if isinstance(value, dict):
+            if key == "payload_compaction":
+                source_view = _summary_source_view(value)
+            else:
+                omitted_nonempty_dict_count += bool(value)
+            continue
+        compact[key] = value
+    compact["payload_compaction"] = {
+        "schema_version": THIN_TODO_LIST_SUMMARY_SCHEMA_VERSION,
+        "view": THIN_EXPLICIT_VIEW,
+        "source_view": source_view,
+        "role": role,
+        "items_projected_to": "todos",
+        "item_fields": list(THIN_TODO_LIST_ITEM_FIELDS),
+        "item_text_limit": AGENT_LANE_TODO_LIST_TEXT_LIMIT,
+        "omitted_nonempty_lane_count": omitted_nonempty_lane_count,
+        "omitted_nonempty_dict_count": omitted_nonempty_dict_count,
+        "full_detail_cold_path": "todo list without --thin or active state",
+    }
+    return compact
+
+
+def thin_todo_list_field_projection_contract() -> dict[str, Any]:
+    return {
+        "schema_version": THIN_TODO_LIST_PROJECTION_SCHEMA_VERSION,
+        "view": THIN_EXPLICIT_VIEW,
+        "item_container": "todos",
+        "item_fields": list(THIN_TODO_LIST_ITEM_FIELDS),
+        "item_text_limit": AGENT_LANE_TODO_LIST_TEXT_LIMIT,
+        "full_detail_cold_paths": [
+            "todo list without --thin",
+            "todo list --todo-id <id> without --thin",
+            "active state",
+        ],
+    }
+
+
+def compact_thin_todo_list_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the opt-in Todo list field projection without changing selection."""
+
+    compact = dict(payload)
+    compact.pop("state_file", None)
+    compact.pop("project", None)
+    compact.pop("filter_semantics", None)
+
+    projected_items: list[dict[str, Any]] = []
+    for key, role in (("user_todos", "user"), ("agent_todos", "agent")):
+        summary = compact.get(key)
+        if not isinstance(summary, dict):
+            continue
+        projected_items.extend(
+            _compact_thin_item(item)
+            for item in summary.get("items") or []
+            if isinstance(item, dict)
+        )
+        projected = compact_thin_todo_summary(summary, role=role)
+        compact[key] = projected
+    compact["todos"] = projected_items
+
+    todo_id_filter = compact.get("todo_id_filter")
+    if isinstance(todo_id_filter, str):
+        matched = next(
+            (
+                item
+                for item in projected_items
+                if item.get("todo_id") == todo_id_filter
+            ),
+            None,
+        )
+        compact["todo"] = matched
+        compact["relations"] = todo_item_relations(matched) if matched else {}
+
+    overlay = compact.get("projection_overlay")
+    if isinstance(overlay, dict):
+        compact["projection_overlay"] = compact_todo_projection_overlay(
+            overlay,
+            full_detail_cold_path="todo list without --thin or active state",
+        )
+    state_event_projection = compact.get("state_event_projection")
+    if isinstance(state_event_projection, dict):
+        compact["state_event_projection"] = {
+            key: state_event_projection[key]
+            for key in ("schema_version", "source_event_count", "last_event_id")
+            if key in state_event_projection
+        }
+
+    compact["thin"] = True
+    compact["todo_list_field_projection"] = (
+        thin_todo_list_field_projection_contract()
+    )
     return compact
 
 
