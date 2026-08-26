@@ -1,14 +1,114 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from ..runtime.time import parse_timestamp
-from ..scheduler.monitor_todo import monitor_cadence_delta, monitor_next_due_at
+from ..scheduler.monitor_todo import (
+    monitor_cadence_delta,
+    monitor_next_due_at,
+    parse_monitor_counter,
+)
 from .contract import (
     TODO_MONITOR_METADATA_FIELDS,
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_watch_only,
 )
+
+
+@dataclass(frozen=True)
+class MonitorPollObservation:
+    """One monitor result whose state transition must be planned under lock."""
+
+    generated_at: str
+    result_hash: str
+    material_change: bool
+    target_key: str | None = None
+    cadence: str | None = None
+    next_due_at: str | None = None
+
+
+def plan_monitor_poll_metadata(
+    *,
+    existing: Mapping[str, Any],
+    observation: MonitorPollObservation,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive one monotonic monitor transition from the locked Todo state."""
+
+    if str(existing.get("task_class") or "") != TODO_TASK_CLASS_MONITOR:
+        raise ValueError(
+            "monitor poll observation requires task_class=continuous_monitor"
+        )
+    result_hash = str(observation.result_hash or "").strip()
+    if not result_hash:
+        raise ValueError("monitor todo writeback requires --result-hash")
+
+    existing_target_key = str(existing.get("target_key") or "").strip()
+    requested_target_key = str(observation.target_key or "").strip()
+    if (
+        requested_target_key
+        and existing_target_key
+        and requested_target_key != existing_target_key
+    ):
+        raise ValueError(
+            f"monitor poll target_key resolves to {existing_target_key!r}, "
+            f"not {requested_target_key!r}"
+        )
+    target_key = requested_target_key or existing_target_key
+    cadence = str(observation.cadence or existing.get("cadence") or "").strip()
+    next_due_at = monitor_next_due_at(
+        generated_at=observation.generated_at,
+        cadence=cadence,
+        explicit_next_due_at=observation.next_due_at,
+    )
+    if not observation.material_change and not next_due_at:
+        raise ValueError(
+            "unchanged monitor todo writeback requires --next-due-at or a "
+            "parseable cadence such as 30m/2h/1d"
+        )
+
+    previous_hash = str(existing.get("result_hash") or "").strip()
+    previous_no_change = parse_monitor_counter(existing.get("consecutive_no_change"))
+    previous_generation = parse_monitor_counter(
+        existing.get("material_change_generation")
+    )
+    advances_generation = bool(
+        observation.material_change and result_hash != previous_hash
+    )
+    generation = previous_generation + (1 if advances_generation else 0)
+    consecutive_no_change = (
+        0
+        if observation.material_change
+        or (previous_hash and previous_hash != result_hash)
+        else previous_no_change + 1
+    )
+
+    metadata: dict[str, Any] = {
+        "last_checked_at": observation.generated_at,
+        "result_hash": result_hash,
+        "consecutive_no_change": str(consecutive_no_change),
+        "material_change": "true" if observation.material_change else "false",
+        "material_change_generation": str(generation),
+    }
+    if target_key:
+        metadata["target_key"] = target_key
+    if cadence:
+        metadata["cadence"] = cadence
+    if next_due_at:
+        metadata["next_due_at"] = next_due_at
+    return metadata, {
+        "result_hash": result_hash,
+        "material_change": observation.material_change,
+        "material_change_applied": advances_generation,
+        "material_change_generation": generation,
+        "consecutive_no_change": consecutive_no_change,
+        "last_checked_at": observation.generated_at,
+        "target_key": target_key or None,
+        "cadence": cadence or None,
+        "next_due_at": next_due_at,
+    }
+
 
 def normalize_monitor_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     normalized: dict[str, Any] = {}

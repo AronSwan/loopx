@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -150,6 +152,73 @@ def test_monitor_change_wait_binds_generation_and_resumes_only_after_increment(
             successor_todo_ids=[FALLBACK_ID],
             agent_id=AGENT_ID,
         )
+
+
+def test_overlapping_material_polls_recompute_generation_after_wait_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.todos as todos_module
+
+    registry, state_file = _write_fixture(tmp_path)
+    original_update = todos_module.update_goal_todo
+    second_poll_ready = Event()
+    release_second_poll = Event()
+
+    def delay_second_poll(**kwargs):
+        observation = kwargs.get("monitor_poll_observation")
+        result_hash = getattr(observation, "result_hash", None)
+        if result_hash == "review-v4-second":
+            second_poll_ready.set()
+            if not release_second_poll.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release overlapping poll")
+        return original_update(**kwargs)
+
+    monkeypatch.setattr(todos_module, "update_goal_todo", delay_second_poll)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        second_poll = executor.submit(
+            write_monitor_poll_todo_state,
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            execute=True,
+            generated_at="2026-08-25T02:01:00Z",
+            todo_id=MONITOR_ID,
+            result_hash="review-v4-second",
+            material_change=True,
+            agent_id=AGENT_ID,
+        )
+        assert second_poll_ready.wait(timeout=5)
+
+        first_poll = write_monitor_poll_todo_state(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            execute=True,
+            generated_at="2026-08-25T02:00:00Z",
+            todo_id=MONITOR_ID,
+            result_hash="review-v3-first",
+            material_change=True,
+            agent_id=AGENT_ID,
+        )
+        assert first_poll["material_change_generation"] == 3
+
+        wait_transition = update_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            todo_id=WAITING_ID,
+            resume_when=f"monitor_changed:{MONITOR_ID}",
+            successor_todo_ids=[FALLBACK_ID],
+            agent_id=AGENT_ID,
+        )
+        assert wait_transition["external_wait_transition"]["baseline_generation"] == 3
+
+        release_second_poll.set()
+        second_result = second_poll.result(timeout=5)
+
+    assert second_result["material_change_generation"] == 4
+    todos = _todos(state_file)
+    assert todos[MONITOR_ID]["result_hash"] == "review-v4-second"
+    assert todos[MONITOR_ID]["material_change_generation"] == 4
+    assert todos[WAITING_ID]["resume_ready"] is True
 
 
 def test_dependency_completion_automatically_resumes_waiting_todo(tmp_path: Path) -> None:

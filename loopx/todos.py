@@ -1224,6 +1224,7 @@ def update_goal_todo(
     clear_resume_when: bool = False,
     no_followup: bool | None = None,
     monitor_metadata: dict[str, Any] | None = None,
+    monitor_poll_observation: todo_monitor_metadata.MonitorPollObservation | None = None,
     enforce_monitor_boundedness: bool = True,
     clear_claim: bool = False,
     claim_only: bool = False,
@@ -1231,6 +1232,11 @@ def update_goal_todo(
     state_file: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if monitor_metadata is not None and monitor_poll_observation is not None:
+        raise ValueError(
+            "todo update accepts either monitor_metadata or "
+            "monitor_poll_observation, not both"
+        )
     if excluded_agents and clear_excluded_agents:
         raise ValueError(
             "todo update accepts either excluded_agents or clear_excluded_agents, not both"
@@ -1270,6 +1276,7 @@ def update_goal_todo(
         if validation_failure is not None:
             return validation_failure
     external_wait_transition: dict[str, Any] | None = None
+    monitor_poll_transition: dict[str, Any] | None = None
     resume_monitor_generation: int | None = None
     with exclusive_file_lock(
         resolved_state_file,
@@ -1324,6 +1331,14 @@ def update_goal_todo(
             raise ValueError(f"todo_id {normalized_todo_id!r} was not found in active user or agent todos")
         existing_role, _section, _start, _end, existing_block = existing_block_match
         target_role = role or existing_role
+        monitor_metadata_input = monitor_metadata
+        if monitor_poll_observation is not None:
+            monitor_metadata_input, monitor_poll_transition = (
+                todo_monitor_metadata.plan_monitor_poll_metadata(
+                    existing=existing_block,
+                    observation=monitor_poll_observation,
+                )
+            )
         authority_todo = dict(existing_block)
         authority_todo["role"] = target_role
         authority_action = todo_update_authority_action(
@@ -1343,7 +1358,7 @@ def update_goal_todo(
                 clear_global_gate, unblocks_todo_id, successor_todo_ids,
                 resume_when, clear_resume_when, no_followup,
             ),
-            monitor_metadata=monitor_metadata,
+            monitor_metadata=monitor_metadata_input,
         )
         mutation_authority = authorize_todo_lifecycle_mutation(
             registry_path=registry_path,
@@ -1525,7 +1540,7 @@ def update_goal_todo(
             )
         )
         normalized_monitor_metadata = todo_monitor_metadata.require_monitor_metadata_scope(
-            monitor_metadata=monitor_metadata,
+            monitor_metadata=monitor_metadata_input,
             role=target_role,
             task_class=target_task_class, generated_at=updated_at,
         )
@@ -1623,6 +1638,8 @@ def update_goal_todo(
             payload["parent_successor_advisory"] = parent_successor_advisory
     if external_wait_transition is not None:
         payload["external_wait_transition"] = external_wait_transition
+    if monitor_poll_transition is not None:
+        payload["monitor_poll_transition"] = monitor_poll_transition
     return _attach_todo_write_correctness_dry_run_packet(
         payload,
         goal_id=goal_id,
