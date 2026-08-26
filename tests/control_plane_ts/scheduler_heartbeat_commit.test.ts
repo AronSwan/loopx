@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -53,6 +53,22 @@ async function tempRuntime(t: test.TestContext): Promise<string> {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-heartbeat-commit-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   return runtimeRoot;
+}
+
+function legacyStatePath(runtimeRoot: string): string {
+  const stateHash = createHash("sha256")
+    .update(scope.state_key, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  return join(
+    runtimeRoot,
+    "goals",
+    scope.goal_id,
+    "scheduler-state",
+    scope.agent_id,
+    scope.surface,
+    `${stateHash}.json`,
+  );
 }
 
 test("exact ACK commits scheduler state and is replay-safe", async (t) => {
@@ -411,20 +427,7 @@ test("missing state rejects nonzero initial progression in execute and preview",
 
 test("preview reads legacy state without migrating or deleting it", async (t) => {
   const runtimeRoot = await tempRuntime(t);
-  const legacyHash = createHash("sha256")
-    .update(scope.state_key, "utf8")
-    .digest("hex")
-    .slice(0, 16);
-  const legacyPath = join(
-    runtimeRoot,
-    "goals",
-    scope.goal_id,
-    "scheduler-state",
-    scope.agent_id,
-    scope.surface,
-    `${legacyHash}.json`,
-  );
-  const { mkdir, writeFile } = await import("node:fs/promises");
+  const legacyPath = legacyStatePath(runtimeRoot);
   await mkdir(join(legacyPath, ".."), { recursive: true });
   const legacyState = {
     schema_version: "loopx_scheduler_state_v0",
@@ -458,6 +461,66 @@ test("preview reads legacy state without migrating or deleting it", async (t) =>
   );
 });
 
+test(
+  "host-match ACK replaces a migrated stale identity at the initial cadence",
+  async (t) => {
+    const runtimeRoot = await tempRuntime(t);
+    const legacyPath = legacyStatePath(runtimeRoot);
+    await mkdir(join(legacyPath, ".."), { recursive: true });
+    const legacyState = {
+      schema_version: "loopx_scheduler_state_v0",
+      ...scope,
+      reset_token: "legacy-reset",
+      identity_signature: "legacy-identity",
+      progression_index: 0,
+      progression_minutes: [15, 30, 60],
+      last_applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      updated_at: "2026-08-24T07:59:00Z",
+    } satisfies JsonObject;
+    await writeFile(legacyPath, `${JSON.stringify(legacyState)}\n`, "utf8");
+
+    const committed = await evaluateSchedulerHeartbeatHostFacts({
+      schema_version: "loopx_scheduler_heartbeat_host_facts_v0",
+      operation: "ack",
+      runtime_root: runtimeRoot,
+      ...scope,
+      reset_token: "reset-2",
+      identity_signature: "identity-2",
+      progression_index: 0,
+      progression_minutes: [15, 30, 60],
+      expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      cadence_class: "active_work",
+      ack_needed: true,
+      apply_needed: false,
+      host_match_observed: true,
+      generated_at: "2026-08-24T08:00:00Z",
+      execute: true,
+    });
+
+    assert.equal(committed.status, "written");
+    assert.equal(
+      committed.expected_state_digest,
+      schedulerHeartbeatCommitStateDigest(legacyState),
+    );
+    assert.equal(committed.state?.reset_token, "reset-2");
+    assert.equal(committed.state?.identity_signature, "identity-2");
+    assert.equal(committed.state?.progression_index, 0);
+    await assert.rejects(readFile(legacyPath, "utf8"), { code: "ENOENT" });
+    const canonicalPath = schedulerStatePath(runtimeRoot, {
+      goalId: scope.goal_id,
+      agentId: scope.agent_id,
+      surface: scope.surface,
+      stateKey: scope.state_key,
+    });
+    const persisted = JSON.parse(
+      await readFile(canonicalPath, "utf8"),
+    ) as JsonObject;
+    assert.equal(persisted.reset_token, "reset-2");
+    assert.equal(persisted.identity_signature, "identity-2");
+  },
+);
+
 test("identity reset starts a new progression without losing CAS protection", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
@@ -478,6 +541,38 @@ test("identity reset starts a new progression without losing CAS protection", as
   assert.equal(reset.status, "written");
   assert.equal(reset.state?.reset_token, "reset-2");
   assert.equal(reset.state?.progression_index, 0);
+});
+
+test("host-match host failure cannot reset scheduler identity", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
+  const reset = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    operation: "host_failure",
+    effect_id: "host-match-identity-reset-failure",
+    reset_token: "reset-2",
+    identity_signature: "identity-2",
+    progression_index: 0,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    apply_needed: true,
+    host_match_observed: true,
+    failure_kind: "timeout",
+    expected_state_digest: first.state_digest,
+  }));
+  assert.equal(reset.status, "conflict");
+  assert.equal(reset.reason_code, "identity_conflict");
+  assert.equal(reset.state_digest, first.state_digest);
+
+  const path = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const persisted = JSON.parse(await readFile(path, "utf8")) as JsonObject;
+  assert.equal(persisted.reset_token, "reset-1");
+  assert.equal(persisted.identity_signature, "identity-1");
 });
 
 test("identity reset rejects nonzero progression and leaves state unchanged", async (t) => {

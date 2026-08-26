@@ -7,6 +7,10 @@ from pathlib import Path
 from examples.control_plane.quota_plan_fixtures import SCOPED_AGENT_ID, write_cli_fixture
 from loopx.cli_commands import quota as quota_command
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
+from loopx.control_plane.scheduler.state import (
+    build_scheduler_state,
+    write_scheduler_state,
+)
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
 
 
@@ -94,6 +98,69 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert settled_app["stateful_backoff"]["apply_needed"] is False
     assert settled_app["stateful_backoff"]["ack_needed"] is False
     assert settled_app["host_action"] == "none"
+
+
+def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
+    _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
+
+    first = _quota(registry_path, runtime_root, project)
+    first_app = first["scheduler_hint"]["codex_app"]
+    target_rrule = first_app["recommended_rrule"]
+    _write_heartbeat_rrule(codex_home, target_rrule)
+    stale_state = build_scheduler_state(
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+        reset_token="stale-reset-token",
+        identity_signature="stale-identity-signature",
+        progression_index=0,
+        progression_minutes=first_app["example_progression_minutes"],
+        last_applied_rrule=target_rrule,
+        updated_at="2026-08-26T00:00:00+00:00",
+        source="test_scheduler_ack_current_stale_identity",
+    )
+    write_scheduler_state(
+        runtime_root,
+        stale_state,
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+    )
+
+    reset = _quota(registry_path, runtime_root, project)
+    reset_app = reset["scheduler_hint"]["codex_app"]
+    reset_backoff = reset_app["stateful_backoff"]
+    assert reset_backoff["state_status"] == "reset_required"
+    assert reset_backoff["apply_needed"] is False
+    assert reset_backoff["ack_needed"] is True
+    assert reset_backoff["host_observation"]["status"] == "matches_recommended"
+
+    ack = run_json_cli(
+        *reset_app["ack_hint"]["cli_args"],
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["scheduler_ack_event"]["scheduler_state"]["reset_token"] == (
+        reset_backoff["reset_token"]
+    )
+
+    settled = _quota(registry_path, runtime_root, project)
+    settled_backoff = settled["scheduler_hint"]["codex_app"][
+        "stateful_backoff"
+    ]
+    assert settled_backoff["state_status"] == "same_identity"
+    assert settled_backoff["apply_needed"] is False
+    assert settled_backoff["ack_needed"] is False
 
 
 def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) -> None:
