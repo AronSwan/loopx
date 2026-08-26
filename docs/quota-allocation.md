@@ -911,12 +911,21 @@ CLI-produced ACK hints bind that argument vector to the exact registry and
 effective runtime root that produced `quota should-run`. Hosts must execute the
 complete vector; stripping its leading global options can route a
 project-launched ACK into project-local scheduler state instead of the shared
-control plane.
+control plane. When the decision is heartbeat-receipted, ACK and failure hints
+also bind the originating `turn_instance_id`. The follow-up rebuilds the same
+receipt-bound live decision before validating its reset token and identity;
+later Todos or a different unscoped wait lane cannot replace the decision that
+requested the host action.
 Monitor-only quiet waits move through `[15, 30, 60]` while preserving the
 same no-spend monitor-poll contract, unless a monitor cadence or due time caps
 the progression earlier. Fifteen minutes is only the default quiet-monitor
 floor: an explicit cadence or due horizon below 15 minutes becomes the host
 initial interval so the next wake cannot occur after the monitor is due.
+The same deadline cap applies while a human gate owns notification semantics:
+the user action remains a human gate and ordinary gates still use `[30, 60]`,
+but a tighter continuous-monitor wakeup remains authoritative for host cadence.
+Notification-only cooldown continues to use the human-gate interval rather
+than turning the monitor deadline into a three-minute reminder policy.
 Agent-scope waits use a more conservative adjustment curve such as
 `[10, 20, 30, 60]`, so a 600-second local tick stays close to the existing
 agent-to-agent interaction cadence before cooling further.

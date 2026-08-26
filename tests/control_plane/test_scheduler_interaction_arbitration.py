@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_module
 from loopx.control_plane.scheduler.arbitration import (
     SchedulerDisposition,
     build_scheduler_arbitration,
@@ -23,9 +25,7 @@ AGENT_SCOPE_ACTIONS = {
     "reassignment_required",
     "successor_replan_required",
 }
-APP_CONTEXT = scheduler_execution_context_for_runtime_profile(
-    "codex_app_heartbeat"
-)
+APP_CONTEXT = scheduler_execution_context_for_runtime_profile("codex_app_heartbeat")
 
 
 def _app_scheduler_hint(payload: dict, **kwargs) -> dict:
@@ -61,7 +61,9 @@ def _payload(
             "spend_policy": "spend only after validated writeback",
         },
         "automation_liveness": {
-            "automation_action": "execute_bounded_work" if should_run else "keep_active_quiet",
+            "automation_action": "execute_bounded_work"
+            if should_run
+            else "keep_active_quiet",
             "spend_policy": "spend only after validated writeback",
         },
         "interaction_contract": {
@@ -253,9 +255,7 @@ def test_nonblocking_user_action_preserves_required_non_delivery_work(
         "agent_todo_summary": {"first_executable_items": []},
         "selected_todo": {"todo_id": "todo_ready_deferred"},
         "agent_scope_frontier": {
-            "deferred_resume_candidates": [
-                {"todo_id": "todo_ready_deferred"}
-            ]
+            "deferred_resume_candidates": [{"todo_id": "todo_ready_deferred"}]
         },
     }
 
@@ -328,6 +328,51 @@ def test_true_user_gate_still_blocks_required_non_delivery_work() -> None:
     assert contract["agent_channel"]["must_attempt"] is False
     assert contract["response_plan"]["action_sequence"] == ["notify", "wait"]
     assert hint["action"] == "backoff_waiting_for_user"
+    assert hint["codex_app"]["recommended_interval_minutes"] == 30
+    assert hint["codex_app"]["example_progression_minutes"] == [30, 60]
+
+
+def test_human_gate_respects_a_tighter_continuous_monitor_deadline(
+    monkeypatch,
+) -> None:
+    current_time = datetime(2026, 8, 25, 23, 59, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        scheduler_hint_module,
+        "now_utc",
+        lambda: current_time,
+    )
+    payload = _payload(
+        mode="user_gate",
+        should_run=False,
+        user_required=True,
+        must_attempt=False,
+        delivery_allowed=False,
+        quiet_noop_allowed=False,
+    )
+    payload["agent_todo_summary"] = {
+        "current_agent_claimed_monitor_items": [
+            {
+                "todo_id": "todo_deadline_sensitive_monitor",
+                "task_class": "continuous_monitor",
+                "cadence": "3m",
+                "next_due_at": (current_time + timedelta(minutes=3)).isoformat(),
+                "target_key": "deadline-sensitive-monitor",
+            }
+        ]
+    }
+
+    hint = _app_scheduler_hint(
+        payload,
+        agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
+        include_detail=True,
+    )
+
+    assert hint["action"] == "backoff_waiting_for_user"
+    assert hint["cadence_class"] == "human_gate"
+    assert hint["codex_app"]["recommended_interval_minutes"] == 3
+    assert hint["codex_app"]["example_progression_minutes"] == [3]
+    assert hint["cold_path_detail"]["cadence_context"]["cap_minutes"] == 3
+    assert hint["reset_policy"]["codex_app_initial_interval_minutes"] == 3
 
 
 def test_raw_should_run_cannot_override_blocking_gate() -> None:
@@ -401,9 +446,7 @@ def test_raw_terminal_liveness_cannot_override_active_final_contract() -> None:
         delivery_allowed=True,
         quiet_noop_allowed=False,
     )
-    payload["automation_liveness"]["automation_action"] = (
-        "stop_terminal_no_followup"
-    )
+    payload["automation_liveness"]["automation_action"] = "stop_terminal_no_followup"
 
     hint = _app_scheduler_hint(
         payload,
@@ -475,9 +518,7 @@ def test_blocked_peer_coordination_returns_to_owner_without_polling() -> None:
     )
 
     assert hint["action"] == "return_to_owner_until_material_change"
-    assert hint["codex_app"]["host_action"] == (
-        "pause_or_delete_current_heartbeat"
-    )
+    assert hint["codex_app"]["host_action"] == ("pause_or_delete_current_heartbeat")
     assert hint["codex_app"]["host_action_required"] is True
     assert hint["unchanged_poll"]["local_scheduler"] == "stop"
     assert hint["unchanged_poll"]["final_quota_replan_check_enabled"] is False

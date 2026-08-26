@@ -196,6 +196,7 @@ test("CAS rejects a stale writer and leaves the newer state unchanged", async (t
     progression_index: 1,
     expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
     applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    host_match_observed: true,
     expected_state_digest: first.state_digest,
     generated_at: "2026-08-24T08:01:00Z",
   }));
@@ -477,6 +478,26 @@ test("identity reset starts a new progression without losing CAS protection", as
   }));
   assert.equal(reset.status, "written");
   assert.equal(reset.state?.reset_token, "reset-2");
+  assert.equal(reset.state?.progression_index, 0);
+});
+
+test("exact host-match ACK binds a fresh reset identity", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot));
+  const reset = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+    effect_id: "identity-reset-host-match",
+    reset_token: "reset-2",
+    identity_signature: "identity-2",
+    progression_index: 0,
+    expected_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    host_match_observed: true,
+    expected_state_digest: first.state_digest,
+  }));
+
+  assert.equal(reset.status, "written");
+  assert.equal(reset.state?.reset_token, "reset-2");
+  assert.equal(reset.state?.identity_signature, "identity-2");
   assert.equal(reset.state?.progression_index, 0);
 });
 
