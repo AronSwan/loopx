@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
@@ -135,8 +136,7 @@ def load_lark_event_inbox_config(
             raise ValueError(f"lark inbox {field} requires enabled reply")
     if processing_reaction_emoji and not received_reaction_emoji:
         raise ValueError(
-            "lark inbox processing_reaction_emoji requires "
-            "received_reaction_emoji"
+            "lark inbox processing_reaction_emoji requires received_reaction_emoji"
         )
     if (
         processing_reaction_emoji
@@ -341,9 +341,7 @@ def _normalized_mention_name(value: Any) -> str:
     return " ".join(str(value or "").strip().lstrip("@").split()).casefold()
 
 
-def lark_event_mentions_bot(
-    event: Mapping[str, Any], *, bot_display_name: str
-) -> bool:
+def lark_event_mentions_bot(event: Mapping[str, Any], *, bot_display_name: str) -> bool:
     """Recognize provider-native direct mentions without message readback."""
 
     if event.get("mentioned") is True:
@@ -397,6 +395,7 @@ def ingest_lark_event_inbox(
 
     if execute and accepted:
         inbox.mkdir(parents=True, exist_ok=True)
+        os.chmod(inbox, 0o700)
         for event in accepted.values():
             path = inbox / f"{event['message_id']}.json"
             temporary = path.with_suffix(".json.tmp")
@@ -409,7 +408,9 @@ def ingest_lark_event_inbox(
                 + "\n",
                 encoding="utf-8",
             )
+            os.chmod(temporary, 0o600)
             temporary.replace(path)
+            os.chmod(path, 0o600)
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_ingest_v0",
@@ -503,12 +504,15 @@ def _material_review_ledger(inbox: Path) -> tuple[Path, dict[str, Any]]:
 
 def _write_material_review_ledger(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    os.chmod(temporary, 0o600)
     temporary.replace(path)
+    os.chmod(path, 0o600)
 
 
 def _acknowledge_lark_event_inbox_state(
@@ -522,6 +526,7 @@ def _acknowledge_lark_event_inbox_state(
     added = [value for value in message_ids if value not in existing]
     if execute and added:
         inbox.mkdir(parents=True, exist_ok=True)
+        os.chmod(inbox, 0o700)
         merged = sorted(existing | set(added))
         payload = {
             "schema_version": PROCESSED_SCHEMA_VERSION,
@@ -533,7 +538,9 @@ def _acknowledge_lark_event_inbox_state(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        os.chmod(temporary, 0o600)
         temporary.replace(processed_path)
+        os.chmod(processed_path, 0o600)
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_ack_v0",
