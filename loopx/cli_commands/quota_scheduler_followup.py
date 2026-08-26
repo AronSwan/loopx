@@ -26,34 +26,13 @@ from ..quota import record_quota_scheduler_ack
 from ..upgrade import resolve_codex_app_automation_rrule
 
 
-def _receipt_bound_action_bindings(
-    *,
-    runtime_root: Path,
-    args: argparse.Namespace,
-    turn_instance_id: str | None,
-) -> tuple[str | None, str | None]:
-    if not turn_instance_id:
-        return None, None
-    receipt = find_heartbeat_receipt(
-        runtime_root,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        turn_instance_id=turn_instance_id,
-    )
-    if not receipt:
-        return None, None
-    return (
-        heartbeat_receipt_settlement_todo_id(receipt),
-        heartbeat_receipt_settlement_replan_obligation_id(receipt),
-    )
-
-
 def _build_scheduler_followup_decision(
     status_payload: dict[str, object],
     args: argparse.Namespace,
     *,
     registry_path: Path,
     runtime_root: Path,
+    heartbeat_receipt: Mapping[str, object] | None,
     turn_instance_id: str | None,
     codex_app_current_rrule: str | None,
     scheduler_context: Mapping[str, object]
@@ -63,10 +42,15 @@ def _build_scheduler_followup_decision(
 ) -> dict[str, object]:
     """Rebuild a scheduler follow-up from the originating receipt-bound Turn."""
 
-    receipt_todo_id, receipt_replan_id = _receipt_bound_action_bindings(
-        runtime_root=runtime_root,
-        args=args,
-        turn_instance_id=turn_instance_id,
+    receipt_todo_id = (
+        heartbeat_receipt_settlement_todo_id(heartbeat_receipt)
+        if heartbeat_receipt
+        else None
+    )
+    receipt_replan_id = (
+        heartbeat_receipt_settlement_replan_obligation_id(heartbeat_receipt)
+        if heartbeat_receipt
+        else None
     )
     return build_live_quota_should_run_decision(
         status_payload,
@@ -104,6 +88,45 @@ def build_scheduler_followup_payload(
 ) -> dict[str, object]:
     """Execute one scheduler ACK/failure command against its live decision."""
 
+    heartbeat_receipt = (
+        find_heartbeat_receipt(
+            runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            turn_instance_id=turn_instance_id,
+        )
+        if turn_instance_id
+        else None
+    )
+    if turn_instance_id and heartbeat_receipt is None:
+        return {
+            "ok": False,
+            "schema_version": "quota_scheduler_followup_receipt_failure_v0",
+            "mode": args.quota_command,
+            "goal_id": args.goal_id,
+            "agent_id": args.agent_id,
+            "turn_instance_id": turn_instance_id,
+            "decision": "skip",
+            "should_run": False,
+            "status": "heartbeat_receipt_missing",
+            "state": "blocked_receipt",
+            "error_code": "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING",
+            "reason": (
+                "scheduler follow-up requires the originating heartbeat receipt; "
+                "refusing to rebuild authority from the current live frontier"
+            ),
+            "retry_guidance": (
+                "retry with the exact Turn id from a committed quota should-run "
+                "heartbeat receipt"
+            ),
+            "write_performed": False,
+            "appended": False,
+            "registry_mutated": False,
+            "scheduler_state_mutated": False,
+            "quota_spend_performed": False,
+            "delivery_outcome": "surface_only",
+        }
+
     observed_rrule = str(args.codex_app_current_rrule or "").strip()
     if args.quota_command == "scheduler-fail-current" and not observed_rrule:
         host_observation = resolve_codex_app_automation_rrule(
@@ -118,6 +141,7 @@ def build_scheduler_followup_payload(
         args,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        heartbeat_receipt=heartbeat_receipt,
         turn_instance_id=turn_instance_id,
         codex_app_current_rrule=(
             args.applied_rrule
