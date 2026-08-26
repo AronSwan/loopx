@@ -59,6 +59,32 @@ def _bind(store: ChatSessionStore) -> dict[str, object]:
     return packet
 
 
+def _delete_session(
+    runtime: ChatRuntimeController,
+    session_id: str,
+) -> list[dict[str, object]]:
+    responses: list[dict[str, object]] = []
+
+    class Handler:
+        path = f"/api/chat/sessions/{session_id}"
+        server = SimpleNamespace(runtime_controller=runtime)
+
+        def _require_loopback_origin(self) -> bool:
+            return True
+
+        def _send_error(self, message: str, **kwargs: object) -> None:
+            responses.append({"ok": False, "error": message, **kwargs})
+
+        def _send_json(self, payload: dict[str, object], *, status: int = 200) -> None:
+            responses.append({**payload, "status": status})
+
+        def _close_session(self, target_session_id: str) -> None:
+            ChatRequestHandler._close_session(self, target_session_id)  # type: ignore[arg-type]
+
+    ChatRequestHandler.do_DELETE(Handler())  # type: ignore[arg-type]
+    return responses
+
+
 def test_bind_requires_exact_registered_thread_and_is_idempotent(tmp_path: Path) -> None:
     store = ChatSessionStore(tmp_path)
     preview = bind_attached_agent_session(
@@ -493,25 +519,7 @@ def test_attached_close_rejects_active_claim_and_preserves_completion(
         claim_id="close-active-claim",
     )
 
-    responses: list[dict[str, object]] = []
-
-    class Handler:
-        path = f"/api/chat/sessions/{session_id}"
-        server = SimpleNamespace(runtime_controller=runtime)
-
-        def _require_loopback_origin(self) -> bool:
-            return True
-
-        def _send_error(self, message: str, **kwargs: object) -> None:
-            responses.append({"ok": False, "error": message, **kwargs})
-
-        def _send_json(self, payload: dict[str, object], *, status: int = 200) -> None:
-            responses.append({**payload, "status": status})
-
-        def _close_session(self, target_session_id: str) -> None:
-            ChatRequestHandler._close_session(self, target_session_id)  # type: ignore[arg-type]
-
-    ChatRequestHandler.do_DELETE(Handler())  # type: ignore[arg-type]
+    responses = _delete_session(runtime, session_id)
     assert responses == [
         {
             "ok": False,
@@ -523,9 +531,11 @@ def test_attached_close_rejects_active_claim_and_preserves_completion(
 
     session = store.load_session(session_id)
     active_turn = store.load_turn(session_id, turn_id)
-    assert session is not None and session["status"] == "busy"
+    assert session is not None
+    assert session["status"] == "busy"
     assert session["active_turn_id"] == turn_id
-    assert active_turn is not None and active_turn["status"] == "running"
+    assert active_turn is not None
+    assert active_turn["status"] == "running"
 
     complete_attached_agent_turn(
         store=store,
@@ -554,25 +564,7 @@ def test_attached_close_rejects_pending_queue_and_preserves_claimability(
         message="do not strand this turn",
         origin="web",
     )
-    responses: list[dict[str, object]] = []
-
-    class Handler:
-        path = f"/api/chat/sessions/{session_id}"
-        server = SimpleNamespace(runtime_controller=runtime)
-
-        def _require_loopback_origin(self) -> bool:
-            return True
-
-        def _send_error(self, message: str, **kwargs: object) -> None:
-            responses.append({"ok": False, "error": message, **kwargs})
-
-        def _send_json(self, payload: dict[str, object], *, status: int = 200) -> None:
-            responses.append({**payload, "status": status})
-
-        def _close_session(self, target_session_id: str) -> None:
-            ChatRequestHandler._close_session(self, target_session_id)  # type: ignore[arg-type]
-
-    ChatRequestHandler.do_DELETE(Handler())  # type: ignore[arg-type]
+    responses = _delete_session(runtime, session_id)
 
     assert responses == [
         {
@@ -583,9 +575,41 @@ def test_attached_close_rejects_pending_queue_and_preserves_claimability(
         }
     ]
     session = store.load_session(session_id)
-    assert session is not None and session["status"] == "ready"
+    assert session is not None
+    assert session["status"] == "ready"
     claimed = store.claim_next_queued_turn(session_id, host_claim_id="pending-claim")
-    assert claimed is not None and claimed["turn_id"] == queued["turn_id"]
+    assert claimed is not None
+    assert claimed["turn_id"] == queued["turn_id"]
+
+
+def test_attached_close_settles_expired_queue_before_closing(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(_bind(store)["session"]["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    queued, _created = store.create_queued_turn(
+        session_id,
+        client_turn_id="close-expired-queue",
+        message="expire before dispatch",
+        origin="web",
+    )
+    turn_id = str(queued["turn_id"])
+    store.update_turn(session_id, turn_id, expires_at="2000-01-01T00:00:00Z")
+
+    responses = _delete_session(runtime, session_id)
+
+    assert responses == [
+        {"ok": True, "session_id": session_id, "closed": True, "status": 200}
+    ]
+    session = store.load_session(session_id)
+    assert session is not None
+    assert session["status"] == "closed"
+    expired = store.load_turn(session_id, turn_id)
+    assert expired is not None
+    assert expired["status"] == "timed_out"
+    assert expired["error_code"] == "session_queue_expired"
+    events = store.events_after(session_id, turn_id, None)
+    assert [event["kind"] for event in events] == ["turn.queued", "turn.failed"]
+    assert events[-1]["payload"] == {"error_code": "session_queue_expired"}
 
 
 def test_attached_live_steering_fails_closed_with_durable_receipt(tmp_path: Path) -> None:

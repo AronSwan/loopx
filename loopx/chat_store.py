@@ -639,6 +639,44 @@ class ChatSessionStore:
             ),
         )
 
+    def _settle_expired_queued_turns(
+        self,
+        session_id: str,
+        *,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Persist queue expiry and return the queued Turns still eligible to run."""
+
+        live_turns: list[dict[str, Any]] = []
+        for turn in self.queued_turns(session_id):
+            expires_at = _instant(turn.get("expires_at"))
+            if expires_at is None or expires_at > now:
+                live_turns.append(turn)
+                continue
+            turn_id = str(turn["turn_id"])
+            completed = utc_now()
+            turn.update(
+                {
+                    "status": "timed_out",
+                    "error_code": "session_queue_expired",
+                    "error": "Queued Agent ingress expired before dispatch.",
+                    "completed_at": completed,
+                    "last_activity_at": completed,
+                }
+            )
+            _atomic_write_json(
+                self._turn_path(session_id, turn_id),
+                turn,
+                preserve_mode=True,
+            )
+            self.append_event(
+                session_id,
+                turn_id,
+                kind="turn.failed",
+                payload={"error_code": "session_queue_expired"},
+            )
+        return live_turns
+
     def claim_next_queued_turn(
         self,
         session_id: str,
@@ -670,33 +708,11 @@ class ChatSessionStore:
                     ):
                         return active
                     return None
-                now = datetime.now(timezone.utc)
-                for turn in self.queued_turns(session_id):
+                for turn in self._settle_expired_queued_turns(
+                    session_id,
+                    now=datetime.now(timezone.utc),
+                ):
                     turn_id = str(turn["turn_id"])
-                    expires_at = _instant(turn.get("expires_at"))
-                    if expires_at is not None and expires_at <= now:
-                        completed = utc_now()
-                        turn.update(
-                            {
-                                "status": "timed_out",
-                                "error_code": "session_queue_expired",
-                                "error": "Queued Agent ingress expired before dispatch.",
-                                "completed_at": completed,
-                                "last_activity_at": completed,
-                            }
-                        )
-                        _atomic_write_json(
-                            self._turn_path(session_id, turn_id),
-                            turn,
-                            preserve_mode=True,
-                        )
-                        self.append_event(
-                            session_id,
-                            turn_id,
-                            kind="turn.failed",
-                            payload={"error_code": "session_queue_expired"},
-                        )
-                        continue
                     if host_claim_id:
                         now_text = utc_now()
                         turn.update(
@@ -912,7 +928,11 @@ class ChatSessionStore:
                         "failed",
                     }:
                         raise RuntimeError("attached_session_turn_active")
-                if self.queued_turns(session_id):
+                live_queued_turns = self._settle_expired_queued_turns(
+                    session_id,
+                    now=datetime.now(timezone.utc),
+                )
+                if live_queued_turns:
                     raise RuntimeError("attached_session_queue_pending")
                 now = utc_now()
                 session.update(
