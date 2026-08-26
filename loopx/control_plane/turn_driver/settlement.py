@@ -551,3 +551,25 @@ def turn_settlement_outcome(
     ):
         raise RuntimeError("TypeScript Turn settlement outcome shape mismatch")
     return dict(outcome)
+
+
+def turn_settlement_failure_outcome(
+    result: SettlementResult[TurnSettlementState],
+) -> tuple[LoopXTurnResultKind, tuple[str, ...], str]:
+    """Decode a required TypeScript failure outcome for legacy projection."""
+
+    outcome = turn_settlement_outcome(result)
+    if outcome is None:
+        raise RuntimeError(
+            "TypeScript Turn settlement omitted its canonical failure outcome"
+        )
+    failed_phase = str(outcome.get("failed_phase") or "")
+    if not failed_phase:
+        raise RuntimeError("TypeScript Turn settlement failure omitted failed_phase")
+    try:
+        result_kind = LoopXTurnResultKind(str(outcome["result_kind"]))
+    except ValueError as exc:
+        raise RuntimeError(
+            "TypeScript Turn settlement failure has unsupported result_kind"
+        ) from exc
+    return result_kind, tuple(str(phase) for phase in outcome["completed_phases"]), failed_phase

@@ -34,6 +34,7 @@ from .settlement import (
     execute_turn_driver_settlement,
     invoke_result_effect,
     terminal_closeout_requirement,
+    turn_settlement_failure_outcome,
     turn_settlement_outcome,
     turn_effect_resolvers,
     verified_terminal_closeout_effect,
@@ -1251,21 +1252,9 @@ def _typed_settlement_stage(
 
     journal["settlement_result"] = settlement_result_payload(settlement_result)
     if settlement_result.failure is not None:
-        outcome = turn_settlement_outcome(settlement_result)
-        if outcome is None:
-            raise RuntimeError(
-                "TypeScript Turn settlement omitted its canonical failure outcome"
-            )
-        failed_phase = str(outcome.get("failed_phase") or "")
-        if not failed_phase:
-            raise RuntimeError("TypeScript Turn settlement failure omitted failed_phase")
-        try:
-            result_kind = LoopXTurnResultKind(str(outcome["result_kind"]))
-        except ValueError as exc:
-            raise RuntimeError(
-                "TypeScript Turn settlement failure has unsupported result_kind"
-            ) from exc
-        completed_phases = [str(phase) for phase in outcome["completed_phases"]]
+        result_kind, completed_phases, failed_phase = turn_settlement_failure_outcome(
+            settlement_result
+        )
         failure = _host_failure(
             plan,
             kind=result_kind,
