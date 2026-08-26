@@ -360,6 +360,31 @@ preemption defers the request and leaves the receipt identity-less. Delivery and
 quota spend remain disabled until binding succeeds. A single-candidate response
 keeps the direct execution path and does not add an extra selection round trip.
 
+When the selected Todo has meaningful strategic context, the same default
+response may include `planning_horizon.schema_version=
+quota_planning_horizon_v0`. It carries at most five selected/related/runnable
+or higher-priority waiting Todos, eight typed lineage/resume/route relations,
+two goal acceptance gaps, and explicit completeness counters. The horizon is a
+read-only steering input: `selection_contract.horizon_changes_selection=false`
+and action authority remains `selected_todo` plus `action_portfolio`. If the
+horizon exposes a better runnable item, the agent still uses the existing
+candidate discovery and explicit selection re-entry. If it is truncated, the
+agent follows its Todo-detail or task-graph cold-path reference before treating
+the visible slice as exhaustive. See
+[`quota_planning_horizon_v0`](reference/protocols/quota-planning-horizon-v0.md).
+
+Portfolio and horizon do not independently reconstruct the Todo queue. Python
+selects canonical Todo domain-state rows and TypeScript normalizes them once as
+`todo_planning_inventory_v0`. The inventory keeps `planning_state` independent
+from `claim_state`, so an unclaimed runnable item explicitly requires a claim
+before work. `--include-detail agent-todos` exposes the larger bounded
+planning-only lens and points its item details back to `agent_todo_summary`;
+the horizon's `full_todo_list` command reads the complete open agent queue.
+Overflow is reported through completeness counters rather than making the
+read-only quota guard fail. Task graph uses the same canonical Todo rows, while
+extending them with terminal predecessor/evidence rows and remaining an
+agent-neutral read model with separate gate/evidence context.
+
 Blocked candidates retain typed `resolution_bindings` even when another todo is
 runnable. Each binding names the capability, its resolution owner, and the
 exact `blocked_todo_ids`. The interaction contract turns an owner-held binding
@@ -432,7 +457,10 @@ Open todos with `resume_when` use the same readiness signal before they enter
 ordinary execution lanes. Until `resume_ready=true`, quota must not include the
 todo in `capability_gate.runnable_candidates` or `agent_lane_next_action`; it
 may continue with a lower-priority executable fallback when the interaction
-contract allows safe scoped fallback work.
+contract allows safe scoped fallback work. The action portfolio keeps a
+higher-priority typed wait visible as `availability_reason=resume_condition_pending`
+while making the runnable fallback and its bounded continuation context the
+default model-facing action.
 
 If an active per-agent vision has no other selectable advancement and its
 existing current-agent or unclaimed successor is blocked by an exact supported

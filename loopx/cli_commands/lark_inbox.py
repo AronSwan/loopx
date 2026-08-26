@@ -28,6 +28,7 @@ from ..extensions.lark.event_inbox import (
     inspect_lark_event_inbox,
     lark_event_inbox_contains_text,
 )
+from ..extensions.lark.group_history import catch_up_lark_group_history
 from ..extensions.lark.inbox_reactions import (
     complete_lark_event_inbox_reactions,
     mark_lark_event_inbox_processing,
@@ -42,6 +43,7 @@ from ..extensions.lark.routed_inbox import (
     inspect_routed_lark_event_inbox,
     project_routed_lark_event_inbox_urgency,
     resolve_routed_lark_inbox_config,
+    settle_routed_lark_event_inbox_material_review,
 )
 from ..extensions.runtime import (
     default_extension_state_file,
@@ -121,6 +123,23 @@ def register_lark_inbox_commands(
     ack.add_argument("--agent-id")
     ack.add_argument("--message-id", action="append", required=True)
     ack.add_argument("--execute", action="store_true")
+    material_review = sub.add_parser(
+        "material-review",
+        help=(
+            "Settle one unaddressed message or attachment with a committed "
+            "effect receipt or an explicit no-follow-up rationale."
+        ),
+    )
+    add_subcommand_format(material_review)
+    material_review.add_argument("--project")
+    material_review.add_argument("--config")
+    material_review.add_argument("--goal-id")
+    material_review.add_argument("--agent-id")
+    material_review.add_argument("--message-id", required=True)
+    disposition = material_review.add_mutually_exclusive_group(required=True)
+    disposition.add_argument("--effect-receipt-json")
+    disposition.add_argument("--no-follow-up")
+    material_review.add_argument("--execute", action="store_true")
     reply = sub.add_parser(
         "reply",
         help=(
@@ -179,6 +198,24 @@ def register_lark_inbox_commands(
     ingest.add_argument("--goal-id")
     ingest.add_argument("--agent-id")
     ingest.add_argument("--execute", action="store_true")
+    history_catch_up = sub.add_parser(
+        "history-catch-up",
+        help=(
+            "Read one bounded group-history page into the configured route inbox; "
+            "preview by default and commit the inbox plus private cursor with --execute."
+        ),
+    )
+    add_subcommand_format(history_catch_up)
+    history_catch_up.add_argument("--project")
+    history_catch_up.add_argument("--config")
+    history_catch_up.add_argument("--goal-id")
+    history_catch_up.add_argument("--agent-id")
+    history_catch_up.add_argument("--route-key", required=True)
+    history_catch_up.add_argument("--start", required=True)
+    history_catch_up.add_argument("--page-size", type=int, default=50)
+    history_catch_up.add_argument("--lark-cli-executable", default="lark-cli")
+    history_catch_up.add_argument("--node-executable")
+    history_catch_up.add_argument("--execute", action="store_true")
     collector_plan = sub.add_parser(
         "collector-plan",
         help="Validate a local-private collector config and preview host setup.",
@@ -228,8 +265,10 @@ def _read_stdin_events() -> list[object]:
 def _required_extension_permissions(command: str) -> tuple[str, ...]:
     if command == "drain":
         return (LARK_INBOX_READ_PERMISSION,)
-    if command in {"ack", "ingest"}:
+    if command in {"ack", "material-review", "ingest"}:
         return (LARK_INBOX_WRITE_PERMISSION,)
+    if command == "history-catch-up":
+        return (LARK_COLLECTOR_PERMISSION, LARK_INBOX_WRITE_PERMISSION)
     if command in {"reply", "processing", "reaction-complete"}:
         return (LARK_REPLY_PERMISSION,)
     return (LARK_COLLECTOR_PERMISSION,)
@@ -347,10 +386,12 @@ def handle_lark_inbox_command(
         inbox_commands = {
             "drain",
             "ack",
+            "material-review",
             "reply",
             "processing",
             "reaction-complete",
             "ingest",
+            "history-catch-up",
         }
         project: Path | None = None
         config_path: str | None = None
@@ -389,6 +430,22 @@ def handle_lark_inbox_command(
                 project=project,
                 config_path=config_path,
                 message_ids=args.message_id,
+                execute=args.execute,
+            )
+        elif args.lark_inbox_command == "material-review":
+            effect_receipt = (
+                json.loads(args.effect_receipt_json)
+                if args.effect_receipt_json
+                else None
+            )
+            if effect_receipt is not None and not isinstance(effect_receipt, dict):
+                raise ValueError("effect receipt JSON must be an object")
+            payload = settle_routed_lark_event_inbox_material_review(
+                project=project,
+                config_path=config_path,
+                message_id=args.message_id,
+                effect_receipt=effect_receipt,
+                no_follow_up_reason=args.no_follow_up,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reply":
@@ -436,6 +493,17 @@ def handle_lark_inbox_command(
                 events=_read_stdin_events(),
                 execute=args.execute,
             )
+        elif args.lark_inbox_command == "history-catch-up":
+            payload = catch_up_lark_group_history(
+                project=project,
+                config_path=config_path,
+                route_key=args.route_key,
+                start=args.start,
+                page_size=args.page_size,
+                execute=args.execute,
+                lark_cli_executable=args.lark_cli_executable,
+                node_executable=args.node_executable,
+            )
         elif args.lark_inbox_command == "collector-plan":
             payload = plan_lark_event_collector(
                 project=args.project,
@@ -463,7 +531,7 @@ def handle_lark_inbox_command(
                 runtime_root=runtime_root_arg,
                 probe_event_bus=args.probe_event_bus,
             )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         payload = {
             "ok": False,
             "schema_version": "lark_event_inbox_error_v0",
