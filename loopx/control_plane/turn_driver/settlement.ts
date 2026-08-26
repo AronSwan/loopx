@@ -297,14 +297,9 @@ function validateTurnOutcomeKind(
       `Turn settlement cannot complete with failed result_kind ${kind}`,
     );
   }
-  if (kind === "validated_completion" && !request.terminal_closeout_required) {
-    throw new Error(
-      "validated_completion requires a terminal closeout in Turn settlement",
-    );
-  }
 }
 
-function terminalCompletionError(
+function completionOutcomeError(
   identity: SettlementIdentity,
   payload: JsonObject,
 ): string | null {
@@ -319,8 +314,38 @@ function terminalCompletionError(
   if (outcome.todo_id !== identity.todo_id) {
     return "terminal closeout completion does not match the selected Todo";
   }
-  if (outcome.continuation !== "no_followup") {
+  if (
+    outcome.continuation !== "successor" &&
+    outcome.continuation !== "active_goal" &&
+    outcome.continuation !== "no_followup"
+  ) {
+    return "completion has an invalid continuation outcome";
+  }
+  return null;
+}
+
+function terminalCompletionError(
+  identity: SettlementIdentity,
+  payload: JsonObject,
+): string | null {
+  const error = completionOutcomeError(identity, payload);
+  if (error !== null) return error;
+  const completion = payload.completion as JsonObject;
+  if (completion.continuation !== "no_followup") {
     return "terminal closeout completion must declare no_followup";
+  }
+  return null;
+}
+
+function nonTerminalCompletionError(
+  identity: SettlementIdentity,
+  payload: JsonObject,
+): string | null {
+  const error = completionOutcomeError(identity, payload);
+  if (error !== null) return error;
+  const completion = payload.completion as JsonObject;
+  if (completion.continuation === "no_followup") {
+    return "non-terminal completion cannot declare no_followup";
   }
   return null;
 }
@@ -352,6 +377,54 @@ function reductionWithTurnOutcome(
     result,
     settlement_result: projection,
   };
+}
+
+function resultKindForFailedStep(stepKind: SettlementStepKind): TurnResultKind {
+  switch (stepKind) {
+    case "validation":
+      return "validation_failed";
+    case "durable_writeback":
+      return "writeback_failed";
+    case "quota_spend":
+      return "quota_spend_failed";
+    case "terminal_closeout":
+      return "terminal_closeout_failed";
+    default:
+      throw new Error(`Turn settlement cannot project failed step ${stepKind}`);
+  }
+}
+
+function reductionWithTurnFailure(
+  request: TurnSettlementRequest,
+  result: SettlementResult<TurnSettlementState>,
+): TurnSettlementOutcome {
+  if (result.failure === null || request.turn_result_kind === null) {
+    return reduction(result);
+  }
+  const projection = settlementResultPayload(result);
+  projection.turn_outcome = {
+    schema_version: TURN_SETTLEMENT_OUTCOME_SCHEMA_VERSION,
+    result_kind: resultKindForFailedStep(result.failure.step_kind),
+    completed_phases: [...request.completed_phases],
+    failed_phase: result.failure.step_kind,
+  };
+  return {
+    schema_version: TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION,
+    decision: "failed",
+    provider_effects: [],
+    result,
+    settlement_result: projection,
+  };
+}
+
+function withTurnOutcome(
+  request: TurnSettlementRequest,
+  reduced: TurnSettlementReduction,
+): TurnSettlementReduction {
+  if (reduced.decision !== "failed" || reduced.result.failure === null) {
+    return reduced;
+  }
+  return reductionWithTurnFailure(request, reduced.result);
 }
 
 function reduction(
@@ -589,10 +662,9 @@ function providerExecution(
  * their checkpointed outcomes into the canonical receipt chain and result.
  * A replay that needs no provider effect completes in one reduction.
  */
-export function reduceTurnSettlementTransaction(
-  value: unknown,
+function reduceTurnSettlementRequest(
+  request: TurnSettlementRequest,
 ): TurnSettlementReduction {
-  const request = decodeRequest(value);
   const identityResult = settlementIdentityFromPlan(request.transaction_plan);
   if (identityResult.failure !== null) return failedState(identityResult);
 
@@ -639,6 +711,25 @@ export function reduceTurnSettlementTransaction(
   }
 
   let receipts = [...base.result.receipts];
+  if (
+    request.turn_result_kind === "validated_completion" &&
+    !request.terminal_closeout_required
+  ) {
+    const completionError = nonTerminalCompletionError(
+      identity,
+      request.writeback_payload!,
+    );
+    if (completionError !== null) {
+      return reduction(
+        settlementFailed({
+          kind: "receipt_missing",
+          step_kind: "durable_writeback",
+          reason: completionError,
+          receipts,
+        }),
+      );
+    }
+  }
   if (request.terminal_closeout_required) {
     if (request.terminal_closeout_payload === null) {
       const effects: readonly ProviderEffect[] = [
@@ -737,4 +828,11 @@ export function reduceTurnSettlementTransaction(
     request.terminal_closeout_payload,
     identity,
   );
+}
+
+export function reduceTurnSettlementTransaction(
+  value: unknown,
+): TurnSettlementReduction {
+  const request = decodeRequest(value);
+  return withTurnOutcome(request, reduceTurnSettlementRequest(request));
 }

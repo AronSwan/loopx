@@ -1251,22 +1251,26 @@ def _typed_settlement_stage(
 
     journal["settlement_result"] = settlement_result_payload(settlement_result)
     if settlement_result.failure is not None:
-        failure_step = settlement_result.failure.step_kind
-        result_kind = (
-            LoopXTurnResultKind.VALIDATION_FAILED
-            if failure_step is SettlementStepKind.VALIDATION
-            else LoopXTurnResultKind.WRITEBACK_FAILED
-            if failure_step is SettlementStepKind.DURABLE_WRITEBACK
-            else LoopXTurnResultKind.QUOTA_SPEND_FAILED
-            if failure_step is SettlementStepKind.QUOTA_SPEND
-            else LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED
-        )
-        completed_phases = list(journal.get("completed_phases") or completed_phases)
+        outcome = turn_settlement_outcome(settlement_result)
+        if outcome is None:
+            raise RuntimeError(
+                "TypeScript Turn settlement omitted its canonical failure outcome"
+            )
+        failed_phase = str(outcome.get("failed_phase") or "")
+        if not failed_phase:
+            raise RuntimeError("TypeScript Turn settlement failure omitted failed_phase")
+        try:
+            result_kind = LoopXTurnResultKind(str(outcome["result_kind"]))
+        except ValueError as exc:
+            raise RuntimeError(
+                "TypeScript Turn settlement failure has unsupported result_kind"
+            ) from exc
+        completed_phases = [str(phase) for phase in outcome["completed_phases"]]
         failure = _host_failure(
             plan,
             kind=result_kind,
             completed_phases=completed_phases,
-            failed_phase=failure_step.value,
+            failed_phase=failed_phase,
             reason=settlement_result.failure.reason,
         )
         journal.update(

@@ -542,11 +542,12 @@ def turn_settlement_outcome(
     if not isinstance(outcome, Mapping):
         return None
     phases = outcome.get("completed_phases")
+    failed_phase = outcome.get("failed_phase")
     if (
         outcome.get("schema_version") != "loopx_turn_settlement_outcome_v0"
         or not isinstance(outcome.get("result_kind"), str)
         or not isinstance(phases, list)
-        or outcome.get("failed_phase") is not None
+        or (failed_phase is not None and not isinstance(failed_phase, str))
     ):
         raise RuntimeError("TypeScript Turn settlement outcome shape mismatch")
     return dict(outcome)

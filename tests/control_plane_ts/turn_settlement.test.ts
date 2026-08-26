@@ -75,14 +75,28 @@ test("Turn settlement rejects an unknown result_kind at the typed boundary", () 
   );
 });
 
-test("Turn settlement rejects a completion result without terminal closeout", () => {
-  assert.throws(
-    () =>
-      reduceTurnSettlementTransaction(
-        request({ turn_result_kind: "validated_completion" }),
-      ),
-    /validated_completion requires a terminal closeout/,
+test("non-terminal completion requires a durable continuing Todo outcome", () => {
+  const reduced = reduceTurnSettlementTransaction(
+    request({ turn_result_kind: "validated_completion" }),
   );
+
+  assert.equal(reduced.result.failure?.kind, "receipt_missing");
+  assert.equal(reduced.result.failure?.step_kind, "durable_writeback");
+});
+
+test("non-terminal completion accepts a durable continuing Todo outcome", () => {
+  const reduced = reduceTurnSettlementTransaction(
+    request({
+      turn_result_kind: "validated_completion",
+      writeback_payload: {
+        ok: true,
+        appended: true,
+        completion: { todo_id: "todo", continuation: "active_goal" },
+      },
+    }),
+  );
+
+  assert.equal(reduced.result.failure, null);
 });
 
 test("preflight authorizes ordered providers without settling early", () => {
@@ -126,6 +140,7 @@ test("mismatched replay fails before accepting committed provider outcomes", () 
 test("writeback rejection retains validation receipt and typed failure", () => {
   const reduced = reduceTurnSettlementTransaction(
     request({
+      turn_result_kind: "validated_progress",
       completed_phases: [...phases.slice(0, 3)],
       writeback_payload: null,
       quota_spend_payload: null,
@@ -144,6 +159,15 @@ test("writeback rejection retains validation receipt and typed failure", () => {
   assert.deepEqual(
     reduced.result.receipts.map((receipt) => receipt.step_kind),
     ["validation"],
+  );
+  assert.deepEqual(
+    (reduced.settlement_result as Record<string, unknown>).turn_outcome,
+    {
+      schema_version: "loopx_turn_settlement_outcome_v0",
+      result_kind: "writeback_failed",
+      completed_phases: [...phases.slice(0, 3)],
+      failed_phase: "durable_writeback",
+    },
   );
 });
 
