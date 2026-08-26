@@ -29,6 +29,9 @@ class MonitorPollObservation:
     next_due_at: str | None = None
 
 
+MonitorMetadataInput = dict[str, Any] | MonitorPollObservation | None
+
+
 def plan_monitor_poll_metadata(
     *,
     existing: Mapping[str, Any],
@@ -108,6 +111,19 @@ def plan_monitor_poll_metadata(
         "cadence": cadence or None,
         "next_due_at": next_due_at,
     }
+
+
+def resolve_monitor_metadata_input(
+    *,
+    existing: Mapping[str, Any],
+    monitor_metadata: MonitorMetadataInput,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not isinstance(monitor_metadata, MonitorPollObservation):
+        return monitor_metadata, None
+    return plan_monitor_poll_metadata(
+        existing=existing,
+        observation=monitor_metadata,
+    )
 
 
 def normalize_monitor_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -200,6 +216,43 @@ def require_continuous_monitor_boundedness(
         "continuous_monitor requires one of: --expires-at, --resume-when, "
         "or --watch-only"
     )
+
+
+def validate_monitor_metadata_update(
+    *,
+    monitor_metadata: dict[str, Any] | None,
+    existing: Mapping[str, Any],
+    role: str,
+    task_class: str | None,
+    generated_at: str,
+    resume_when: str | None,
+    enforce_boundedness: bool,
+) -> dict[str, Any]:
+    normalized = require_monitor_metadata_scope(
+        monitor_metadata=monitor_metadata,
+        role=role,
+        task_class=task_class,
+        generated_at=generated_at,
+    )
+    if enforce_boundedness:
+        effective = {
+            key: value
+            for key, value in {
+                **{
+                    key: existing.get(key)
+                    for key in ("expires_at", "watch_only")
+                    if existing.get(key) is not None
+                },
+                **normalized,
+            }.items()
+            if value is not None
+        }
+        require_continuous_monitor_boundedness(
+            task_class=task_class,
+            resume_when=resume_when,
+            monitor_metadata=effective,
+        )
+    return normalized
 
 
 def require_monitor_metadata_scope(

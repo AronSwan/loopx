@@ -236,7 +236,7 @@ def write_monitor_poll_todo_state(
         todo_id=resolved_todo_id,
         role="agent",
         reason=reason_summary,
-        monitor_poll_observation=MonitorPollObservation(
+        monitor_metadata=MonitorPollObservation(
             generated_at=generated_at,
             result_hash=safe_result_hash,
             material_change=material_change,

@@ -166,7 +166,7 @@ def test_overlapping_material_polls_recompute_generation_after_wait_baseline(
     release_second_poll = Event()
 
     def delay_second_poll(**kwargs):
-        observation = kwargs.get("monitor_poll_observation")
+        observation = kwargs.get("monitor_metadata")
         result_hash = getattr(observation, "result_hash", None)
         if result_hash == "review-v4-second":
             second_poll_ready.set()
