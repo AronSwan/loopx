@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from ...rollout_event_log import build_rollout_event
+from loopx.rollout_event_log import build_rollout_event
 
 
 RESEARCH_CONTRACT_SCHEMA_VERSION = "research_contract_v0"

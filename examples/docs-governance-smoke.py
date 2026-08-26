@@ -300,7 +300,7 @@ def main() -> int:
     root_readme_zh = read("README.zh-CN.md")
     governance = read(".github/GOVERNANCE.md")
     support = read(".github/SUPPORT.md")
-    auto_research_command_path = read("loopx/capabilities/auto_research/README.md")
+    auto_research_command_path = read("demo/auto_research/README.md")
     codex_cli_tui_loop = read("docs/product/runtimes/codex-cli/codex-cli-tui-loop.md")
     project_agent_contract = read("docs/project-agent-todo-contract.md")
     status_contract = read("docs/status-data-contract.md")
@@ -453,7 +453,7 @@ def main() -> int:
         "docs/development/documentation-layout.md",
         "docs/development/testing-and-quality.md",
         "docs/guides/README.md",
-        "loopx/capabilities/auto_research/README.md",
+        "demo/auto_research/README.md",
         "docs/guides/multi-agent-product-recipe.md",
         "docs/integrations/README.md",
         "docs/reference/README.md",

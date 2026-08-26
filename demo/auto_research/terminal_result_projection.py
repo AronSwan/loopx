@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from ..explore.result_log import (
+from loopx.capabilities.explore.result_log import (
     build_explore_edge_event,
     build_explore_finding_event,
     build_explore_node_event,

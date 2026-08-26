@@ -25,10 +25,10 @@ from .rollout_append import append_auto_research_rollout_events
 from .user_contract import build_auto_research_user_contract
 from .worker_loop import run_auto_research_worker_loop
 from .worker_runtime import load_auto_research_worker_frontier
-from ...control_plane.agents.multi_agent.collective_round_ledger import (
+from ..multi_agent.collective_round_ledger import (
     build_multi_agent_collective_round_ledger,
 )
-from ...control_plane.todos.contract import normalize_required_write_scopes
+from loopx.control_plane.todos.contract import normalize_required_write_scopes
 
 
 AppendEvidence = Callable[[str], dict[str, object]]
@@ -116,10 +116,10 @@ def _seed_visible_demo_control_plane(
 ) -> tuple[dict[str, object], Path, str]:
     """Create a tiny demo-local LoopX queue for visible workers."""
 
-    from ...bootstrap import bootstrap_project
-    from ...configure_goal import configure_goal
-    from ...state_refresh import now_local, replace_next_action_section
-    from ...todos import add_goal_todo
+    from loopx.bootstrap import bootstrap_project
+    from loopx.configure_goal import configure_goal
+    from loopx.state_refresh import now_local, replace_next_action_section
+    from loopx.todos import add_goal_todo
 
     control_project = demo_root / "visible-control-plane"
     control_registry = demo_root / "visible-control-plane.registry.json"

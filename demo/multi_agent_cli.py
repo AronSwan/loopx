@@ -5,11 +5,13 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from ..history import load_registry
-from ..paths import resolve_runtime_root
-from ..visible_multi_agent_launcher import (
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from .visible_multi_agent_launcher import (
     build_visible_multi_agent_payload_from_spec,
     execute_visible_multi_agent_launcher,
+)
+from .visible_multi_agent_tmux import (
     wake_visible_multi_agent_panes,
 )
 

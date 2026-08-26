@@ -6,19 +6,19 @@ from collections.abc import Iterable
 from .defaults import AUTO_RESEARCH_DEFAULT_GOAL_ID
 from .role_profiles import (
     AUTO_RESEARCH_DEFAULT_LANES,
-    AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS,
+    AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS,  # noqa: F401
     AUTO_RESEARCH_REQUIRED_SKILL,
     AUTO_RESEARCH_ROLE_PROFILE_SCHEMA_VERSION,
     AUTO_RESEARCH_WORKER_SKILL_SOURCE,
     auto_research_role_id,
-    auto_research_role_id_for_action,
+    auto_research_role_id_for_action,  # noqa: F401
     auto_research_role_profile,
-    auto_research_seed_action_for_role,
-    auto_research_seed_title,
-    auto_research_successor_specs_for_action,
+    auto_research_seed_action_for_role,  # noqa: F401
+    auto_research_seed_title,  # noqa: F401
+    auto_research_successor_specs_for_action,  # noqa: F401
     knn_demo_visible_first_steps,
 )
-from ...control_plane.agents.multi_agent.recipe import (
+from ..multi_agent.recipe import (
     build_minimal_decentralized_a2a_recipe,
     parse_multi_agent_role_spec_lines,
 )

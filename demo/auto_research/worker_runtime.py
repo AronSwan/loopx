@@ -23,20 +23,20 @@ from .research_state import (
     build_research_failure_continuation_resolution,
     normalize_auto_research_action,
 )
-from ...control_plane.agents.multi_agent.role_successor import (
+from ..multi_agent.role_successor import (
     apply_role_successor_todos,
     first_successor_followup,
 )
-from ...control_plane.todos.contract import (
+from loopx.control_plane.todos.contract import (
     normalize_supported_todo_resume_when,
     normalize_todo_id,
 )
-from ...history import load_registry
-from ...paths import resolve_runtime_root
-from ...quota import build_quota_should_run
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-from ...status import collect_status
-from ...todos import complete_goal_todo
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from loopx.quota import build_quota_should_run
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+from loopx.status import collect_status
+from loopx.todos import complete_goal_todo
 
 
 AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION = "auto_research_worker_turn_v0"

@@ -14,10 +14,10 @@ from .delivery_contract import (
 )
 from .research_state import build_research_evidence_graph_from_rollout_events
 from .terminal_result_query import build_terminal_result_query
-from ...agent_registry import registered_agent_ids_from_registry
-from ...history import load_registry
-from ...paths import resolve_runtime_root
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+from loopx.agent_registry import registered_agent_ids_from_registry
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 
 
 AUTO_RESEARCH_ARTIFACT_RECEIPT_SCHEMA_VERSION = (

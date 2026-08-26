@@ -44,19 +44,19 @@ from .user_contract import (
     infer_auto_research_output_language,
     normalize_auto_research_preset_id,
 )
-from ...control_plane.agents.multi_agent.visible_launch_policy import (
+from ..multi_agent.visible_launch_policy import (
     make_visible_launcher_callback,
     make_visible_wake_callback,
     resolve_codex_trust_workspace,
     resolve_visible_launch_policy,
 )
-from ...control_plane.runtime.public_safety import public_safe_compact_text
-from ...history import load_registry
-from ...paths import resolve_runtime_root
-from ...quota import build_quota_should_run
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-from ...status import collect_status
-from ...visible_multi_agent_launcher import (
+from loopx.control_plane.runtime.public_safety import public_safe_compact_text
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from loopx.quota import build_quota_should_run
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+from loopx.status import collect_status
+from ..visible_multi_agent_launcher import (
     execute_visible_multi_agent_launcher,
 )
 
