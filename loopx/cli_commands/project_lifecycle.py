@@ -16,8 +16,7 @@ from ..control_plane.goals.goal_vision_policy import (
     GOAL_VISION_ADVANCEMENT_POLICY_CHOICES,
 )
 from ..control_plane.quota.settlement import (
-    require_settlement_writeback,
-    resolve_heartbeat_settlement_identity,
+    read_heartbeat_settlement,
     settlement_result_payload,
 )
 from ..control_plane.work_items.delivery_batch_scale import (
@@ -796,7 +795,7 @@ def handle_project_lifecycle_command(
                     load_registry(registry_path),
                     args.runtime_root,
                 )
-                settlement_result = resolve_heartbeat_settlement_identity(
+                settlement_readback = read_heartbeat_settlement(
                     runtime_root,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
@@ -805,12 +804,12 @@ def handle_project_lifecycle_command(
                     replan_obligation_id=getattr(
                         args, "replan_obligation_id", None
                     ),
-                ).bind(
-                    lambda identity: require_settlement_writeback(
-                        runtime_root,
-                        identity,
-                    )
                 )
+                if settlement_readback is None:
+                    raise RuntimeError(
+                        "exact settlement readback unexpectedly returned not-found"
+                    )
+                settlement_result = settlement_readback.delivery
                 payload["settlement_result"] = settlement_result_payload(
                     settlement_result
                 )

@@ -16,6 +16,7 @@ from loopx.control_plane.effect_program import (
     SettlementStepKind,
 )
 from loopx.control_plane.quota import effect_program as quota_effect_program
+from loopx.control_plane.quota import settlement as quota_settlement
 from loopx.control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_settlement_replan_obligation_id,
     heartbeat_receipt_settlement_todo_id,
@@ -23,6 +24,7 @@ from loopx.control_plane.quota.heartbeat_receipt import (
 from loopx.control_plane.quota.settlement import (
     build_codex_app_settlement_plan,
     infer_persisted_heartbeat_settlement_identity,
+    read_heartbeat_settlement,
     require_settlement_terminal_closeout,
     resolve_heartbeat_settlement_identity,
     settlement_step_command,
@@ -177,6 +179,79 @@ def _append_run_index_record(runtime_root: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
+
+
+def test_quota_settlement_readback_returns_the_complete_typed_chain(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    _append_guard_receipt(runtime_root, effect_id=identity.effect_id)
+    event_path = rollout_event_log_path(runtime_root, GOAL_ID)
+    with event_path.open("a", encoding="utf-8") as handle:
+        for event_id, event_kind in (
+            ("event-writeback", "refresh_state"),
+            ("event-spend", "quota_spend"),
+        ):
+            handle.write(
+                json.dumps(
+                    {
+                        "schema_version": "loopx_rollout_event_v0",
+                        "event_id": event_id,
+                        "event_kind": event_kind,
+                        "goal_id": GOAL_ID,
+                        "agent_id": AGENT_ID,
+                        "run_id": TURN_ID,
+                        "details": {"settlement_effect_id": identity.effect_id},
+                    }
+                )
+                + "\n"
+            )
+    _append_run_index_record(
+        runtime_root,
+        {
+            "classification": "state_refreshed",
+            "delivery_outcome": "outcome_progress",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "todo_id": TODO_ID,
+            "turn_instance_id": TURN_ID,
+        },
+    )
+    _append_run_index_record(
+        runtime_root,
+        {
+            "classification": "quota_slot_spent",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "todo_id": TODO_ID,
+            "turn_instance_id": TURN_ID,
+        },
+    )
+
+    with patch.object(
+        quota_settlement,
+        "effect_runtime_result",
+        wraps=quota_settlement.effect_runtime_result,
+    ) as runtime_result:
+        readback = read_heartbeat_settlement(
+            runtime_root,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            todo_id=TODO_ID,
+            turn_instance_id=TURN_ID,
+        )
+
+    assert readback is not None
+    assert runtime_result.call_count == 1
+    assert readback.identity.value == identity
+    assert readback.settlement.failure is None
+    assert [receipt.step_kind for receipt in readback.settlement.receipts] == [
+        SettlementStepKind.VALIDATION,
+        SettlementStepKind.DURABLE_WRITEBACK,
+        SettlementStepKind.QUOTA_SPEND,
+    ]
+    assert readback.spend_run is not None
 
 
 def test_terminal_closeout_receipt_rejects_ordinary_completion_event(
