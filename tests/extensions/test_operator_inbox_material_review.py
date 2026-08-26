@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -12,7 +14,9 @@ from loopx.control_plane.work_items.work_lane import (
     work_lane_contract_is_operator_inbox_material_review_due,
 )
 from loopx.extensions.external_connector_runtime import EFFECT_RECEIPT_SCHEMA_VERSION
+from loopx.extensions.lark import event_inbox as event_inbox_module
 from loopx.extensions.lark.event_inbox import (
+    acknowledge_lark_event_inbox,
     ingest_lark_event_inbox,
     inspect_lark_event_inbox,
     project_lark_event_inbox_urgency,
@@ -215,3 +219,208 @@ def test_material_review_requires_event_bound_effect_and_rejects_reply_items(
             message_id="om_direct",
             no_follow_up_reason="Not a material review item.",
         )
+
+
+def test_concurrent_material_settlements_preserve_both_state_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+    writer_entered = Event()
+    release_writer = Event()
+    original_writer = event_inbox_module._write_material_review_ledger
+
+    def blocked_first_writer(path: Path, payload: object) -> None:
+        if not writer_entered.is_set():
+            writer_entered.set()
+            assert release_writer.wait(timeout=5)
+        original_writer(path, payload)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        event_inbox_module,
+        "_write_material_review_ledger",
+        blocked_first_writer,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(
+            settle_lark_event_inbox_material_review,
+            project=tmp_path,
+            config_path=config,
+            message_id="om_material_text",
+            no_follow_up_reason="Text reviewed.",
+            execute=True,
+        )
+        assert writer_entered.wait(timeout=5)
+        second = pool.submit(
+            settle_lark_event_inbox_material_review,
+            project=tmp_path,
+            config_path=config,
+            message_id="om_material_attachment",
+            no_follow_up_reason="Attachment reviewed.",
+            execute=True,
+        )
+        with pytest.raises(FutureTimeout):
+            second.result(timeout=0.05)
+        release_writer.set()
+        assert first.result(timeout=5)["status"] == "settled"
+        assert second.result(timeout=5)["status"] == "settled"
+
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    ledger = json.loads(
+        (inbox / "material-review" / "receipts.json").read_text(encoding="utf-8")
+    )
+    processed = json.loads((inbox / "processed.json").read_text(encoding="utf-8"))
+    assert set(ledger["receipts"]) == {
+        "om_material_text",
+        "om_material_attachment",
+    }
+    assert set(processed["message_ids"]) == {
+        "om_material_text",
+        "om_material_attachment",
+    }
+
+
+def test_concurrent_same_message_replay_and_conflict_are_serialized(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        same = [
+            pool.submit(
+                settle_lark_event_inbox_material_review,
+                project=tmp_path,
+                config_path=config,
+                message_id="om_material_text",
+                no_follow_up_reason="Reviewed once.",
+                execute=True,
+            )
+            for _ in range(2)
+        ]
+    assert {future.result()["status"] for future in same} == {
+        "settled",
+        "already_settled",
+    }
+
+    receipts = [
+        {
+            "schema_version": EFFECT_RECEIPT_SCHEMA_VERSION,
+            "event_id": "evt_material_attachment",
+            "effect_id": effect_id,
+            "effect_kind": "todo_update",
+            "status": "committed",
+        }
+        for effect_id in ("todo-update-one", "todo-update-two")
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        conflicting = [
+            pool.submit(
+                settle_lark_event_inbox_material_review,
+                project=tmp_path,
+                config_path=config,
+                message_id="om_material_attachment",
+                effect_receipt=receipt,
+                execute=True,
+            )
+            for receipt in receipts
+        ]
+    results = [future.result() for future in conflicting]
+    assert sum(result["ok"] is True for result in results) == 1
+    assert sum(result["status"] == "material_review_receipt_conflict" for result in results) == 1
+
+
+def test_material_settlement_repairs_ledger_written_ack_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+    original_ack = event_inbox_module._acknowledge_lark_event_inbox_state
+
+    def interrupted_ack(**_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("simulated interruption after ledger commit")
+
+    monkeypatch.setattr(
+        event_inbox_module,
+        "_acknowledge_lark_event_inbox_state",
+        interrupted_ack,
+    )
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        settle_lark_event_inbox_material_review(
+            project=tmp_path,
+            config_path=config,
+            message_id="om_material_text",
+            no_follow_up_reason="Reviewed before interruption.",
+            execute=True,
+        )
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    assert (inbox / "material-review" / "receipts.json").is_file()
+    assert not (inbox / "processed.json").is_file()
+
+    monkeypatch.setattr(
+        event_inbox_module,
+        "_acknowledge_lark_event_inbox_state",
+        original_ack,
+    )
+    repaired = settle_lark_event_inbox_material_review(
+        project=tmp_path,
+        config_path=config,
+        message_id="om_material_text",
+        no_follow_up_reason="Reviewed before interruption.",
+        execute=True,
+    )
+    assert repaired["status"] == "settled"
+    assert repaired["receipt_recorded"] is True
+    assert json.loads((inbox / "processed.json").read_text(encoding="utf-8"))[
+        "message_ids"
+    ] == ["om_material_text"]
+
+
+def test_generic_ack_and_material_settlement_share_state_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+    writer_entered = Event()
+    release_writer = Event()
+    original_writer = event_inbox_module._write_material_review_ledger
+
+    def blocked_writer(path: Path, payload: object) -> None:
+        writer_entered.set()
+        assert release_writer.wait(timeout=5)
+        original_writer(path, payload)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        event_inbox_module,
+        "_write_material_review_ledger",
+        blocked_writer,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        material = pool.submit(
+            settle_lark_event_inbox_material_review,
+            project=tmp_path,
+            config_path=config,
+            message_id="om_material_text",
+            no_follow_up_reason="Material reviewed.",
+            execute=True,
+        )
+        assert writer_entered.wait(timeout=5)
+        generic = pool.submit(
+            acknowledge_lark_event_inbox,
+            project=tmp_path,
+            config_path=config,
+            message_ids=["om_direct"],
+            execute=True,
+        )
+        with pytest.raises(FutureTimeout):
+            generic.result(timeout=0.05)
+        release_writer.set()
+        assert material.result(timeout=5)["status"] == "settled"
+        assert generic.result(timeout=5)["new_count"] == 1
+
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    processed = json.loads((inbox / "processed.json").read_text(encoding="utf-8"))
+    assert set(processed["message_ids"]) == {"om_material_text", "om_direct"}
