@@ -324,12 +324,46 @@ def _require_requested_quota_action_selection(
     ):
         return
     selected_todo = payload.get("selected_todo")
-    if not isinstance(selected_todo, Mapping) or (
-        normalize_todo_id(selected_todo.get("todo_id")) != requested_todo_id
-        or selected_todo.get("selection_binding") != "pending_action_selection"
+    selected_todo_id = (
+        normalize_todo_id(selected_todo.get("todo_id"))
+        if isinstance(selected_todo, Mapping)
+        else None
+    )
+    selection_binding = (
+        selected_todo.get("selection_binding")
+        if isinstance(selected_todo, Mapping)
+        else None
+    )
+    execution_obligation_value = payload.get("execution_obligation")
+    execution_obligation: Mapping[str, object] = (
+        execution_obligation_value
+        if isinstance(execution_obligation_value, Mapping)
+        else {}
+    )
+    interaction_value = payload.get("interaction_contract")
+    interaction: Mapping[str, object] = (
+        interaction_value if isinstance(interaction_value, Mapping) else {}
+    )
+    agent_channel_value = interaction.get("agent_channel")
+    agent_channel: Mapping[str, object] = (
+        agent_channel_value if isinstance(agent_channel_value, Mapping) else {}
+    )
+    pending_selection_qualified = (
+        selection_binding == "pending_action_selection"
+        and payload.get("normal_delivery_allowed") is True
+    )
+    exact_current_obligation_qualified = (
+        selection_binding != "pending_action_selection"
+        and execution_obligation.get("must_attempt_work") is True
+        and agent_channel.get("must_attempt") is True
+    )
+    if (
+        selected_todo_id != requested_todo_id
         or payload.get("ok") is not True
         or payload.get("should_run") is not True
-        or payload.get("normal_delivery_allowed") is not True
+        or not (
+            pending_selection_qualified or exact_current_obligation_qualified
+        )
     ):
         raise HeartbeatReceiptIdentityConflictError(
             "explicit action selection must name one currently projected "
@@ -337,19 +371,18 @@ def _require_requested_quota_action_selection(
         )
 
 
-def _commit_pending_action_selection(
+def _commit_requested_action_selection(
     payload: Mapping[str, object],
     *,
     requested_todo_id: str | None,
 ) -> None:
-    """Promote a qualified selection only after receipt reconciliation commits."""
+    """Project the exact requested selection only after receipt reconciliation."""
 
     selected_todo = payload.get("selected_todo")
     if (
         requested_todo_id
         and isinstance(selected_todo, dict)
         and normalize_todo_id(selected_todo.get("todo_id")) == requested_todo_id
-        and selected_todo.get("selection_binding") == "pending_action_selection"
     ):
         selected_todo["selection_binding"] = "heartbeat_receipt"
 
@@ -640,7 +673,7 @@ def handle_quota_command(
                     status=heartbeat_receipt_existing_status,
                     appended=heartbeat_receipt_existing_appended,
                 )
-                _commit_pending_action_selection(
+                _commit_requested_action_selection(
                     payload,
                     requested_todo_id=_requested_quota_action_todo_id(args),
                 )
@@ -707,7 +740,7 @@ def handle_quota_command(
                         if rollout_event.get("appended")
                         else "replayed",
                     )
-                    _commit_pending_action_selection(
+                    _commit_requested_action_selection(
                         payload,
                         requested_todo_id=_requested_quota_action_todo_id(args),
                     )

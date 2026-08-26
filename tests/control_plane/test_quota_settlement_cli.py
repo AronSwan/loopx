@@ -1651,6 +1651,108 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert not events[0]["details"].get("settlement_effect_id")
 
 
+def test_pending_action_selection_can_bind_exact_newly_due_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-exact-due-monitor"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_newly_due_monitor(project)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == DUE_MONITOR_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+    poll_args = (
+        "quota",
+        "monitor-poll",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--target-key",
+        "due-monitor-fixture",
+        "--result-hash",
+        "unchanged-due-monitor",
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--execute",
+        "--scan-path",
+        str(project),
+    )
+    poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
+    poll_replay_rc, poll_replay = _run_cli(
+        registry_path,
+        runtime,
+        *poll_args,
+    )
+
+    assert poll_rc == 0, poll
+    assert poll["material_change"] is False
+    assert poll["replayed"] is False
+    assert poll_replay_rc == 0, poll_replay
+    assert poll_replay["replayed"] is True
+    assert poll_replay["appended"] is False
+    assert _classification_count(runtime, "quota_monitor_poll") == 1
+    assert _spend_run_count(runtime) == 0
+
+    settled_rc, settled = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    assert settled_rc == 0, settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["execution_obligation"]["must_attempt_work"] is False
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert _spend_run_count(runtime) == 0
+
+
 def test_pending_action_selection_does_not_commit_after_new_user_gate(
     tmp_path: Path,
 ) -> None:
