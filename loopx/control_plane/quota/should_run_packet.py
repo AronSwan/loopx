@@ -111,10 +111,7 @@ from ..todos.user_gate import (
 )
 from ..todos.write_hint import build_todo_write_hint
 from ..turn_driver.delivery_continuity import evaluate_delivery_route
-from ..work_items.action_portfolio import (
-    build_quota_action_portfolio,
-    qualify_action_selection,
-)
+from ..work_items.action_portfolio import qualify_action_selection
 from ..work_items.planning_projection import (
     build_quota_planning_projections,
 )
