@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from ...control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
     PostWritebackHookRegistration,
 )
+from ...rollout_event_log import iter_rollout_events, rollout_event_log_path
 from .runtime_producer import (
     RUNTIME_TRIGGER_REQUEST_SCHEMA,
     build_periodic_report_runtime_trigger_decision,
@@ -201,3 +203,21 @@ def build_periodic_report_post_writeback_hook(
         producer=produce,
         max_result_bytes=max_result_bytes,
     )
+
+
+def runtime_rollout_event_reader(runtime_root: Path) -> RolloutEventReader:
+    """Read durable rollout events for one goal inside a bounded window.
+
+    ``recorded_at`` values are emitted by the control plane in a single
+    UTC ``Z``-suffixed format, so lexicographic comparison matches the
+    chronological window the producer asked for.
+    """
+
+    def reader(goal_id: str, start_at: str, end_at: str) -> Iterable[Mapping[str, Any]]:
+        log_path = rollout_event_log_path(runtime_root, goal_id)
+        for event in iter_rollout_events(log_path):
+            recorded_at = str(event.get("recorded_at") or "")
+            if recorded_at and start_at <= recorded_at <= end_at:
+                yield event
+
+    return reader

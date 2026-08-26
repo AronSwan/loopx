@@ -138,6 +138,17 @@ def register_turn_commands(
         help="Retry a failed transaction from its last side-effect-safe phase.",
     )
     run_once.add_argument(
+        "--post-writeback-periodic-report",
+        dest="post_writeback_periodic_report",
+        help=(
+            "Optional path to a periodic_report_profile_v0 JSON. When supplied, "
+            "the periodic-report post-writeback hook is registered at this "
+            "composition root and dispatched after each newly appended durable "
+            "settlement writeback; the hook returns a typed trigger-evaluation "
+            "intent only and never gains write authority."
+        ),
+    )
+    run_once.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
     )
