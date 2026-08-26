@@ -15,7 +15,7 @@ from .preset import (
     build_auto_research_preset_summary,
     auto_research_lane_specs,
 )
-from ...visible_multi_agent_launcher import build_visible_multi_agent_payload_from_spec
+from ..visible_multi_agent_launcher import build_visible_multi_agent_payload_from_spec
 
 
 AUTO_RESEARCH_DEMO_SUPERVISOR_SCHEMA_VERSION = "auto_research_demo_supervisor_plan_v0"

@@ -9,7 +9,7 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     "visibility": "public",
     "provider_id": "loopx-core",
     "documentation": {
-        "source_root": "loopx/capabilities/auto_research",
+        "source_root": "demo/auto_research",
         "site_root": "capabilities/auto-research",
         "canonical": "README.md",
         "aliases": [
@@ -69,42 +69,42 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     "implemented_protocols": [
         {
             "schema_version": "auto_research_user_contract_v0",
-            "module": "loopx.capabilities.auto_research.user_contract",
-            "doc": "loopx/capabilities/auto_research/README.md",
+            "module": "demo.auto_research.user_contract",
+            "doc": "demo/auto_research/README.md",
         },
         {
             "schema_version": "decentralized_auto_research_projection_v0",
-            "module": "loopx.capabilities.auto_research.research_state",
+            "module": "demo.auto_research.research_state",
             "doc": "docs/reference/protocols/decentralized-auto-research-state-v0.md",
         },
         {
             "schema_version": "auto_research_terminal_decision_v0",
-            "module": "loopx.capabilities.auto_research.terminal_result_contract",
+            "module": "demo.auto_research.terminal_result_contract",
             "doc": "docs/reference/protocols/decentralized-auto-research-state-v0.md",
         },
         {
             "schema_version": "auto_research_peer_review_v0",
-            "module": "loopx.capabilities.auto_research.terminal_result_contract",
+            "module": "demo.auto_research.terminal_result_contract",
             "doc": "docs/reference/protocols/auto-research-lane-contract-v1.md",
         },
         {
             "schema_version": "auto_research_terminal_result_query_v0",
-            "module": "loopx.capabilities.auto_research.terminal_result_query",
+            "module": "demo.auto_research.terminal_result_query",
             "doc": "docs/reference/protocols/decentralized-auto-research-state-v0.md",
         },
         {
             "schema_version": "auto_research_terminal_result_projection_v0",
-            "module": "loopx.capabilities.auto_research.terminal_results",
+            "module": "demo.auto_research.terminal_results",
             "doc": "docs/reference/protocols/decentralized-auto-research-state-v0.md",
         },
         {
             "schema_version": "auto_research_delivery_contract_v0",
-            "module": "loopx.capabilities.auto_research.delivery_contract",
+            "module": "demo.auto_research.delivery_contract",
             "doc": "docs/reference/protocols/auto-research-wish-to-artifact-v0.md",
         },
         {
             "schema_version": "auto_research_artifact_receipt_v0",
-            "module": "loopx.capabilities.auto_research.artifact_receipt",
+            "module": "demo.auto_research.artifact_receipt",
             "doc": "docs/reference/protocols/auto-research-wish-to-artifact-v0.md",
         },
     ],
@@ -116,7 +116,7 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
         "python3 examples/auto-research-artifact-receipt-smoke.py",
     ],
     "docs": [
-        "loopx/capabilities/auto_research/README.md",
+        "demo/auto_research/README.md",
         "docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md",
     ],
     "boundaries": [

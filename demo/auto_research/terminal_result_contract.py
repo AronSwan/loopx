@@ -9,7 +9,7 @@ from .evidence_packet import (
     _compact_public_token,
 )
 from .research_state import build_research_decision_candidates
-from ...rollout_event_log import build_rollout_event
+from loopx.rollout_event_log import build_rollout_event
 
 
 AUTO_RESEARCH_TERMINAL_DECISION_SCHEMA_VERSION = (

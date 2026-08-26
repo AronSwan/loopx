@@ -18,19 +18,19 @@ from .terminal_result_projection import (
     explore_result_ids,
 )
 from .terminal_result_query import build_terminal_result_query
-from ..explore.result_log import (
+from loopx.capabilities.explore.result_log import (
     append_explore_result_events,
     build_explore_result_projection,
     explore_result_log_path,
     load_explore_result_events_strict,
 )
-from ...agent_registry import (
+from loopx.agent_registry import (
     registered_agent_ids_from_registry,
     require_registered_agent_id,
 )
-from ...history import load_registry
-from ...paths import resolve_runtime_root
-from ...rollout_event_log import (
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from loopx.rollout_event_log import (
     append_rollout_event,
     load_rollout_events,
     rollout_event_log_path,

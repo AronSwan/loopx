@@ -10,9 +10,9 @@ from .evidence_packet import (
     build_auto_research_rollout_events,
     load_auto_research_evidence_packet,
 )
-from ...history import load_registry
-from ...paths import resolve_runtime_root
-from ...rollout_event_log import (
+from loopx.history import load_registry
+from loopx.paths import resolve_runtime_root
+from loopx.rollout_event_log import (
     append_rollout_event,
     load_rollout_events,
     rollout_event_log_path,

@@ -10,7 +10,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
-from .control_plane.agents.multi_agent.contract import (
+from .multi_agent.contract import (
     GENERIC_MULTI_AGENT_ROLE_PROFILE_SCHEMA_VERSION,
     INTERACTIVE_TUI_CONTRACT_SCHEMA_VERSION,
     TUI_MULTI_AGENT_RUNNER_CONTRACT_SCHEMA_VERSION,
@@ -22,26 +22,26 @@ from .control_plane.agents.multi_agent.contract import (
     generic_role_prompt as _generic_role_prompt,
     role_skill_profile as _role_skill_profile,
 )
-from .control_plane.agents.multi_agent.codex_executable import (
+from .multi_agent.codex_executable import (
     resolve_codex_executable,
     write_codex_compatibility_shim,
 )
-from .control_plane.agents.multi_agent.runtime_scripts import (
+from .multi_agent.runtime_scripts import (
     CODEX_TUI_EXEC_PY as _CODEX_TUI_EXEC_PY,
     SCOPED_LOOPX_WRAPPER_PY as _SCOPED_LOOPX_WRAPPER_PY,
 )
-from .control_plane.agents.multi_agent.visible_wake_scheduler import (
+from .multi_agent.visible_wake_scheduler import (
     DEFAULT_READINESS_POLL_SECONDS,
     STATE_AWARE_WAKE_MODEL,
     resolve_initial_wake_plan,
 )
 from .visible_multi_agent_tmux import (
-    PANE_A2A_INPUT_READY_TIMEOUT_SECONDS,
-    PANE_A2A_WAKEUP_PROMPT,
-    PANE_A2A_WAKEUP_SCHEMA_VERSION,
+    PANE_A2A_INPUT_READY_TIMEOUT_SECONDS,  # noqa: F401
+    PANE_A2A_WAKEUP_PROMPT,  # noqa: F401
+    PANE_A2A_WAKEUP_SCHEMA_VERSION,  # noqa: F401
     TMUX_LANE_ID_OPTION,
-    build_pane_a2a_wakeup_prompt,
-    wake_visible_multi_agent_panes,
+    build_pane_a2a_wakeup_prompt,  # noqa: F401
+    wake_visible_multi_agent_panes,  # noqa: F401
 )
 
 
@@ -756,7 +756,7 @@ def _start_auto_wake_loop(
         / "auto-wake.public.jsonl"
     )
     wake_command = (
-        "exec python3 -m loopx.control_plane.agents.multi_agent.visible_wake_scheduler "
+        "exec python3 -m demo.multi_agent.visible_wake_scheduler "
         f"--cli-bin {_q(cli_bin)} --tmux-bin {_q(tmux_bin)} "
         f"--registry {_q(registry)} --runtime-root {_q(runtime_root)} "
         f"--goal-id {_q(goal_id)} --session {_q(session)} "

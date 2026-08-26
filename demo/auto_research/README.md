@@ -12,7 +12,7 @@ Use the deeper showcase and protocol docs only after this path is clear:
 - [auto_research_role_profile_v0](../../../docs/reference/protocols/auto-research-role-profile-v0.md)
 
 Implementation boundary: auto-research is a thin preset over the generic
-multi-agent kernel. `loopx/capabilities/auto_research/preset.py` owns only the
+multi-agent kernel. `demo/auto_research/preset.py` owns only the
 research roles, handoff hints, metric/evidence loop defaults, and seed todo
 phrasing. The generic kernel owns the real Codex TUI panes, pane-local A2A
 tick, workspace/trust-safe launch, todo/evidence/status protocol, and compact
