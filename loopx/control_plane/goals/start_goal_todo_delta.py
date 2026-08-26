@@ -95,9 +95,9 @@ def existing_runnable_agent_frontier(
 def _todo_add_command_template(
     *,
     cli_bin: str,
-    runtime_root: object,
+    runtime_root: str | Path | None,
     goal_id: str,
-    agent_id: object,
+    agent_id: str | None,
 ) -> str:
     return (
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
@@ -118,12 +118,12 @@ def _todo_add_command_template(
 def todo_authoring_steps(
     *,
     existing_runnable_frontier: list[dict[str, Any]] | None,
-    plan_prompt: object,
+    plan_prompt: str | None,
     fine_grained: bool,
     cli_bin: str,
-    runtime_root: object,
+    runtime_root: str | Path | None,
     goal_id: str,
-    agent_id: object,
+    agent_id: str | None,
 ) -> list[dict[str, Any]]:
     """Ordered Todo-authoring steps, conditional on the runnable frontier."""
     add_template = _todo_add_command_template(
