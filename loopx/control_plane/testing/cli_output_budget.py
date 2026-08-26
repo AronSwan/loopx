@@ -536,6 +536,21 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         max_chars={"json": 40_000, "markdown": 1_200},
         max_lines={"json": 1_100, "markdown": 24},
     ),
+    CliOutputModeVariantSpec(
+        variant_id="todo_list_thin",
+        parent_surface_id="todo_list",
+        command="todo list --thin",
+        output_formats=("json", "markdown"),
+        semantic_json_keys=(
+            "todos",
+            "agent_todos",
+            "thin",
+            "todo_list_field_projection",
+        ),
+        markdown_anchor="# LoopX Todo List",
+        max_chars={"json": 20_000, "markdown": 6_000},
+        max_lines={"json": 600, "markdown": 60},
+    ),
 )
 
 
