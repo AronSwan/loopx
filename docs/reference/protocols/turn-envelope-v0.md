@@ -41,7 +41,7 @@ only when a v0/v1 baseline moves to v2; ordinary growth limits resume once v2
 is the baseline. A digest change without a supported coverage migration, or a
 v2 portfolio above that one-version budget, still fails closed.
 
-For `quota_action_portfolio_v1`, the envelope carries the recommendation and
+For `quota_action_portfolio_v2`, the envelope carries the recommendation and
 bounded, non-exhaustive `suggested_actions`, but neither is a settlement
 identity or permission list. When the full interaction contract says
 `selection_required=true`, the agent must rerun quota in the same turn with any
@@ -55,8 +55,22 @@ only a qualified request upgrades the identity-less receipt. A newly due hard
 lane leaves the receipt unbound, and only the resulting receipt-bound envelope
 is a delivery contract.
 
+Portfolio v2 preserves v1's selection policy, candidate ordering, and
+settlement rules, and adds an optional `continuation_hint` to each suggested
+action. The default quota producer and Turn controller now require v2. The
+compact quota CLI view uses the independently versioned
+`quota_cli_action_portfolio_compaction_v1` detail marker and inlines candidate
+`text`, `priority`, `action_kind`, and `continuation_hint` alongside the v1
+identity fields. TurnEnvelope keeps the same `loopx_turn_envelope_v0` outer
+schema and v2 action-signature coverage; only its nested action portfolio
+version changes. Hosts that strictly accept v1 must update before consuming
+the new default. LoopX does not dual-emit or negotiate a v1 downgrade, so an
+unknown nested portfolio version must fail closed. Ignoring an absent
+`continuation_hint` remains valid when reading stored v1 evidence, but it does
+not make a v1-only live decoder compatible with the v2 producer.
+
 `loopx turn plan` and `loopx turn run-once` have no agent selection phase before
-they build the host transaction. When such a Turn sees a v1 portfolio, its
+they build the host transaction. When such a Turn sees a v2 portfolio, its
 outer controller binds the advisory primary by rerunning the same current
 eligibility qualification, retains the portfolio in the envelope for audit,
 and marks the selected Todo with

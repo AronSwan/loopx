@@ -1254,7 +1254,7 @@ co-displayed global agent todo rows as goal-wide, so `--agent-id` is not
 mistaken for a filter that replaces the goal-wide queue.
 When more than one already-admitted advancement todo remains runnable, the
 same guard also includes `action_portfolio.schema_version=
-quota_action_portfolio_v1`. `primary` is the ordered recommendation, while
+quota_action_portfolio_v2`. `primary` is the ordered recommendation, while
 `suggested_actions` is the single canonical bounded convenience view: it carries
 the recommendation plus at most two ordered, agent-scoped, capability-ready
 alternatives and labels them `recommended` or `alternative`. The portfolio does
@@ -1265,6 +1265,22 @@ the legal choice boundary separate from the displayed suggestions;
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
 this boundary rather than silently binding the first Todo.
+
+Version 2 adds the optional `continuation_hint` field to each
+`suggested_actions[]` item so an agent can see the candidate's next execution
+boundary without joining the compact packet back to the full Todo summary.
+All v1 selection, ordering, identity, and permission semantics remain
+unchanged. The default producer now emits only v2; `quota should-run`, compact
+CLI output, TurnEnvelope, and the model-free `loopx turn` controller all carry
+or consume that version. The compact CLI projection separately reports
+`suggested_action_details.schema_version=
+quota_cli_action_portfolio_compaction_v1` and inlines `todo_id`,
+`selection_role`, `priority`, `action_kind`, `text`, and `continuation_hint`.
+Hosts that match schema versions exactly must upgrade their portfolio decoder
+before consuming the new default. There is no v1 dual-emission or downgrade
+negotiation; an unknown version must fail closed rather than silently treating
+the recommendation as delivery authority. Consumers that already ignore
+unknown additive item fields still need to accept the explicit v2 version.
 
 The first quota response sets `selection_required=true` and exposes one typed
 `selection_command.command_args_template` with a `{todo_id}` placeholder plus a
