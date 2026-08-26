@@ -11,6 +11,7 @@ Lark event stream
   -> loopx lark-inbox processing (optional reaction lifecycle)
   -> domain agent writes a todo, vision correction, artifact update, or rationale
   -> direct bot question: loopx lark-inbox reply (optional, configured sender only)
+  -> unaddressed material: loopx lark-inbox material-review (effect/no-follow-up)
   -> loopx lark-inbox ack --message-id ... --execute
 ```
 
@@ -75,7 +76,11 @@ The inbox is opt-in. Create a local-private generic Lark inbox config:
   "schema_version": "lark_event_inbox_config_v0",
   "enabled": true,
   "inbox_dir": ".loopx/inbox/team-feedback",
-  "capture_scope": "configured_chat_all"
+  "capture_scope": "configured_chat_all",
+  "material_review": {
+    "enabled": true,
+    "drain_limit": 20
+  }
 }
 ```
 
@@ -92,6 +97,13 @@ presentation and reply context, not an additional ingress filter for
 remain visible to the bound Agent. When more than one chat-wide Goal route is
 eligible for the same Bot target, routing fails closed instead of choosing one
 by iteration order.
+
+`material_review` is an independent, default-off scheduling boundary. It
+requires `configured_chat_all`; when enabled, captured messages and normalized
+attachments that do not require a Bot reply produce `material_review_due`.
+`drain_limit` is bounded to 1–100 and defaults to 20. Direct questions,
+mentions, and verified Bot replies continue to use `reply_due` and take
+precedence, so material review never grants outbound reply authority.
 
 Optional source-thread replies are a separate, default-off boundary. Bind an
 explicit non-default bot profile to the same local-private chat. An
@@ -325,6 +337,30 @@ files collapse by `message_id`; repeated acknowledgement is idempotent.
 `processing` is also idempotent: retries reuse the recorded processing
 reaction and finish any pending received-reaction cleanup without creating
 another processing reaction.
+
+For unaddressed material, use the dedicated settlement command rather than a
+reply. It accepts either an event-bound committed external effect receipt or an
+explicit no-follow-up rationale. The latter becomes a deterministic
+`no_follow_up` effect receipt; repeated execution returns `already_settled`
+without duplicating the ACK. Receipt replay/conflict checks, the ledger commit,
+and the processed-message ACK share one per-inbox lock. The ledger remains
+ledger-first, so a retry after interruption repairs an ACK that was not yet
+written without losing a concurrent receipt or processed-message update.
+
+```bash
+loopx lark-inbox material-review \
+  --project . \
+  --config .loopx/config/lark/event-inbox.json \
+  --message-id om_xxx \
+  --no-follow-up 'Informational material already captured.'
+
+loopx lark-inbox material-review \
+  --project . \
+  --config .loopx/config/lark/event-inbox.json \
+  --message-id om_xxx \
+  --no-follow-up 'Informational material already captured.' \
+  --execute
+```
 
 Urgency classification stays local: explicit `@` mentions of the configured
 bot/LoopX, bounded question signals on addressed events, and provider-verified

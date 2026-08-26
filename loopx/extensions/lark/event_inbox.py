@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ...file_lock import exclusive_file_lock
 from ...control_plane.work_items.operator_inbox import (
     OperatorInboxSourceContract,
     operator_inbox_attention_kind,
     project_operator_inbox_urgency,
 )
+from ..external_connector_runtime import (
+    EFFECT_RECEIPT_SCHEMA_VERSION,
+    ExternalEffectKind,
+    ExternalResponsePolicy,
+    decide_external_event_ack,
+    external_event_ref,
+)
 
 EVENT_SCHEMA_VERSION = "lark_event_inbox_event_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_inbox_config_v0"
 PROCESSED_SCHEMA_VERSION = "lark_event_inbox_processed_v0"
+MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION = "lark_material_review_ledger_v0"
 CAPTURE_SCOPES = {"addressed_only", "configured_chat_all"}
 MESSAGE_ID_PATTERN = re.compile(r"om_[A-Za-z0-9_-]+")
 EVENT_ID_PATTERN = re.compile(r"[A-Za-z0-9:_-]{1,200}")
@@ -37,6 +49,7 @@ LARK_OPERATOR_INBOX_SOURCE_CONTRACT = OperatorInboxSourceContract(
     operator_display_name_field="bot_display_name",
     destination_field="chat_id",
     destination_pattern=CHAT_ID_PATTERN,
+    attachment_count_field="attachment_count",
 )
 
 
@@ -123,8 +136,7 @@ def load_lark_event_inbox_config(
             raise ValueError(f"lark inbox {field} requires enabled reply")
     if processing_reaction_emoji and not received_reaction_emoji:
         raise ValueError(
-            "lark inbox processing_reaction_emoji requires "
-            "received_reaction_emoji"
+            "lark inbox processing_reaction_emoji requires received_reaction_emoji"
         )
     if (
         processing_reaction_emoji
@@ -145,6 +157,28 @@ def load_lark_event_inbox_config(
             "enabled lark inbox reply requires an explicit non-default "
             "sender_profile, bot identity, bot_display_name, and chat_id"
         )
+    material_review_payload = payload.get("material_review")
+    if material_review_payload is not None and not isinstance(
+        material_review_payload, Mapping
+    ):
+        raise ValueError("lark inbox material_review config must be an object")
+    material_review_payload = (
+        material_review_payload
+        if isinstance(material_review_payload, Mapping)
+        else {}
+    )
+    material_review_enabled = material_review_payload.get("enabled") is True
+    material_review_drain_limit = material_review_payload.get("drain_limit", 20)
+    if (
+        isinstance(material_review_drain_limit, bool)
+        or not isinstance(material_review_drain_limit, int)
+        or not 1 <= material_review_drain_limit <= 100
+    ):
+        raise ValueError("lark inbox material_review drain_limit is invalid")
+    if material_review_enabled and capture_scope != "configured_chat_all":
+        raise ValueError(
+            "lark inbox material_review requires configured_chat_all capture"
+        )
     return {
         "enabled": enabled,
         "configured": True,
@@ -161,6 +195,10 @@ def load_lark_event_inbox_config(
             "editorial_style": editorial_style,
             "received_reaction_emoji": received_reaction_emoji,
             "processing_reaction_emoji": processing_reaction_emoji,
+        },
+        "material_review": {
+            "enabled": material_review_enabled,
+            "drain_limit": material_review_drain_limit,
         },
     }
 
@@ -195,13 +233,21 @@ def _event_from_payload(payload: object) -> dict[str, Any] | None:
     ):
         return None
     content = " ".join(str(payload.get("content") or "").split())[:1200]
-    if not content:
+    raw_attachment_count = payload.get("attachment_count", 0)
+    if (
+        isinstance(raw_attachment_count, bool)
+        or not isinstance(raw_attachment_count, int)
+        or not 0 <= raw_attachment_count <= 50
+    ):
+        return None
+    if not content and raw_attachment_count == 0:
         return None
     event = {
         "event_id": event_id,
         "message_id": message_id,
         "create_time": str(payload.get("create_time") or "")[:40],
         "content": content,
+        "attachment_count": raw_attachment_count,
     }
     if "route_key" in payload:
         route_key = str(payload.get("route_key") or "").strip()
@@ -295,9 +341,7 @@ def _normalized_mention_name(value: Any) -> str:
     return " ".join(str(value or "").strip().lstrip("@").split()).casefold()
 
 
-def lark_event_mentions_bot(
-    event: Mapping[str, Any], *, bot_display_name: str
-) -> bool:
+def lark_event_mentions_bot(event: Mapping[str, Any], *, bot_display_name: str) -> bool:
     """Recognize provider-native direct mentions without message readback."""
 
     if event.get("mentioned") is True:
@@ -351,6 +395,7 @@ def ingest_lark_event_inbox(
 
     if execute and accepted:
         inbox.mkdir(parents=True, exist_ok=True)
+        os.chmod(inbox, 0o700)
         for event in accepted.values():
             path = inbox / f"{event['message_id']}.json"
             temporary = path.with_suffix(".json.tmp")
@@ -363,7 +408,9 @@ def ingest_lark_event_inbox(
                 + "\n",
                 encoding="utf-8",
             )
+            os.chmod(temporary, 0o600)
             temporary.replace(path)
+            os.chmod(path, 0o600)
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_ingest_v0",
@@ -430,8 +477,231 @@ def inspect_lark_event_inbox(
             "update, or no-follow-up rationale. Send and verify any required reply "
             "before acknowledging the message_id. Follow reply_guidance for "
             "placement and editorial style. If no reply is required, run "
-            "`loopx lark-inbox reaction-complete` before acknowledging it."
+            "`loopx lark-inbox material-review` with a committed effect receipt "
+            "or an explicit no-follow-up rationale; the command settles the "
+            "message idempotently without sending a reply."
         ),
+    }
+
+
+def _material_review_ledger(inbox: Path) -> tuple[Path, dict[str, Any]]:
+    path = inbox / "material-review" / "receipts.json"
+    if not path.is_file():
+        return path, {
+            "schema_version": MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION,
+            "receipts": {},
+        }
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version")
+        != MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION
+        or not isinstance(payload.get("receipts"), dict)
+    ):
+        raise ValueError("lark material-review receipt ledger is invalid")
+    return path, payload
+
+
+def _write_material_review_ledger(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    os.chmod(path, 0o600)
+
+
+def _acknowledge_lark_event_inbox_state(
+    *,
+    inbox: Path,
+    message_ids: Sequence[str],
+    execute: bool,
+) -> dict[str, Any]:
+    processed_path = inbox / "processed.json"
+    existing = _load_processed(processed_path)
+    added = [value for value in message_ids if value not in existing]
+    if execute and added:
+        inbox.mkdir(parents=True, exist_ok=True)
+        os.chmod(inbox, 0o700)
+        merged = sorted(existing | set(added))
+        payload = {
+            "schema_version": PROCESSED_SCHEMA_VERSION,
+            "message_ids": merged,
+            "last_processed_at": datetime.now(UTC).isoformat(),
+        }
+        temporary = processed_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        temporary.replace(processed_path)
+        os.chmod(processed_path, 0o600)
+    return {
+        "ok": True,
+        "schema_version": "lark_event_inbox_ack_v0",
+        "execute": execute,
+        "requested_count": len(message_ids),
+        "new_count": len(added),
+        "already_acknowledged_count": len(message_ids) - len(added),
+        "write_performed": bool(execute and added),
+        "message_ids": list(message_ids),
+        "local_private_content_captured": False,
+        "external_writes_performed": False,
+    }
+
+
+def settle_lark_event_inbox_material_review(
+    *,
+    project: str | Path,
+    config_path: str | Path,
+    message_id: str,
+    effect_receipt: Mapping[str, Any] | None = None,
+    no_follow_up_reason: str | None = None,
+    execute: bool = False,
+) -> dict[str, Any]:
+    """Settle one unaddressed material only after an event-bound durable decision."""
+
+    config = load_lark_event_inbox_config(project=project, config_path=config_path)
+    if not config["enabled"] or not config["material_review"]["enabled"]:
+        raise ValueError("lark inbox material_review is not enabled")
+    message = str(message_id or "").strip()
+    if not MESSAGE_ID_PATTERN.fullmatch(message):
+        raise ValueError("material review requires a valid Lark message id")
+    inbox = config["inbox_path"]
+    event = _event_from_file(inbox / f"{message}.json")
+    if event is None:
+        raise ValueError("material review message is not captured")
+    kind = _event_attention_kind(
+        event,
+        bot_display_name=str(config["reply"].get("bot_display_name") or ""),
+        capture_scope=str(config["capture_scope"]),
+    )
+    if kind is not None:
+        raise ValueError("addressed Lark events must use the reply_due settlement path")
+
+    normalized_reason = " ".join(str(no_follow_up_reason or "").split())
+    if effect_receipt is not None and normalized_reason:
+        raise ValueError(
+            "material review accepts either effect_receipt or no_follow_up_reason"
+        )
+    if effect_receipt is None and not normalized_reason:
+        raise ValueError(
+            "material review requires effect_receipt or no_follow_up_reason"
+        )
+    if len(normalized_reason) > 400:
+        raise ValueError("material review no_follow_up_reason is too long")
+    receipt: Mapping[str, Any]
+    if effect_receipt is not None:
+        receipt = effect_receipt
+    else:
+        rationale_digest = hashlib.sha256(
+            f"{event['event_id']}\0{normalized_reason}".encode()
+        ).hexdigest()[:24]
+        receipt = {
+            "schema_version": EFFECT_RECEIPT_SCHEMA_VERSION,
+            "event_id": str(event["event_id"]),
+            "effect_id": f"no-follow-up-{rationale_digest}",
+            "effect_kind": ExternalEffectKind.NO_FOLLOW_UP.value,
+            "status": "committed",
+        }
+    decision = decide_external_event_ack(
+        event_id=str(event["event_id"]),
+        effect_receipt=receipt,
+        response_policy=ExternalResponsePolicy.NO_RESPONSE.value,
+    )
+    if not decision["ack_allowed"]:
+        return {
+            "ok": False,
+            "schema_version": "lark_event_inbox_material_review_settlement_v0",
+            "status": str(decision["reason"]),
+            "execute": execute,
+            "event_ref": external_event_ref(str(event["event_id"])),
+            "ack_decision": decision,
+            "write_performed": False,
+            "local_private_content_returned": False,
+        }
+    event_ref = external_event_ref(str(event["event_id"]))
+    effect_ref = external_event_ref(str(receipt.get("effect_id") or ""))
+    compact_receipt = {
+        "event_ref": event_ref,
+        "effect_ref": effect_ref,
+        "effect_kind": str(receipt.get("effect_kind") or ""),
+        "status": "committed",
+    }
+    lock = (
+        exclusive_file_lock(
+            inbox / ".state" / "settlement",
+            operation="settle_lark_event_inbox_material_review",
+        )
+        if execute
+        else nullcontext()
+    )
+    with lock:
+        ledger_path, ledger = _material_review_ledger(inbox)
+        receipts = dict(ledger["receipts"])
+        existing_receipt = receipts.get(message)
+        if existing_receipt is not None and existing_receipt != compact_receipt:
+            return {
+                "ok": False,
+                "schema_version": "lark_event_inbox_material_review_settlement_v0",
+                "status": "material_review_receipt_conflict",
+                "execute": execute,
+                "event_ref": event_ref,
+                "write_performed": False,
+                "local_private_content_returned": False,
+            }
+        processed = _load_processed(inbox / "processed.json")
+        if message in processed and existing_receipt is None:
+            return {
+                "ok": False,
+                "schema_version": "lark_event_inbox_material_review_settlement_v0",
+                "status": "material_review_receipt_missing_for_processed_event",
+                "execute": execute,
+                "event_ref": event_ref,
+                "write_performed": False,
+                "local_private_content_returned": False,
+            }
+        ledger_written = False
+        if execute and existing_receipt is None:
+            receipts[message] = compact_receipt
+            _write_material_review_ledger(
+                ledger_path,
+                {
+                    "schema_version": MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION,
+                    "receipts": receipts,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            ledger_written = True
+        acknowledged = _acknowledge_lark_event_inbox_state(
+            inbox=inbox,
+            message_ids=[message],
+            execute=execute,
+        )
+    return {
+        "ok": True,
+        "schema_version": "lark_event_inbox_material_review_settlement_v0",
+        "status": (
+            "preview_ready"
+            if not execute and int(acknowledged.get("new_count") or 0) > 0
+            else "settled"
+            if int(acknowledged.get("new_count") or 0) > 0
+            else "already_settled"
+        ),
+        "execute": execute,
+        "event_ref": event_ref,
+        "effect_kind": str(receipt.get("effect_kind") or ""),
+        "effect_ref": effect_ref,
+        "receipt_recorded": existing_receipt is not None or ledger_written,
+        "write_performed": bool(
+            ledger_written or acknowledged.get("write_performed") is True
+        ),
+        "local_private_content_returned": False,
     }
 
 
@@ -475,32 +745,17 @@ def acknowledge_lark_event_inbox(
     if not normalized or len(normalized) != len(message_ids):
         raise ValueError("ack requires valid Lark message ids")
     inbox = config["inbox_path"]
-    processed_path = inbox / "processed.json"
-    existing = _load_processed(processed_path)
-    added = [value for value in normalized if value not in existing]
-    if execute and added:
-        inbox.mkdir(parents=True, exist_ok=True)
-        merged = sorted(existing | set(added))
-        payload = {
-            "schema_version": PROCESSED_SCHEMA_VERSION,
-            "message_ids": merged,
-            "last_processed_at": datetime.now(UTC).isoformat(),
-        }
-        temporary = processed_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+    lock = (
+        exclusive_file_lock(
+            inbox / ".state" / "settlement",
+            operation="acknowledge_lark_event_inbox",
         )
-        temporary.replace(processed_path)
-    return {
-        "ok": True,
-        "schema_version": "lark_event_inbox_ack_v0",
-        "execute": execute,
-        "requested_count": len(normalized),
-        "new_count": len(added),
-        "already_acknowledged_count": len(normalized) - len(added),
-        "write_performed": bool(execute and added),
-        "message_ids": normalized,
-        "local_private_content_captured": False,
-        "external_writes_performed": False,
-    }
+        if execute
+        else nullcontext()
+    )
+    with lock:
+        return _acknowledge_lark_event_inbox_state(
+            inbox=inbox,
+            message_ids=normalized,
+            execute=execute,
+        )

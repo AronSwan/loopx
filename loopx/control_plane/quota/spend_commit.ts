@@ -510,8 +510,13 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
 async function nextArtifactPaths(
   runsDir: string,
   generatedAt: string,
+  effectId: string,
 ): Promise<{ jsonPath: string; markdownPath: string }> {
-  const base = `${runStem(generatedAt)}-quota-slot-spent`;
+  const effectDigest = sha256(effectId).slice(
+    "sha256:".length,
+    "sha256:".length + 24,
+  );
+  const base = `${runStem(generatedAt)}-quota-slot-spent-${effectDigest}`;
   for (let index = 1; ; index += 1) {
     const stem = index === 1 ? base : `${base}-${index}`;
     const jsonPath = join(runsDir, `${stem}.json`);
@@ -959,6 +964,7 @@ export async function evaluateQuotaSpendCommit(
     const { jsonPath, markdownPath } = await nextArtifactPaths(
       runsDir,
       request.generated_at,
+      request.effect_id,
     );
     const payload = payloadFor(
       request,
@@ -1064,6 +1070,7 @@ export async function evaluateQuotaSpendCommit(
     const { jsonPath, markdownPath } = await nextArtifactPaths(
       runsDir,
       request.generated_at,
+      request.effect_id,
     );
     const payload = payloadFor(
       request,

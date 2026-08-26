@@ -194,6 +194,30 @@ def assert_contributor_task_board_is_current() -> None:
         assert stale not in tasks, stale
 
 
+def assert_contributor_task_links_are_current() -> None:
+    for path in (
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/SUPPORT.md",
+        "docs/book/chapters/source-protocol-map.md",
+        "docs/book/en/chapters/source-protocol-map.md",
+        "docs/book/chapters/source-validation-to-pr.md",
+        "docs/book/en/chapters/source-validation-to-pr.md",
+    ):
+        assert "docs/development/contributor-tasks.md" in read(path), path
+
+    assert "/docs/development/contributor-tasks.md @huangruiteng" in read(
+        ".github/CODEOWNERS"
+    )
+    for path in (
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/SUPPORT.md",
+        ".github/CODEOWNERS",
+    ):
+        assert "main/CONTRIBUTOR_TASKS.md" not in read(path), path
+        assert "../CONTRIBUTOR_TASKS.md" not in read(path), path
+        assert "/CONTRIBUTOR_TASKS.md @" not in read(path), path
+
+
 def assert_technical_direction_governance_is_current() -> None:
     direction = read("docs/project/technical-directions.md")
     direction_zh = read("docs/project/technical-directions.zh-CN.md")
@@ -479,6 +503,7 @@ def main() -> int:
     assert_local_doc_links_resolve()
     assert_effect_interpreter_docs_are_canonical()
     assert_contributor_task_board_is_current()
+    assert_contributor_task_links_are_current()
     assert_technical_direction_governance_is_current()
 
     collaboration_rfc = read(
