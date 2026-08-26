@@ -305,14 +305,14 @@ function completionOutcomeError(
 ): string | null {
   const completion = payload.completion;
   if (completion === null || completion === undefined) {
-    return "terminal closeout is missing its durable Todo outcome";
+    return "completion is missing its durable Todo outcome";
   }
   if (typeof completion !== "object" || Array.isArray(completion)) {
-    return "terminal closeout has an invalid durable Todo outcome";
+    return "completion has an invalid durable Todo outcome";
   }
   const outcome = completion as JsonObject;
   if (outcome.todo_id !== identity.todo_id) {
-    return "terminal closeout completion does not match the selected Todo";
+    return "completion does not match the selected Todo";
   }
   if (
     outcome.continuation !== "successor" &&
