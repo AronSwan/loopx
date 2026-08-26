@@ -20,6 +20,13 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
                 f"- role: `{payload.get('role')}`",
                 f"- status_filter: `{payload.get('status_filter')}`",
                 f"- todo_count: `{payload.get('todo_count')}`",
+                f"- matched_todo_count: `{payload.get('matched_todo_count')}`",
+                f"- returned_todo_count: `{payload.get('returned_todo_count')}`",
+                f"- omitted_todo_count: `{payload.get('omitted_todo_count')}`",
+                (
+                    "- item_limit_per_role: `"
+                    f"{field_projection.get('item_limit_per_role')}`"
+                ),
                 f"- view: `{field_projection.get('view')}`",
                 (
                     "- full_detail_cold_path: `"

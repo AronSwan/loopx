@@ -6,12 +6,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from loopx.control_plane.testing.cli_output_budget import (
+    CLI_OUTPUT_MODE_VARIANT_BY_ID,
+    assert_cli_output_mode_variant,
+    measure_cli_output,
+)
 from loopx.control_plane.todos.contract import encode_metadata_value
 from loopx.todos import list_goal_todos
 
 GOAL_ID = "todo-list-thin-goal"
 AGENT_ID = "codex-thin-output"
 REPO_ROOT = Path(__file__).resolve().parents[2]
+THIN_ITEM_LIMIT_PER_ROLE = 5
 
 
 def _todo_line(*, text: str, metadata: str) -> list[str]:
@@ -87,6 +93,84 @@ def _write_fixture(tmp_path: Path) -> Path:
     return registry_path
 
 
+def _write_crowded_fixture(tmp_path: Path, *, items_per_role: int = 20) -> Path:
+    project = tmp_path / "project"
+    runtime = tmp_path / "runtime"
+    state_relative = Path(".local/goals") / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    state_file = project / state_relative
+    state_file.parent.mkdir(parents=True)
+    long_text = "x" * 260
+    long_target = "target-" + "y" * 220
+    long_agent = "codex-" + "a" * 70
+    long_scope = "scope-" + "s" * 80
+    required_scopes = ",".join(
+        f"direction:action:{long_scope}-{index}" for index in range(6)
+    )
+    lines = [
+        "---",
+        "status: active",
+        "updated_at: 2026-01-01T00:00:00+00:00",
+        "---",
+        "",
+        "# Crowded Todo List Thin Fixture",
+        "",
+        "## User Todo",
+        "",
+    ]
+    for index in range(items_per_role):
+        lines.extend(
+            _todo_line(
+                text=f"Approve bounded user projection {index:03d} {long_text}",
+                metadata=(
+                    f"todo_id=todo_user_{index:03d} status=open priority=P0 "
+                    "task_class=user_gate action_kind=approve_output "
+                    f"blocks_agent={long_agent} "
+                    f"decision_scope=direction:action:{long_scope} "
+                    f"target_key={long_target}-{index:03d}"
+                ),
+            )
+        )
+    lines.extend(["", "## Agent Todo", ""])
+    for index in range(items_per_role):
+        lines.extend(
+            _todo_line(
+                text=f"Observe bounded agent projection {index:03d} {long_text}",
+                metadata=(
+                    f"todo_id=todo_agent_{index:03d} status=open priority=P1 "
+                    "task_class=continuous_monitor action_kind=observe_budget "
+                    f"claimed_by={long_agent} "
+                    f"required_decision_scopes={required_scopes} "
+                    f"target_key={long_target}-{index:03d} cadence=PT5M "
+                    "next_due_at=2026-01-01T00:05:00Z "
+                    "expires_at=2026-01-02T00:05:00Z watch_only=true"
+                ),
+            )
+        )
+    state_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    registry_path = project / ".loopx/registry.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {
+                        "id": GOAL_ID,
+                        "status": "active",
+                        "repo": str(project),
+                        "state_file": str(state_relative),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return registry_path
+
+
 def _run_cli(
     registry_path: Path,
     *extra: str,
@@ -129,7 +213,13 @@ def test_thin_projects_actionable_identity_and_omits_detail(tmp_path: Path) -> N
     assert payload["todo_list_field_projection"] == {
         "schema_version": "todo_list_thin_projection_v0",
         "view": "thin_explicit_view",
+        "source_view": "full_detail",
         "item_container": "todos",
+        "matched_todo_count": 2,
+        "returned_todo_count": 2,
+        "omitted_todo_count": 0,
+        "item_limit_per_role": THIN_ITEM_LIMIT_PER_ROLE,
+        "counts_cover_full_match": True,
         "item_fields": [
             "todo_id",
             "role",
@@ -156,6 +246,8 @@ def test_thin_projects_actionable_identity_and_omits_detail(tmp_path: Path) -> N
             "watch_only",
         ],
         "item_text_limit": 180,
+        "nested_item_limit": 3,
+        "nested_dict_field_limit": 8,
         "full_detail_cold_paths": [
             "todo list without --thin",
             "todo list --todo-id <id> without --thin",
@@ -240,7 +332,94 @@ def test_cli_thin_round_trips_json_and_markdown(tmp_path: Path) -> None:
     assert "- view: `thin_explicit_view`" in markdown_result.stdout
     assert "state_file" not in markdown_result.stdout
     assert "Public fixture review detail" not in markdown_result.stdout
-    assert len(markdown_result.stdout.splitlines()) <= 18
+    assert len(markdown_result.stdout.splitlines()) <= 22
+
+
+def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
+    tmp_path: Path,
+) -> None:
+    registry_path = _write_crowded_fixture(tmp_path, items_per_role=191)
+
+    default = list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)
+    thin = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        thin=True,
+    )
+    role_filtered = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        role="agent",
+        thin=True,
+    )
+    explicitly_limited = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        limit=2,
+        thin=True,
+    )
+    direct_match = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        todo_id="todo_agent_190",
+        thin=True,
+    )
+
+    assert len(default["todos"]) == default["todo_count"] == 382
+    assert thin["todo_count"] == thin["matched_todo_count"] == 382
+    assert thin["returned_todo_count"] == len(thin["todos"]) == 10
+    assert thin["omitted_todo_count"] == 372
+    assert thin["todo_list_field_projection"]["item_limit_per_role"] == 5
+    assert thin["todo_list_field_projection"]["counts_cover_full_match"] is True
+    assert {
+        role: sum(item["role"] == role for item in thin["todos"])
+        for role in ("user", "agent")
+    } == {"user": 5, "agent": 5}
+    for role in ("user", "agent"):
+        summary = thin[f"{role}_todos"]
+        compaction = summary["payload_compaction"]
+        assert compaction["items_matched"] == 191
+        assert compaction["items_returned"] == 5
+        assert compaction["items_omitted"] == 186
+        assert compaction["compacted_lanes"]["items"] == {
+            "shown": 5,
+            "total": 191,
+        }
+
+    bounded_agent_item = next(item for item in thin["todos"] if item["role"] == "agent")
+    assert len(bounded_agent_item["target_key"]) <= 180
+    assert len(bounded_agent_item["required_decision_scopes"]) == 3
+
+    assert role_filtered["todo_count"] == 191
+    assert role_filtered["returned_todo_count"] == 5
+    assert role_filtered["omitted_todo_count"] == 186
+    assert {item["role"] for item in role_filtered["todos"]} == {"agent"}
+    assert explicitly_limited["matched_todo_count"] == 382
+    assert explicitly_limited["returned_todo_count"] == 4
+    assert explicitly_limited["omitted_todo_count"] == 378
+    assert explicitly_limited["todo_list_field_projection"]["item_limit_per_role"] == 2
+    assert direct_match["todo_count"] == 1
+    assert direct_match["returned_todo_count"] == 1
+    assert direct_match["omitted_todo_count"] == 0
+    assert direct_match["todo"]["todo_id"] == "todo_agent_190"
+
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_thin"]
+    for output_format in ("json", "markdown"):
+        result = _run_cli(
+            registry_path,
+            "--thin",
+            output_format=output_format,
+        )
+        assert result.returncode == 0, result.stdout
+        assert_cli_output_mode_variant(
+            spec,
+            output_format=output_format,
+            text=result.stdout,
+            measurement=measure_cli_output(
+                result.stdout,
+                output_format=output_format,
+            ),
+        )
 
 
 def test_cli_rejects_thin_outside_todo_list(tmp_path: Path) -> None:
