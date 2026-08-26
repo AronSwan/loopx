@@ -468,6 +468,14 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 "planning inventory detail schema migrated: "
                 f"{inventory_detail_schema_migration}"
             )
+    if guided_todo_delta_schema_changed:
+        if guided_todo_delta_schema_migration is None:
+            failures.append("guided todo delta schema coverage changed")
+        else:
+            review_signals.append(
+                "guided todo delta schema migrated: "
+                f"{guided_todo_delta_schema_migration}"
+            )
 
     return {
         "row_id": row_id,
