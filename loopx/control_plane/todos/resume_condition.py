@@ -30,7 +30,7 @@ _RESUME_WHEN_PATTERN = re.compile(
     r"^[a-z][a-z0-9_-]{0,31}(?::[a-z0-9_.:@-]{1,96})?$"
 )
 _RESUME_PR_MERGED_PATTERN = re.compile(
-    r"^pr_merged:(?:(?:[a-z0-9_.-]{1,80})/(?:[a-z0-9_.-]{1,100}))?#[1-9][0-9]{0,8}$"
+    r"^pr_merged:(?:[a-z\d_.-]{1,80}/[a-z\d_.-]{1,100})?#[1-9]\d{0,8}$"
 )
 
 _RESUME_ITEM_FIELDS = (

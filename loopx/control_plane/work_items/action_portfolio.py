@@ -102,29 +102,30 @@ def _unavailable_higher_priority_candidates(
         if not isinstance(item, Mapping):
             continue
         candidate = dict(item)
-        task_class = todo_item_task_class(candidate)
-        condition = (
-            candidate.get("resume_condition")
-            if isinstance(candidate.get("resume_condition"), Mapping)
-            else {}
-        )
-        if candidate.get("resume_when") and candidate.get("resume_ready") is False:
-            candidate["availability_reason"] = str(
-                condition.get("availability_reason")
-                or "resume_condition_pending"
-            )
-        elif task_class == TODO_TASK_CLASS_MONITOR and candidate.get("next_due_at"):
-            candidate["availability_reason"] = "scheduled_for_future"
-        elif candidate.get("status"):
-            candidate["availability_reason"] = (
-                f"status_{str(candidate['status']).strip().lower()}"
-            )
-        else:
-            candidate["availability_reason"] = "not_currently_executable"
+        candidate["availability_reason"] = _unavailable_reason(candidate)
         compact = _compact_candidate(candidate)
         if compact is not None:
             unavailable.append(compact)
     return unavailable
+
+
+def _unavailable_reason(candidate: Mapping[str, Any]) -> str:
+    condition = candidate.get("resume_condition")
+    if candidate.get("resume_when") and candidate.get("resume_ready") is False:
+        availability_reason = (
+            condition.get("availability_reason")
+            if isinstance(condition, Mapping)
+            else None
+        )
+        return str(availability_reason or "resume_condition_pending")
+    if (
+        todo_item_task_class(candidate) == TODO_TASK_CLASS_MONITOR
+        and candidate.get("next_due_at")
+    ):
+        return "scheduled_for_future"
+    if candidate.get("status"):
+        return f"status_{str(candidate['status']).strip().lower()}"
+    return "not_currently_executable"
 
 
 def build_quota_action_portfolio(

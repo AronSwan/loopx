@@ -29,15 +29,15 @@ export const TODO_RESUME_KINDS = [
 
 type TodoResumeKind = typeof TODO_RESUME_KINDS[number];
 
-const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
-const CAPABILITY_PATTERN = /^[a-z][a-z0-9_:-]{0,63}$/;
-const RESUME_PATTERN = /^[a-z][a-z0-9_-]{0,31}(?::[a-z0-9_.:@#/-]{1,181})?$/;
+const TODO_ID_PATTERN = /^todo_[a-z\d_-]{3,64}$/;
+const CAPABILITY_PATTERN = /^[a-z][a-z\d_:-]{0,63}$/;
+const RESUME_PATTERN = /^[a-z][a-z\d_-]{0,31}(?::[a-z\d_.:@#/-]{1,181})?$/;
 const PR_RESUME_PATTERN =
-  /^pr_merged:(?:(?:[a-z0-9_.-]{1,80})\/(?:[a-z0-9_.-]{1,100}))?#[1-9][0-9]{0,8}$/;
+  /^pr_merged:(?:[a-z\d_.-]{1,80}\/[a-z\d_.-]{1,100})?#[1-9]\d{0,8}$/;
 const GITHUB_PULL_URL_PATTERN =
-  /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([0-9]+)(?:\b|\/|#|\?)/i;
+  /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\b|\/|#|\?)/i;
 const PR_REF_PATTERN =
-  /^(?:([a-z0-9_.-]+\/[a-z0-9_.-]+)#|#|pr[-_\s]*)([0-9]+)$/i;
+  /^(?:([a-z\d_.-]+\/[a-z\d_.-]+)#|#|pr[-_\s]*)(\d+)$/i;
 const PR_MERGED_EVENT_KINDS = new Set([
   "pr_merge",
   "pr_merged",
@@ -63,7 +63,7 @@ interface TodoItem extends JsonObject {
 
 function nonNegativeInteger(value: unknown, label: string): number | null {
   if (value === null || value === undefined || value === "") return null;
-  const normalized = typeof value === "string" && /^[0-9]+$/.test(value)
+  const normalized = typeof value === "string" && /^\d+$/.test(value)
     ? Number.parseInt(value, 10)
     : requireInteger(value, label);
   if (!Number.isSafeInteger(normalized) || normalized < 0) {
@@ -125,7 +125,7 @@ function parseResumeWhen(value: unknown): ResumeSpec | null {
   if (separator < 1) return null;
   const kind = normalized.slice(0, separator);
   const target = normalized.slice(separator + 1);
-  if (!TODO_RESUME_KINDS.some((candidate) => candidate === kind)) return null;
+  if (!TODO_RESUME_KINDS.includes(kind as TodoResumeKind)) return null;
   if ((kind === "todo_done" || kind === "monitor_changed") && !TODO_ID_PATTERN.test(target)) {
     return null;
   }
@@ -179,40 +179,128 @@ function normalizedPrRef(value: unknown): PrRef | null {
   return { repo, number, normalized: repo ? `${repo}#${number}` : `#${number}` };
 }
 
-function rolloutEventPrRefs(value: unknown): PrRef[] {
-  const event = requireJsonObject(value, "rollout_event");
+function normalizedString(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function sourcePrRefCandidates(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((rawRef) => {
+    if (typeof rawRef !== "object" || rawRef === null || Array.isArray(rawRef)) {
+      return [];
+    }
+    const sourceRef = rawRef as JsonObject;
+    const kind = normalizedString(sourceRef.kind);
+    return kind === "pull_request" || kind === "pr" ? [sourceRef.ref] : [];
+  });
+}
+
+function uniquePrRefs(candidates: unknown[]): PrRef[] {
+  const refs = candidates
+    .map(normalizedPrRef)
+    .filter((ref): ref is PrRef => ref !== null);
+  return [...new Map(
+    refs.map((ref) => [`${ref.repo ?? ""}#${ref.number}`, ref]),
+  ).values()];
+}
+
+function rolloutEventPrRefs(event: JsonObject): PrRef[] {
   const codeRefs = typeof event.code_refs === "object" && event.code_refs !== null &&
       !Array.isArray(event.code_refs)
     ? event.code_refs as JsonObject
     : {};
-  const candidates: unknown[] = [codeRefs.pr_ref, event.pr_ref];
-  if (Array.isArray(event.source_refs)) {
-    for (const rawRef of event.source_refs) {
-      if (typeof rawRef !== "object" || rawRef === null || Array.isArray(rawRef)) continue;
-      const sourceRef = rawRef as JsonObject;
-      const kind = String(sourceRef.kind ?? "").trim().toLowerCase();
-      if (kind === "pull_request" || kind === "pr") candidates.push(sourceRef.ref);
-    }
-  }
-  const refs: PrRef[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const ref = normalizedPrRef(candidate);
-    if (!ref) continue;
-    const identity = `${ref.repo ?? ""}#${ref.number}`;
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    refs.push(ref);
-  }
-  return refs;
+  return uniquePrRefs([
+    codeRefs.pr_ref,
+    event.pr_ref,
+    ...sourcePrRefCandidates(event.source_refs),
+  ]);
 }
 
 function githubRepository(value: unknown): string | null {
   const candidate = typeof value === "string" ? value.trim().toLowerCase() : "";
   const prefix = "git:github.com/";
   if (!candidate.startsWith(prefix)) return null;
-  const repository = candidate.slice(prefix.length).replace(/^\/+|\/+$/g, "");
+  const repository = candidate.slice(prefix.length).replace(/\/+$/, "");
   return repository.split("/").length === 2 ? repository : null;
+}
+
+interface PrMergedEvent {
+  event: JsonObject;
+  refs: PrRef[];
+}
+
+function prMergedEvents(rolloutEvents: unknown[]): PrMergedEvent[] {
+  return rolloutEvents.flatMap((rawEvent, index) => {
+    const event = requireJsonObject(rawEvent, `rollout_events[${index}]`);
+    if (!PR_MERGED_EVENT_KINDS.has(normalizedString(event.event_kind))) return [];
+    return [{ event, refs: rolloutEventPrRefs(event) }];
+  });
+}
+
+function resolvePrRepositoryBinding(
+  targetRef: PrRef,
+  item: TodoItem,
+  events: PrMergedEvent[],
+): { repository: string | null; projection: JsonObject } {
+  if (targetRef.repo) {
+    return {
+      repository: targetRef.repo,
+      projection: {
+        pr_repo: targetRef.repo,
+        repository_binding_source: "qualified_resume_when",
+      },
+    };
+  }
+  const taskRepository = githubRepository(item.task_repository);
+  if (taskRepository) {
+    return {
+      repository: taskRepository,
+      projection: {
+        pr_repo: taskRepository,
+        repository_binding_source: "task_repository",
+      },
+    };
+  }
+  const candidateRefs = new Set(
+    events.flatMap(({ refs }) =>
+      refs
+        .filter((ref) => ref.number === targetRef.number && ref.repo !== null)
+        .map((ref) => ref.normalized)
+    ),
+  );
+  return {
+    repository: null,
+    projection: {
+      repository_binding_state: "ambiguous",
+      repository_binding_reason: item.task_repository
+        ? "task_repository_not_github"
+        : "task_repository_missing",
+      candidate_pr_refs: [...candidateRefs]
+        .sort((left, right) => left.localeCompare(right))
+        .slice(0, 8),
+    },
+  };
+}
+
+function matchingPrMerge(
+  events: PrMergedEvent[],
+  targetRef: PrRef,
+  targetRepo: string,
+): JsonObject | null {
+  for (const { event, refs } of events) {
+    const matched = refs.find((ref) =>
+      ref.number === targetRef.number && ref.repo === targetRepo
+    );
+    if (!matched) continue;
+    return {
+      satisfied: true,
+      matched_event_id: event.event_id ?? null,
+      matched_event_kind: event.event_kind ?? null,
+      matched_pr_ref: matched.normalized,
+      matched_event_at: event.recorded_at ?? null,
+    };
+  }
+  return null;
 }
 
 function prMergedCondition(
@@ -228,52 +316,12 @@ function prMergedCondition(
   const targetRef = normalizedPrRef(spec.target);
   if (!targetRef) return { ...condition, invalid_target: true };
   condition.pr_number = targetRef.number;
-  let targetRepo = targetRef.repo;
-  if (targetRepo) {
-    condition.pr_repo = targetRepo;
-    condition.repository_binding_source = "qualified_resume_when";
-  } else {
-    targetRepo = githubRepository(item.task_repository);
-    if (targetRepo) {
-      condition.pr_repo = targetRepo;
-      condition.repository_binding_source = "task_repository";
-    } else {
-      const candidateRefs = new Set<string>();
-      for (const rawEvent of rolloutEvents) {
-        const event = requireJsonObject(rawEvent, "rollout_event");
-        const eventKind = String(event.event_kind ?? "").trim().toLowerCase();
-        if (!PR_MERGED_EVENT_KINDS.has(eventKind)) continue;
-        for (const ref of rolloutEventPrRefs(event)) {
-          if (ref.number === targetRef.number && ref.repo) candidateRefs.add(ref.normalized);
-        }
-      }
-      return {
-        ...condition,
-        repository_binding_state: "ambiguous",
-        repository_binding_reason: item.task_repository
-          ? "task_repository_not_github"
-          : "task_repository_missing",
-        candidate_pr_refs: [...candidateRefs].sort().slice(0, 8),
-      };
-    }
-  }
-  for (const rawEvent of rolloutEvents) {
-    const event = requireJsonObject(rawEvent, "rollout_event");
-    const eventKind = String(event.event_kind ?? "").trim().toLowerCase();
-    if (!PR_MERGED_EVENT_KINDS.has(eventKind)) continue;
-    for (const ref of rolloutEventPrRefs(event)) {
-      if (ref.number !== targetRef.number || ref.repo !== targetRepo) continue;
-      return {
-        ...condition,
-        satisfied: true,
-        matched_event_id: event.event_id ?? null,
-        matched_event_kind: event.event_kind ?? null,
-        matched_pr_ref: ref.normalized,
-        matched_event_at: event.recorded_at ?? null,
-      };
-    }
-  }
-  return condition;
+  const events = prMergedEvents(rolloutEvents);
+  const binding = resolvePrRepositoryBinding(targetRef, item, events);
+  const boundCondition = { ...condition, ...binding.projection };
+  if (!binding.repository) return boundCondition;
+  const matched = matchingPrMerge(events, targetRef, binding.repository);
+  return matched ? { ...boundCondition, ...matched } : boundCondition;
 }
 
 function conditionFor(
@@ -396,32 +444,44 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
   };
 }
 
-export function planTodoExternalWaitTransition(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "todo_external_wait_request");
-  if (request.schema_version !== TODO_EXTERNAL_WAIT_REQUEST_SCHEMA_VERSION) {
-    throw new EffectRuntimeRequestError("Todo external-wait request schema mismatch");
-  }
+function externalWaitItems(request: JsonObject): TodoItem[] {
   if (!Array.isArray(request.items)) {
-    throw new EffectRuntimeRequestError("todo_external_wait_request.items must be an array");
+    throw new EffectRuntimeRequestError(
+      "todo_external_wait_request.items must be an array",
+    );
   }
-  const items = request.items.map((item, index) =>
+  return request.items.map((item, index) =>
     todoItem(item, `todo_external_wait_request.items[${index}]`)
   );
-  const byId = new Map(items.map((item) => [item.todo_id, item]));
-  const waitingTodoId = todoId(request.todo_id, "todo_external_wait_request.todo_id");
-  const waitingTodo = byId.get(waitingTodoId);
-  if (!waitingTodo) {
-    throw new EffectRuntimeRequestError("external-wait Todo is absent from current state");
+}
+
+function externalWaitTodo(
+  request: JsonObject,
+  byId: Map<string, TodoItem>,
+): { todoId: string; todo: TodoItem } {
+  const requestedId = todoId(
+    request.todo_id,
+    "todo_external_wait_request.todo_id",
+  );
+  const todo = byId.get(requestedId);
+  if (!todo) {
+    throw new EffectRuntimeRequestError(
+      "external-wait Todo is absent from current state",
+    );
   }
-  if (waitingTodo.status !== "open" || waitingTodo.task_class !== "advancement_task") {
+  if (todo.status !== "open" || todo.task_class !== "advancement_task") {
     throw new EffectRuntimeRequestError(
       "external-wait transition requires an open advancement_task",
     );
   }
-  const spec = requireResumeWhen(
-    request.resume_when,
-    "todo_external_wait_request.resume_when",
-  );
+  return { todoId: requestedId, todo };
+}
+
+function externalWaitDependency(
+  spec: ResumeSpec,
+  waitingTodoId: string,
+  byId: Map<string, TodoItem>,
+): TodoItem {
   if (spec.kind !== "todo_done" && spec.kind !== "monitor_changed") {
     throw new EffectRuntimeRequestError(
       "external-wait transition supports todo_done or monitor_changed; use ordinary " +
@@ -429,41 +489,58 @@ export function planTodoExternalWaitTransition(value: unknown): JsonObject {
     );
   }
   if (spec.target === waitingTodoId) {
-    throw new EffectRuntimeRequestError("external-wait Todo cannot resume from itself");
+    throw new EffectRuntimeRequestError(
+      "external-wait Todo cannot resume from itself",
+    );
   }
   const dependency = byId.get(spec.target);
   if (!dependency) {
-    throw new EffectRuntimeRequestError("external-wait dependency is absent from current state");
+    throw new EffectRuntimeRequestError(
+      "external-wait dependency is absent from current state",
+    );
   }
-  if (spec.kind === "todo_done") {
-    if (dependency.task_class === "continuous_monitor") {
-      throw new EffectRuntimeRequestError(
-        "todo_done cannot wait on a continuous_monitor; use monitor_changed:<todo_id>",
-      );
-    }
-    if (dependency.status === "done") {
-      throw new EffectRuntimeRequestError("todo_done dependency is already complete");
-    }
-  } else if (
-    dependency.status !== "open" || dependency.task_class !== "continuous_monitor"
+  if (spec.kind === "todo_done" && dependency.task_class === "continuous_monitor") {
+    throw new EffectRuntimeRequestError(
+      "todo_done cannot wait on a continuous_monitor; use monitor_changed:<todo_id>",
+    );
+  }
+  if (spec.kind === "todo_done" && dependency.status === "done") {
+    throw new EffectRuntimeRequestError(
+      "todo_done dependency is already complete",
+    );
+  }
+  if (
+    spec.kind === "monitor_changed" &&
+    (dependency.status !== "open" || dependency.task_class !== "continuous_monitor")
   ) {
     throw new EffectRuntimeRequestError(
       "monitor_changed requires an open continuous_monitor target",
     );
   }
-  const successors = requireStringArray(
+  return dependency;
+}
+
+function externalWaitSuccessors(
+  request: JsonObject,
+  waitingTodoId: string,
+  byId: Map<string, TodoItem>,
+): string[] {
+  const successorIds = requireStringArray(
     request.successor_todo_ids,
     "todo_external_wait_request.successor_todo_ids",
   ).map((item, index) => todoId(item, `successor_todo_ids[${index}]`));
+  const successors = [...new Set(successorIds)];
   if (successors.length === 0) {
     throw new EffectRuntimeRequestError(
       "external-wait transition requires at least one independent runnable successor",
     );
   }
-  for (const successorId of new Set(successors)) {
+  for (const successorId of successors) {
     const successor = byId.get(successorId);
     if (!successor || successorId === waitingTodoId) {
-      throw new EffectRuntimeRequestError("external-wait successor is absent or self-referential");
+      throw new EffectRuntimeRequestError(
+        "external-wait successor is absent or self-referential",
+      );
     }
     if (successor.status !== "open" || successor.task_class !== "advancement_task") {
       throw new EffectRuntimeRequestError(
@@ -476,39 +553,61 @@ export function planTodoExternalWaitTransition(value: unknown): JsonObject {
       );
     }
   }
-  const metadataUpdates: JsonObject = { resume_when: spec.normalized };
-  let baselineGeneration: number | null = null;
-  if (spec.kind === "monitor_changed") {
-    const sameCondition = waitingTodo.resume_when === spec.normalized;
-    const currentCondition = conditionFor(
-      waitingTodo,
-      spec,
-      byId,
-      [],
-      null,
+  return successors;
+}
+
+function externalWaitMetadata(
+  waitingTodo: TodoItem,
+  dependency: TodoItem,
+  spec: ResumeSpec,
+  byId: Map<string, TodoItem>,
+): { updates: JsonObject; baselineGeneration: number | null } {
+  const updates: JsonObject = { resume_when: spec.normalized };
+  if (spec.kind !== "monitor_changed") {
+    updates.resume_monitor_generation = null;
+    return { updates, baselineGeneration: null };
+  }
+  const sameCondition = waitingTodo.resume_when === spec.normalized;
+  const currentCondition = conditionFor(waitingTodo, spec, byId, [], null);
+  if (sameCondition && currentCondition.satisfied === true) {
+    throw new EffectRuntimeRequestError(
+      "clear the satisfied resume_when before re-arming the same monitor wait",
     );
-    if (sameCondition && currentCondition.satisfied === true) {
-      throw new EffectRuntimeRequestError(
-        "clear the satisfied resume_when before re-arming the same monitor wait",
-      );
-    }
-    baselineGeneration = sameCondition && waitingTodo.resume_monitor_generation !== undefined
+  }
+  const baselineGeneration =
+    sameCondition && waitingTodo.resume_monitor_generation !== undefined
       ? waitingTodo.resume_monitor_generation
       : dependency.material_change_generation ?? 0;
-    metadataUpdates.resume_monitor_generation = baselineGeneration;
-  } else {
-    metadataUpdates.resume_monitor_generation = null;
+  updates.resume_monitor_generation = baselineGeneration;
+  return { updates, baselineGeneration };
+}
+
+export function planTodoExternalWaitTransition(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "todo_external_wait_request");
+  if (request.schema_version !== TODO_EXTERNAL_WAIT_REQUEST_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError("Todo external-wait request schema mismatch");
   }
+  const byId = new Map<string, TodoItem>(
+    externalWaitItems(request).map((item) => [item.todo_id, item]),
+  );
+  const waiting = externalWaitTodo(request, byId);
+  const spec = requireResumeWhen(
+    request.resume_when,
+    "todo_external_wait_request.resume_when",
+  );
+  const dependency = externalWaitDependency(spec, waiting.todoId, byId);
+  const successors = externalWaitSuccessors(request, waiting.todoId, byId);
+  const metadata = externalWaitMetadata(waiting.todo, dependency, spec, byId);
   return {
     schema_version: TODO_EXTERNAL_WAIT_TRANSITION_SCHEMA_VERSION,
-    state: waitingTodo.resume_when === spec.normalized ? "already_waiting" : "waiting",
-    todo_id: waitingTodoId,
+    state: waiting.todo.resume_when === spec.normalized ? "already_waiting" : "waiting",
+    todo_id: waiting.todoId,
     resume_when: spec.normalized,
     resume_kind: spec.kind,
     dependency_todo_id: spec.target,
-    successor_todo_ids: [...new Set(successors)],
-    baseline_generation: baselineGeneration,
-    metadata_updates: metadataUpdates,
+    successor_todo_ids: successors,
+    baseline_generation: metadata.baselineGeneration,
+    metadata_updates: metadata.updates,
     runnable_state: "excluded_until_resume_condition_satisfied",
     idempotency: "preserve_existing_monitor_baseline",
   };
