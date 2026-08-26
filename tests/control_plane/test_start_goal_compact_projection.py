@@ -1882,12 +1882,10 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     assert "compare_planned_todos_with_frontier" in step_ids
     delta = next(step for step in steps if step["id"] == "apply_todo_delta")
     assert delta["kind"] == "operator_or_agent_actions"
-    assert "reuse_existing" in delta["todo_delta"]["decisions"]
-    frontier = delta["existing_runnable_frontier"]
-    assert any(
-        "scheduler coverage fix" in str(item.get("text")) for item in frontier
-    )
-    assert all(item.get("claimed_by") in (None, AGENT_ID) for item in frontier)
+    assert "reuse" in delta["todo_delta"]
+    frontier_summary = str(delta["todo_delta"])
+    assert "scheduler coverage fix" in frontier_summary
+    assert "unclaimed" not in frontier_summary.split(":")[2] if ":" in frontier_summary else True
     # add_new remains available as an explicit, template-backed escape hatch.
     add_args = build_parser().parse_args(
         _runnable_todo_add_argv(delta["add_new_command_template"])
@@ -1899,7 +1897,7 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     assert "quota_guard" in step_ids
     rendered = render_start_goal_guided_markdown(payload)
     assert "apply_todo_delta" in rendered
-    assert "reuse_existing" in rendered
+    assert "reuse" in rendered
     assert "todo_delta:" in rendered
 
 

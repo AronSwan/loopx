@@ -22,7 +22,7 @@ from ...registry import registry_goals, resolve_state_file
 
 GUIDED_TODO_DELTA_SCHEMA_VERSION = "loopx_guided_todo_delta_v0"
 
-_FRONTIER_PROJECTION_LIMIT = 2
+_FRONTIER_PROJECTION_LIMIT = 1
 
 
 def existing_runnable_agent_frontier(
@@ -164,50 +164,27 @@ def todo_authoring_steps(
             "kind": "model_checkpoint",
             "prompt": plan_prompt,
             "purpose": (
-                "compare the requested continuation against "
-                "existing_runnable_frontier by text and action_kind before any "
-                "Todo writeback; an existing-agent takeover continues runnable "
-                "work instead of re-planning it"
+                "compare the continuation with existing_runnable_frontier "
+                "by text/action_kind before any writeback"
             ),
         },
         {
             "id": "apply_todo_delta",
             "kind": "operator_or_agent_actions",
-            "todo_delta": {
-                "schema_version": GUIDED_TODO_DELTA_SCHEMA_VERSION,
-                "decisions": "reuse_existing | update_existing | link_successor | add_new",
-                "reuse_existing": (
-                    "the frontier already covers the requested continuation; "
-                    "no Todo writeback, continue through refresh/host-loop/quota"
-                ),
-                "update_existing": (
-                    "refresh priority, claim, or evidence on an existing "
-                    "runnable Todo instead of creating a duplicate"
-                ),
-                "link_successor": (
-                    "write a successor Todo only after completion evidence on "
-                    "the existing runnable Todo"
-                ),
-                "add_new": (
-                    "the frontier does not cover the request; write exactly one "
-                    "new Todo with add_new_command_template"
-                ),
-            },
-            "existing_runnable_frontier_count": len(existing_runnable_frontier),
-            "existing_runnable_frontier": [
-                {
-                    "todo_id": item.get("todo_id"),
-                    "text": item.get("title") or item.get("text"),
-                    "claimed_by": item.get("claimed_by"),
-                    "priority": item.get("priority"),
-                }
-                for item in existing_runnable_frontier[:_FRONTIER_PROJECTION_LIMIT]
-            ],
-            "add_new_command_template": add_template,
-            "purpose": (
-                "identity takeover continues the existing runnable frontier; "
-                "Todo authoring is a conditional delta, not an unconditional step"
+            "todo_delta": (
+                f"{GUIDED_TODO_DELTA_SCHEMA_VERSION}: "
+                "reuse|update|link_successor|add_new; "
+                f"runnable frontier={len(existing_runnable_frontier)}: "
+                + "; ".join(
+                    f"{item.get('title') or item.get('text')} "
+                    f"[{item.get('todo_id')}, {item.get('claimed_by') or 'unclaimed'}]"
+                    for item in existing_runnable_frontier[:_FRONTIER_PROJECTION_LIMIT]
+                )
+                + "; reuse when covered, update instead of duplicating, "
+                "link successor only after completion evidence"
             ),
+            "add_new_command_template": add_template,
+            "purpose": "takeover continues the frontier; authoring is a delta",
         },
     ]
 
@@ -218,18 +195,9 @@ def append_todo_delta_render_line(
 ) -> None:
     """Render the Todo-delta decision rule compactly for the markdown packet."""
     todo_delta = raw_step.get("todo_delta")
-    if not isinstance(todo_delta, Mapping):
+    if not isinstance(todo_delta, str) or not todo_delta:
         return
-    frontier = raw_step.get("existing_runnable_frontier")
-    frontier_count = (
-        raw_step.get("existing_runnable_frontier_count")
-        if raw_step.get("existing_runnable_frontier_count") is not None
-        else (len(frontier) if isinstance(frontier, list) else 0)
-    )
-    step_lines.append(
-        f"   - todo_delta: {todo_delta.get('decisions')} "
-        f"(existing runnable frontier: {frontier_count})"
-    )
+    step_lines.append(f"   - todo_delta: {todo_delta}")
 
 
 def _read_registry(registry_path: Path) -> tuple[dict[str, Any] | None, str | None]:
