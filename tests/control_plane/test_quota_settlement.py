@@ -750,6 +750,49 @@ def test_guard_receipt_returns_typed_failure_for_effect_without_todo(
     assert "effect identity without a Todo" in result.failure.reason
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "run_agent_id",
+        "settlement_identity",
+        "identity_schema_version",
+        "run_todo_id",
+        "run_turn_instance_id",
+    ],
+)
+def test_unbound_visible_goal_recovery_requires_fully_typed_same_agent_run(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    _append_guard_receipt(tmp_path, effect_id=identity.effect_id)
+    record = {
+        "classification": "state_refreshed",
+        "delivery_outcome": "outcome_progress",
+        "agent_id": AGENT_ID,
+        "todo_id": TODO_ID,
+        "turn_instance_id": TURN_ID,
+        "settlement_identity": identity.as_dict(),
+    }
+    if missing_field == "identity_schema_version":
+        record["settlement_identity"].pop("schema_version")
+    else:
+        record.pop(missing_field.removeprefix("run_"), None)
+    _append_run_index_record(tmp_path, record)
+
+    result = infer_persisted_heartbeat_settlement_identity(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=None,
+        allow_unbound_binding=True,
+    )
+
+    assert result is not None
+    assert result.failure is not None
+    assert result.failure.kind is SettlementFailureKind.IDENTITY_MISMATCH
+
+
 def test_typed_material_poll_is_recovered_not_shadowed(tmp_path: Path) -> None:
     _append_guard_receipt(tmp_path)
     _append_run_index_record(

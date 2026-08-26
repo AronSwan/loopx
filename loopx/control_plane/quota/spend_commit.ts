@@ -85,13 +85,13 @@ interface QuotaSpendCommitRequest {
   resolved_agent_id: string | null;
 }
 
-interface SpendSemantics {
-  eligibleSpend: boolean;
-  safeBypassSpend: boolean;
-  selfRepairSpend: boolean;
-  capabilityRepairSpend: boolean;
-  deliveryCompletionSpend: boolean;
-}
+type SpendDisposition =
+  | "delivery_completion"
+  | "eligible"
+  | "outcome_floor_recovery"
+  | "control_plane_self_repair"
+  | "capability_repair"
+  | "safe_bypass";
 
 interface QuotaSpendCommitReceipt extends JsonObject {
   schema_version: typeof QUOTA_SPEND_COMMIT_RECEIPT_SCHEMA;
@@ -318,7 +318,7 @@ function positiveSlots(preview: JsonObject): number {
   return value;
 }
 
-function spendSemantics(request: QuotaSpendCommitRequest): SpendSemantics {
+function spendDisposition(request: QuotaSpendCommitRequest): SpendDisposition {
   if (request.preview.ok !== true) {
     throw new EffectRuntimeRequestError(
       typeof request.preview.reason === "string"
@@ -339,8 +339,7 @@ function spendSemantics(request: QuotaSpendCommitRequest): SpendSemantics {
     request.before.self_repair_allowed;
   const capabilityRepairSpend = request.before.should_run &&
     action === "capability_bridge_repair" &&
-    request.before.capability_repair_allowed &&
-    !deliveryCompletionSpend;
+    request.before.capability_repair_allowed;
   const eligibleSpend = request.before.should_run &&
     request.before.state === "eligible" &&
     action !== "external_evidence_observe" &&
@@ -352,79 +351,73 @@ function spendSemantics(request: QuotaSpendCommitRequest): SpendSemantics {
       request.before.recovery_delivery_allowed ||
       action === "outcome_floor_recovery"
     ) && request.before.safe_bypass_allowed;
-  if (
-    !eligibleSpend && !safeBypassSpend && !selfRepairSpend &&
-    !capabilityRepairSpend && !deliveryCompletionSpend
-  ) {
-    throw new EffectRuntimeRequestError(
-      "quota slot spend requires an eligible, safe-bypass, control-plane self-repair, " +
-        "capability bridge repair, or latest validated delivery-completion quota should-run decision",
-    );
+  // A recovered settlement describes work that already happened. The current
+  // frontier may now ask for capability or control-plane repair, but that later
+  // projection cannot rewrite the attribution of the completed delivery.
+  if (deliveryCompletionSpend) return "delivery_completion";
+  if (eligibleSpend) return "eligible";
+  if (safeBypassSpend && action === "outcome_floor_recovery") {
+    return "outcome_floor_recovery";
   }
-  return {
-    eligibleSpend,
-    safeBypassSpend,
-    selfRepairSpend,
-    capabilityRepairSpend,
-    deliveryCompletionSpend,
-  };
+  if (selfRepairSpend) return "control_plane_self_repair";
+  if (capabilityRepairSpend) return "capability_repair";
+  if (safeBypassSpend) return "safe_bypass";
+  throw new EffectRuntimeRequestError(
+    "quota slot spend requires an eligible, safe-bypass, control-plane self-repair, " +
+      "capability bridge repair, or latest validated delivery-completion quota should-run decision",
+  );
 }
 
 function reasonSummary(
   request: QuotaSpendCommitRequest,
-  semantics: SpendSemantics,
+  disposition: SpendDisposition,
   slots: number,
 ): string {
-  if (semantics.eligibleSpend) {
-    return `${slots} automatic agent slot(s) completed under an eligible quota guard`;
+  switch (disposition) {
+    case "eligible":
+      return `${slots} automatic agent slot(s) completed under an eligible quota guard`;
+    case "outcome_floor_recovery":
+      return `${slots} automatic agent slot(s) completed as outcome-floor recovery safe-bypass work`;
+    case "control_plane_self_repair":
+      return `${slots} automatic agent slot(s) completed as control-plane self-repair work`;
+    case "capability_repair":
+      return `${slots} automatic agent slot(s) completed as capability bridge repair work`;
+    case "delivery_completion":
+      return `${slots} automatic agent slot(s) accounted after validated delivery ${String(request.preview.delivery_run_classification ?? "")}`;
+    case "safe_bypass":
+      return `${slots} automatic agent slot(s) completed as safe-bypass work`;
   }
-  if (request.before.effective_action === "outcome_floor_recovery") {
-    return `${slots} automatic agent slot(s) completed as outcome-floor recovery safe-bypass work`;
-  }
-  if (semantics.selfRepairSpend) {
-    return `${slots} automatic agent slot(s) completed as control-plane self-repair work`;
-  }
-  if (semantics.capabilityRepairSpend) {
-    return `${slots} automatic agent slot(s) completed as capability bridge repair work`;
-  }
-  if (semantics.deliveryCompletionSpend) {
-    return `${slots} automatic agent slot(s) accounted after validated delivery ${String(request.preview.delivery_run_classification ?? "")}`;
-  }
-  return `${slots} automatic agent slot(s) completed as safe-bypass work`;
 }
 
 function healthCheck(
-  request: QuotaSpendCommitRequest,
-  semantics: SpendSemantics,
+  disposition: SpendDisposition,
 ): string {
-  if (semantics.eligibleSpend) {
-    return "quota should-run eligible; quota slot spend event public-safe";
+  switch (disposition) {
+    case "eligible":
+      return "quota should-run eligible; quota slot spend event public-safe";
+    case "outcome_floor_recovery":
+      return "quota outcome-floor recovery safe-bypass; quota slot spend event public-safe";
+    case "control_plane_self_repair":
+      return "quota control-plane self-repair; quota slot spend event public-safe";
+    case "capability_repair":
+      return "quota capability bridge repair; quota slot spend event public-safe";
+    case "delivery_completion":
+      return "quota validated delivery completion; quota slot spend event public-safe";
+    case "safe_bypass":
+      return "quota safe-bypass delivery; quota slot spend event public-safe";
   }
-  if (request.before.effective_action === "outcome_floor_recovery") {
-    return "quota outcome-floor recovery safe-bypass; quota slot spend event public-safe";
-  }
-  if (semantics.selfRepairSpend) {
-    return "quota control-plane self-repair; quota slot spend event public-safe";
-  }
-  if (semantics.capabilityRepairSpend) {
-    return "quota capability bridge repair; quota slot spend event public-safe";
-  }
-  if (semantics.deliveryCompletionSpend) {
-    return "quota validated delivery completion; quota slot spend event public-safe";
-  }
-  return "quota safe-bypass delivery; quota slot spend event public-safe";
 }
 
 function buildSpendRecord(
   request: QuotaSpendCommitRequest,
   fingerprint: string,
 ): JsonObject {
-  const semantics = spendSemantics(request);
+  const disposition = spendDisposition(request);
   const slots = positiveSlots(request.preview);
   const deliveryAction = typeof request.preview.delivery_run_recommended_action === "string"
     ? request.preview.delivery_run_recommended_action.trim()
     : "";
-  const recommendedAction = semantics.deliveryCompletionSpend && deliveryAction
+  const recommendedAction = disposition === "delivery_completion" && deliveryAction
     ? deliveryAction
     : typeof request.preview.after_recommended_action === "string"
     ? request.preview.after_recommended_action
@@ -438,7 +431,7 @@ function buildSpendRecord(
     settlement_identity: request.preview.settlement_identity ?? null,
     effect_ref: request.preview.effect_ref ?? null,
     slots,
-    reason_summary: reasonSummary(request, semantics, slots),
+    reason_summary: reasonSummary(request, disposition, slots),
     delivery_run_generated_at: request.preview.delivery_run_generated_at ?? null,
     delivery_run_classification: request.preview.delivery_run_classification ?? null,
     delivery_run_agent_id: request.preview.delivery_run_agent_id ?? null,
@@ -459,7 +452,7 @@ function buildSpendRecord(
     goal_id: request.goal_id,
     classification: QUOTA_SLOT_SPENT_CLASSIFICATION,
     recommended_action: recommendedAction,
-    health_check: healthCheck(request, semantics),
+    health_check: healthCheck(disposition),
     quota_event: quotaEvent,
     quota_spend_commit: commit,
   };

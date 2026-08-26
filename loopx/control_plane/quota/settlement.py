@@ -436,6 +436,12 @@ def infer_persisted_heartbeat_settlement_identity(
 
     if candidate is None:
         return None
+    candidate_agent_id = normalize_todo_claimed_by(candidate.get("agent_id"))
+    if allow_unbound_binding and candidate_agent_id != normalized_agent_id:
+        return _identity_mismatch(
+            "persisted settlement identity mismatch: accountable run is not "
+            "bound to the requesting Agent"
+        )
     persisted_value = candidate.get("settlement_identity")
     persisted = persisted_value if isinstance(persisted_value, Mapping) else {}
     candidate_todo_id = normalize_todo_id(candidate.get("todo_id"))
@@ -448,7 +454,10 @@ def infer_persisted_heartbeat_settlement_identity(
         candidate_replan_obligation_id = None
     else:
         if not persisted:
-            return None
+            return _identity_mismatch(
+                "unbound visible-goal settlement recovery requires a fully "
+                "typed persisted identity"
+            )
         persisted_todo_id = normalize_todo_id(persisted.get("todo_id"))
         persisted_replan_obligation_id = normalize_todo_replan_obligation_id(
             persisted.get("replan_obligation_id")
@@ -458,15 +467,12 @@ def infer_persisted_heartbeat_settlement_identity(
                 "persisted settlement identity must contain exactly one Todo or "
                 "autonomous replan binding"
             )
-        if candidate_todo_id and candidate_todo_id != persisted_todo_id:
+        if candidate_todo_id != persisted_todo_id:
             return _identity_mismatch(
                 "persisted settlement identity mismatch: Todo binding differs "
                 "from the accountable run"
             )
-        if (
-            candidate_replan_obligation_id
-            and candidate_replan_obligation_id != persisted_replan_obligation_id
-        ):
+        if candidate_replan_obligation_id != persisted_replan_obligation_id:
             return _identity_mismatch(
                 "persisted settlement identity mismatch: autonomous replan "
                 "binding differs from the accountable run"
@@ -475,13 +481,12 @@ def infer_persisted_heartbeat_settlement_identity(
         candidate_replan_obligation_id = persisted_replan_obligation_id
     candidate_turn_id = str(candidate.get("turn_instance_id") or "").strip()
     persisted_turn_id = str(persisted.get("turn_instance_id") or "").strip()
-    if allow_unbound_binding and persisted_turn_id:
-        if candidate_turn_id and candidate_turn_id != persisted_turn_id:
+    if allow_unbound_binding:
+        if not candidate_turn_id or candidate_turn_id != persisted_turn_id:
             return _identity_mismatch(
                 "persisted settlement identity mismatch: turn_instance_id differs "
                 "from the accountable run"
             )
-        candidate_turn_id = persisted_turn_id
     if not candidate_turn_id:
         return None
 
@@ -492,22 +497,14 @@ def infer_persisted_heartbeat_settlement_identity(
         turn_instance_id=candidate_turn_id,
         replan_obligation_id=candidate_replan_obligation_id,
     )
-    expected_fields = {
-        "goal_id": identity.goal_id,
-        "agent_id": identity.agent_id,
-        "turn_instance_id": identity.turn_instance_id,
-        "effect_id": identity.effect_id,
-    }
-    if identity.todo_id:
-        expected_fields["todo_id"] = identity.todo_id
-    if identity.replan_obligation_id:
-        expected_fields["replan_obligation_id"] = identity.replan_obligation_id
-    for field, expected in expected_fields.items():
+    for field, expected in identity.as_dict().items():
         actual = str(persisted.get(field) or "").strip()
-        if actual and actual != expected:
+        if (allow_unbound_binding and actual != expected) or (
+            not allow_unbound_binding and actual and actual != expected
+        ):
             return _identity_mismatch(
                 "persisted settlement identity mismatch: "
-                f"{field} is {actual} but expected {expected}"
+                f"{field} is {actual or 'missing'} but expected {expected}"
             )
 
     return resolve_heartbeat_settlement_identity(
