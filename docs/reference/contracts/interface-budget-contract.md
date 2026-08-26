@@ -33,7 +33,7 @@ details and command prefixes still belong in compact references or cold paths.
 | `diagnose --goal-id` | explicit-limit cold path | `--limit 5` fixture matrix | status plus goal-specific quota/todo reads |
 | `review-packet --handoff-only` | absolute hot path | todo-count growth plus handoff semantic anchors | full `review-packet`, run artifacts |
 | `heartbeat-prompt --thin` | absolute hot path | agent scope and multi-agent fixture matrix | `--compact`, `--full` |
-| `todo list` | baseline and growth | todo-count growth and agent filtering semantics | role/status filters, direct todo-id lifecycle commands |
+| `todo list` | baseline and growth | todo-count growth and agent filtering semantics | `--thin`, `--limit N`, role/status filters, direct todo-id lifecycle commands |
 | `history --limit 5` | explicit-limit cold path | returned-run bound | individual run JSON/Markdown artifacts |
 | `evidence-log --thin --limit 5` | explicit-limit cold path | returned-evidence bound | referenced run-history and rollout-event artifacts |
 
@@ -60,6 +60,14 @@ selectors, TurnEnvelope output, status task-graph detail, the full review
 packet, and the brief/compact/full heartbeat prompt modes. These remain opt-in
 cold paths, but their exact stdout size and semantic anchors are regression
 contracts too.
+
+`todo list --thin` is an explicit field projection, not a new selection mode.
+It keeps one top-level `todos` item container plus per-role counts, preserves
+the actionable identity and gate/monitor relationship fields declared by
+`todo_list_thin_projection_v0`, and omits local paths, note/evidence detail,
+and duplicate summary lanes. It composes with `--limit N`; omitting `--thin`
+restores the existing full list shape without changing Todo selection,
+ordering, quota, lifecycle, or write behavior.
 
 The start and daily command groups in the public help surface, plus
 `heartbeat-prompt`, are fail-closed inventory inputs. Each command must map to
