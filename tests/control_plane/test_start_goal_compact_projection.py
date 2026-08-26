@@ -1852,3 +1852,62 @@ def test_guided_write_ordered_todos_template_is_accepted_by_todo_add(
     args = build_parser().parse_args(_runnable_todo_add_argv(template))
     validate_shared_todo_options(args)
     validate_todo_add_options(args)
+
+
+def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
+    project = _write_connected_project(root)
+    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    state_file.write_text(
+        "# Active Goal State\n"
+        "## Objective\n"
+        f"{GOAL_TEXT}\n"
+        "## Agent Todo\n"
+        "- [ ] [P1] continue the scheduler coverage fix\n"
+        "  <!-- status=open task_class=advancement_task claimed_by="
+        f"{AGENT_ID} todo_id=todo_3586abcd0001 -->\n",
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project_with_runnable_agent_todo(tmp_path)
+    payload = _build(project, include_detail=False)
+    steps = payload["guided_transaction"]["ordered_steps"]
+    step_ids = [step["id"] for step in steps]
+    assert "write_ordered_todos" not in step_ids
+    assert "plan_ranked_todos" not in step_ids
+    assert "compare_planned_todos_with_frontier" in step_ids
+    delta = next(step for step in steps if step["id"] == "apply_todo_delta")
+    assert delta["kind"] == "operator_or_agent_actions"
+    assert "reuse_existing" in delta["todo_delta"]["decisions"]
+    frontier = delta["existing_runnable_frontier"]
+    assert any(
+        "scheduler coverage fix" in str(item.get("text")) for item in frontier
+    )
+    assert all(item.get("claimed_by") in (None, AGENT_ID) for item in frontier)
+    # add_new remains available as an explicit, template-backed escape hatch.
+    add_args = build_parser().parse_args(
+        _runnable_todo_add_argv(delta["add_new_command_template"])
+    )
+    validate_shared_todo_options(add_args)
+    validate_todo_add_options(add_args)
+    # The takeover continues through the normal refresh/host-loop/quota tail.
+    assert step_ids.index("apply_todo_delta") < step_ids.index("refresh_state")
+    assert "quota_guard" in step_ids
+    rendered = render_start_goal_guided_markdown(payload)
+    assert "apply_todo_delta" in rendered
+    assert "reuse_existing" in rendered
+    assert "todo_delta:" in rendered
+
+
+def test_guided_takeover_without_runnable_frontier_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    payload = _build(project, include_detail=False)
+    step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
+    assert "write_ordered_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
