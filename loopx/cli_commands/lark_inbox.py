@@ -28,6 +28,7 @@ from ..extensions.lark.event_inbox import (
     inspect_lark_event_inbox,
     lark_event_inbox_contains_text,
 )
+from ..extensions.lark.group_history import catch_up_lark_group_history
 from ..extensions.lark.inbox_reactions import (
     complete_lark_event_inbox_reactions,
     mark_lark_event_inbox_processing,
@@ -179,6 +180,24 @@ def register_lark_inbox_commands(
     ingest.add_argument("--goal-id")
     ingest.add_argument("--agent-id")
     ingest.add_argument("--execute", action="store_true")
+    history_catch_up = sub.add_parser(
+        "history-catch-up",
+        help=(
+            "Read one bounded group-history page into the configured route inbox; "
+            "preview by default and commit the inbox plus private cursor with --execute."
+        ),
+    )
+    add_subcommand_format(history_catch_up)
+    history_catch_up.add_argument("--project")
+    history_catch_up.add_argument("--config")
+    history_catch_up.add_argument("--goal-id")
+    history_catch_up.add_argument("--agent-id")
+    history_catch_up.add_argument("--route-key", required=True)
+    history_catch_up.add_argument("--start", required=True)
+    history_catch_up.add_argument("--page-size", type=int, default=50)
+    history_catch_up.add_argument("--lark-cli-executable", default="lark-cli")
+    history_catch_up.add_argument("--node-executable")
+    history_catch_up.add_argument("--execute", action="store_true")
     collector_plan = sub.add_parser(
         "collector-plan",
         help="Validate a local-private collector config and preview host setup.",
@@ -230,6 +249,8 @@ def _required_extension_permissions(command: str) -> tuple[str, ...]:
         return (LARK_INBOX_READ_PERMISSION,)
     if command in {"ack", "ingest"}:
         return (LARK_INBOX_WRITE_PERMISSION,)
+    if command == "history-catch-up":
+        return (LARK_COLLECTOR_PERMISSION, LARK_INBOX_WRITE_PERMISSION)
     if command in {"reply", "processing", "reaction-complete"}:
         return (LARK_REPLY_PERMISSION,)
     return (LARK_COLLECTOR_PERMISSION,)
@@ -351,6 +372,7 @@ def handle_lark_inbox_command(
             "processing",
             "reaction-complete",
             "ingest",
+            "history-catch-up",
         }
         project: Path | None = None
         config_path: str | None = None
@@ -436,6 +458,17 @@ def handle_lark_inbox_command(
                 events=_read_stdin_events(),
                 execute=args.execute,
             )
+        elif args.lark_inbox_command == "history-catch-up":
+            payload = catch_up_lark_group_history(
+                project=project,
+                config_path=config_path,
+                route_key=args.route_key,
+                start=args.start,
+                page_size=args.page_size,
+                execute=args.execute,
+                lark_cli_executable=args.lark_cli_executable,
+                node_executable=args.node_executable,
+            )
         elif args.lark_inbox_command == "collector-plan":
             payload = plan_lark_event_collector(
                 project=args.project,
@@ -463,7 +496,7 @@ def handle_lark_inbox_command(
                 runtime_root=runtime_root_arg,
                 probe_event_bus=args.probe_event_bus,
             )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         payload = {
             "ok": False,
             "schema_version": "lark_event_inbox_error_v0",
