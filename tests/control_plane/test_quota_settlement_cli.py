@@ -287,7 +287,9 @@ def _append_blocking_user_gate(project: Path) -> None:
     )
 
 
-def _heartbeat_receipt_events(runtime: Path, turn_instance_id: str) -> list[dict[str, Any]]:
+def _heartbeat_receipt_events(
+    runtime: Path, turn_instance_id: str
+) -> list[dict[str, Any]]:
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     if not log_path.exists():
         return []
@@ -582,12 +584,10 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     )
     assert guard_rc == 0, guard
     assert guard["selected_todo"]["todo_id"] == TODO_ID
-    assert guard["selected_todo"]["delivery_boundary"] == (
-        "in_flight_continuation"
-    )
-    first_writeback = guard["interaction_contract"]["cli_channel"][
-        "next_cli_actions"
-    ][0]
+    assert guard["selected_todo"]["delivery_boundary"] == ("in_flight_continuation")
+    first_writeback = guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
+        0
+    ]
     assert "--delivery-boundary in_flight_continuation" in first_writeback
 
     refresh_rc, refresh = _run_cli(
@@ -641,9 +641,9 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     assert second_guard["selected_todo"]["delivery_boundary"] == (
         "in_flight_continuation"
     )
-    writeback = second_guard["interaction_contract"]["cli_channel"][
-        "next_cli_actions"
-    ][0]
+    writeback = second_guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
+        0
+    ]
     assert "--delivery-boundary in_flight_continuation" in writeback
 
     second_refresh_rc, second_refresh = _run_cli(
@@ -856,10 +856,25 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert settled_replay.get("selected_todo") is None
     assert settled_replay["heartbeat_receipt"]["status"] == "replayed"
     assert (
-        settled_replay["heartbeat_receipt"]["settlement_identity"]["todo_id"]
-        == TODO_ID
+        settled_replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
     )
     assert _spend_run_count(runtime) == 1
+
+    settled_ack_hint = settled_replay["scheduler_hint"]["codex_app"]["ack_hint"]
+    assert settled_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert settled_ack_hint["cli_args"][-3:] == [
+        "--turn-instance-id",
+        TURN_ID,
+        "--execute",
+    ]
+    ack_rc, ack = _run_cli(
+        registry_path,
+        runtime,
+        *settled_ack_hint["cli_args"],
+    )
+    assert ack_rc == 0, ack
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["already_applied"] is False
 
     fresh_turn_rc, fresh_turn = _run_cli(
         registry_path,
@@ -999,9 +1014,9 @@ def _assert_material_monitor_writeback_can_add_workspace_before_spend(
     }
     assert replay_rc == 0, replay
     assert replay["idempotent_replay"] is True
-    assert _classification_count(
-        runtime, "material_monitor_workspace_supplemented"
-    ) == 1
+    assert (
+        _classification_count(runtime, "material_monitor_workspace_supplemented") == 1
+    )
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -1213,15 +1228,12 @@ def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
 
     assert first_rc == 0, first
-    assert first["action_portfolio"]["selection_policy"][
-        "requires_explicit_turn_binding"
-    ] is True
-    assert first["interaction_contract"]["agent_channel"][
-        "selection_required"
-    ] is True
-    assert first["interaction_contract"]["agent_channel"][
-        "delivery_allowed"
-    ] is False
+    assert (
+        first["action_portfolio"]["selection_policy"]["requires_explicit_turn_binding"]
+        is True
+    )
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
     assert "settlement_identity" not in first["heartbeat_receipt"]
     cli_channel = first["interaction_contract"]["cli_channel"]
     assert cli_channel["next_cli_actions"] == []
@@ -1242,19 +1254,19 @@ def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
     assert "action_portfolio" not in selected
-    assert selected["interaction_contract"]["agent_channel"].get(
-        "selection_required"
-    ) is None
-    assert selected["interaction_contract"]["agent_channel"][
-        "delivery_allowed"
-    ] is True
+    assert (
+        selected["interaction_contract"]["agent_channel"].get("selection_required")
+        is None
+    )
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     assert selected["heartbeat_receipt"]["status"] == "upgraded"
-    assert selected["heartbeat_receipt"]["settlement_identity"][
-        "todo_id"
-    ] == ALTERNATIVE_TODO_ID
-    plan_identity = selected["interaction_contract"]["cli_channel"][
-        "settlement_plan"
-    ]["identity"]
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == ALTERNATIVE_TODO_ID
+    )
+    plan_identity = selected["interaction_contract"]["cli_channel"]["settlement_plan"][
+        "identity"
+    ]
     assert plan_identity["todo_id"] == ALTERNATIVE_TODO_ID
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
@@ -1288,21 +1300,16 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     )
 
     assert first_rc == 0, first
-    assert first["interaction_contract"]["cli_channel"][
-        "selection_required"
-    ] is True
+    assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
     assert turn_instance_id.startswith("guided-start:")
     selection = first["interaction_contract"]["cli_channel"]["selection_command"]
-    assert f"--turn-instance-id {turn_instance_id}" in selection[
-        "command_args_template"
-    ]
-    selection_command = (
-        f"{selection['route_prefix']} "
-        + selection["command_args_template"].replace(
-            "{todo_id}", ALTERNATIVE_TODO_ID
-        )
+    assert (
+        f"--turn-instance-id {turn_instance_id}" in selection["command_args_template"]
     )
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
 
     selected_rc, selected = _run_generated_cli(
         selection_command,
@@ -1350,21 +1357,16 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     )
 
     assert first_rc == 0, first
-    assert first["interaction_contract"]["cli_channel"][
-        "selection_required"
-    ] is True
+    assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
     assert turn_instance_id.startswith("guided-start:")
     selection = first["interaction_contract"]["cli_channel"]["selection_command"]
-    assert f"--turn-instance-id {turn_instance_id}" in selection[
-        "command_args_template"
-    ]
-    selection_command = (
-        f"{selection['route_prefix']} "
-        + selection["command_args_template"].replace(
-            "{todo_id}", ALTERNATIVE_TODO_ID
-        )
+    assert (
+        f"--turn-instance-id {turn_instance_id}" in selection["command_args_template"]
     )
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
 
     selected_rc, selected = _run_generated_cli(
         selection_command,
@@ -1374,17 +1376,17 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert selected_rc == 0, selected
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
-    assert selected["heartbeat_receipt"]["settlement_identity"][
-        "turn_instance_id"
-    ] == turn_instance_id
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"]
+        == turn_instance_id
+    )
     cli_channel = selected["interaction_contract"]["cli_channel"]
     settlement_plan = cli_channel["settlement_plan"]
     assert settlement_plan["identity"] == selected["heartbeat_receipt"][
         "settlement_identity"
     ]
     assert any(
-        "--source visible-goal" in action
-        for action in cli_channel["next_cli_actions"]
+        "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
     )
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
@@ -1416,9 +1418,9 @@ def test_single_todo_guided_start_keeps_direct_delivery_semantics(
 
     assert guard_rc == 0, guard
     assert guard["selected_todo"]["todo_id"] == TODO_ID
-    assert guard["interaction_contract"]["cli_channel"].get(
-        "selection_required"
-    ) is None
+    assert (
+        guard["interaction_contract"]["cli_channel"].get("selection_required") is None
+    )
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["turn_instance_id"].startswith("guided-start:")
@@ -1629,16 +1631,11 @@ def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
 
     assert first_rc == 0, first
     assert OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID not in {
-        item["todo_id"]
-        for item in first["action_portfolio"]["suggested_actions"]
+        item["todo_id"] for item in first["action_portfolio"]["suggested_actions"]
     }
     assert selected_rc == 0, selected
-    assert selected["selected_todo"]["todo_id"] == (
-        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
-    )
-    assert selected["selected_todo"]["selection_binding"] == (
-        "heartbeat_receipt"
-    )
+    assert selected["selected_todo"]["todo_id"] == (OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID)
+    assert selected["selected_todo"]["selection_binding"] == ("heartbeat_receipt")
     assert selected["heartbeat_receipt"]["status"] == "upgraded"
     assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
         OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
@@ -1801,6 +1798,108 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     assert len(events) == 1
     assert not events[0]["details"].get("todo_id")
     assert not events[0]["details"].get("settlement_effect_id")
+
+
+def test_pending_action_selection_can_bind_exact_newly_due_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-exact-due-monitor"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_newly_due_monitor(project)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == DUE_MONITOR_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+    poll_args = (
+        "quota",
+        "monitor-poll",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--target-key",
+        "due-monitor-fixture",
+        "--result-hash",
+        "unchanged-due-monitor",
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--execute",
+        "--scan-path",
+        str(project),
+    )
+    poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
+    poll_replay_rc, poll_replay = _run_cli(
+        registry_path,
+        runtime,
+        *poll_args,
+    )
+
+    assert poll_rc == 0, poll
+    assert poll["material_change"] is False
+    assert poll["replayed"] is False
+    assert poll_replay_rc == 0, poll_replay
+    assert poll_replay["replayed"] is True
+    assert poll_replay["appended"] is False
+    assert _classification_count(runtime, "quota_monitor_poll") == 1
+    assert _spend_run_count(runtime) == 0
+
+    settled_rc, settled = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    assert settled_rc == 0, settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["execution_obligation"]["must_attempt_work"] is False
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert _spend_run_count(runtime) == 0
 
 
 def test_pending_action_selection_does_not_commit_after_new_user_gate(
@@ -2326,9 +2425,10 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
     assert first_rc == 0, first
     assert first["decision"] == "autonomous_replan_required", first
     obligation_id = first["replan_action_packet"]["obligation_id"]
-    assert first["heartbeat_receipt"]["settlement_identity"][
-        "replan_obligation_id"
-    ] == obligation_id
+    assert (
+        first["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+        == obligation_id
+    )
     assert replay_rc == 0, replay
     assert replay["decision"] == "autonomous_replan_required", replay
     assert replay["selected_todo"] is None
@@ -2337,12 +2437,16 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
     )
     assert replay["replan_action_packet"]["obligation_id"] == obligation_id
     assert replay["heartbeat_receipt"]["status"] == "replayed"
-    assert replay["heartbeat_receipt"]["settlement_identity"][
-        "replan_obligation_id"
-    ] == obligation_id
-    assert replay["interaction_contract"]["cli_channel"]["settlement_plan"][
-        "identity"
-    ]["replan_obligation_id"] == obligation_id
+    assert (
+        replay["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+        == obligation_id
+    )
+    assert (
+        replay["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"][
+            "replan_obligation_id"
+        ]
+        == obligation_id
+    )
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
     conflict_rc, conflict = _run_cli(
@@ -2358,6 +2462,7 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
     assert conflict_rc == 1, conflict
     assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
 
 def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     tmp_path: Path,
@@ -2954,8 +3059,7 @@ def test_same_turn_terminal_receipt_replay_preempts_autonomous_replan(
     assert _spend_run_count(runtime) == 1
 
     fresh_turn_args = tuple(
-        "turn-settlement-cli-2" if value == TURN_ID else value
-        for value in guard_args
+        "turn-settlement-cli-2" if value == TURN_ID else value for value in guard_args
     )
     fresh_rc, fresh = _run_cli(registry_path, runtime, *fresh_turn_args)
     assert fresh_rc == 0, fresh

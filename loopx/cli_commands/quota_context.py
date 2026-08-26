@@ -143,11 +143,15 @@ def prepare_quota_command_context(
     if heartbeat_turn_id and command not in {
         "should-run",
         "monitor-poll",
+        "scheduler-ack",
+        "scheduler-ack-current",
+        "scheduler-fail-current",
         "spend-slot",
     }:
         raise QuotaCommandValidationError(
             "--turn-instance-id is only valid with `quota should-run`, "
-            "`quota monitor-poll`, or `quota spend-slot`"
+            "`quota monitor-poll`, scheduler ACK/failure follow-ups, or "
+            "`quota spend-slot`"
         )
     if getattr(args, "replan_obligation_id", None) and command != "spend-slot":
         raise QuotaCommandValidationError(

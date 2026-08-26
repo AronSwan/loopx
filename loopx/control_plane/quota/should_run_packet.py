@@ -118,15 +118,15 @@ from ..work_items.planning_projection import (
 from ..work_items.execution_obligation import build_execution_obligation
 from ..work_items.goal_route_hint import build_goal_route_hint
 from ..work_items.interaction_contract import (
-    _user_action_owns_empty_agent_lane_from_summaries as _user_action_owns_empty_agent_lane,
-)
-from ..work_items.interaction_contract import (
     build_interaction_contract,
     build_protocol_action_packet,
     finalize_user_gate_notification_cooldown,
 )
 from ..work_items.interaction_contract import (
     user_channel_action_required as _user_channel_action_required,
+)
+from ..work_items.user_action_frontier import (
+    user_action_owns_empty_agent_lane_from_summaries as _user_action_owns_empty_agent_lane,
 )
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
 from ..work_items.progress_observation import build_replan_action_packet

@@ -6,9 +6,11 @@ from pathlib import Path
 
 from examples.control_plane.quota_plan_fixtures import SCOPED_AGENT_ID, write_cli_fixture
 from loopx.cli_commands import quota as quota_command
+from loopx.cli_commands import quota_scheduler_followup
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
 from loopx.control_plane.scheduler.state import (
     build_scheduler_state,
+    scheduler_state_path,
     write_scheduler_state,
 )
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
@@ -200,6 +202,48 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
     assert app["stateful_backoff"]["apply_needed"] is True
 
 
+def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    state_path = scheduler_state_path(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+    )
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-fail-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--turn-instance-id",
+        "heartbeat-missing-receipt",
+        "--failed-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--codex-app",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "heartbeat_receipt_missing"
+    assert payload["state"] == "blocked_receipt"
+    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING")
+    assert payload["write_performed"] is False
+    assert payload["scheduler_state_mutated"] is False
+    assert payload["quota_spend_performed"] is False
+    assert not state_path.exists()
+
+
 def test_scheduler_ack_collects_the_periodic_should_run_lookback(
     tmp_path: Path,
     monkeypatch,
@@ -239,7 +283,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(
         fake_build_lark_projector,
     )
     monkeypatch.setattr(
-        quota_command,
+        quota_scheduler_followup,
         "record_quota_scheduler_ack",
         fake_record_quota_scheduler_ack,
     )
