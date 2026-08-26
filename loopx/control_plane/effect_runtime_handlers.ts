@@ -100,6 +100,8 @@ import {
 import {
   validateInteractionProjectionHookInvocation,
   validateInteractionProjectionHookRegistration,
+  validatePostWritebackHookInvocation,
+  validatePostWritebackHookRegistration,
   validateTurnStartHookInvocation,
   validateTurnStartHookRegistration,
 } from "./capability_hooks.ts";
@@ -419,6 +421,17 @@ export function createEffectRuntimeHandlers(
     [
       "capability_hook.turn_start.validate",
       (params) => validateTurnStartHookInvocation({
+        registration: params.registration,
+        result: params.result,
+      }),
+    ],
+    [
+      "capability_hook.post_writeback.validate_registration",
+      (params) => validatePostWritebackHookRegistration(params.registration),
+    ],
+    [
+      "capability_hook.post_writeback.validate",
+      (params) => validatePostWritebackHookInvocation({
         registration: params.registration,
         result: params.result,
       }),

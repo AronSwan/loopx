@@ -15,6 +15,10 @@ export const TURN_START_HOOK_REGISTRATION_SCHEMA_VERSION =
   "loopx_turn_start_capability_hook_registration_v0";
 export const TURN_START_HOOK_RESULT_SCHEMA_VERSION =
   "loopx_turn_start_capability_hook_result_v0";
+export const POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION =
+  "loopx_post_writeback_capability_hook_registration_v0";
+export const POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION =
+  "loopx_post_writeback_capability_hook_result_v0";
 
 const REGISTRATION_FIELDS = new Set([
   "schema_version",
@@ -76,6 +80,33 @@ const TURN_START_STATUSES = new Set([
   "empty",
   "partial",
   "unavailable",
+  "failed",
+]);
+const POST_WRITEBACK_REGISTRATION_FIELDS = new Set([
+  "schema_version",
+  "hook_id",
+  "capability_id",
+  "phase",
+  "subscribed_event_kinds",
+  "budget",
+  "failure_policy",
+  "requested_read_scope",
+  "requested_write_scope",
+]);
+const POST_WRITEBACK_RESULT_FIELDS = new Set([
+  "schema_version",
+  "hook_id",
+  "capability_id",
+  "phase",
+  "status",
+  "intent_kind",
+  "idempotency_key",
+  "intent",
+  "error_code",
+]);
+const POST_WRITEBACK_STATUSES = new Set([
+  "not_applicable",
+  "intent_ready",
   "failed",
 ]);
 const TOKEN_RE = /^[a-z][a-z0-9_.:-]{2,95}$/;
@@ -408,6 +439,154 @@ export function validateTurnStartHookInvocation(input: {
   }
   if (["unavailable", "failed"].includes(status) && result.agent_read_required) {
     throw new Error("unavailable turn-start hook cannot require unread evidence");
+  }
+  return { ...result };
+}
+
+export function validatePostWritebackHookRegistration(
+  value: unknown,
+): JsonObject & {
+  hook_id: string;
+  capability_id: string;
+  subscribed_event_kinds: string[];
+  max_result_bytes: number;
+} {
+  const registration = requiredObject(
+    value,
+    "post-writeback hook registration",
+  );
+  requireExactFields(
+    registration,
+    POST_WRITEBACK_REGISTRATION_FIELDS,
+    "post-writeback hook registration",
+  );
+  if (
+    registration.schema_version !==
+      POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION ||
+    registration.phase !== "post_writeback" ||
+    registration.failure_policy !== "isolate"
+  ) {
+    throw new Error("post-writeback hook registration contract is invalid");
+  }
+  const hookId = requiredString(
+    registration.hook_id,
+    "post-writeback hook hook_id",
+  );
+  const capabilityId = requiredString(
+    registration.capability_id,
+    "post-writeback hook capability_id",
+  );
+  if (!TOKEN_RE.test(hookId) || !TOKEN_RE.test(capabilityId)) {
+    throw new Error("post-writeback hook identity is invalid");
+  }
+  const subscribedEventKinds = boundedTokens(
+    registration.subscribed_event_kinds,
+    "post-writeback hook subscribed_event_kinds",
+    8,
+  );
+  if (subscribedEventKinds.length === 0) {
+    throw new Error("post-writeback hook subscribed_event_kinds cannot be empty");
+  }
+  boundedTokens(
+    registration.requested_read_scope,
+    "post-writeback hook requested_read_scope",
+    16,
+  );
+  const writeScope = boundedTokens(
+    registration.requested_write_scope,
+    "post-writeback hook requested_write_scope",
+    16,
+  );
+  if (writeScope.length > 0) {
+    throw new Error("post-writeback hooks cannot request write scope");
+  }
+  const budget = requiredObject(registration.budget, "post-writeback hook budget");
+  requireExactFields(budget, BUDGET_FIELDS, "post-writeback hook budget");
+  const maxInvocations = requireInteger(
+    budget.max_invocations_per_dispatch,
+    "post-writeback hook max_invocations_per_dispatch",
+  );
+  const maxResultBytes = requireInteger(
+    budget.max_result_bytes,
+    "post-writeback hook max_result_bytes",
+  );
+  if (maxInvocations !== 1 || maxResultBytes < 1024 || maxResultBytes > 65_536) {
+    throw new Error("post-writeback hook budget is outside the admitted envelope");
+  }
+  return {
+    ...registration,
+    hook_id: hookId,
+    capability_id: capabilityId,
+    subscribed_event_kinds: subscribedEventKinds,
+    max_result_bytes: maxResultBytes,
+  };
+}
+
+export function validatePostWritebackHookInvocation(input: {
+  registration: unknown;
+  result: unknown;
+}): JsonObject {
+  const registration = validatePostWritebackHookRegistration(input.registration);
+  const result = requiredObject(input.result, "post-writeback hook result");
+  requireExactFields(result, POST_WRITEBACK_RESULT_FIELDS, "post-writeback hook result");
+  if (
+    result.schema_version !== POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION ||
+    result.hook_id !== registration.hook_id ||
+    result.capability_id !== registration.capability_id ||
+    result.phase !== "post_writeback"
+  ) {
+    throw new Error("post-writeback hook result identity is invalid");
+  }
+  if (
+    new TextEncoder().encode(JSON.stringify(result)).byteLength >
+    registration.max_result_bytes
+  ) {
+    throw new Error("post-writeback hook result exceeds its budget");
+  }
+  const status = requiredString(result.status, "post-writeback hook status");
+  if (!POST_WRITEBACK_STATUSES.has(status)) {
+    throw new Error("post-writeback hook result status is invalid");
+  }
+  const intentKind = result.intent_kind;
+  if (intentKind !== null && (typeof intentKind !== "string" || !TOKEN_RE.test(intentKind))) {
+    throw new Error("post-writeback hook intent_kind is invalid");
+  }
+  const idempotencyKey = result.idempotency_key;
+  if (
+    idempotencyKey !== null &&
+    (typeof idempotencyKey !== "string" || !TOKEN_RE.test(idempotencyKey))
+  ) {
+    throw new Error("post-writeback hook idempotency_key is invalid");
+  }
+  const intent = result.intent;
+  if (intent !== null && typeof intent !== "object") {
+    throw new Error("post-writeback hook intent must be an object");
+  }
+  const errorCode = result.error_code;
+  if (
+    errorCode !== null &&
+    (typeof errorCode !== "string" || !TOKEN_RE.test(errorCode))
+  ) {
+    throw new Error("post-writeback hook error_code is invalid");
+  }
+  if (status === "intent_ready" && (
+    intentKind === null ||
+    idempotencyKey === null ||
+    intent === null ||
+    errorCode !== null
+  )) {
+    throw new Error("intent-ready post-writeback hook result is incomplete");
+  }
+  if (status === "not_applicable" && (
+    intentKind !== null ||
+    idempotencyKey !== null ||
+    intent !== null ||
+    errorCode !== null
+  )) {
+    throw new Error("not-applicable post-writeback hook result must be empty");
+  }
+  if (status === "failed" && (errorCode === null || intent !== null)) {
+    throw new Error("failed post-writeback hook result requires error_code");
   }
   return { ...result };
 }
