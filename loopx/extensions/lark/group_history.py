@@ -206,8 +206,14 @@ def _canonical_events(
             "content": content,
             "chat_id": chat_id,
         }
-        for field in ("parent_id", "root_id", "mentions", "mentioned"):
-            if message.get(field) not in (None, "", [], False):
+        for field in ("parent_id", "root_id"):
+            if message.get(field) not in (None, ""):
+                event[field] = message[field]
+        # Preserve structured positive *and negative* mention evidence.  The
+        # inbox canonicalizer turns this into a typed addressed-to-Bot flag;
+        # dropping an empty list/false value would reopen text heuristics.
+        for field in ("mentions", "mentioned"):
+            if field in message:
                 event[field] = message[field]
         events.append(event)
     return events, skipped_count, invalid_count

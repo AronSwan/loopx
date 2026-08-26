@@ -259,10 +259,12 @@ def enrich_lark_event_reply_context(
     # envelope fields. Message-level routing fields live on the message lookup
     # response, so copy them into the canonical event before deciding whether
     # this bot was addressed and which Goal Topic owns the message.
-    for field in ("content", "mentions", "mentioned"):
-        value = current.get(field)
-        if value not in (None, "", [], False):
-            enriched[field] = value
+    content = current.get("content")
+    if content not in (None, ""):
+        enriched["content"] = content
+    for field in ("mentions", "mentioned"):
+        if field in current:
+            enriched[field] = current[field]
     current_sender_type, current_sender_id = _sender_identity(current)
     if current_sender_id:
         enriched["sender_id"] = current_sender_id
@@ -324,14 +326,19 @@ def _consume_argv(
 def lark_event_requires_reply_context_lookup(
     event: Mapping[str, Any], *, bot_display_name: str
 ) -> bool:
-    """Direct mentions are actionable without a provider readback."""
+    """Require provider context unless the stream carries a typed Bot mention."""
 
-    direct_attention = _event_attention_kind(
-        event,
-        bot_display_name=bot_display_name,
-        capture_scope="configured_chat_all",
+    provider_fields = {
+        key: event[key] for key in ("mentioned", "mentions") if key in event
+    }
+    return (
+        _event_attention_kind(
+            provider_fields,
+            bot_display_name=bot_display_name,
+            capture_scope="configured_chat_all",
+        )
+        is None
     )
-    return direct_attention not in {"direct_question", "direct_mention"}
 
 
 def _create_lark_event_received_reaction(

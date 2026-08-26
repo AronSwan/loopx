@@ -76,6 +76,7 @@ def _ingest(project: Path, config: Path) -> None:
                 "message_id": "om_direct",
                 "create_time": "2026-08-26T00:02:00Z",
                 "content": "@Context Bot can you confirm?",
+                "mentions": [{"name": "Context Bot"}],
             },
         ],
         execute=True,
@@ -143,6 +144,100 @@ def test_material_review_projection_is_separate_from_reply_due(tmp_path: Path) -
         "continue_current_work",
     ]
     assert "before ordinary work" in str(reply["action"])
+
+
+def test_configured_chat_reply_due_requires_typed_bot_addressing(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    result = ingest_lark_event_inbox(
+        project=tmp_path,
+        config_path=config,
+        events=[
+            {
+                "schema_version": "lark_event_inbox_event_v0",
+                "event_id": "evt_other_mention",
+                "message_id": "om_other_mention",
+                "create_time": "2026-08-26T00:00:00Z",
+                "content": "@Alice can LoopX handle this?",
+                "mentions": [{"name": "Alice"}],
+                "mentioned": False,
+            },
+            {
+                "schema_version": "lark_event_inbox_event_v0",
+                "event_id": "evt_bot_prose",
+                "message_id": "om_bot_prose",
+                "create_time": "2026-08-26T00:01:00Z",
+                "content": "Context Bot is part of the LoopX discussion.",
+                "mentions": [],
+                "mentioned": False,
+            },
+            {
+                "schema_version": "lark_event_inbox_event_v0",
+                "event_id": "evt_verified_mention",
+                "message_id": "om_verified_mention",
+                "create_time": "2026-08-26T00:02:00Z",
+                "content": "@Context Bot can you confirm?",
+                "mentions": [{"name": "Context Bot"}],
+            },
+        ],
+        execute=True,
+    )
+
+    urgency = project_lark_event_inbox_urgency(
+        project=tmp_path,
+        config_path=config,
+    )
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    other = json.loads((inbox / "om_other_mention.json").read_text(encoding="utf-8"))
+    direct = json.loads(
+        (inbox / "om_verified_mention.json").read_text(encoding="utf-8")
+    )
+
+    assert result["accepted_count"] == 3
+    assert urgency["pending_count"] == 3
+    assert urgency["direct_question_count"] == 1
+    assert urgency["direct_mention_count"] == 0
+    assert urgency["attention_required_count"] == 1
+    assert urgency["material_review_count"] == 2
+    assert urgency["reply_due"] is True
+    assert other["addressed_to_bot"] is False
+    assert direct["addressed_to_bot"] is True
+    assert "mentions" not in direct
+    assert "mentioned" not in direct
+
+
+def test_legacy_configured_chat_event_without_addressing_evidence_fails_closed(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    inbox.mkdir(parents=True)
+    (inbox / "om_legacy_text_only.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_inbox_event_v0",
+                "event_id": "evt_legacy_text_only",
+                "message_id": "om_legacy_text_only",
+                "create_time": "2026-08-26T00:00:00Z",
+                "content": "@Context Bot can you confirm?",
+                "reply_context_verified": False,
+                "reply_to_bot": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    urgency = project_lark_event_inbox_urgency(
+        project=tmp_path,
+        config_path=config,
+    )
+
+    assert urgency["pending_count"] == 1
+    assert urgency["attention_required_count"] == 0
+    assert urgency["reply_due"] is False
+    assert urgency["material_review_count"] == 1
+    assert urgency["material_review_due"] is True
 
 
 def test_material_review_no_follow_up_settlement_is_idempotent(tmp_path: Path) -> None:
