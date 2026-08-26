@@ -1297,6 +1297,30 @@ not need to have appeared in the bounded suggestions. Only the upgraded response
 restores delivery and its settlement plan. If there is only one admitted action,
 no portfolio selection phase is added.
 
+When selected work has meaningful typed lineage, waiting, sibling, or
+goal-acceptance context, the same default guard may also include
+`planning_horizon.schema_version=quota_planning_horizon_v0`. It is a bounded
+read-only projection: at most five Todo items, eight typed relations, two
+acceptance gaps, and three attention ids. `source_context_todo_count` covers
+open plus deferred source Todos; omission and text-truncation counters make an
+incomplete slice explicit. `successor` remains `lineage_only`, while
+`resumes_when` and `unblocks` retain their existing typed lifecycle semantics.
+The horizon does not make another Todo executable and does not change the
+selected Todo. Consumers must use the existing explicit selection re-entry for
+another runnable action and follow `detail_refs` before treating an incomplete
+horizon as exhaustive.
+
+`action_portfolio`, `planning_horizon`, and the explicit agent-Todo detail lens
+derive from one `todo_planning_inventory_v0`. `planning_state` and `claim_state`
+are orthogonal: runnable unclaimed work carries
+`claim_required_before_work=true`, while work claimed by another agent is not
+silently made executable. `quota should-run --include-detail agent-todos`
+exposes the larger bounded `todo_planning_inventory_detail_v0` projection;
+`item_detail_ref=$.agent_todo_summary` avoids copying full Todo payloads. Its
+completeness counters remain authoritative for omissions. Consumers that need
+the complete open source follow `detail_refs.full_todo_list` rather than
+assuming either bounded projection is exhaustive.
+
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota
 selects the next ready advancement todo and records the future monitor under
