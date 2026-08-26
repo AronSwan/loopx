@@ -7,6 +7,8 @@ from typing import Any
 
 from ...state_projection import (
     next_action_projection_warning,
+)
+from ...state_projection import (
     state_action_projection_warning as build_state_action_projection_warning,
 )
 from .. import compact_control_plane_policy
@@ -28,14 +30,13 @@ from ..agents.capability_gate import missing_required_capabilities
 from ..goals.goal_frontier import (
     AUTONOMOUS_REPLAN_REQUIRED_MODE,
 )
-from ..work_items.progress_observation import build_replan_action_packet
-from ..quota.goal_boundary import (
-    quota_execution_profile_summary as _quota_execution_profile_summary,
-)
 from ..quota.decision_summary import (
     quota_decision_agent_id,
     refine_quota_recommended_action,
     resolve_quota_run_decision,
+)
+from ..quota.goal_boundary import (
+    quota_execution_profile_summary as _quota_execution_profile_summary,
 )
 from ..quota.heartbeat_recommendation import (
     build_heartbeat_recommendation,
@@ -47,6 +48,8 @@ from ..quota.policy_constants import (
 )
 from ..quota.recent_runs import (
     goal_latest_runs as _goal_latest_runs,
+)
+from ..quota.recent_runs import (
     recent_external_monitor_observation_unchanged as _recent_external_monitor_observation_unchanged,
 )
 from ..quota.selected_todo_projection import (
@@ -55,15 +58,25 @@ from ..quota.selected_todo_projection import (
 from ..quota.stall_repair import (
     stall_repair_blocked_action_scope,
     stall_repair_payload,
+)
+from ..quota.stall_repair import (
     standing_decision_authority_payload_from_status_item as _standing_decision_authority_payload_from_status_item,
 )
 from ..quota.task_orchestration import (
     PEER_COORDINATION_BLOCKED_ACTION,
     attach_task_orchestration_payload,
-    payload_work_lane_contract as _payload_work_lane_contract,
+    task_goal_route_hint,
     task_orchestration_contract_is_actionable,
     task_orchestration_requires_material_change_stop,
-    task_goal_route_hint,
+)
+from ..quota.task_orchestration import (
+    payload_work_lane_contract as _payload_work_lane_contract,
+)
+from ..runtime.decision_freshness import (
+    decision_freshness_warning as _decision_freshness_warning,
+)
+from ..runtime.promotion_readiness import (
+    promotion_readiness_warning as _promotion_readiness_warning,
 )
 from ..scheduler.automation_liveness import build_automation_liveness
 from ..scheduler.execution_context import (
@@ -78,9 +91,6 @@ from ..scheduler.state import (
     CODEX_APP_SURFACE,
     load_scheduler_state,
 )
-from ..turn_driver.delivery_continuity import evaluate_delivery_route
-from ..runtime.decision_freshness import decision_freshness_warning as _decision_freshness_warning
-from ..runtime.promotion_readiness import promotion_readiness_warning as _promotion_readiness_warning
 from ..todos.contract import (
     normalize_todo_claimed_by,
 )
@@ -92,10 +102,15 @@ from ..todos.quota_summary import (
 )
 from ..todos.user_gate import (
     apply_scoped_user_gate_fallback_projection as _apply_scoped_user_gate_fallback_projection,
+)
+from ..todos.user_gate import (
     build_gate_prompt as _build_gate_prompt,
+)
+from ..todos.user_gate import (
     build_user_todo_notification as _build_user_todo_notification,
 )
 from ..todos.write_hint import build_todo_write_hint
+from ..turn_driver.delivery_continuity import evaluate_delivery_route
 from ..work_items.action_portfolio import qualify_action_selection
 from ..work_items.planning_projection import (
     build_quota_planning_projections,
@@ -104,22 +119,26 @@ from ..work_items.execution_obligation import build_execution_obligation
 from ..work_items.goal_route_hint import build_goal_route_hint
 from ..work_items.interaction_contract import (
     _user_action_owns_empty_agent_lane_from_summaries as _user_action_owns_empty_agent_lane,
+)
+from ..work_items.interaction_contract import (
     build_interaction_contract,
     build_protocol_action_packet,
     finalize_user_gate_notification_cooldown,
+)
+from ..work_items.interaction_contract import (
     user_channel_action_required as _user_channel_action_required,
 )
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
+from ..work_items.progress_observation import build_replan_action_packet
 from ..work_items.work_lane import (
     work_lane_contract_is_due_monitor_attempt,
     work_lane_contract_is_receipt_bound_monitor_settled,
 )
-
-from .should_run_prepare import _QuotaDecisionPreparation
 from .settlement_precedence import (
     apply_settled_replay_payload_precedence,
     clear_quota_action_projections,
 )
+from .should_run_prepare import _QuotaDecisionPreparation
 
 
 def _compact_autonomous_candidate_context(
@@ -287,7 +306,7 @@ def _apply_agent_monitor_only_precedence(
     payload: dict[str, Any],
     *,
     monitor_only: bool,
-    inbox_reply_due: bool,
+    inbox_priority_due: bool,
 ) -> None:
     """Keep monitor/reply lanes alive while suppressing advancement work.
 
@@ -295,7 +314,7 @@ def _apply_agent_monitor_only_precedence(
     from turning a configured monitor-only peer back into an advancement lane.
     """
 
-    if not monitor_only or inbox_reply_due:
+    if not monitor_only or inbox_priority_due:
         return
     work_lane = (
         payload.get("work_lane_contract")
@@ -486,7 +505,7 @@ def _delivery_preemptions_for_route(
         preemptions.append("heartbeat_receipt")
     if (
         due_monitor_attempt
-        or prepared.inbox_reply_due
+        or prepared.inbox_priority_due
         or task_orchestration_contract_is_actionable(
             prepared.task_orchestration_contract
         )
@@ -548,7 +567,7 @@ def _resolve_agent_lane_delivery_route(
     if (
         fallback is None
         and not due_monitor_attempt
-        and not prepared.inbox_reply_due
+        and not prepared.inbox_priority_due
         and not task_orchestration_contract_is_actionable(
             prepared.task_orchestration_contract
         )
@@ -761,6 +780,7 @@ def _resolve_quota_should_run_route(
         replan_obligation=prepared.replan_obligation,
         goal_health_ok=prepared.goal_health_ok,
         inbox_reply_due=prepared.inbox_reply_due,
+        inbox_material_review_due=prepared.inbox_material_review_due,
         agent_frontier_id=prepared.agent_frontier_id,
         registered_agent_ids=prepared.registered_agent_ids,
         goal_frontier_projection=prepared.goal_frontier_projection,
@@ -840,7 +860,7 @@ def _resolve_quota_should_run_route(
     if (
         external_evidence_observation
         and not prepared.workspace_guard
-        and not prepared.inbox_reply_due
+        and not prepared.inbox_priority_due
     ):
         normal_delivery_allowed = False
         should_run = True
@@ -1400,7 +1420,7 @@ def _build_quota_should_run_payload(
     _apply_agent_monitor_only_precedence(
         payload,
         monitor_only=prepared.agent_monitor_only,
-        inbox_reply_due=prepared.inbox_reply_due,
+        inbox_priority_due=prepared.inbox_priority_due,
     )
     apply_settled_replay_payload_precedence(
         payload,

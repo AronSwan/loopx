@@ -43,6 +43,7 @@ from ..extensions.lark.routed_inbox import (
     inspect_routed_lark_event_inbox,
     project_routed_lark_event_inbox_urgency,
     resolve_routed_lark_inbox_config,
+    settle_routed_lark_event_inbox_material_review,
 )
 from ..extensions.runtime import (
     default_extension_state_file,
@@ -122,6 +123,23 @@ def register_lark_inbox_commands(
     ack.add_argument("--agent-id")
     ack.add_argument("--message-id", action="append", required=True)
     ack.add_argument("--execute", action="store_true")
+    material_review = sub.add_parser(
+        "material-review",
+        help=(
+            "Settle one unaddressed message or attachment with a committed "
+            "effect receipt or an explicit no-follow-up rationale."
+        ),
+    )
+    add_subcommand_format(material_review)
+    material_review.add_argument("--project")
+    material_review.add_argument("--config")
+    material_review.add_argument("--goal-id")
+    material_review.add_argument("--agent-id")
+    material_review.add_argument("--message-id", required=True)
+    disposition = material_review.add_mutually_exclusive_group(required=True)
+    disposition.add_argument("--effect-receipt-json")
+    disposition.add_argument("--no-follow-up")
+    material_review.add_argument("--execute", action="store_true")
     reply = sub.add_parser(
         "reply",
         help=(
@@ -247,7 +265,7 @@ def _read_stdin_events() -> list[object]:
 def _required_extension_permissions(command: str) -> tuple[str, ...]:
     if command == "drain":
         return (LARK_INBOX_READ_PERMISSION,)
-    if command in {"ack", "ingest"}:
+    if command in {"ack", "material-review", "ingest"}:
         return (LARK_INBOX_WRITE_PERMISSION,)
     if command == "history-catch-up":
         return (LARK_COLLECTOR_PERMISSION, LARK_INBOX_WRITE_PERMISSION)
@@ -368,6 +386,7 @@ def handle_lark_inbox_command(
         inbox_commands = {
             "drain",
             "ack",
+            "material-review",
             "reply",
             "processing",
             "reaction-complete",
@@ -411,6 +430,22 @@ def handle_lark_inbox_command(
                 project=project,
                 config_path=config_path,
                 message_ids=args.message_id,
+                execute=args.execute,
+            )
+        elif args.lark_inbox_command == "material-review":
+            effect_receipt = (
+                json.loads(args.effect_receipt_json)
+                if args.effect_receipt_json
+                else None
+            )
+            if effect_receipt is not None and not isinstance(effect_receipt, dict):
+                raise ValueError("effect receipt JSON must be an object")
+            payload = settle_routed_lark_event_inbox_material_review(
+                project=project,
+                config_path=config_path,
+                message_id=args.message_id,
+                effect_receipt=effect_receipt,
+                no_follow_up_reason=args.no_follow_up,
                 execute=args.execute,
             )
         elif args.lark_inbox_command == "reply":
