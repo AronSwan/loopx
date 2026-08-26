@@ -10,12 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ...file_lock import exclusive_file_lock
 from ...control_plane.work_items.operator_inbox import (
     OperatorInboxSourceContract,
     operator_inbox_attention_kind,
     project_operator_inbox_urgency,
 )
+from ...file_lock import exclusive_file_lock
 from ..external_connector_runtime import (
     EFFECT_RECEIPT_SCHEMA_VERSION,
     ExternalEffectKind,
@@ -50,6 +50,7 @@ LARK_OPERATOR_INBOX_SOURCE_CONTRACT = OperatorInboxSourceContract(
     destination_field="chat_id",
     destination_pattern=CHAT_ID_PATTERN,
     attachment_count_field="attachment_count",
+    addressed_flag_field="addressed_to_bot",
 )
 
 
@@ -220,7 +221,12 @@ def _load_processed(path: Path) -> set[str]:
     }
 
 
-def _event_from_payload(payload: object) -> dict[str, Any] | None:
+def _event_from_payload(
+    payload: object,
+    *,
+    bot_display_name: str | None = None,
+    allow_text_addressing: bool = False,
+) -> dict[str, Any] | None:
     if (
         not isinstance(payload, Mapping)
         or payload.get("schema_version") != EVENT_SCHEMA_VERSION
@@ -266,6 +272,18 @@ def _event_from_payload(payload: object) -> dict[str, Any] | None:
         reply_context_verified
         and "parent_id" in event
         and payload.get("reply_to_bot") is True
+    )
+    event["addressed_to_bot"] = bool(
+        event["reply_to_bot"]
+        or (
+            bot_display_name is not None
+            and lark_event_mentions_bot(
+                payload,
+                bot_display_name=bot_display_name,
+                allow_text_fallback=allow_text_addressing,
+            )
+        )
+        or (bot_display_name is None and payload.get("addressed_to_bot") is True)
     )
     return event
 
@@ -322,9 +340,11 @@ def _event_attention_kind(
     bot_display_name: str,
     capture_scope: str,
 ) -> str | None:
-    if lark_event_mentions_bot(event, bot_display_name=bot_display_name):
-        return "direct_mention"
     normalized = dict(event)
+    normalized["addressed_to_operator"] = bool(
+        event.get("addressed_to_bot") is True
+        or lark_event_mentions_bot(event, bot_display_name=bot_display_name)
+    )
     normalized["reply_to_operator"] = bool(
         event.get("reply_context_verified") is True
         and event.get("reply_to_bot") is True
@@ -341,20 +361,44 @@ def _normalized_mention_name(value: Any) -> str:
     return " ".join(str(value or "").strip().lstrip("@").split()).casefold()
 
 
-def lark_event_mentions_bot(event: Mapping[str, Any], *, bot_display_name: str) -> bool:
-    """Recognize provider-native direct mentions without message readback."""
+def lark_event_mentions_bot(
+    event: Mapping[str, Any],
+    *,
+    bot_display_name: str,
+    allow_text_fallback: bool = True,
+) -> bool:
+    """Recognize one provider-native or exact legacy Bot mention."""
 
     if event.get("mentioned") is True:
         return True
     expected = _normalized_mention_name(bot_display_name)
     mentions = event.get("mentions")
-    return bool(
+    provider_mention = bool(
         expected
         and isinstance(mentions, list)
         and any(
             isinstance(mention, Mapping)
             and _normalized_mention_name(mention.get("name")) == expected
             for mention in mentions
+        )
+    )
+    if provider_mention:
+        return True
+    # A provider-supplied structured negative is authoritative.  In
+    # particular, do not reinterpret an @mention of somebody else because the
+    # surrounding message also discusses LoopX.
+    if "mentions" in event or "mentioned" in event:
+        return False
+    if not expected or not allow_text_fallback:
+        return False
+    content = str(event.get("content") or "")
+    escaped = re.escape(" ".join(str(bot_display_name).strip().lstrip("@").split()))
+    return bool(
+        escaped
+        and re.search(
+            rf"(?:^|[\s,，!！?？;；:：])@{escaped}(?:$|[\s,，!！?？;；:：])",
+            content,
+            re.IGNORECASE,
         )
     )
 
@@ -383,7 +427,11 @@ def ingest_lark_event_inbox(
     invalid_count = 0
     duplicate_count = 0
     for payload in events:
-        event = _event_from_payload(payload)
+        event = _event_from_payload(
+            payload,
+            bot_display_name=str(config["reply"].get("bot_display_name") or ""),
+            allow_text_addressing=config["capture_scope"] == "addressed_only",
+        )
         if event is None:
             invalid_count += 1
             continue

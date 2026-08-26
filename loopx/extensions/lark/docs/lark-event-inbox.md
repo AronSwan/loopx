@@ -438,12 +438,16 @@ loopx lark-inbox material-review \
   --execute
 ```
 
-Urgency classification stays local: explicit `@` mentions of the configured
-bot/LoopX, bounded question signals on addressed events, and provider-verified
-direct replies to the configured bot produce counts only. A question elsewhere in the
-group or a reply to a human does not become `reply_due`. The agent still drains
-and interprets the source event before deciding the durable effect or reply; the
-summary is a scheduling signal, not semantic authority.
+Urgency classification stays local. Under `configured_chat_all`, provider-native
+mention evidence is normalized into a compact `addressed_to_bot` flag before the
+event is persisted. Only that typed flag or a provider-verified direct reply can
+produce Bot reply urgency; bounded question signals distinguish a direct question
+only after addressing is proven. A question elsewhere in the group, an `@` mention
+of another member, Bot-name prose, or a reply to a human remains material review and
+does not become `reply_due`. Legacy persisted events without typed addressing also
+fail closed to material review. The agent still drains and interprets the source
+event before deciding the durable effect or reply; the summary is a scheduling
+signal, not semantic authority.
 
 For a direct question, explicit bot mention, or verified reply to the configured
 bot, write the requested durable effect first, preview one concise reply,

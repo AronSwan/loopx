@@ -29,6 +29,7 @@ class OperatorInboxSourceContract:
     destination_field: str
     destination_pattern: re.Pattern[str]
     attachment_count_field: str
+    addressed_flag_field: str | None = None
 
 
 def _safe_inbox_path(project: Path, raw_path: object) -> Path:
@@ -105,21 +106,23 @@ def _pending_events(
             or (not content and attachment_count == 0)
         ):
             continue
-        events.setdefault(
-            message_id,
-            {
-                "message_id": message_id,
-                "create_time": str(payload.get("create_time") or "")[:40],
-                "content": content,
-                "attachment_count": attachment_count,
-                "reply_context_verified": payload.get("reply_context_verified") is True,
-                "reply_to_operator": bool(
-                    payload.get("reply_context_verified") is True
-                    and source_contract.message_id_pattern.fullmatch(parent_id)
-                    and payload.get(source_contract.reply_flag_field) is True
-                ),
-            },
-        )
+        event = {
+            "message_id": message_id,
+            "create_time": str(payload.get("create_time") or "")[:40],
+            "content": content,
+            "attachment_count": attachment_count,
+            "reply_context_verified": payload.get("reply_context_verified") is True,
+            "reply_to_operator": bool(
+                payload.get("reply_context_verified") is True
+                and source_contract.message_id_pattern.fullmatch(parent_id)
+                and payload.get(source_contract.reply_flag_field) is True
+            ),
+        }
+        if source_contract.addressed_flag_field is not None:
+            event["addressed_to_operator"] = bool(
+                payload.get(source_contract.addressed_flag_field) is True
+            )
+        events.setdefault(message_id, event)
     return [
         event for message_id, event in events.items() if message_id not in processed
     ]
@@ -157,6 +160,8 @@ def operator_inbox_attention_kind(
         and event.get("reply_to_operator") is True
     ):
         return "reply_to_operator"
+    typed_addressing = "addressed_to_operator" in event
+    addressed_to_operator = event.get("addressed_to_operator") is True
     content = str(event.get("content") or "")
     folded = content.casefold()
     operator_name = " ".join(operator_display_name.split()).casefold()
@@ -164,11 +169,19 @@ def operator_inbox_attention_kind(
         operator_name and "@" in content and operator_name in folded
     )
     loopx_mention = "@" in content and "loopx" in folded
-    if capture_scope != "addressed_only" and not explicit_mention and not loopx_mention:
+    if typed_addressing:
+        # A configured-chat source must prove addressing at its provider
+        # normalization boundary.  Missing/false evidence stays material-only;
+        # the control plane must not guess from unrelated @mentions or prose.
+        if capture_scope != "addressed_only" and not addressed_to_operator:
+            return None
+    elif (
+        capture_scope != "addressed_only" and not explicit_mention and not loopx_mention
+    ):
         return None
     if QUESTION_SIGNAL_PATTERN.search(content):
         return "direct_question"
-    if explicit_mention or loopx_mention:
+    if addressed_to_operator or explicit_mention or loopx_mention:
         return "direct_mention"
     return None
 

@@ -237,6 +237,47 @@ def test_execute_commits_inbox_before_advancing_cursor(tmp_path: Path) -> None:
     ]
 
 
+def test_history_preserves_structured_negative_mention_evidence(
+    tmp_path: Path,
+) -> None:
+    project, config = _project(tmp_path)
+    message = _message(
+        "om_other_user_mention",
+        "@Alice can LoopX handle this?",
+    )
+    message["mentions"] = [{"name": "Alice"}]
+    message["mentioned"] = False
+    receipt = _catch_up(
+        project,
+        config,
+        PageRunner(
+            [
+                {
+                    "messages": [message],
+                    "total": 1,
+                    "has_more": False,
+                    "page_token": "",
+                }
+            ]
+        ),
+        execute=True,
+    )
+    stored = json.loads(
+        (
+            project
+            / ".loopx"
+            / "inbox"
+            / "requirements-a"
+            / "om_other_user_mention.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert receipt["ok"] is True
+    assert stored["addressed_to_bot"] is False
+    assert "mentions" not in stored
+    assert "mentioned" not in stored
+
+
 def test_cursor_resumes_then_replays_completed_history_without_provider_read(
     tmp_path: Path,
 ) -> None:
