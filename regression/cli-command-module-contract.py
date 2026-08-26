@@ -71,17 +71,24 @@ def main() -> int:
         root = Path(raw_tmp)
         home = root / "home"
         home.mkdir()
+        project = root / "project"
+        registry = project / ".loopx" / "registry.json"
         runtime_root = root / "runtime"
+        caller_registry = root / "caller-registry"
+        caller_registry.mkdir()
         environment = os.environ.copy()
         # This contract exercises command wiring, not the caller's installed state.
         environment.update(
             HOME=str(home),
+            LOOPX_REGISTRY=str(caller_registry),
             LOOPX_RUNTIME_ROOT=str(runtime_root),
             USERPROFILE=str(home),
         )
 
         def isolated_cli(*args: str) -> dict[str, object]:
             return run_cli(
+                "--registry",
+                str(registry),
                 "--runtime-root",
                 str(runtime_root),
                 *args,
@@ -108,7 +115,7 @@ def main() -> int:
         demo = isolated_cli(
             "demo",
             "--project",
-            str(root / "project"),
+            str(project),
             "--goal-id",
             "command-module-demo",
         )
