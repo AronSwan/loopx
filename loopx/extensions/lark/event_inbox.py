@@ -4,10 +4,12 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ...file_lock import exclusive_file_lock
 from ...control_plane.work_items.operator_inbox import (
     OperatorInboxSourceContract,
     operator_inbox_attention_kind,
@@ -509,6 +511,43 @@ def _write_material_review_ledger(path: Path, payload: Mapping[str, Any]) -> Non
     temporary.replace(path)
 
 
+def _acknowledge_lark_event_inbox_state(
+    *,
+    inbox: Path,
+    message_ids: Sequence[str],
+    execute: bool,
+) -> dict[str, Any]:
+    processed_path = inbox / "processed.json"
+    existing = _load_processed(processed_path)
+    added = [value for value in message_ids if value not in existing]
+    if execute and added:
+        inbox.mkdir(parents=True, exist_ok=True)
+        merged = sorted(existing | set(added))
+        payload = {
+            "schema_version": PROCESSED_SCHEMA_VERSION,
+            "message_ids": merged,
+            "last_processed_at": datetime.now(UTC).isoformat(),
+        }
+        temporary = processed_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(processed_path)
+    return {
+        "ok": True,
+        "schema_version": "lark_event_inbox_ack_v0",
+        "execute": execute,
+        "requested_count": len(message_ids),
+        "new_count": len(added),
+        "already_acknowledged_count": len(message_ids) - len(added),
+        "write_performed": bool(execute and added),
+        "message_ids": list(message_ids),
+        "local_private_content_captured": False,
+        "external_writes_performed": False,
+    }
+
+
 def settle_lark_event_inbox_material_review(
     *,
     project: str | Path,
@@ -587,48 +626,56 @@ def settle_lark_event_inbox_material_review(
         "effect_kind": str(receipt.get("effect_kind") or ""),
         "status": "committed",
     }
-    ledger_path, ledger = _material_review_ledger(inbox)
-    receipts = dict(ledger["receipts"])
-    existing_receipt = receipts.get(message)
-    if existing_receipt is not None and existing_receipt != compact_receipt:
-        return {
-            "ok": False,
-            "schema_version": "lark_event_inbox_material_review_settlement_v0",
-            "status": "material_review_receipt_conflict",
-            "execute": execute,
-            "event_ref": event_ref,
-            "write_performed": False,
-            "local_private_content_returned": False,
-        }
-    processed = _load_processed(inbox / "processed.json")
-    if message in processed and existing_receipt is None:
-        return {
-            "ok": False,
-            "schema_version": "lark_event_inbox_material_review_settlement_v0",
-            "status": "material_review_receipt_missing_for_processed_event",
-            "execute": execute,
-            "event_ref": event_ref,
-            "write_performed": False,
-            "local_private_content_returned": False,
-        }
-    ledger_written = False
-    if execute and existing_receipt is None:
-        receipts[message] = compact_receipt
-        _write_material_review_ledger(
-            ledger_path,
-            {
-                "schema_version": MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION,
-                "receipts": receipts,
-                "updated_at": datetime.now(UTC).isoformat(),
-            },
+    lock = (
+        exclusive_file_lock(
+            inbox / ".state" / "settlement",
+            operation="settle_lark_event_inbox_material_review",
         )
-        ledger_written = True
-    acknowledged = acknowledge_lark_event_inbox(
-        project=project,
-        config_path=config_path,
-        message_ids=[message],
-        execute=execute,
+        if execute
+        else nullcontext()
     )
+    with lock:
+        ledger_path, ledger = _material_review_ledger(inbox)
+        receipts = dict(ledger["receipts"])
+        existing_receipt = receipts.get(message)
+        if existing_receipt is not None and existing_receipt != compact_receipt:
+            return {
+                "ok": False,
+                "schema_version": "lark_event_inbox_material_review_settlement_v0",
+                "status": "material_review_receipt_conflict",
+                "execute": execute,
+                "event_ref": event_ref,
+                "write_performed": False,
+                "local_private_content_returned": False,
+            }
+        processed = _load_processed(inbox / "processed.json")
+        if message in processed and existing_receipt is None:
+            return {
+                "ok": False,
+                "schema_version": "lark_event_inbox_material_review_settlement_v0",
+                "status": "material_review_receipt_missing_for_processed_event",
+                "execute": execute,
+                "event_ref": event_ref,
+                "write_performed": False,
+                "local_private_content_returned": False,
+            }
+        ledger_written = False
+        if execute and existing_receipt is None:
+            receipts[message] = compact_receipt
+            _write_material_review_ledger(
+                ledger_path,
+                {
+                    "schema_version": MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION,
+                    "receipts": receipts,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            ledger_written = True
+        acknowledged = _acknowledge_lark_event_inbox_state(
+            inbox=inbox,
+            message_ids=[message],
+            execute=execute,
+        )
     return {
         "ok": True,
         "schema_version": "lark_event_inbox_material_review_settlement_v0",
@@ -691,32 +738,17 @@ def acknowledge_lark_event_inbox(
     if not normalized or len(normalized) != len(message_ids):
         raise ValueError("ack requires valid Lark message ids")
     inbox = config["inbox_path"]
-    processed_path = inbox / "processed.json"
-    existing = _load_processed(processed_path)
-    added = [value for value in normalized if value not in existing]
-    if execute and added:
-        inbox.mkdir(parents=True, exist_ok=True)
-        merged = sorted(existing | set(added))
-        payload = {
-            "schema_version": PROCESSED_SCHEMA_VERSION,
-            "message_ids": merged,
-            "last_processed_at": datetime.now(UTC).isoformat(),
-        }
-        temporary = processed_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+    lock = (
+        exclusive_file_lock(
+            inbox / ".state" / "settlement",
+            operation="acknowledge_lark_event_inbox",
         )
-        temporary.replace(processed_path)
-    return {
-        "ok": True,
-        "schema_version": "lark_event_inbox_ack_v0",
-        "execute": execute,
-        "requested_count": len(normalized),
-        "new_count": len(added),
-        "already_acknowledged_count": len(normalized) - len(added),
-        "write_performed": bool(execute and added),
-        "message_ids": normalized,
-        "local_private_content_captured": False,
-        "external_writes_performed": False,
-    }
+        if execute
+        else nullcontext()
+    )
+    with lock:
+        return _acknowledge_lark_event_inbox_state(
+            inbox=inbox,
+            message_ids=normalized,
+            execute=execute,
+        )
