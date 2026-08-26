@@ -2,18 +2,18 @@
 """Thin walkthrough smoke: stop → takeover command → resume → state-aware wake.
 
 Proves the contributor-facing Auto Research control cycle on synthetic state.
-Reuses the shipped start/worker-loop path; no second launcher, no live model.
+Reuses helpers from the shipped stop-marker smoke (no duplicated lane/env
+boilerplate) and the existing start/worker-loop path; no second launcher.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import subprocess
+import importlib.util
 import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,93 +33,24 @@ from loopx.control_plane.agents.multi_agent.visible_launch_policy import (  # no
     resolve_visible_launch_policy,
 )
 
-GOAL_ID = "loopx-auto-research-demo"
-AGENT_IDS = [
-    "research-curator",
-    "hypothesis-proposer",
-    "research-executor",
-    "evaluator-promoter",
-]
-LANES = [
-    "research-curator:research-curator:research_curator",
-    "hypothesis-proposer:hypothesis-proposer:hypothesis_proposer",
-    "research-executor:research-executor:research_executor",
-    "evaluator-promoter:evaluator-promoter:evaluator_promoter",
-]
+
+def _load_stop_marker_smoke() -> ModuleType:
+    path = REPO_ROOT / "examples" / "auto-research-stop-marker-smoke.py"
+    spec = importlib.util.spec_from_file_location("ar_stop_marker_smoke", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load stop-marker smoke from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _env() -> dict[str, str]:
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
-    return env
-
-
-def assert_public_safe(payload: Any) -> None:
-    text = json.dumps(payload, sort_keys=True) if not isinstance(payload, str) else payload
-    forbidden = [
-        "/" + "Users/",
-        "/" + "private/",
-        "/" + "tmp/",
-        "http" + "://",
-        "https" + "://",
-        "api" + "_key",
-        "pass" + "word",
-        "sec" + "ret",
-    ]
-    leaked = [needle for needle in forbidden if needle.lower() in text.lower()]
-    assert not leaked, leaked
-
-
-def _stop_marker(workspace: Path) -> Path:
-    return workspace / ".loopx-auto-research-stop"
-
-
-def _run_worker_loop(
-    *,
-    registry: Path,
-    runtime_root: str | None,
-    workspace: Path,
-    max_rounds: int = 1,
-) -> dict[str, Any]:
-    args = [
-        sys.executable,
-        "-m",
-        "loopx.cli",
-        "--registry",
-        str(registry),
-        "--runtime-root",
-        str(runtime_root),
-        "--format",
-        "json",
-        "auto-research",
-        "worker-loop",
-        "--goal-id",
-        GOAL_ID,
-        "--lane-count",
-        str(len(AGENT_IDS)),
-        "--max-rounds",
-        str(max_rounds),
-        "--visible-lanes-accepted",
-        "--complete-selected-todo",
-        "--execute",
-    ]
-    for agent_id in AGENT_IDS:
-        args.extend(["--agent-id", agent_id])
-    result = subprocess.run(
-        args,
-        cwd=workspace,
-        env=_env(),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"worker-loop failed rc={result.returncode}\n"
-            f"stdout={result.stdout}\nstderr={result.stderr}"
-        )
-    return json.loads(result.stdout)
+_STOP = _load_stop_marker_smoke()
+GOAL_ID = _STOP.GOAL_ID
+AGENT_IDS = _STOP.AGENT_IDS
+LANES = _STOP.LANES
+assert_public_safe = _STOP.assert_public_safe
+_run_worker_loop = _STOP._run_worker_loop
+_stop_marker = _STOP._stop_marker
 
 
 def _seed_demo() -> tuple[Path, Path, str | None, Path]:
