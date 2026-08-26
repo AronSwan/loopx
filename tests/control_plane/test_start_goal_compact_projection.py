@@ -1863,8 +1863,8 @@ def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
         f"{GOAL_TEXT}\n"
         "## Agent Todo\n"
         "- [ ] [P1] continue the scheduler coverage fix\n"
-        "  <!-- status=open task_class=advancement_task claimed_by="
-        f"{AGENT_ID} todo_id=todo_3586abcd0001 -->\n",
+        "  <!-- loopx:todo status=open task_class=advancement_task "
+        f"claimed_by={AGENT_ID} todo_id=todo_3586abcd0001 -->\n",
         encoding="utf-8",
     )
     return project
@@ -1910,4 +1910,35 @@ def test_guided_takeover_without_runnable_frontier_keeps_unconditional_authoring
     payload = _build(project, include_detail=False)
     step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
     assert "write_ordered_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
+
+
+def _write_connected_project_with_blocked_agent_todo(root: Path) -> Path:
+    project = _write_connected_project(root)
+    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    state_file.write_text(
+        "# Active Goal State\n"
+        "## Objective\n"
+        f"{GOAL_TEXT}\n"
+        "## Agent Todo\n"
+        "- [ ] [P1] continue the scheduler coverage fix\n"
+        "  <!-- loopx:todo status=blocked task_class=advancement_task "
+        f"claimed_by={AGENT_ID} todo_id=todo_3586bbbb0001 -->\n",
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_guided_takeover_with_only_blocked_todo_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    # A blocked Todo claimed by the agent is not a runnable frontier: the
+    # packet must fail closed to unconditional planning instead of projecting
+    # a takeover delta onto work that cannot proceed.
+    project = _write_connected_project_with_blocked_agent_todo(tmp_path)
+    payload = _build(project, include_detail=False)
+    steps = payload["guided_transaction"]["ordered_steps"]
+    step_ids = [step["id"] for step in steps]
+    assert "write_ordered_todos" in step_ids
+    assert "plan_ranked_todos" in step_ids
     assert "apply_todo_delta" not in step_ids

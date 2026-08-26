@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from ...control_plane.todos.contract import normalize_todo_status
 from ...project_prompt import render_cli_command_prefix, shell_arg
 from ...registry import registry_goals, resolve_state_file
 
@@ -32,9 +33,11 @@ def existing_runnable_agent_frontier(
 ) -> list[dict[str, Any]] | None:
     """Runnable advancement agent Todos already present in the goal's state.
 
-    Returns ``None`` whenever the frontier cannot be proven (not connected,
-    unknown goal, missing or unreadable state file, or nothing runnable), so
-    callers keep the unconditional planning contract — fail-closed.
+    Blocked Todos (``status: blocked``) are not runnable and never enter the
+    frontier. Returns ``None`` whenever the frontier cannot be proven (not
+    connected, unknown goal, missing or unreadable state file, or nothing
+    runnable), so callers keep the unconditional planning contract —
+    fail-closed.
     """
     if inspection.get("connection_state") != "connected":
         return None
@@ -76,6 +79,7 @@ def existing_runnable_agent_frontier(
         if isinstance(item, dict)
         and not item.get("done")
         and item.get("task_class") != "continuous_monitor"
+        and normalize_todo_status(item.get("status")) != "blocked"
     ]
     if effective_agent_id:
         owned = [
