@@ -750,6 +750,7 @@ def interaction_next_cli_actions(
             payload,
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id,
         )
     capability_reentry_actions = (
         [str(candidate["command"]) for candidate in capability_reentry["candidates"]]
@@ -1243,6 +1244,7 @@ def _build_interaction_cli_channel(
             payload,
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id,
         )
     settlement_plan, replan_settlement_contract = (
         _turn_scoped_cli_settlement_context(
@@ -1448,6 +1450,7 @@ def build_interaction_contract(
         payload,
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id,
     )
 
     user_channel = _build_interaction_user_channel(

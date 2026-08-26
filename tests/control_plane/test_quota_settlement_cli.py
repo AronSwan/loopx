@@ -217,23 +217,38 @@ def _configure_repository_write_todo(project: Path) -> Path:
     return state_path
 
 
-def _configure_selectable_alternative(project: Path) -> None:
+def _configure_selectable_alternative(
+    project: Path,
+    *,
+    required_capability: str | None = None,
+) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
+    capability_metadata = (
+        f" required_capabilities={required_capability}"
+        if required_capability
+        else ""
+    )
     state_path.write_text(
         state_text.rstrip()
         + "\n- [ ] [P1] Advance the independent alternative delivery.\n"
         + "  <!-- loopx:todo "
         + f"todo_id={ALTERNATIVE_TODO_ID} status=open "
-        + "task_class=advancement_task action_kind=implement -->\n"
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n"
         + "- [ ] [P1] Advance the second independent alternative.\n"
         + "  <!-- loopx:todo "
         + f"todo_id={SECOND_ALTERNATIVE_TODO_ID} status=open "
-        + "task_class=advancement_task action_kind=implement -->\n"
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n"
         + "- [ ] [P1] Advance the fourth eligible action.\n"
         + "  <!-- loopx:todo "
         + f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open "
-        + "task_class=advancement_task action_kind=implement -->\n",
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n",
         encoding="utf-8",
     )
 
@@ -1388,6 +1403,67 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert any(
         "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
     )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def test_visible_goal_capability_reentry_preserves_turn_through_selection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability="network",
+    )
+    _configure_runtime_capability_reentry_fixture(project)
+    _configure_selectable_alternative(project, required_capability="network")
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile="codex_app_ssh_goal",
+        thin=True,
+    )
+    guard_command = prompt["quota_guard_command"].replace(
+        "$HOME/.codex/loopx/registry.global.json",
+        str(registry_path),
+    )
+
+    first_rc, first = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert first_rc == 0, first
+    turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    reentry_command = first["runtime_capability_reentry"]["candidates"][0][
+        "command"
+    ]
+    assert f"--turn-instance-id {turn_instance_id}" in reentry_command
+
+    reentry_rc, reentry = _run_generated_cli(
+        reentry_command,
+        registry_path=registry_path,
+    )
+
+    assert reentry_rc == 0, reentry
+    cli_channel = reentry["interaction_contract"]["cli_channel"]
+    assert cli_channel["selection_required"] is True
+    selection = cli_channel["selection_command"]
+    assert f"--turn-instance-id {turn_instance_id}" in selection[
+        "command_args_template"
+    ]
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", REENTRY_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(
+        selection_command,
+        registry_path=registry_path,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == REENTRY_TODO_ID
+    receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert receipt_identity["turn_instance_id"] == turn_instance_id
+    assert receipt_identity["todo_id"] == REENTRY_TODO_ID
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
