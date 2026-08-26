@@ -78,18 +78,18 @@ class FakeProvider:
 
     def retrieve(self, **kwargs: Any) -> ContextProviderRetrieval:
         self.calls += 1
-        items = (
-            (
+        content = self.content
+        if content is None:
+            items: tuple[ContextProviderItem, ...] = ()
+        else:
+            items = (
                 ContextProviderItem(
                     resource_ref=f"{SCOPE_REF}/guidance.json",
                     summary="Scoped turn guidance.",
-                    content=self.content or "{}",
+                    content=content,
                     score=0.97,
                 ),
             )
-            if self.content
-            else ()
-        )
         return ContextProviderRetrieval(
             provider=self.provider_id,
             namespace=str(kwargs["namespace"]),
