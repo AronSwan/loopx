@@ -321,6 +321,16 @@ function completionOutcomeError(
   ) {
     return "completion has an invalid continuation outcome";
   }
+  if (
+    outcome.continuation === "successor" &&
+    (!Array.isArray(outcome.successor_todo_ids) ||
+      outcome.successor_todo_ids.length === 0 ||
+      !outcome.successor_todo_ids.every(
+        (todoId) => typeof todoId === "string" && todoId.length > 0,
+      ))
+  ) {
+    return "successor completion requires successor Todo ids";
+  }
   return null;
 }
 

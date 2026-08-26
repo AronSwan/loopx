@@ -99,6 +99,25 @@ test("non-terminal completion accepts a durable continuing Todo outcome", () => 
   assert.equal(reduced.result.failure, null);
 });
 
+test("successor completion requires durable successor Todo ids", () => {
+  const reduced = reduceTurnSettlementTransaction(
+    request({
+      turn_result_kind: "validated_completion",
+      writeback_payload: {
+        ok: true,
+        appended: true,
+        completion: { todo_id: "todo", continuation: "successor" },
+      },
+    }),
+  );
+
+  assert.equal(reduced.result.failure?.kind, "receipt_missing");
+  assert.match(
+    reduced.result.failure?.reason ?? "",
+    /successor completion requires successor Todo ids/,
+  );
+});
+
 test("preflight authorizes ordered providers without settling early", () => {
   const reduced = reduceTurnSettlementTransaction(
     request({
