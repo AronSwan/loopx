@@ -27,6 +27,8 @@ export const TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION =
   "loopx_turn_settlement_transaction_v0";
 export const TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION =
   "loopx_turn_settlement_reduction_v0";
+export const TURN_SETTLEMENT_OUTCOME_SCHEMA_VERSION =
+  "loopx_turn_settlement_outcome_v0";
 
 const BASE_SETTLEMENT_STEPS = [
   "validation",
@@ -94,6 +96,7 @@ interface TurnSettlementRequest {
   failed_provider_attempt: FailedProviderAttempt | null;
   effect_attempts: Partial<Record<ProviderStepKind, PreparedEffectAttempt>>;
   provider_observations: Partial<Record<ProviderStepKind, ProviderObservation>>;
+  turn_result_kind: string | null;
 }
 
 export interface TurnSettlementState {
@@ -249,6 +252,59 @@ function decodeRequest(value: unknown): TurnSettlementRequest {
       "provider_observations",
       decodeProviderObservation,
     ),
+    turn_result_kind: optionalNonEmptyString(
+      request.turn_result_kind,
+      "turn_result_kind",
+    ),
+  };
+}
+
+function terminalCompletionError(
+  identity: SettlementIdentity,
+  payload: JsonObject,
+): string | null {
+  const completion = payload.completion;
+  if (completion === null || completion === undefined) {
+    return "terminal closeout is missing its durable Todo outcome";
+  }
+  if (typeof completion !== "object" || Array.isArray(completion)) {
+    return "terminal closeout has an invalid durable Todo outcome";
+  }
+  const outcome = completion as JsonObject;
+  if (outcome.todo_id !== identity.todo_id) {
+    return "terminal closeout completion does not match the selected Todo";
+  }
+  if (outcome.continuation !== "no_followup") {
+    return "terminal closeout completion must declare no_followup";
+  }
+  return null;
+}
+
+function reductionWithTurnOutcome(
+  request: TurnSettlementRequest,
+  state: TurnSettlementState,
+  receipts: SettlementResult<unknown>["receipts"],
+  terminalPayload: JsonObject | null,
+  identity: SettlementIdentity,
+): TurnSettlementOutcome {
+  const result = settlementPure(state, receipts);
+  const projection = settlementResultPayload(result);
+  if (request.turn_result_kind !== null) {
+    const outcome: JsonObject = {
+      schema_version: TURN_SETTLEMENT_OUTCOME_SCHEMA_VERSION,
+      result_kind: request.turn_result_kind,
+      completed_phases: [...state.completed_phases],
+      failed_phase: null,
+    };
+    if (terminalPayload?.completion) outcome.completion = terminalPayload.completion;
+    projection.turn_outcome = outcome;
+  }
+  return {
+    schema_version: TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION,
+    decision: "complete",
+    provider_effects: [],
+    result,
+    settlement_result: projection,
   };
 }
 
@@ -574,6 +630,25 @@ export function reduceTurnSettlementTransaction(
       source_ref_prefix: "turn_journal",
     });
     if (terminal.failure !== null) return failedState(terminal);
+    // The generic settlement adapter predates Turn Todo lifecycle metadata.
+    // Only the explicit Turn transaction requests the canonical outcome and
+    // therefore requires that durable completion proof.
+    if (request.turn_result_kind !== null) {
+      const completionError = terminalCompletionError(
+        identity,
+        request.terminal_closeout_payload,
+      );
+      if (completionError !== null) {
+        return reduction(
+          settlementFailed({
+            kind: "receipt_missing",
+            step_kind: "terminal_closeout",
+            reason: completionError,
+            receipts,
+          }),
+        );
+      }
+    }
     receipts = [...receipts, ...terminal.receipts];
   } else if (request.terminal_closeout_payload !== null) {
     return reduction(
@@ -605,14 +680,15 @@ export function reduceTurnSettlementTransaction(
       "failed_provider_attempt remains after all required settlement effects committed",
     );
   }
-  return reduction(
-    settlementPure(
-      {
-        completed_phases: [...request.completed_phases],
-        writeback: request.writeback_payload,
-        quota_spend: request.quota_spend_payload,
-      },
-      receipts,
-    ),
+  return reductionWithTurnOutcome(
+    request,
+    {
+      completed_phases: [...request.completed_phases],
+      writeback: request.writeback_payload,
+      quota_spend: request.quota_spend_payload,
+    },
+    receipts,
+    request.terminal_closeout_payload,
+    identity,
   );
 }

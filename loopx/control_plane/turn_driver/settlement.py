@@ -10,6 +10,7 @@ from typing import Any
 from ..effect_program import (
     SettlementResult,
     SettlementStepKind,
+    settlement_result_payload,
 )
 from ..effect_runtime import effect_runtime_result
 from ..settlement_driver import decode_settlement_result
@@ -350,6 +351,7 @@ def execute_turn_driver_settlement(
     abort: TurnSettlementAbort | None = None,
     effect_attempts: Mapping[str, Mapping[str, Any]] | None = None,
     effect_resolvers: Mapping[SettlementStepKind, TurnEffectResolver] | None = None,
+    turn_result_kind: str | None = None,
 ) -> SettlementResult[TurnSettlementState]:
     """Run external effect providers and reduce one complete Turn settlement.
 
@@ -412,6 +414,7 @@ def execute_turn_driver_settlement(
                 ),
                 "effect_attempts": attempts,
                 "provider_observations": observations,
+                "turn_result_kind": turn_result_kind,
             },
         )
         if (
@@ -525,3 +528,25 @@ def execute_turn_driver_settlement(
         value_decoder=decode_state,
         projection_payload=(projection if isinstance(projection, Mapping) else None),
     )
+
+
+def turn_settlement_outcome(
+    result: SettlementResult[TurnSettlementState],
+) -> Mapping[str, Any] | None:
+    """Read the optional canonical Turn projection from the TS reduction."""
+
+    projection = settlement_result_payload(result)
+    if not isinstance(projection, Mapping):
+        return None
+    outcome = projection.get("turn_outcome")
+    if not isinstance(outcome, Mapping):
+        return None
+    phases = outcome.get("completed_phases")
+    if (
+        outcome.get("schema_version") != "loopx_turn_settlement_outcome_v0"
+        or not isinstance(outcome.get("result_kind"), str)
+        or not isinstance(phases, list)
+        or outcome.get("failed_phase") is not None
+    ):
+        raise RuntimeError("TypeScript Turn settlement outcome shape mismatch")
+    return dict(outcome)
