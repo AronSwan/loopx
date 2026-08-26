@@ -539,6 +539,114 @@ function pendingProviderEffects(
   return effects;
 }
 
+function terminalCloseoutRequestFailure(
+  request: TurnSettlementRequest,
+): SettlementResult<TurnSettlementState> | null {
+  if (
+    request.terminal_closeout_required &&
+    request.turn_result_kind !== null &&
+    request.turn_result_kind !== "validated_completion"
+  ) {
+    return settlementFailed<TurnSettlementState>({
+      kind: "terminal_closeout_rejected",
+      step_kind: "terminal_closeout",
+      reason: "terminal closeout requires a validated completion result",
+      receipts: [],
+    });
+  }
+  return null;
+}
+
+function reduceBaseProviderAction(
+  request: TurnSettlementRequest,
+  identity: SettlementIdentity,
+  stepKind: ProviderStepKind,
+  receipts: SettlementResult<unknown>["receipts"],
+): TurnSettlementReduction {
+  const effects = pendingProviderEffects(request, identity, stepKind);
+  return request.failed_provider_attempt === null
+    ? providerExecution(request, identity, stepKind, effects, receipts)
+    : providerFailure(identity, request, stepKind, receipts);
+}
+
+type TerminalCloseoutReduction =
+  | { outcome: TurnSettlementReduction; receipts?: never }
+  | { outcome?: never; receipts: SettlementResult<unknown>["receipts"] };
+
+function reduceTerminalCloseout(
+  request: TurnSettlementRequest,
+  identity: SettlementIdentity,
+  receipts: SettlementResult<unknown>["receipts"],
+): TerminalCloseoutReduction {
+  if (!request.terminal_closeout_required) {
+    if (request.terminal_closeout_payload !== null) {
+      return {
+        outcome: reduction(
+          settlementFailed({
+            kind: "terminal_closeout_rejected",
+            step_kind: "terminal_closeout",
+            reason: "Turn settlement contains an unrequested terminal closeout",
+            receipts,
+          }),
+        ),
+      };
+    }
+    return { receipts };
+  }
+
+  if (request.terminal_closeout_payload === null) {
+    const effects: readonly ProviderEffect[] = [
+      {
+        step_kind: "terminal_closeout",
+        action: "prepare_and_execute",
+        effect_ref: `${identity.effect_id}#terminal_closeout`,
+        completed_phases: [...request.completed_phases],
+      },
+    ];
+    return {
+      outcome: request.failed_provider_attempt === null
+        ? providerExecution(
+            request,
+            identity,
+            "terminal_closeout",
+            effects,
+            receipts,
+          )
+        : providerFailure(identity, request, "terminal_closeout", receipts),
+    };
+  }
+
+  const terminal = seedCommittedSteps({
+    identity,
+    ordered_steps: ["terminal_closeout"],
+    committed_payloads: {
+      terminal_closeout: request.terminal_closeout_payload,
+    },
+    completed_phases: ["terminal_closeout"],
+    transaction_phases: ["terminal_closeout"],
+    require_validation: false,
+    source_ref_prefix: "turn_journal",
+  });
+  if (terminal.failure !== null) return { outcome: failedState(terminal) };
+
+  const completionError = request.turn_result_kind === null
+    ? null
+    : terminalCompletionError(identity, request.terminal_closeout_payload);
+  if (completionError !== null) {
+    return {
+      outcome: reduction(
+        settlementFailed({
+          kind: "receipt_missing",
+          step_kind: "terminal_closeout",
+          reason: completionError,
+          receipts,
+        }),
+      ),
+    };
+  }
+  return { receipts: [...receipts, ...terminal.receipts] };
+}
+
 function providerExecution(
   request: TurnSettlementRequest,
   identity: SettlementIdentity,
@@ -685,6 +793,9 @@ function reduceTurnSettlementRequest(
   );
   if (matching.failure !== null) return failedState(matching);
 
+  const terminalRequestFailure = terminalCloseoutRequestFailure(request);
+  if (terminalRequestFailure !== null) return reduction(terminalRequestFailure);
+
   const base = settlementNextAction({
     identity,
     ordered_steps: BASE_SETTLEMENT_STEPS,
@@ -703,38 +814,15 @@ function reduceTurnSettlementRequest(
     if (base.step_kind === "validation" || base.step_kind === "terminal_closeout") {
       throw new Error(`unsupported base settlement step ${base.step_kind}`);
     }
-    const effects = pendingProviderEffects(request, identity, base.step_kind);
-    return request.failed_provider_attempt === null
-      ? providerExecution(
-          request,
-          identity,
-          base.step_kind,
-          effects,
-          base.result.receipts,
-        )
-      : providerFailure(
-          identity,
-          request,
-          base.step_kind,
-          base.result.receipts,
-        );
-  }
-
-  let receipts = [...base.result.receipts];
-  if (
-    request.terminal_closeout_required &&
-    request.turn_result_kind !== null &&
-    request.turn_result_kind !== "validated_completion"
-  ) {
-    return reduction(
-      settlementFailed({
-        kind: "terminal_closeout_rejected",
-        step_kind: "terminal_closeout",
-        reason: "terminal closeout requires a validated completion result",
-        receipts,
-      }),
+    return reduceBaseProviderAction(
+      request,
+      identity,
+      base.step_kind,
+      base.result.receipts,
     );
   }
+
+  let receipts: SettlementResult<unknown>["receipts"] = [...base.result.receipts];
   if (
     request.turn_result_kind === "validated_completion" &&
     !request.terminal_closeout_required
@@ -754,73 +842,9 @@ function reduceTurnSettlementRequest(
       );
     }
   }
-  if (request.terminal_closeout_required) {
-    if (request.terminal_closeout_payload === null) {
-      const effects: readonly ProviderEffect[] = [
-        {
-          step_kind: "terminal_closeout",
-          action: "prepare_and_execute",
-          effect_ref: `${identity.effect_id}#terminal_closeout`,
-          completed_phases: [...request.completed_phases],
-        },
-      ];
-      return request.failed_provider_attempt === null
-        ? providerExecution(
-            request,
-            identity,
-            "terminal_closeout",
-            effects,
-            receipts,
-          )
-        : providerFailure(
-            identity,
-            request,
-            "terminal_closeout",
-            receipts,
-          );
-    }
-    const terminal = seedCommittedSteps({
-      identity,
-      ordered_steps: ["terminal_closeout"],
-      committed_payloads: {
-        terminal_closeout: request.terminal_closeout_payload,
-      },
-      completed_phases: ["terminal_closeout"],
-      transaction_phases: ["terminal_closeout"],
-      require_validation: false,
-      source_ref_prefix: "turn_journal",
-    });
-    if (terminal.failure !== null) return failedState(terminal);
-    // The generic settlement adapter predates Turn Todo lifecycle metadata.
-    // Only the explicit Turn transaction requests the canonical outcome and
-    // therefore requires that durable completion proof.
-    if (request.turn_result_kind !== null) {
-      const completionError = terminalCompletionError(
-        identity,
-        request.terminal_closeout_payload,
-      );
-      if (completionError !== null) {
-        return reduction(
-          settlementFailed({
-            kind: "receipt_missing",
-            step_kind: "terminal_closeout",
-            reason: completionError,
-            receipts,
-          }),
-        );
-      }
-    }
-    receipts = [...receipts, ...terminal.receipts];
-  } else if (request.terminal_closeout_payload !== null) {
-    return reduction(
-      settlementFailed({
-        kind: "terminal_closeout_rejected",
-        step_kind: "terminal_closeout",
-        reason: "Turn settlement contains an unrequested terminal closeout",
-        receipts,
-      }),
-    );
-  }
+  const terminal = reduceTerminalCloseout(request, identity, receipts);
+  if (terminal.outcome !== undefined) return terminal.outcome;
+  receipts = terminal.receipts;
 
   const danglingAttempt = Object.keys(request.effect_attempts)[0] as
     | ProviderStepKind

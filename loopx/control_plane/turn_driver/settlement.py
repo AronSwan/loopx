@@ -536,8 +536,6 @@ def turn_settlement_outcome(
     """Read the optional canonical Turn projection from the TS reduction."""
 
     projection = settlement_result_payload(result)
-    if not isinstance(projection, Mapping):
-        return None
     outcome = projection.get("turn_outcome")
     if not isinstance(outcome, Mapping):
         return None
