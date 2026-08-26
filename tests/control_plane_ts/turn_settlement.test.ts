@@ -68,6 +68,23 @@ test("complete Turn settlement constructs one ordered receipt chain", () => {
   });
 });
 
+test("Turn settlement rejects an unknown result_kind at the typed boundary", () => {
+  assert.throws(
+    () => reduceTurnSettlementTransaction(request({ turn_result_kind: "done" })),
+    /turn_result_kind is unsupported/,
+  );
+});
+
+test("Turn settlement rejects a completion result without terminal closeout", () => {
+  assert.throws(
+    () =>
+      reduceTurnSettlementTransaction(
+        request({ turn_result_kind: "validated_completion" }),
+      ),
+    /validated_completion requires a terminal closeout/,
+  );
+});
+
 test("preflight authorizes ordered providers without settling early", () => {
   const reduced = reduceTurnSettlementTransaction(
     request({
