@@ -342,7 +342,10 @@ For unaddressed material, use the dedicated settlement command rather than a
 reply. It accepts either an event-bound committed external effect receipt or an
 explicit no-follow-up rationale. The latter becomes a deterministic
 `no_follow_up` effect receipt; repeated execution returns `already_settled`
-without duplicating the ACK.
+without duplicating the ACK. Receipt replay/conflict checks, the ledger commit,
+and the processed-message ACK share one per-inbox lock. The ledger remains
+ledger-first, so a retry after interruption repairs an ACK that was not yet
+written without losing a concurrent receipt or processed-message update.
 
 ```bash
 loopx lark-inbox material-review \
