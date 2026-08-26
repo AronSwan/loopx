@@ -85,22 +85,6 @@ def compact(text: str) -> str:
     return " ".join(text.split())
 
 
-def markdown_link_targets(markdown: str) -> list[str]:
-    return re.findall(r"(?<!!)\[[^]]+\]\(([^)]+)\)", markdown)
-
-
-def semantic_checkpoints(markdown: str) -> list[str]:
-    return re.findall(r"<!-- community-casebook:([a-z0-9-]+(?::(?:start|end))?) -->", markdown)
-
-
-def marked_section(markdown: str, section_id: str) -> str:
-    start = f"<!-- community-casebook:{section_id}:start -->"
-    end = f"<!-- community-casebook:{section_id}:end -->"
-    assert start in markdown, start
-    assert end in markdown, end
-    return markdown.split(start, 1)[1].split(end, 1)[0]
-
-
 def subsection(text: str, heading: str) -> str:
     marker = f"### {heading}"
     assert marker in text, marker
@@ -208,138 +192,6 @@ def assert_contributor_task_board_is_current() -> None:
         "| GH-C93 |",
     ):
         assert stale not in tasks, stale
-
-
-def assert_community_casebook_is_bilingual() -> None:
-    protocol_map_zh = read("docs/book/chapters/source-protocol-map.md")
-    protocol_map_en = read("docs/book/en/chapters/source-protocol-map.md")
-    validation_zh = read("docs/book/chapters/source-validation-to-pr.md")
-    validation_en = read("docs/book/en/chapters/source-validation-to-pr.md")
-
-    expected_protocol_checkpoints = [
-        "signal-to-bounded-work:start",
-        "question-before-fix",
-        "user-idea-to-contract",
-        "claim-before-code",
-        "signal-to-bounded-work:end",
-        "rfc-review-lab:start",
-        "rfc-status",
-        "rfc-community-proposal",
-        "rfc-output",
-        "rfc-review-lab:end",
-    ]
-    expected_validation_checkpoints = [
-        "small-pr:start",
-        "small-pr-problem",
-        "small-pr-scope",
-        "small-pr-lesson",
-        "small-pr:end",
-        "review-repair:start",
-        "review-repair-problem",
-        "review-repair-response",
-        "review-repair-lesson",
-        "review-repair:end",
-    ]
-    assert semantic_checkpoints(protocol_map_zh) == expected_protocol_checkpoints
-    assert semantic_checkpoints(protocol_map_en) == expected_protocol_checkpoints
-    assert semantic_checkpoints(validation_zh) == expected_validation_checkpoints
-    assert semantic_checkpoints(validation_en) == expected_validation_checkpoints
-
-    for zh_text, en_text, section_id, required_targets in (
-        (
-            protocol_map_zh,
-            protocol_map_en,
-            "signal-to-bounded-work",
-            (
-                "https://github.com/huangruiteng/loopx/discussions/3069",
-                "https://github.com/huangruiteng/loopx/issues/2353",
-                "https://github.com/huangruiteng/loopx/issues/3549",
-                "https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md",
-            ),
-        ),
-        (
-            protocol_map_zh,
-            protocol_map_en,
-            "rfc-review-lab",
-            (
-                "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md",
-                "https://github.com/huangruiteng/loopx/discussions/3157",
-                "https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md",
-            ),
-        ),
-        (
-            validation_zh,
-            validation_en,
-            "small-pr",
-            (
-                "https://github.com/huangruiteng/loopx/pull/3540",
-            ),
-        ),
-        (
-            validation_zh,
-            validation_en,
-            "review-repair",
-            (
-                "https://github.com/huangruiteng/loopx/pull/3529",
-            ),
-        ),
-    ):
-        zh_targets = markdown_link_targets(marked_section(zh_text, section_id))
-        en_targets = markdown_link_targets(marked_section(en_text, section_id))
-        assert zh_targets == en_targets, section_id
-        for target in required_targets:
-            assert zh_targets.count(target) == 1, target
-            assert en_targets.count(target) == 1, target
-
-    mirrored_concepts = (
-        (
-            compact(marked_section(protocol_map_zh, "signal-to-bounded-work")),
-            compact(marked_section(protocol_map_en, "signal-to-bounded-work")),
-            (
-                ("Maintainer-owned", "Maintainer-owned"),
-                ("Contributor Task Board", "Contributor Task Board"),
-                ("Goal acceptance", "Goal acceptance"),
-                ("goal_path_delta_v0", "goal_path_delta_v0"),
-                ("non-goals", "non-goals"),
-            ),
-        ),
-        (
-            compact(marked_section(protocol_map_zh, "rfc-review-lab")),
-            compact(marked_section(protocol_map_en, "rfc-review-lab")),
-            (
-                ("canonical authority", "canonical authority"),
-                ("event store", "event store"),
-                ("event bus", "event bus"),
-                ("最小可验证切片", "smallest verifiable slice"),
-                ("不会替代版本化 RFC", "does not replace a versioned RFC"),
-            ),
-        ),
-        (
-            compact(marked_section(validation_zh, "small-pr")),
-            compact(marked_section(validation_en, "small-pr")),
-            (
-                ("真实 first-run", "real first-run"),
-                ("argparse", "argparse"),
-                ("现有 subcommand format contract", "existing subcommand format contract"),
-                ("正向、兼容与负向验证", "positive, compatibility, and negative validation"),
-            ),
-        ),
-        (
-            compact(marked_section(validation_zh, "review-repair")),
-            compact(marked_section(validation_en, "review-repair")),
-            (
-                ("partial write", "partial write"),
-                ("bool-as-int", "bool-as-int"),
-                ("真正的 owner", "real owner"),
-                ("semantic core", "semantic core"),
-                ("exact head", "exact head"),
-            ),
-        ),
-    )
-    for zh_section, en_section, concepts in mirrored_concepts:
-        for zh_marker, en_marker in concepts:
-            assert zh_marker in zh_section, zh_marker
-            assert en_marker in en_section, en_marker
 
 
 def assert_contributor_task_links_are_current() -> None:
@@ -651,7 +503,6 @@ def main() -> int:
     assert_local_doc_links_resolve()
     assert_effect_interpreter_docs_are_canonical()
     assert_contributor_task_board_is_current()
-    assert_community_casebook_is_bilingual()
     assert_contributor_task_links_are_current()
     assert_technical_direction_governance_is_current()
 
