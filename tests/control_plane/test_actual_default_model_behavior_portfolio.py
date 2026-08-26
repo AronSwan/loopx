@@ -621,6 +621,22 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
     assert future_portfolio["unavailable_higher_priority"][0][
         "availability_reason"
     ] == "scheduled_for_future"
+    external_wait = packets["turn_external_wait_fallback"]
+    external_signature = quota_action_signature_document(external_wait)
+    assert external_signature["action"]["selected_todo"]["todo_id"] == (
+        "todo_external_wait_fallback"
+    )
+    external_portfolio = external_signature["action"]["action_portfolio"]
+    assert external_portfolio["schema_version"] == "quota_action_portfolio_v2"
+    assert external_portfolio["unavailable_higher_priority"][0]["todo_id"] == (
+        "todo_external_wait_primary"
+    )
+    assert external_portfolio["unavailable_higher_priority"][0][
+        "availability_reason"
+    ] == "resume_condition_pending"
+    assert external_portfolio["suggested_actions"][0]["continuation_hint"] == (
+        "Implement the fallback and run its focused validation."
+    )
     regression_source = build_quota_hot_path_compaction_regression_source()
     regression = packets["turn_quota_hot_path_compaction_regression"]
     assert (
@@ -742,6 +758,76 @@ def test_portfolio_oracle_catches_wrong_selected_todo(tmp_path: Path) -> None:
     assert selected["failure_codes"] == ["source_mismatch:selected_todo_id"]
 
 
+def test_external_wait_oracle_rejects_model_following_unavailable_primary(
+    tmp_path: Path,
+) -> None:
+    def stale_primary_actor(request: Mapping[str, Any]) -> dict[str, Any]:
+        result = _turn_actor(request)
+        selected = dict(request["packet"].get("selected_todo") or {})
+        if selected.get("todo_id") == "todo_external_wait_fallback":
+            result["decision"] = {
+                **result["decision"],
+                "selected_todo_id": "todo_external_wait_primary",
+            }
+        return result
+
+    sources, packets = _scenario_inputs(tmp_path)
+    result = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-external-wait-stale-primary",
+        turn_actor=stale_primary_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+
+    scenario = next(
+        item
+        for item in result["scenarios"]
+        if item["scenario_id"] == "turn_external_wait_fallback"
+    )
+    assert result["qualification_passed"] is False
+    assert scenario["status"] == "failed"
+    assert scenario["repeats_completed"] == 2
+    assert scenario["failure_codes"] == ["source_mismatch:selected_todo_id"]
+
+
+def test_external_wait_preflight_rejects_shared_projection_drift(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    source = deepcopy(sources["turn_external_wait_fallback"])
+    blocked = source["agent_todo_summary"]["resume_blocked_items"][0]
+    blocked["resume_condition"]["baseline_generation"] = 3
+    sources["turn_external_wait_fallback"] = source
+    packets["turn_external_wait_fallback"] = compact_quota_should_run_cli_payload(
+        source
+    )
+    calls = 0
+
+    def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _turn_actor(request)
+
+    with pytest.raises(
+        ValueError,
+        match="external-wait scenario must expose the pending P0 condition",
+    ):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-external-wait-projection-drift",
+            turn_actor=turn_actor,
+            onboarding_actor=_onboarding_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
+
+    assert calls == 0
+
+
 def test_portfolio_source_oracle_rejects_mutated_compact_user_action(
     tmp_path: Path,
 ) -> None:
@@ -843,7 +929,7 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
     }
 
     assert catalog["topology"] == "actual_default_one_arm"
-    assert len(catalog["scenarios"]) == 17
+    assert len(catalog["scenarios"]) == 18
     assert all(
         scenario["packet_view"]
         == (
@@ -1020,10 +1106,10 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     )
 
     assert result["qualification_passed"] is True
-    assert result["scenario_count"] == 17
+    assert result["scenario_count"] == 18
     assert result["contrast_count"] == 4
-    assert result["actor_call_budget"] == 34
-    assert result["actor_call_count"] == 34
+    assert result["actor_call_budget"] == 36
+    assert result["actor_call_count"] == 36
     assert result["failure_count"] == 0
     assert result["skip_count"] == 0
     assert result["contrast_failure_count"] == 0
@@ -1055,7 +1141,7 @@ def test_portfolio_real_tool_scenarios_choose_from_latest_quota_result(
     boundary = result["boundary"]
     assert boundary["tools_enabled"] is True
     assert boundary["tool_enabled_scenario_count"] == 5
-    assert boundary["packet_interpretation_scenario_count"] == 12
+    assert boundary["packet_interpretation_scenario_count"] == 13
     assert boundary["automatic_retries"] is False
     assert boundary["raw_model_responses_persisted"] is False
     assert boundary["raw_packets_persisted"] is False

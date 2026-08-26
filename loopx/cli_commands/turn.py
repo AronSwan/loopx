@@ -84,7 +84,7 @@ def _turn_controller_advisory_primary(
         return None
     portfolio = decision.get("action_portfolio")
     if not isinstance(portfolio, Mapping) or (
-        portfolio.get("schema_version") != "quota_action_portfolio_v1"
+        portfolio.get("schema_version") != "quota_action_portfolio_v2"
     ):
         raise ValueError(
             "Turn action selection requires a typed advisory action portfolio"
