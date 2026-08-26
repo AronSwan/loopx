@@ -76,6 +76,7 @@ from .control_plane.quota.slot_accounting import (
 from .control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
     TURN_SCOPED_SLOT_SPEND_SOURCES,
+    VISIBLE_GOAL_SLOT_SPEND_SOURCE,
 )
 from .control_plane.quota.states import AutomaticTurnPauseCause, QUOTA_STATE_ORDER
 from .control_plane.quota.policy_constants import (
@@ -1276,16 +1277,25 @@ def spend_quota_slot(
                 "visible-goal spend"
             ),
         }
+    recover_unbound_visible_goal = (
+        source == VISIBLE_GOAL_SLOT_SPEND_SOURCE
+        and not todo_id
+        and not replan_obligation_id
+    )
     if (
         not turn_instance_id
-        and source == DEFAULT_SLOT_SPEND_SOURCE
         and raw_runtime_root
+        and (
+            source == DEFAULT_SLOT_SPEND_SOURCE
+            or recover_unbound_visible_goal
+        )
     ):
         inferred_result = infer_persisted_heartbeat_settlement_identity(
             Path(str(raw_runtime_root)).expanduser(),
             goal_id=safe_goal_id,
             agent_id=agent_id,
             todo_id=todo_id,
+            allow_unbound_binding=recover_unbound_visible_goal,
         )
         if inferred_result is not None:
             if inferred_result.failure is not None or inferred_result.value is None:
@@ -1302,7 +1312,11 @@ def spend_quota_slot(
                     ),
                     "settlement_result": settlement_result_payload(inferred_result),
                 }
-            turn_instance_id = inferred_result.value.turn_instance_id
+            identity = inferred_result.value
+            turn_instance_id = identity.turn_instance_id
+            if recover_unbound_visible_goal:
+                todo_id = identity.todo_id
+                replan_obligation_id = identity.replan_obligation_id
     if turn_instance_id and raw_runtime_root:
         runtime_root = Path(str(raw_runtime_root)).expanduser()
         guard_result = resolve_heartbeat_settlement_identity(

@@ -333,13 +333,14 @@ function spendSemantics(request: QuotaSpendCommitRequest): SpendSemantics {
     );
   }
   const action = request.before.effective_action;
+  const deliveryCompletionSpend = request.preview.delivery_completion_spend === true;
   const selfRepairSpend = request.before.should_run &&
     action !== null && SELF_REPAIR_SPEND_ACTIONS.has(action) &&
     request.before.self_repair_allowed;
   const capabilityRepairSpend = request.before.should_run &&
     action === "capability_bridge_repair" &&
-    request.before.capability_repair_allowed;
-  const deliveryCompletionSpend = request.preview.delivery_completion_spend === true;
+    request.before.capability_repair_allowed &&
+    !deliveryCompletionSpend;
   const eligibleSpend = request.before.should_run &&
     request.before.state === "eligible" &&
     action !== "external_evidence_observe" &&
