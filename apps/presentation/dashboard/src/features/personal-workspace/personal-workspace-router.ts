@@ -30,11 +30,14 @@ function negates(message: string, subject: RegExp) {
     `(?:不要|不需要|无需|禁止|别|暂不|do not\\b|don't\\b|without\\b).{0,10}(?:${subject.source})`,
     "iu",
   );
-  const afterSubject = new RegExp(
-    `(?:${subject.source}).{0,10}(?:不要|不需要|无需|禁止|关闭|disabled\\b|off\\b(?!\\s+track\\b))`,
+  const chineseAfter = new RegExp(`(?:${subject.source}).{0,10}(?:不要|不需要|无需|禁止|关闭)`, "iu");
+  const explicitEnglishDisable = new RegExp(
+    `disable\\b.{0,10}(?:${subject.source})|(?:turn|switch|set)\\b.{0,10}(?:${subject.source}).{0,10}\\boff\\b|(?:${subject.source})\\s+(?:is\\s+)?disabled\\b`,
     "iu",
   );
-  return beforeSubject.test(message) || afterSubject.test(message);
+  return beforeSubject.test(message)
+    || chineseAfter.test(message)
+    || explicitEnglishDisable.test(message);
 }
 
 function managerProjectionIntent(message: string) {

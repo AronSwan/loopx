@@ -20,6 +20,9 @@ equal(routeWorkspaceInput("每天推进这个 Goal，设置 heartbeat", goalCont
 equal(routeWorkspaceInput("Set up a Heartbeat for this Goal with daily progress", goalContext).actionKind, "heartbeat.bind", "English heartbeat");
 equal(routeWorkspaceInput("Turn Heartbeat off", goalContext).route, "agent_chat", "explicit English heartbeat disable stays in chat");
 equal(routeWorkspaceInput("Add a scheduled check every 2 hours", goalContext).actionKind, "monitor.create", "English monitor");
+equal(routeWorkspaceInput("Add a monitor for off hours", goalContext).actionKind, "monitor.create", "off hours is a valid monitor target");
+equal(routeWorkspaceInput("Create a scheduled check for off-hours deployment alerts", goalContext).actionKind, "monitor.create", "hyphenated off-hours is a valid scheduled-check target");
+equal(routeWorkspaceInput("Turn monitor off", goalContext).route, "agent_chat", "explicit English monitor disable stays in chat");
 equal(routeWorkspaceInput("创建一个 Todo：整理发布说明", goalContext).actionKind, "todo.create", "todo create");
 equal(
   routeWorkspaceInput("做一次只读分析：判断刚刚新增的 Todo 是否与当前 Goal 一致。不要修改状态。", goalContext).route,
