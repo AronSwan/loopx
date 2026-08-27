@@ -204,6 +204,7 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
         direct_event = {
             "message_id": "om_direct_fixture",
             "content": "@Project Review Bot 请处理这个问题",
+            "mentioned": True,
         }
         assert not lark_event_requires_reply_context_lookup(
             direct_event,
@@ -420,6 +421,7 @@ if "event" in args and "consume" in args:
             "message_id": "om_runtime_direct",
             "create_time": "2026-07-16T00:00:00Z",
             "content": "@Project Review Bot 能处理吗？",
+            "mentioned": True,
             "chat_id": "oc_private_fixture_chat",
         },
         {
