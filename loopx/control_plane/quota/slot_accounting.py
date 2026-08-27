@@ -33,10 +33,7 @@ from .settlement import (
     SettlementIdentity,
     SettlementResult,
     SettlementStepKind,
-    infer_persisted_heartbeat_settlement_identity,
-    require_settlement_writeback,
-    resolve_heartbeat_settlement_identity,
-    resolve_settlement_delivery_workspace_causality,
+    read_heartbeat_settlement,
     settlement_result_payload,
 )
 from .settlement_workspace_causality import (
@@ -148,48 +145,31 @@ def _resolve_preview_settlement(
         return {}
 
     runtime_root = Path(str(raw_runtime_root)).expanduser()
-    result = (
-        resolve_heartbeat_settlement_identity(
-            runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_id=todo_id,
-            turn_instance_id=turn_instance_id,
-            replan_obligation_id=replan_obligation_id,
-        )
-        if turn_instance_id
-        else infer_persisted_heartbeat_settlement_identity(
-            runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_id=todo_id,
-            allow_unbound_binding=(
-                source == VISIBLE_GOAL_SLOT_SPEND_SOURCE
-                and not todo_id
-                and not replan_obligation_id
-            ),
-        )
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=todo_id,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+        infer_turn_instance_id=not bool(turn_instance_id),
+        allow_unbound_binding=(
+            source == VISIBLE_GOAL_SLOT_SPEND_SOURCE
+            and not todo_id
+            and not replan_obligation_id
+        ),
     )
-    if result is None:
+    if readback is None:
         return {}
+    result = readback.identity
     identity = result.value if result.failure is None else None
-    delivery_workspace_causality = (
-        resolve_settlement_delivery_workspace_causality(runtime_root, identity)
-        if identity is not None
-        else None
-    )
     if identity is not None:
-        result = result.bind(
-            lambda resolved: require_settlement_writeback(
-                runtime_root,
-                resolved,
-            )
-        )
+        result = readback.delivery
     return {
         "identity": identity,
         "result": result,
         "delivery_run": result.value if result.failure is None else None,
-        "delivery_workspace_causality": delivery_workspace_causality,
+        "delivery_workspace_causality": readback.workspace_causality,
         "reason": result.failure.reason if result.failure is not None else None,
     }
 

@@ -9,10 +9,7 @@ from ..control_plane.todos.contract import (
     replan_successor_semantic_binding,
 )
 from ..control_plane.quota.settlement import (
-    require_settlement_spend,
-    require_settlement_terminal_closeout,
-    require_settlement_writeback,
-    resolve_heartbeat_settlement_identity,
+    read_heartbeat_settlement,
     settlement_result_payload,
 )
 from ..control_plane.todos.handoff_mode import HandoffModeError
@@ -771,6 +768,7 @@ def handle_todo_command(
             validate_todo_complete_options(args)
             settlement_result = None
             settlement_identity = None
+            settlement_readback = None
             completion_turn_key = None
             completion_identity_source = None
             if getattr(args, "turn_instance_id", None):
@@ -778,13 +776,18 @@ def handle_todo_command(
                     load_registry(registry_path),
                     runtime_root_arg,
                 )
-                settlement_result = resolve_heartbeat_settlement_identity(
+                settlement_readback = read_heartbeat_settlement(
                     runtime_root,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
                     todo_id=args.todo_id,
                     turn_instance_id=getattr(args, "turn_instance_id", None),
                 )
+                if settlement_readback is None:
+                    raise RuntimeError(
+                        "exact settlement readback unexpectedly returned not-found"
+                    )
+                settlement_result = settlement_readback.identity
                 if settlement_result.failure is not None:
                     raise ValueError(settlement_result.failure.reason)
                 if settlement_result.value is None:
@@ -792,17 +795,7 @@ def handle_todo_command(
                 identity = settlement_result.value
                 settlement_identity = identity
                 if args.no_follow_up:
-                    settlement_result = settlement_result.bind(
-                        lambda resolved: require_settlement_writeback(
-                            runtime_root,
-                            resolved,
-                        )
-                    ).bind(
-                        lambda _writeback: require_settlement_spend(
-                            runtime_root,
-                            identity,
-                        )
-                    )
+                    settlement_result = settlement_readback.settlement
                     if settlement_result.failure is not None:
                         raise ValueError(
                             "terminal no-follow-up closeout requires matching "
@@ -954,22 +947,20 @@ def handle_todo_command(
             load_registry(registry_path),
             runtime_root_arg,
         )
-        if args.no_follow_up and settlement_identity is not None:
-            assert settlement_result is not None
-            settlement_result = settlement_result.bind(
-                lambda _spend: require_settlement_terminal_closeout(
-                    runtime_root,
-                    settlement_identity,
-                )
-            )
-        else:
-            settlement_result = resolve_heartbeat_settlement_identity(
-                runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                todo_id=args.todo_id,
-                turn_instance_id=getattr(args, "turn_instance_id", None),
-            )
+        settlement_readback = read_heartbeat_settlement(
+            runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=args.todo_id,
+            turn_instance_id=getattr(args, "turn_instance_id", None),
+        )
+        if settlement_readback is None:
+            raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+        settlement_result = (
+            settlement_readback.terminal_settlement
+            if args.no_follow_up and settlement_identity is not None
+            else settlement_readback.identity
+        )
         payload["settlement_result"] = settlement_result_payload(
             settlement_result
         )

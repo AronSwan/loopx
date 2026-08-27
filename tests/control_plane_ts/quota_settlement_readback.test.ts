@@ -1,0 +1,369 @@
+import assert from "node:assert/strict";
+import { appendFile, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
+import {
+  QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+  readQuotaSettlement,
+} from "../../loopx/control_plane/quota/settlement_readback.ts";
+
+const goalId = "settlement-goal";
+const agentId = "codex-settlement";
+const todoId = "todo_settlement";
+const turnId = "turn-settlement-1";
+const identity = settlementIdentity({
+  goal_id: goalId,
+  agent_id: agentId,
+  todo_id: todoId,
+  turn_instance_id: turnId,
+});
+
+async function fixture(options: {
+  guard?: boolean;
+  writeback?: boolean;
+  spend?: boolean;
+  completion?: boolean;
+  noFollowup?: boolean;
+  workspace?: boolean;
+  monitor?: boolean;
+} = {}) {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-settlement-readback-"));
+  const goalRoot = join(runtimeRoot, "goals", goalId);
+  const runsRoot = join(goalRoot, "runs");
+  await mkdir(runsRoot, { recursive: true });
+  const events: Record<string, unknown>[] = options.guard === false
+    ? []
+    : [{
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-guard",
+      event_kind: "quota_should_run",
+      goal_id: goalId,
+      agent_id: agentId,
+      run_id: turnId,
+      details: {
+        todo_id: todoId,
+        settlement_effect_id: identity.effect_id,
+        ...(options.workspace
+          ? {
+            delivery_workspace_causality_schema_version:
+              "delivery_workspace_causality_v0",
+            delivery_workspace_causality_todo_id: todoId,
+            delivery_workspace_requirement: "required",
+            delivery_workspace_causality_source: "selected_todo_contract",
+            delivery_workspace_causality_reason:
+              "declared_repository_or_write_contract",
+          }
+          : {}),
+      },
+    }];
+  const runs: Record<string, unknown>[] = [];
+  if (options.writeback) {
+    events.push({
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-writeback",
+      event_kind: "refresh_state",
+      goal_id: goalId,
+      agent_id: agentId,
+      run_id: turnId,
+      details: { settlement_effect_id: identity.effect_id },
+    });
+    runs.push({
+      classification: "state_refreshed",
+      delivery_outcome: "outcome_progress",
+      goal_id: goalId,
+      agent_id: agentId,
+      todo_id: todoId,
+      turn_instance_id: turnId,
+      settlement_identity: identity,
+    });
+  }
+  if (options.spend) {
+    events.push({
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-spend",
+      event_kind: "quota_spend",
+      goal_id: goalId,
+      agent_id: agentId,
+      run_id: turnId,
+      details: { settlement_effect_id: identity.effect_id },
+    });
+    runs.push({
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      agent_id: agentId,
+      todo_id: todoId,
+      turn_instance_id: turnId,
+      settlement_identity: identity,
+    });
+  }
+  if (options.completion) {
+    events.push({
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-completion",
+      event_kind: "todo_complete",
+      goal_id: goalId,
+      agent_id: agentId,
+      run_id: turnId,
+      details: {
+        settlement_effect_id: identity.effect_id,
+        no_followup: options.noFollowup === true,
+      },
+    });
+  }
+  if (options.monitor) {
+    runs.push({
+      classification: "quota_monitor_poll",
+      goal_id: goalId,
+      agent_id: agentId,
+      todo_id: todoId,
+      turn_instance_id: turnId,
+      material_change: true,
+    });
+  }
+  await writeFile(
+    join(goalRoot, "rollout-event-log.jsonl"),
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+  );
+  await writeFile(
+    join(runsRoot, "index.jsonl"),
+    `${runs.map((run) => JSON.stringify(run)).join("\n")}\n`,
+  );
+  return runtimeRoot;
+}
+
+function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    runtime_root: runtimeRoot,
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: todoId,
+    turn_instance_id: turnId,
+    replan_obligation_id: null,
+    infer_turn_instance_id: false,
+    allow_unbound_binding: false,
+    ...overrides,
+  };
+}
+
+test("reads the complete receipt chain and workspace causality once", async () => {
+  const runtimeRoot = await fixture({
+    writeback: true,
+    spend: true,
+    completion: true,
+    noFollowup: true,
+    workspace: true,
+    monitor: true,
+  });
+
+  const result = await readQuotaSettlement(request(runtimeRoot));
+
+  assert.equal(result.found, true);
+  assert.equal((result.settlement as any).payload.ok, true);
+  assert.deepEqual(
+    (result.settlement as any).result.receipts.map((receipt: any) => receipt.step_kind),
+    ["validation", "durable_writeback", "quota_spend"],
+  );
+  assert.equal((result.terminal_closeout as any).payload.ok, true);
+  assert.equal(result.monitor_phase, "settled");
+  assert.equal(result.replay_phase, "settled");
+  assert.deepEqual(result.workspace_causality, {
+    schema_version: "delivery_workspace_causality_v0",
+    todo_id: todoId,
+    requirement: "required",
+    source: "selected_todo_contract",
+    reason: "declared_repository_or_write_contract",
+  });
+});
+
+test("keeps partial settlement fail-closed without losing durable facts", async () => {
+  const runtimeRoot = await fixture({ writeback: true, monitor: true });
+
+  const result = await readQuotaSettlement(request(runtimeRoot));
+
+  assert.equal((result.writeback as any).payload.ok, true);
+  assert.equal((result.spend as any).payload.ok, false);
+  assert.equal((result.settlement as any).result.failure.kind, "receipt_missing");
+  assert.equal(result.monitor_phase, "settlement_pending");
+  assert.equal(result.replay_phase, "open");
+  assert.equal((result.writeback_run as any).delivery_outcome, "outcome_progress");
+});
+
+test("rejects a guard bound to another Todo", async () => {
+  const runtimeRoot = await fixture();
+
+  const result = await readQuotaSettlement(
+    request(runtimeRoot, { todo_id: "todo_other" }),
+  );
+
+  assert.equal((result.identity as any).result.failure.kind, "identity_mismatch");
+  assert.match(
+    (result.identity as any).result.failure.reason,
+    /does not match the original quota guard/,
+  );
+});
+
+test("rejects dual Todo and replan bindings before reading settlement facts", async () => {
+  const runtimeRoot = await fixture({
+    writeback: true,
+    spend: true,
+    completion: true,
+    monitor: true,
+  });
+
+  const result = await readQuotaSettlement(request(runtimeRoot, {
+    replan_obligation_id: "replan-0000000000000001",
+  }));
+
+  assert.equal((result.identity as any).result.failure.kind, "invalid_identity");
+  assert.equal(result.monitor_phase, null);
+  assert.equal(result.replay_phase, null);
+  assert.equal(result.writeback_run, null);
+  assert.equal(result.spend_run, null);
+});
+
+test("identity failure cannot promote unguarded later facts to a terminal phase", async () => {
+  const runtimeRoot = await fixture();
+  const unguardedTodoId = "todo_unguarded";
+  const unguardedIdentity = settlementIdentity({
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: unguardedTodoId,
+    turn_instance_id: turnId,
+  });
+  const goalRoot = join(runtimeRoot, "goals", goalId);
+  await appendFile(
+    join(goalRoot, "rollout-event-log.jsonl"),
+    [
+      {
+        schema_version: "loopx_rollout_event_v0",
+        event_id: "event-unguarded-writeback",
+        event_kind: "refresh_state",
+        goal_id: goalId,
+        agent_id: agentId,
+        run_id: turnId,
+        details: { settlement_effect_id: unguardedIdentity.effect_id },
+      },
+      {
+        schema_version: "loopx_rollout_event_v0",
+        event_id: "event-unguarded-spend",
+        event_kind: "quota_spend",
+        goal_id: goalId,
+        agent_id: agentId,
+        run_id: turnId,
+        details: { settlement_effect_id: unguardedIdentity.effect_id },
+      },
+    ].map((event) => `${JSON.stringify(event)}\n`).join(""),
+  );
+  await appendFile(
+    join(goalRoot, "runs", "index.jsonl"),
+    [
+      {
+        classification: "quota_monitor_poll",
+        material_change: true,
+        goal_id: goalId,
+        agent_id: agentId,
+        todo_id: unguardedTodoId,
+        turn_instance_id: turnId,
+      },
+      {
+        classification: "state_refreshed",
+        delivery_outcome: "outcome_progress",
+        goal_id: goalId,
+        agent_id: agentId,
+        todo_id: unguardedTodoId,
+        turn_instance_id: turnId,
+        settlement_identity: unguardedIdentity,
+      },
+      {
+        classification: "quota_slot_spent",
+        goal_id: goalId,
+        agent_id: agentId,
+        todo_id: unguardedTodoId,
+        turn_instance_id: turnId,
+        settlement_identity: unguardedIdentity,
+      },
+    ].map((run) => `${JSON.stringify(run)}\n`).join(""),
+  );
+
+  const result = await readQuotaSettlement(
+    request(runtimeRoot, { todo_id: unguardedTodoId }),
+  );
+
+  assert.equal((result.identity as any).result.failure.kind, "identity_mismatch");
+  assert.equal(result.monitor_phase, null);
+  assert.equal(result.replay_phase, null);
+  assert.equal(result.writeback_run, null);
+  assert.equal(result.spend_run, null);
+});
+
+test("a missing guard keeps complete later facts non-terminal", async () => {
+  const runtimeRoot = await fixture({
+    guard: false,
+    writeback: true,
+    spend: true,
+    monitor: true,
+  });
+
+  const result = await readQuotaSettlement(request(runtimeRoot));
+
+  assert.equal((result.identity as any).result.failure.kind, "receipt_missing");
+  assert.equal(result.monitor_phase, null);
+  assert.equal(result.replay_phase, null);
+  assert.equal(result.writeback_run, null);
+  assert.equal(result.spend_run, null);
+});
+
+test("infers the latest typed turn and revalidates its guard", async () => {
+  const runtimeRoot = await fixture({ writeback: true });
+
+  const result = await readQuotaSettlement(request(runtimeRoot, {
+    turn_instance_id: null,
+    infer_turn_instance_id: true,
+  }));
+
+  assert.equal(result.found, true);
+  assert.equal((result.identity as any).result.value.turn_instance_id, turnId);
+});
+
+test("returns not-found when compatibility inference has no typed run", async () => {
+  const runtimeRoot = await fixture();
+
+  const result = await readQuotaSettlement(request(runtimeRoot, {
+    turn_instance_id: null,
+    infer_turn_instance_id: true,
+  }));
+
+  assert.deepEqual(result, {
+    schema_version: "loopx_quota_settlement_readback_result_v0",
+    found: false,
+  });
+});
+
+test("rejects malformed request authority at the runtime boundary", async () => {
+  const runtimeRoot = await fixture();
+
+  await assert.rejects(
+    readQuotaSettlement(request(runtimeRoot, { agent_id: [agentId] })),
+    /agent_id must be a string or null/,
+  );
+  await assert.rejects(
+    readQuotaSettlement(request(runtimeRoot, { runtime_root: "relative" })),
+    /runtime_root must be absolute/,
+  );
+  await assert.rejects(
+    readQuotaSettlement(request(runtimeRoot, { schema_version: "future" })),
+    /request schema mismatch/,
+  );
+  await assert.rejects(
+    readQuotaSettlement(request(runtimeRoot, { infer_turn_instance_id: "yes" })),
+    /infer_turn_instance_id must be a boolean/,
+  );
+  await assert.rejects(
+    readQuotaSettlement(request(runtimeRoot, { allow_unbound_binding: "yes" })),
+    /allow_unbound_binding must be a boolean/,
+  );
+});

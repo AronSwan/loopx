@@ -22,10 +22,7 @@ from .control_plane.agents.workspace_guard import (
 )
 from .control_plane.quota.settlement import (
     SettlementIdentity,
-    find_settlement_writeback,
-    require_settlement_writeback,
-    resolve_heartbeat_settlement_identity,
-    resolve_settlement_delivery_workspace_causality,
+    read_heartbeat_settlement,
     settlement_result_payload,
 )
 from .control_plane.work_items.repair_delta import (
@@ -916,7 +913,7 @@ def refresh_state_run(
             raise ValueError(
                 "turn-scoped refresh-state requires an accountable --delivery-outcome"
             )
-        settlement_result = resolve_heartbeat_settlement_identity(
+        settlement_readback = read_heartbeat_settlement(
             runtime_root,
             goal_id=safe_goal_id,
             agent_id=normalized_agent_id or None,
@@ -924,19 +921,17 @@ def refresh_state_run(
             turn_instance_id=turn_instance_id,
             replan_obligation_id=normalized_replan_obligation_id,
         )
+        if settlement_readback is None:
+            raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+        settlement_result = settlement_readback.identity
         if settlement_result.failure is not None:
             raise ValueError(settlement_result.failure.reason)
         settlement_identity = settlement_result.value
         if settlement_identity is None:
             raise ValueError("turn-scoped refresh-state has no settlement identity")
-        delivery_workspace_causality = resolve_settlement_delivery_workspace_causality(
-            runtime_root, settlement_identity
-        )
+        delivery_workspace_causality = settlement_readback.workspace_causality
         if not dry_run:
-            prior_writeback = require_settlement_writeback(
-                runtime_root,
-                settlement_identity,
-            )
+            prior_writeback = settlement_readback.writeback
             if prior_writeback.failure is None and prior_writeback.value is not None:
                 if not _delivery_workspace_supplement_required(
                     prior_writeback=prior_writeback.value,
@@ -965,10 +960,7 @@ def refresh_state_run(
                             )
                         ),
                     }
-            prior_writeback_run = find_settlement_writeback(
-                runtime_root,
-                settlement_identity,
-            )
+            prior_writeback_run = settlement_readback.writeback_run
             if prior_writeback_run is not None and not (
                 _delivery_workspace_supplement_required(
                     prior_writeback=prior_writeback_run,
