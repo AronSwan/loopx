@@ -273,14 +273,17 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
       run: {
         agentId: goal.agentId,
         agentLabel: goal.agentLabel ?? goal.agentId,
-        completedSteps: goal.agentTodos.filter((todo) => todo.done).length,
+        completedSteps: goal.doneTodoCount ?? goal.agentTodos.filter((todo) => todo.done).length,
         goalId: goal.goalId,
         goalTitle: goal.title,
         latestActivity: goal.agentSentence,
         runId: `goal:${goal.goalId}`,
         status: "running",
         title: goal.nextSentence,
-        totalSteps: goal.agentTodos.length || 1,
+        totalSteps: Math.max(
+          (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
+          1,
+        ),
       },
     }));
     return items;
@@ -306,14 +309,17 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
     run: {
       agentId: goal.agentId,
       agentLabel: goal.agentLabel ?? goal.agentId,
-      completedSteps: goal.agentTodos.filter((todo) => todo.done).length,
+      completedSteps: goal.doneTodoCount ?? goal.agentTodos.filter((todo) => todo.done).length,
       goalId: goal.goalId,
       goalTitle: goal.title,
       latestActivity: goal.agentSentence,
       runId: `goal:${goal.goalId}`,
       status: goal.state === "推进中" ? "running" : goal.state === "需修复" ? "failed" : "waiting",
       title: goal.nextSentence,
-      totalSteps: goal.agentTodos.length || 1,
+      totalSteps: Math.max(
+        (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
+        1,
+      ),
     },
   });
   goal.agentTodos.filter((todo) => todo.taskClass === "continuous_monitor").forEach((todo) => {

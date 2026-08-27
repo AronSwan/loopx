@@ -56,6 +56,8 @@ export type WorkspaceGoal = {
   agentLabel?: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
+  /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
+  doneTodoCount?: number;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;

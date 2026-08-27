@@ -263,7 +263,7 @@ assert.match(page, /当前本地工作区（未绑定 Repository）/, "Create Go
 assert.doesNotMatch(model, /kind: "agent"/, "The drawer model omits the read-only Agent settings variant");
 assert.match(
   dashboard,
-  /statusRequestActive = Boolean\(activeStatusRequestUrl\) && Boolean\(loadError && requestedStatusUrl\)/,
+  /statusRequestActive = source\.kind === "example"[\s\S]*?&& Boolean\(activeStatusRequestUrl\)[\s\S]*?&& Boolean\(loadError && requestedStatusUrl\)/,
   "Initial load and refresh keep the workspace shell visible, while failed authoritative status requests surface recovery",
 );
 
@@ -312,5 +312,18 @@ assert.match(larkSettings, /setAppRef\(snapshot\.app_ref\)/, "Completed registra
 assert.match(larkSettings, /loading \? "…" : apps\.length/, "Lark App count does not flash a false zero while loading");
 assert.match(larkSettings, /openConnectionEditor\(connection\)/, "Every Lark connection settings button opens a scoped editor");
 assert.match(larkSettings, /focusGoalConnection[\s\S]*openConnectionEditor\(connection\)[\s\S]*openConnect\(goals\.find/, "Goal-level Lark entry opens the scoped connection editor or create flow");
+
+// Completed-Todo projection (issue: Personal Workspace hides completed Todo progress).
+assert.match(status, /recent_completed_advancement_items/, "The status schema accepts the bounded recent-completed lane");
+assert.match(model, /doneTodoCount\??:/, "A Goal exposes the payload completed-Todo count");
+assert.match(dashboard, /personalAgentTodoFacts/, "Goal projection derives completion facts from the payload, not open-only item lists");
+assert.match(dashboard, /agentTodos:\s*\[\.\.\.goalAgentTodos,\s*\.\.\.agentTodoFacts\.recentCompleted\]/, "Recent completed Todos stay visible in the Goal board");
+assert.match(tasks, /Math\.max\(goal\.doneTodoCount \?\? 0, doneAgentTodos\.length\)/, "The completed column counts payload completions instead of open-only items");
+assert.doesNotMatch(tasks, /<span>\{doneAgentTodos\.length\}<\/span>/, "The completed column never reports a false zero");
+assert.match(
+  dashboard,
+  /agentTodoFacts\.nextTodoText,\s*\n\s*row\.queueItem\?\.recommended_action,/,
+  "The Goal header prefers the current projected Todo over stale recommended_action strings",
+);
 
 console.log("personal workspace drawer contract smoke passed");
