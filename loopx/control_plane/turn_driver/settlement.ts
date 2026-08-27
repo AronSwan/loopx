@@ -849,11 +849,12 @@ function reduceTurnSettlementRequest(
   let receipts: SettlementResult<unknown>["receipts"] = [...base.result.receipts];
   if (
     request.turn_result_kind === "validated_completion" &&
-    !request.terminal_closeout_required
+    !request.terminal_closeout_required &&
+    request.writeback_payload !== null
   ) {
     const completionError = nonTerminalCompletionError(
       identity,
-      request.writeback_payload!,
+      request.writeback_payload,
     );
     if (completionError !== null) {
       return reduction(
