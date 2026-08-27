@@ -25,6 +25,8 @@ from loopx.control_plane.quota.settlement import (
     build_codex_app_settlement_plan,
     infer_persisted_heartbeat_settlement_identity,
     read_heartbeat_settlement,
+    receipt_bound_monitor_settlement_phase,
+    receipt_bound_replay_settlement_phase,
     require_settlement_terminal_closeout,
     resolve_heartbeat_settlement_identity,
     settlement_step_command,
@@ -252,6 +254,73 @@ def test_quota_settlement_readback_returns_the_complete_typed_chain(
         SettlementStepKind.QUOTA_SPEND,
     ]
     assert readback.spend_run is not None
+
+
+@pytest.mark.parametrize(
+    ("guard_state", "failure_kind"),
+    [
+        ("missing", SettlementFailureKind.RECEIPT_MISSING),
+        ("mismatched", SettlementFailureKind.IDENTITY_MISMATCH),
+    ],
+)
+def test_python_settlement_wrappers_fail_closed_for_invalid_or_missing_guard(
+    tmp_path: Path,
+    guard_state: str,
+    failure_kind: SettlementFailureKind,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    if guard_state == "mismatched":
+        _append_guard_receipt(runtime_root, todo_id="todo_other")
+    for classification in (
+        "quota_monitor_poll",
+        "state_refreshed",
+        "quota_slot_spent",
+    ):
+        _append_run_index_record(
+            runtime_root,
+            {
+                "classification": classification,
+                "material_change": True,
+                "goal_id": GOAL_ID,
+                "agent_id": AGENT_ID,
+                "todo_id": TODO_ID,
+                "turn_instance_id": TURN_ID,
+            },
+        )
+
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+
+    assert readback is not None
+    assert readback.identity.failure is not None
+    assert readback.identity.failure.kind is failure_kind
+    assert readback.monitor_phase is None
+    assert readback.replay_phase is None
+    assert (
+        receipt_bound_monitor_settlement_phase(
+            runtime_root,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            todo_id=TODO_ID,
+            turn_instance_id=TURN_ID,
+        )
+        is None
+    )
+    assert (
+        receipt_bound_replay_settlement_phase(
+            runtime_root,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            todo_id=TODO_ID,
+            turn_instance_id=TURN_ID,
+        )
+        is None
+    )
 
 
 def test_terminal_closeout_receipt_rejects_ordinary_completion_event(

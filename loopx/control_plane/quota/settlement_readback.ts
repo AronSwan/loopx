@@ -551,6 +551,37 @@ function failedAfterIdentity(
     });
 }
 
+function failedReadback(
+  identityResult: SettlementResult<JsonObject>,
+): JsonObject {
+  const downstreamFailure = failedAfterIdentity(identityResult);
+  const terminalFailure = settlementFailed<JsonObject>({
+    kind: "receipt_missing",
+    step_kind: "terminal_closeout",
+    reason: "matching terminal no-follow-up closeout receipt is missing",
+  });
+  return {
+    schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
+    found: true,
+    identity: bundle(identityResult),
+    writeback: bundle(downstreamFailure),
+    spend: bundle(downstreamFailure),
+    delivery: bundle(downstreamFailure),
+    settlement: bundle(downstreamFailure),
+    terminal_closeout: bundle(terminalFailure),
+    terminal_settlement: bundle(downstreamFailure),
+    workspace_causality: null,
+    writeback_run: null,
+    spend_run: null,
+    heartbeat_receipt: null,
+    writeback_event: null,
+    spend_event: null,
+    completion_event: null,
+    monitor_phase: null,
+    replay_phase: null,
+  };
+}
+
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
   const request = decodeRequest(value);
   const goalRoot = join(request.runtime_root, "goals", request.goal_id);
@@ -566,32 +597,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     };
   }
   if (identityResult.failure || identityResult.value === null) {
-    const failed = failedAfterIdentity(identityResult);
-    const terminalFailure = settlementFailed<JsonObject>({
-      kind: "receipt_missing",
-      step_kind: "terminal_closeout",
-      reason: "matching terminal no-follow-up closeout receipt is missing",
-    });
-    return {
-      schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
-      found: true,
-      identity: bundle(identityResult),
-      writeback: bundle(failed),
-      spend: bundle(failed),
-      delivery: bundle(failed),
-      settlement: bundle(failed),
-      terminal_closeout: bundle(terminalFailure),
-      terminal_settlement: bundle(failed),
-      workspace_causality: null,
-      writeback_run: null,
-      spend_run: null,
-      heartbeat_receipt: null,
-      writeback_event: null,
-      spend_event: null,
-      completion_event: null,
-      monitor_phase: null,
-      replay_phase: null,
-    };
+    return failedReadback(identityResult);
   }
 
   const identity = settlementIdentity({
@@ -601,7 +607,15 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     turn_instance_id: String(identityResult.value.turn_instance_id),
     replan_obligation_id: optionalString(identityResult.value.replan_obligation_id),
   });
-  const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity)!;
+  const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity);
+  if (heartbeatReceipt === null) {
+    return failedReadback(
+      failedIdentity(
+        "matching quota should-run heartbeat receipt disappeared during settlement readback",
+        "receipt_missing",
+      ),
+    );
+  }
   const receiptDetails = details(heartbeatReceipt);
   const writebackRun = findWriteback(runs, identity);
   const writebackEvent = findStepEvent(events, identity, "refresh_state");

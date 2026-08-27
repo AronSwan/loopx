@@ -206,6 +206,25 @@ test("rejects a guard bound to another Todo", async () => {
   );
 });
 
+test("rejects dual Todo and replan bindings before reading settlement facts", async () => {
+  const runtimeRoot = await fixture({
+    writeback: true,
+    spend: true,
+    completion: true,
+    monitor: true,
+  });
+
+  const result = await readQuotaSettlement(request(runtimeRoot, {
+    replan_obligation_id: "replan-0000000000000001",
+  }));
+
+  assert.equal((result.identity as any).result.failure.kind, "invalid_identity");
+  assert.equal(result.monitor_phase, null);
+  assert.equal(result.replay_phase, null);
+  assert.equal(result.writeback_run, null);
+  assert.equal(result.spend_run, null);
+});
+
 test("identity failure cannot promote unguarded later facts to a terminal phase", async () => {
   const runtimeRoot = await fixture();
   const unguardedTodoId = "todo_unguarded";
