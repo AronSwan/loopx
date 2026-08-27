@@ -2093,5 +2093,3 @@ def test_guided_takeover_with_resume_ready_advancement_todo_projects_todo_delta(
     todo_delta = delta["todo_delta"]
     assert todo_delta["runnable_frontier_count"] == 1
     assert any("resume-ready advancement task" in str(item) for item in todo_delta["frontier"])
-
-
