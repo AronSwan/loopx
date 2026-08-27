@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from ...control_plane.todos.contract import normalize_todo_status
+from ...control_plane.todos.contract import (
+    TODO_STATUS_OPEN,
+    TODO_TASK_CLASS_ADVANCEMENT,
+    normalize_todo_status,
+)
 from ...project_prompt import render_cli_command_prefix, shell_arg
 from ...registry import registry_goals, resolve_state_file
 
@@ -33,11 +37,13 @@ def existing_runnable_agent_frontier(
 ) -> list[dict[str, Any]] | None:
     """Runnable advancement agent Todos already present in the goal's state.
 
-    Blocked Todos (``status: blocked``) and peer-claimed Todos are not
-    runnable for the effective agent and never enter the frontier. Returns
-    ``None`` whenever the frontier cannot be proven (not connected, unknown
-    goal, missing or unreadable state file, or nothing runnable), so callers
-    keep the unconditional planning contract — fail-closed.
+    Only open advancement Todos (``status: open``, ``task_class:
+    advancement_task``) belonging to the effective agent (or unclaimed)
+    enter the frontier. Blocked, deferred, monitor, blocker, or peer-claimed
+    Todos never enter the frontier. Returns ``None`` whenever the frontier
+    cannot be proven (not connected, unknown goal, missing or unreadable
+    state file, or nothing runnable), so callers keep the unconditional
+    planning contract — fail-closed.
     """
     if inspection.get("connection_state") != "connected":
         return None
@@ -78,8 +84,8 @@ def existing_runnable_agent_frontier(
         for item in items
         if isinstance(item, dict)
         and not item.get("done")
-        and item.get("task_class") != "continuous_monitor"
-        and normalize_todo_status(item.get("status")) != "blocked"
+        and normalize_todo_status(item.get("status")) == TODO_STATUS_OPEN
+        and item.get("task_class") == TODO_TASK_CLASS_ADVANCEMENT
     ]
     if effective_agent_id:
         runnable = [

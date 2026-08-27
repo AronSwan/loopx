@@ -1997,3 +1997,49 @@ def test_guided_takeover_filters_out_peer_claimed_todos_from_frontier(
     assert todo_delta["runnable_frontier_count"] == 1
     assert any("own advancement task" in str(item) for item in todo_delta["frontier"])
     assert not any("peer advancement task" in str(item) for item in todo_delta["frontier"])
+
+
+def _write_connected_project_with_open_blocker_agent_todo(root: Path) -> Path:
+    return _write_connected_project_with_todos(
+        root,
+        todos_body=(
+            "- [ ] [P0] investigate rate limit blocker\n"
+            "  <!-- loopx:todo status=open task_class=blocker "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586blk0001 -->"
+        ),
+    )
+
+
+def test_guided_takeover_with_only_open_blocker_todo_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    # An open blocker is a non-executable lane and not a runnable advancement
+    # frontier: the packet must fail closed to unconditional planning rather
+    # than projecting a takeover delta onto a blocker.
+    project = _write_connected_project_with_open_blocker_agent_todo(tmp_path)
+    payload = _build(project, include_detail=False)
+    step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
+    assert "write_ordered_todos" in step_ids
+    assert "plan_ranked_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
+
+
+def test_guided_takeover_with_only_deferred_advancement_todo_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    # A deferred advancement Todo is not open: the takeover must fail closed
+    # to unconditional Todo planning.
+    project = _write_connected_project_with_todos(
+        tmp_path,
+        todos_body=(
+            "- [-] [P1] deferred advancement task\n"
+            "  <!-- loopx:todo status=deferred task_class=advancement_task "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586def0001 -->"
+        ),
+    )
+    payload = _build(project, include_detail=False)
+    step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
+    assert "write_ordered_todos" in step_ids
+    assert "plan_ranked_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
+
