@@ -34,6 +34,8 @@ from .settlement import (
     execute_turn_driver_settlement,
     invoke_result_effect,
     terminal_closeout_requirement,
+    turn_settlement_failure_outcome,
+    turn_settlement_outcome,
     turn_effect_resolvers,
     verified_terminal_closeout_effect,
 )
@@ -1245,26 +1247,19 @@ def _typed_settlement_stage(
         abort=journal_adapter.abort,
         effect_attempts=journal_adapter.effect_attempts,
         effect_resolvers=effect_resolvers,
+        turn_result_kind=str(result.get("result_kind") or "") or None,
     )
 
     journal["settlement_result"] = settlement_result_payload(settlement_result)
     if settlement_result.failure is not None:
-        failure_step = settlement_result.failure.step_kind
-        result_kind = (
-            LoopXTurnResultKind.VALIDATION_FAILED
-            if failure_step is SettlementStepKind.VALIDATION
-            else LoopXTurnResultKind.WRITEBACK_FAILED
-            if failure_step is SettlementStepKind.DURABLE_WRITEBACK
-            else LoopXTurnResultKind.QUOTA_SPEND_FAILED
-            if failure_step is SettlementStepKind.QUOTA_SPEND
-            else LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED
+        result_kind, completed_phases, failed_phase = turn_settlement_failure_outcome(
+            settlement_result
         )
-        completed_phases = list(journal.get("completed_phases") or completed_phases)
         failure = _host_failure(
             plan,
             kind=result_kind,
             completed_phases=completed_phases,
-            failed_phase=failure_step.value,
+            failed_phase=failed_phase,
             reason=settlement_result.failure.reason,
         )
         journal.update(
@@ -1287,7 +1282,11 @@ def _typed_settlement_stage(
         raise ValueError(
             "typed Turn settlement completed without a quota spend receipt"
         )
-    completed_phases = list(settlement_state.completed_phases)
+    outcome = turn_settlement_outcome(settlement_result)
+    if outcome is None:
+        raise RuntimeError("TypeScript Turn settlement omitted its canonical outcome")
+    result = {**result, "result_kind": outcome["result_kind"]}
+    completed_phases = [str(phase) for phase in outcome["completed_phases"]]
     spend_payload = dict(settlement_state.quota_spend)
     _write_journal(journal_path, journal)
 
