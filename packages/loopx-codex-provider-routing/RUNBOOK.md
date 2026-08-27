@@ -61,6 +61,7 @@ SSH 运行面的演进；CPA PR 承载进入在线 data plane 的通用修复。
 | LoopX | [#3576](https://github.com/huangruiteng/loopx/pull/3576) | merged | 记录 CPA upstream qualification |
 | LoopX | [#3585](https://github.com/huangruiteng/loopx/pull/3585) | merged | 固化 pinned CPA self-use routing 与回滚边界 |
 | LoopX | [#3665](https://github.com/huangruiteng/loopx/pull/3665) | merged | 沉淀 CPA + Codex App 分层重试与延迟门禁 |
+| LoopX | [#3711](https://github.com/huangruiteng/loopx/pull/3711) | open | 将 runbook、脚本迁移清单、无密配置和资格 contract 升级为独立 extension |
 | CLIProxyAPI | [#5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220) | open / review required | provider-bound Responses history、`additional_tools` 与 Ark SSE normalizer |
 | CLIProxyAPI | [#5261](https://github.com/router-for-me/CLIProxyAPI/pull/5261) | open / review required | ChatGPT uTLS HTTP/2 连接池、TLS session resumption 与异常重建 |
 
