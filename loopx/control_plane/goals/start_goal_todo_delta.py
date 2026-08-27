@@ -17,10 +17,9 @@ from typing import Any
 
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ...control_plane.todos.contract import (
-    TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
-    normalize_todo_status,
 )
+from ...control_plane.todos.projection import todo_item_is_actionable_open
 from ...project_prompt import render_cli_command_prefix, shell_arg
 from ...registry import registry_goals, resolve_state_file
 
@@ -39,7 +38,8 @@ def existing_runnable_agent_frontier(
 
     Only open advancement Todos (``status: open``, ``task_class:
     advancement_task``) belonging to the effective agent (or unclaimed)
-    enter the frontier. Blocked, deferred, monitor, blocker, or peer-claimed
+    whose resume condition is satisfied (or absent) enter the frontier.
+    Blocked, deferred, monitor, blocker, resume-blocked, or peer-claimed
     Todos never enter the frontier. Returns ``None`` whenever the frontier
     cannot be proven (not connected, unknown goal, missing or unreadable
     state file, or nothing runnable), so callers keep the unconditional
@@ -83,8 +83,7 @@ def existing_runnable_agent_frontier(
         item
         for item in items
         if isinstance(item, dict)
-        and not item.get("done")
-        and normalize_todo_status(item.get("status")) == TODO_STATUS_OPEN
+        and todo_item_is_actionable_open(item)
         and item.get("task_class") == TODO_TASK_CLASS_ADVANCEMENT
     ]
     if effective_agent_id:

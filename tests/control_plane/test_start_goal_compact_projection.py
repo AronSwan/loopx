@@ -2043,3 +2043,55 @@ def test_guided_takeover_with_only_deferred_advancement_todo_keeps_unconditional
     assert "plan_ranked_todos" in step_ids
     assert "apply_todo_delta" not in step_ids
 
+
+def test_guided_takeover_with_resume_blocked_advancement_todo_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    # An open advancement Todo whose resume_when dependency is not satisfied
+    # is not yet runnable (resume_ready=false): takeover must fail closed to
+    # unconditional planning rather than projecting a premature delta.
+    project = _write_connected_project_with_todos(
+        tmp_path,
+        todos_body=(
+            "- [ ] [P1] resume-blocked advancement task\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            f"claimed_by={AGENT_ID} resume_when=todo_done:todo_missing "
+            "todo_id=todo_3586res0001 -->"
+        ),
+    )
+    payload = _build(project, include_detail=False)
+    step_ids = [step["id"] for step in payload["guided_transaction"]["ordered_steps"]]
+    assert "write_ordered_todos" in step_ids
+    assert "plan_ranked_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
+
+
+def test_guided_takeover_with_resume_ready_advancement_todo_projects_todo_delta(
+    tmp_path: Path,
+) -> None:
+    # Once the resume_when prerequisite is completed (resume_ready=true), the
+    # advancement Todo is actionable-open and enters the runnable frontier.
+    project = _write_connected_project_with_todos(
+        tmp_path,
+        todos_body=(
+            "- [x] [P1] prerequisite task\n"
+            "  <!-- loopx:todo status=done task_class=advancement_task "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586prereq0001 -->\n"
+            "- [ ] [P1] resume-ready advancement task\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            f"claimed_by={AGENT_ID} resume_when=todo_done:todo_3586prereq0001 "
+            "todo_id=todo_3586res0002 -->"
+        ),
+    )
+    payload = _build(project, include_detail=False)
+    steps = payload["guided_transaction"]["ordered_steps"]
+    step_ids = [step["id"] for step in steps]
+    assert "write_ordered_todos" not in step_ids
+    assert "plan_ranked_todos" not in step_ids
+    assert "compare_planned_todos_with_frontier" in step_ids
+    delta = next(step for step in steps if step["id"] == "apply_todo_delta")
+    todo_delta = delta["todo_delta"]
+    assert todo_delta["runnable_frontier_count"] == 1
+    assert any("resume-ready advancement task" in str(item) for item in todo_delta["frontier"])
+
+
