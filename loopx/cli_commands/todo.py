@@ -571,7 +571,8 @@ def register_todo_command(
         action="store_true",
         help=(
             "For todo list, return the explicit field-only projection and omit "
-            "detail lanes; compose with --limit for a bounded item count."
+            "detail lanes; returns at most two items per role, and --limit can "
+            "lower but not expand that bound."
         ),
     )
     todo_parser.add_argument(

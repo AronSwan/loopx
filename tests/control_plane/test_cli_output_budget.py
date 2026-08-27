@@ -1576,12 +1576,12 @@ def test_todo_list_thin_reduces_crowded_output_and_keeps_default_unchanged(
     payload = json.loads(thin_text)
     assert payload["thin"] is True
     assert payload["todo_count"] == payload["matched_todo_count"] == 36
-    assert payload["returned_todo_count"] == len(payload["todos"]) == 5
-    assert payload["omitted_todo_count"] == 31
+    assert payload["returned_todo_count"] == len(payload["todos"]) == 2
+    assert payload["omitted_todo_count"] == 34
     assert payload["todo_list_field_projection"]["view"] == (
         "thin_explicit_view"
     )
-    assert payload["todo_list_field_projection"]["item_limit_per_role"] == 5
+    assert payload["todo_list_field_projection"]["item_limit_per_role"] == 2
     assert "state_file" not in payload
     assert "project" not in payload
     assert len(thin_text) < len(default_text) * 0.45

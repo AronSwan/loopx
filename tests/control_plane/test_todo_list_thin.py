@@ -12,12 +12,16 @@ from loopx.control_plane.testing.cli_output_budget import (
     measure_cli_output,
 )
 from loopx.control_plane.todos.contract import encode_metadata_value
+from loopx.control_plane.todos.list_projection import (
+    compact_thin_todo_list_payload,
+)
+from loopx.control_plane.todos.markdown import render_todo_markdown
 from loopx.todos import list_goal_todos
 
 GOAL_ID = "todo-list-thin-goal"
 AGENT_ID = "codex-thin-output"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-THIN_ITEM_LIMIT_PER_ROLE = 5
+THIN_ITEM_LIMIT_PER_ROLE = 2
 
 
 def _todo_line(*, text: str, metadata: str) -> list[str]:
@@ -171,6 +175,79 @@ def _write_crowded_fixture(tmp_path: Path, *, items_per_role: int = 20) -> Path:
     return registry_path
 
 
+def _widest_retained_thin_item(*, role: str, index: int) -> dict[str, object]:
+    long_value = "x" * 240
+    scope = {
+        "schema_version": "decision_scope_v0",
+        "kind": "direction",
+        "granularity": "action",
+        "scope_key": "scope-" + "s" * 90,
+    }
+    return {
+        "todo_id": "todo_" + role[0] + str(index) + "i" * 62,
+        "role": role,
+        "status": "open",
+        "priority": "P0",
+        "text": f"text-{index}-{long_value}",
+        "title": f"title-{index}-{long_value}",
+        "task_class": "continuous_monitor",
+        "action_kind": "a" * 64,
+        "claimed_by": "a" * 80,
+        "bound_agent": "b" * 80,
+        "goal_bound": True,
+        "blocks_agent": "c" * 80,
+        "global_gate": True,
+        "unblocks_todo_id": "todo_" + "u" * 64,
+        "decision_scope": scope,
+        "required_decision_scopes": [
+            {**scope, "scope_key": f"scope-{offset}-" + "s" * 87}
+            for offset in range(3)
+        ],
+        "resume_when": "capacity_available:" + "r" * 64,
+        "resume_ready": True,
+        "target_key": f"target-{index}-{long_value}",
+        "cadence": "999d",
+        "next_due_at": "2026-12-31T23:59:59+00:00",
+        "expires_at": "2027-12-31T23:59:59+00:00",
+        "watch_only": True,
+    }
+
+
+def _widest_retained_thin_payload(*, items_per_role: int) -> dict[str, object]:
+    def summary(role: str) -> dict[str, object]:
+        items = [
+            _widest_retained_thin_item(role=role, index=index)
+            for index in range(items_per_role)
+        ]
+        return {
+            "schema_version": "todo_summary_v0",
+            "source_section": f"{role.title()} Todo",
+            "total_count": len(items),
+            "open_count": len(items),
+            "done_count": 0,
+            "deferred_count": 0,
+            "monitor_due_count": 0,
+            "monitor_schedule_gap_count": 0,
+            "claimed_advancement_open_count": 0,
+            "claimed_monitor_open_count": 0,
+            "items": items,
+        }
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "read_only": True,
+        "command": "list",
+        "goal_id": GOAL_ID,
+        "role": "all",
+        "status_filter": None,
+        "source": "markdown_active_state",
+        "todo_count": items_per_role * 2,
+        "user_todos": summary("user"),
+        "agent_todos": summary("agent"),
+    }
+
+
 def _run_cli(
     registry_path: Path,
     *extra: str,
@@ -226,7 +303,6 @@ def test_thin_projects_actionable_identity_and_omits_detail(tmp_path: Path) -> N
             "status",
             "priority",
             "text",
-            "title",
             "task_class",
             "action_kind",
             "claimed_by",
@@ -355,7 +431,7 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
     explicitly_limited = list_goal_todos(
         registry_path=registry_path,
         goal_id=GOAL_ID,
-        limit=2,
+        limit=1,
         thin=True,
     )
     direct_match = list_goal_todos(
@@ -367,22 +443,22 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
 
     assert len(default["todos"]) == default["todo_count"] == 382
     assert thin["todo_count"] == thin["matched_todo_count"] == 382
-    assert thin["returned_todo_count"] == len(thin["todos"]) == 10
-    assert thin["omitted_todo_count"] == 372
-    assert thin["todo_list_field_projection"]["item_limit_per_role"] == 5
+    assert thin["returned_todo_count"] == len(thin["todos"]) == 4
+    assert thin["omitted_todo_count"] == 378
+    assert thin["todo_list_field_projection"]["item_limit_per_role"] == 2
     assert thin["todo_list_field_projection"]["counts_cover_full_match"] is True
     assert {
         role: sum(item["role"] == role for item in thin["todos"])
         for role in ("user", "agent")
-    } == {"user": 5, "agent": 5}
+    } == {"user": 2, "agent": 2}
     for role in ("user", "agent"):
         summary = thin[f"{role}_todos"]
         compaction = summary["payload_compaction"]
         assert compaction["items_matched"] == 191
-        assert compaction["items_returned"] == 5
-        assert compaction["items_omitted"] == 186
+        assert compaction["items_returned"] == 2
+        assert compaction["items_omitted"] == 189
         assert compaction["compacted_lanes"]["items"] == {
-            "shown": 5,
+            "shown": 2,
             "total": 191,
         }
 
@@ -391,13 +467,13 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
     assert len(bounded_agent_item["required_decision_scopes"]) == 3
 
     assert role_filtered["todo_count"] == 191
-    assert role_filtered["returned_todo_count"] == 5
-    assert role_filtered["omitted_todo_count"] == 186
+    assert role_filtered["returned_todo_count"] == 2
+    assert role_filtered["omitted_todo_count"] == 189
     assert {item["role"] for item in role_filtered["todos"]} == {"agent"}
     assert explicitly_limited["matched_todo_count"] == 382
-    assert explicitly_limited["returned_todo_count"] == 4
-    assert explicitly_limited["omitted_todo_count"] == 378
-    assert explicitly_limited["todo_list_field_projection"]["item_limit_per_role"] == 2
+    assert explicitly_limited["returned_todo_count"] == 2
+    assert explicitly_limited["omitted_todo_count"] == 380
+    assert explicitly_limited["todo_list_field_projection"]["item_limit_per_role"] == 1
     assert direct_match["todo_count"] == 1
     assert direct_match["returned_todo_count"] == 1
     assert direct_match["omitted_todo_count"] == 0
@@ -417,6 +493,33 @@ def test_thin_intrinsically_bounds_high_cardinality_and_reports_overflow(
             text=result.stdout,
             measurement=measure_cli_output(
                 result.stdout,
+                output_format=output_format,
+            ),
+        )
+
+
+def test_thin_widest_retained_shape_stays_inside_fixed_output_budget() -> None:
+    payload = compact_thin_todo_list_payload(
+        _widest_retained_thin_payload(items_per_role=5)
+    )
+
+    assert payload["returned_todo_count"] == 4
+    assert payload["omitted_todo_count"] == 6
+    assert payload["todo_list_field_projection"]["item_limit_per_role"] == 2
+    assert all("title" not in item for item in payload["todos"])
+
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_thin"]
+    rendered_by_format = {
+        "json": json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        "markdown": render_todo_markdown(payload) + "\n",
+    }
+    for output_format, rendered in rendered_by_format.items():
+        assert_cli_output_mode_variant(
+            spec,
+            output_format=output_format,
+            text=rendered,
+            measurement=measure_cli_output(
+                rendered,
                 output_format=output_format,
             ),
         )

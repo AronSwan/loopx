@@ -63,7 +63,9 @@ contracts too.
 
 `todo list --thin` is an explicit bounded projection, not a new filtering or
 ordering mode. After the normal role, status, Todo-id, and agent filters run,
-it keeps at most five matched items per role in one top-level `todos` container.
+it keeps at most two matched items per role in one top-level `todos` container.
+The hot item shape keeps `text` and omits its redundant derived `title` field so
+the maximum retained field shape stays inside the registered fixed budget.
 The payload preserves the existing `todo_count` meaning, adds full-match
 `matched_todo_count` plus `returned_todo_count` and `omitted_todo_count`, and
 repeats per-role overflow readback in `payload_compaction`. Retained strings
@@ -72,7 +74,7 @@ and nested scope collections are bounded as declared by
 relationship fields stay allowlisted. Local paths, note/evidence detail, and
 duplicate summary lanes remain omitted.
 
-`--limit N` composes by lowering the intrinsic per-role cap to `min(N, 5)`;
+`--limit N` composes by lowering the intrinsic per-role cap to `min(N, 2)`;
 it never expands the thin projection. Use `todo list` without `--thin`, the
 direct Todo-id cold path, or active state when omitted items or full fields are
 required. Omitting `--thin` restores the existing full list shape without

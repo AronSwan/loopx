@@ -13,7 +13,9 @@ THIN_TODO_LIST_PROJECTION_SCHEMA_VERSION = "todo_list_thin_projection_v0"
 THIN_TODO_LIST_SUMMARY_SCHEMA_VERSION = "todo_list_thin_summary_compaction_v0"
 AGENT_LANE_TODO_LIST_ITEM_LIMIT = 12
 AGENT_LANE_TODO_LIST_TEXT_LIMIT = 180
-THIN_TODO_LIST_ITEM_LIMIT_PER_ROLE = 5
+# Two items per role keeps the maximally populated retained field shape inside
+# the registered 20k/600-line JSON budget; the regression owns that invariant.
+THIN_TODO_LIST_ITEM_LIMIT_PER_ROLE = 2
 THIN_TODO_LIST_NESTED_ITEM_LIMIT = 3
 THIN_TODO_LIST_NESTED_DICT_FIELD_LIMIT = 8
 AGENT_LANE_HOT_PATH_VIEW: Literal["agent_lane_hot_path"] = "agent_lane_hot_path"
@@ -86,7 +88,6 @@ THIN_TODO_LIST_ITEM_FIELDS = (
     "status",
     "priority",
     "text",
-    "title",
     "task_class",
     "action_kind",
     "claimed_by",
@@ -106,7 +107,7 @@ THIN_TODO_LIST_ITEM_FIELDS = (
     "watch_only",
 )
 _COMPACT_ITEM_TEXT_FIELDS = frozenset({"text", "title", "note"})
-_THIN_ITEM_TEXT_FIELDS = frozenset({"text", "title"})
+_THIN_ITEM_TEXT_FIELDS = frozenset({"text"})
 
 
 def _compact_text(value: Any) -> Any:
