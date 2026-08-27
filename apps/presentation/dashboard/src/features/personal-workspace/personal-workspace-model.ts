@@ -166,7 +166,7 @@ export type WorkspaceActionPreview = {
     | "gate.resolve"
     | "run.correct";
   agentLabel?: string;
-  fields: Array<{ label: string; value: string }>;
+  fields: Array<{ key: string; label: string; value: string }>;
   goalId?: string;
   lifecycleOperation?: "stop" | "resume" | "delete";
   impact: string;
