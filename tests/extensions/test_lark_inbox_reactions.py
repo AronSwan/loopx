@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from loopx.extensions.lark.event_inbox import load_lark_event_inbox_config
+from loopx.extensions.lark import inbox_reactions as inbox_reactions_module
 from loopx.extensions.lark.inbox_reactions import (
     complete_lark_event_inbox_reactions,
     ensure_lark_event_inbox_received_reaction,
@@ -225,7 +226,7 @@ def test_received_reaction_receipt_failure_reports_provider_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, _inbox, project = _fixture(tmp_path)
-    deleted: list[tuple[str, str]] = []
+    real_record = inbox_reactions_module.record_lark_inbox_reaction
     monkeypatch.setattr(
         "loopx.extensions.lark.inbox_reactions.record_lark_inbox_reaction",
         lambda **_kwargs: (_ for _ in ()).throw(OSError("fixture receipt failure")),
@@ -239,16 +240,77 @@ def test_received_reaction_receipt_failure_reports_provider_writes(
             "mentions": [{"name": "Project Review Bot"}],
         },
         create_reaction=lambda _message_id, _emoji_type: "reaction_Get",
-        delete_reaction=lambda message_id, reaction_id: (
-            deleted.append((message_id, reaction_id)) or True
-        ),
+        delete_reaction=lambda _message_id, _reaction_id: True,
     )
 
     assert result["status"] == "receipt_failed"
     assert result["blocker"] == "lark_inbox_received_reaction_receipt_failed"
-    assert result["created_count"] == 0
+    assert result["created_count"] == 1
     assert result["external_writes_performed"] is True
-    assert deleted == [("om_reaction_fixture", "reaction_Get")]
+    monkeypatch.setattr(
+        "loopx.extensions.lark.inbox_reactions.record_lark_inbox_reaction",
+        real_record,
+    )
+    created: list[tuple[str, str]] = []
+    recovered = ensure_lark_event_inbox_received_reaction(
+        project=project,
+        config_path=config,
+        event={"message_id": "om_reaction_fixture"},
+        create_reaction=lambda message_id, emoji_type: (
+            created.append((message_id, emoji_type)) or "reaction_duplicate"
+        ),
+        delete_reaction=lambda _message_id, _reaction_id: True,
+    )
+
+    assert recovered["status"] == "receipt_recovered"
+    assert recovered["external_writes_performed"] is False
+    assert created == []
+
+
+def test_received_reaction_uncertain_operation_never_repeats_provider_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _inbox, project = _fixture(tmp_path)
+    real_write = inbox_reactions_module._write_received_operation
+    write_count = 0
+
+    def fail_created_receipt(**kwargs: object) -> None:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise OSError("fixture operation receipt failure")
+        real_write(**kwargs)
+
+    monkeypatch.setattr(
+        inbox_reactions_module,
+        "_write_received_operation",
+        fail_created_receipt,
+    )
+    created: list[tuple[str, str]] = []
+    first = ensure_lark_event_inbox_received_reaction(
+        project=project,
+        config_path=config,
+        event={"message_id": "om_reaction_fixture"},
+        create_reaction=lambda message_id, emoji_type: (
+            created.append((message_id, emoji_type)) or "reaction_Get"
+        ),
+        delete_reaction=lambda _message_id, _reaction_id: False,
+    )
+    second = ensure_lark_event_inbox_received_reaction(
+        project=project,
+        config_path=config,
+        event={"message_id": "om_reaction_fixture"},
+        create_reaction=lambda message_id, emoji_type: (
+            created.append((message_id, emoji_type)) or "reaction_duplicate"
+        ),
+        delete_reaction=lambda _message_id, _reaction_id: False,
+    )
+
+    assert first["status"] == "operation_receipt_failed"
+    assert first["blocker"] == "lark_inbox_received_reaction_provider_outcome_uncertain"
+    assert second["status"] == "provider_outcome_uncertain"
+    assert second["external_writes_performed"] is False
+    assert created == [("om_reaction_fixture", "Get")]
 
 
 class ReplyRunner:
