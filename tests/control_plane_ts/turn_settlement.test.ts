@@ -97,6 +97,43 @@ test("non-terminal completion accepts a durable continuing Todo outcome", () => 
   );
 
   assert.equal(reduced.result.failure, null);
+  assert.deepEqual(
+    (reduced.settlement_result as Record<string, unknown>).turn_outcome,
+    {
+      schema_version: "loopx_turn_settlement_outcome_v0",
+      result_kind: "validated_completion",
+      completed_phases: [...phases.slice(0, 5)],
+      failed_phase: null,
+      completion: { todo_id: "todo", continuation: "active_goal" },
+    },
+  );
+});
+
+test("successful successor completion is included in the canonical outcome", () => {
+  const reduced = reduceTurnSettlementTransaction(
+    request({
+      turn_result_kind: "validated_completion",
+      writeback_payload: {
+        ok: true,
+        appended: true,
+        completion: {
+          todo_id: "todo",
+          continuation: "successor",
+          successor_todo_ids: ["next"],
+        },
+      },
+    }),
+  );
+
+  assert.equal(reduced.result.failure, null);
+  assert.deepEqual(
+    (reduced.settlement_result as Record<string, unknown>).turn_outcome?.completion,
+    {
+      todo_id: "todo",
+      continuation: "successor",
+      successor_todo_ids: ["next"],
+    },
+  );
 });
 
 test("successor completion requires durable successor Todo ids", () => {
@@ -151,12 +188,6 @@ test("preflight authorizes ordered providers without settling early", () => {
       action: "prepare_and_execute",
       effect_ref: `${identity.effect_id}#durable_writeback`,
       completed_phases: [...phases.slice(0, 4)],
-    },
-    {
-      step_kind: "quota_spend",
-      action: "prepare_and_execute",
-      effect_ref: `${identity.effect_id}#quota_spend`,
-      completed_phases: [...phases.slice(0, 5)],
     },
   ]);
   assert.equal(reduced.result, null);
@@ -235,6 +266,7 @@ test("internal settlement contradictions remain internal failures", () => {
 test("terminal closeout joins the same transaction after spend", () => {
   const reduced = reduceTurnSettlementTransaction(
     request({
+      turn_result_kind: "validated_completion",
       terminal_closeout_required: true,
       terminal_closeout_payload: {
         ok: true,
@@ -253,6 +285,16 @@ test("terminal closeout joins the same transaction after spend", () => {
       "quota_spend",
       "terminal_closeout",
     ],
+  );
+  assert.deepEqual(
+    (reduced.settlement_result as Record<string, unknown>).turn_outcome,
+    {
+      schema_version: "loopx_turn_settlement_outcome_v0",
+      result_kind: "validated_completion",
+      completed_phases: [...phases.slice(0, 5)],
+      failed_phase: null,
+      completion: { todo_id: "todo", continuation: "no_followup" },
+    },
   );
 });
 
@@ -297,12 +339,6 @@ test("prepared provider attempts authorize one identity-bound readback", () => {
         absent: "execute",
         unknown: "fail_closed",
       },
-    },
-    {
-      step_kind: "quota_spend",
-      action: "prepare_and_execute",
-      effect_ref: `${identity.effect_id}#quota_spend`,
-      completed_phases: [...phases.slice(0, 5)],
     },
   ]);
 });

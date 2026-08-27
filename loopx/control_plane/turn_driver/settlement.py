@@ -426,7 +426,7 @@ def execute_turn_driver_settlement(
 
     reduction = reduce()
     decision = str(reduction.get("decision") or "")
-    if decision == "execute":
+    while decision == "execute":
         provider_effects = reduction.get("provider_effects")
         if not isinstance(provider_effects, list) or not provider_effects:
             raise RuntimeError("TypeScript Turn settlement provider plan is empty")

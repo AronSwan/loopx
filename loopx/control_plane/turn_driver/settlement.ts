@@ -377,7 +377,10 @@ function reductionWithTurnOutcome(
       completed_phases: [...state.completed_phases],
       failed_phase: null,
     };
-    if (terminalPayload?.completion) outcome.completion = terminalPayload.completion;
+    if (request.turn_result_kind === "validated_completion") {
+      const completion = terminalPayload?.completion ?? state.writeback?.completion;
+      if (completion !== undefined) outcome.completion = completion;
+    }
     projection.turn_outcome = outcome;
   }
   return {
@@ -536,7 +539,7 @@ function pendingProviderEffects(
       completed_phases: [...request.completed_phases],
     });
   }
-  return effects;
+  return effects.slice(0, 1);
 }
 
 function terminalCloseoutRequestFailure(
@@ -813,6 +816,27 @@ function reduceTurnSettlementRequest(
   if (base.decision === "execute") {
     if (base.step_kind === "validation" || base.step_kind === "terminal_closeout") {
       throw new Error(`unsupported base settlement step ${base.step_kind}`);
+    }
+    if (
+      base.step_kind === "quota_spend" &&
+      request.turn_result_kind === "validated_completion" &&
+      !request.terminal_closeout_required &&
+      request.writeback_payload !== null
+    ) {
+      const completionError = nonTerminalCompletionError(
+        identity,
+        request.writeback_payload,
+      );
+      if (completionError !== null) {
+        return reduction(
+          settlementFailed({
+            kind: "receipt_missing",
+            step_kind: "durable_writeback",
+            reason: completionError,
+            receipts: base.result.receipts,
+          }),
+        );
+      }
     }
     return reduceBaseProviderAction(
       request,
