@@ -187,6 +187,7 @@ def main() -> None:
                 "message_id": "om_direct_question",
                 "create_time": "2026-07-12T10:02:00Z",
                 "content": "@Project Review Bot 结论呢？",
+                "mentioned": True,
             },
             {
                 "schema_version": "lark_event_inbox_event_v0",
