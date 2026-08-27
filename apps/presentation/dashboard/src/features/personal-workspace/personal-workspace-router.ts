@@ -26,7 +26,15 @@ function normalizedMessage(message: string) {
 }
 
 function negates(message: string, subject: RegExp) {
-  return new RegExp(`(?:不要|不需要|无需|禁止|别|暂不|do not|don't|without).{0,10}(?:${subject.source})|(?:${subject.source}).{0,10}(?:不要|不需要|无需|禁止|关闭|disabled|off)`, "iu").test(message);
+  const beforeSubject = new RegExp(
+    `(?:不要|不需要|无需|禁止|别|暂不|do not\\b|don't\\b|without\\b).{0,10}(?:${subject.source})`,
+    "iu",
+  );
+  const afterSubject = new RegExp(
+    `(?:${subject.source}).{0,10}(?:不要|不需要|无需|禁止|关闭|disabled\\b|off\\b(?!\\s+track\\b))`,
+    "iu",
+  );
+  return beforeSubject.test(message) || afterSubject.test(message);
 }
 
 function managerProjectionIntent(message: string) {
@@ -85,7 +93,7 @@ export function routeWorkspaceInput(rawMessage: string, context: WorkspaceRouter
     candidates.push({ actionKind: "agent.bind", confidence: 0.96, normalizedParameters: { agent_id: agent.agentId, goal_id: context.goalId } });
   }
   if (context.goalId && !referencesExistingTodo && !negates(message, new RegExp(todoSubject, "iu"))
-    && /(创建|新建|新增|添加|加一个|记一个).{0,16}(todo|待办|任务)|(todo|待办|任务).{0,12}(创建|新建|新增|添加)/iu.test(message)) {
+    && /(创建|新建|新增|添加|加一个|记一个).{0,16}(todo|待办|任务)|(todo|待办|任务).{0,12}(创建|新建|新增|添加)|(?:create|add)(?:\s+(?:a|an|new))?\s+(?:todo|task)|(?:todo|task).{0,12}(?:create|add)/iu.test(message)) {
     candidates.push({ actionKind: "todo.create", confidence: 0.94, normalizedParameters: { goal_id: context.goalId } });
   }
   if (context.goalId && executionIntent(message)) {

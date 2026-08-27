@@ -132,6 +132,11 @@ assert.match(page, /\["目标", "Objective"\]/, "Goal creation accepts Chinese a
 assert.match(page, /"Execution boundary \(optional\)"/, "Goal creation accepts an English execution boundary");
 assert.match(page, /t\("schedule\.unsupportedCalendar"\)/, "Unsupported calendar schedules use localized fail-closed feedback");
 assert.match(page, /function monitorTargetFromMessage/, "Monitor creation preserves the user's requested check target");
+assert.match(model, /fields: Array<\{ key: string; label: string; value: string \}>/, "Every action preview field retains a stable semantic key beside its localized label");
+assert.match(page, /\.map\(\(\[key, value\]\) => \(\{[\s\S]*key,[\s\S]*label: fieldLabels\[key\]/, "Typed action projection preserves semantic parameter keys while localizing labels");
+assert.match(page, /field\.key === "cadence"[\s\S]*field\.key === "stop_condition"[\s\S]*field\.key === "timezone"/, "Applied Heartbeat readback consumes stable semantic keys");
+assert.doesNotMatch(page, /field\.label === "cadence"|field\.label === "stop condition"/, "Schedule semantics never depend on localized display labels");
+assert.match(page, /defaultTimeline\(model, managerProjectionId, t\)/, "Default schedule projection uses the active locale authority");
 assert.match(page, /onOpenGoal: async \(goalId\)[\s\S]*await callbacks\.onRefresh\?\.\(\);[\s\S]*selectGoal\(goalId\)/, "A created Goal refreshes before navigation");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
 assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");

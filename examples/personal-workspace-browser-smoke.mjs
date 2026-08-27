@@ -2,12 +2,12 @@
 // Focused browser smoke for the personal Agent workspace first screen and interactions.
 
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  launchBrowser,
+  loadPlaywright,
   startViteDashboardServer,
   waitForHttp,
 } from "./dashboard-browser-smoke-support.mjs";
@@ -17,19 +17,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboardDir = resolve(repoRoot, "apps/presentation/dashboard");
 const outputDir = resolve(repoRoot, "output/playwright/personal-workspace");
 const port = Number(process.env.LOOPX_PERSONAL_WORKSPACE_PORT ?? "5196");
-
-function loadPlaywright() {
-  const candidates = [
-    process.env.LOOPX_PLAYWRIGHT_PACKAGE,
-    resolve(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"),
-  ].filter(Boolean);
-  try { return require("playwright"); } catch {}
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    try { return require(candidate); } catch {}
-  }
-  throw new Error("Playwright package not found");
-}
 
 async function visibleElementCount(locator) {
   return locator.evaluateAll((elements) => elements.filter((element) => {
@@ -64,6 +51,7 @@ async function installApi(page) {
     interrupts: [],
     larkWrites: [],
     actionTransitions: [],
+    allowNextHeartbeatApply: false,
     nextLifecycleApplyDelayMs: 0,
     nextStatusDelayMs: 0,
     statusRequestCount: 0,
@@ -372,10 +360,11 @@ async function installApi(page) {
     const apply = url.pathname.match(/^\/api\/actions\/(.+)\/apply$/);
     if (apply) {
       state.actionApplies.push(apply[1]);
-      if (actionKinds.get(apply[1]) === "heartbeat.bind") {
+      if (actionKinds.get(apply[1]) === "heartbeat.bind" && !state.allowNextHeartbeatApply) {
         await route.fulfill({ contentType: "application/json", json: { ok: false, schema_version: "loopx_chat_action_gate_v1", error: "Host activation required", error_code: "protected_action", gate: { kind: "host_activation_required", summary: "需要 Codex App 宿主创建 Heartbeat 自动化。", next_action: "确认宿主自动化后重新验证。" }, write_attempted: false }, status: 409 });
         return;
       }
+      if (actionKinds.get(apply[1]) === "heartbeat.bind") state.allowNextHeartbeatApply = false;
       const actionKind = actionKinds.get(apply[1]) ?? "goal.create";
       const preview = state.actionPreviews.find((item) => item.proposalId === apply[1]);
       const lifecycleDelayMs = actionKind === "goal.lifecycle" ? state.nextLifecycleApplyDelayMs : 0;
@@ -433,7 +422,7 @@ async function installApi(page) {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
         summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? {}, context: preview?.context ?? {}, expected_state_fingerprint: "fixture-r1",
         permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
-        status: "applied", receipt: { receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        status: "applied", receipt: { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
       };
       actionProposals.set(apply[1], proposal);
       await route.fulfill({ contentType: "application/json", json: { ok: true, proposal, turn: acceptedTurn }, status: acceptedTurn ? 202 : 200 });
@@ -496,7 +485,7 @@ async function main() {
   try {
     const url = `http://127.0.0.1:${port}/?statusUrl=/status.json`;
     await waitForHttp(url);
-    browser = await chromium.launch({ channel: "chrome", headless: true });
+    browser = await launchBrowser(chromium);
     const page = await browser.newPage({ viewport: { width: 1512, height: 982 } });
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -685,7 +674,40 @@ async function main() {
     if (englishMonitorPreview.normalized_parameters.stop_condition !== "goal_complete") throw new Error(`English monitor stop condition drifted: ${JSON.stringify(englishMonitorPreview.normalized_parameters)}`);
     if (api.durableWriteCount !== writesBeforeEnglishPreviews) throw new Error("English write previews mutated durable state before confirmation");
     await page.getByRole("button", { name: "Close", exact: true }).click();
-    pass(20, "English Goal and monitor drafts produce localized typed previews without durable writes.");
+
+    await page.getByRole("button", { name: "Goal details" }).click();
+    await page.getByRole("button", { name: "Set up Heartbeat", exact: true }).click();
+    const englishHeartbeatDraft = await page.getByLabel("Send a message to LoopX").inputValue();
+    for (const field of ["Frequency: Daily", "Stop condition: Goal completes", "Notification: Only notify me when needed"]) {
+      if (!englishHeartbeatDraft.includes(field)) throw new Error("English Heartbeat draft missing " + field + ": " + englishHeartbeatDraft);
+    }
+    await page.locator(".personal-channel-composer > button").last().click();
+    await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
+    const englishHeartbeatPreview = api.actionPreviews.at(-1);
+    if (englishHeartbeatPreview?.action_kind !== "heartbeat.bind") throw new Error("English Heartbeat input did not create a heartbeat preview: " + JSON.stringify(englishHeartbeatPreview));
+    if (englishHeartbeatPreview.normalized_parameters.cadence !== "1d") throw new Error("English Heartbeat cadence drifted: " + JSON.stringify(englishHeartbeatPreview.normalized_parameters));
+    if (englishHeartbeatPreview.normalized_parameters.stop_condition !== "goal_complete") throw new Error("English Heartbeat stop condition drifted: " + JSON.stringify(englishHeartbeatPreview.normalized_parameters));
+    const writesBeforeEnglishHeartbeatApply = api.durableWriteCount;
+    api.allowNextHeartbeatApply = true;
+    await page.getByRole("button", { name: "Confirm and apply", exact: true }).click();
+    await page.getByText("Applied. LoopX state will refresh.", { exact: true }).waitFor({ state: "visible" });
+    if (api.durableWriteCount !== writesBeforeEnglishHeartbeatApply + 1) throw new Error("English Heartbeat apply did not produce exactly one durable write");
+    await page.getByRole("button", { name: "View updated Goal", exact: true }).click();
+    await page.getByRole("navigation", { name: "Goal view" }).getByRole("button", { name: "Chat", exact: true }).click();
+    const englishHeartbeatSchedule = page.locator(".personal-schedule-row", { hasText: "Goal Heartbeat" }).first();
+    await englishHeartbeatSchedule.waitFor({ state: "visible" });
+    const englishHeartbeatScheduleText = await englishHeartbeatSchedule.innerText();
+    if (!englishHeartbeatScheduleText.includes("1d")) throw new Error("Applied English Heartbeat lost cadence: " + englishHeartbeatScheduleText);
+    await englishHeartbeatSchedule.click();
+    const englishHeartbeatDrawer = page.locator('.personal-context-drawer[data-context-kind="schedule"]');
+    await englishHeartbeatDrawer.getByText("goal_complete", { exact: true }).waitFor({ state: "visible" });
+    await englishHeartbeatDrawer.getByText("Asia/Shanghai", { exact: true }).waitFor({ state: "visible" });
+    const englishHeartbeatReadback = await englishHeartbeatDrawer.innerText();
+    for (const forbidden of ["等待下次宿主唤醒", "仅在需要你时通知", "由 heartbeat-prompt 生命周期驱动", "Goal 完成或 owner 停止"]) {
+      if (englishHeartbeatReadback.includes(forbidden)) throw new Error("Applied English Heartbeat exposed Chinese fallback " + forbidden + ": " + englishHeartbeatReadback);
+    }
+    await page.getByRole("button", { name: /Close details/ }).click();
+    pass(20, "English Goal and monitor previews stay read-only until confirmation, and applied Heartbeat readback preserves typed schedule semantics.");
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: /Language/ }).click();

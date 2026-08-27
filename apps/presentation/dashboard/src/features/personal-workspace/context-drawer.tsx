@@ -518,7 +518,7 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
               <h3>{selection.item.title}</h3>
               <p>{selection.item.impact}</p>
               {selection.item.status === "ready" ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
-              <dl>{selection.item.fields.map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl>
+              <dl>{selection.item.fields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl>
             </section>
             {selection.item.status === "applied" ? <p className="personal-proposal-state is-applied"><Check size={16} />{t("drawer.proposalApplied")}</p> : null}
             {selection.item.status === "applied" && selection.item.goalId ? <button className="personal-primary-action" onClick={() => void (async () => { await callbacks.onOpenGoal?.(selection.item.goalId!); onClose(); })()} type="button"><ExternalLink size={16} />{selection.item.actionKind === "goal.create" ? t("drawer.proposalEnterGoal") : t("drawer.proposalViewGoal")}</button> : null}
@@ -528,9 +528,9 @@ export function ContextDrawer({ agents, callbacks, goalNotifications = [], goals
             {selection.item.status === "deferred" ? <p className="personal-proposal-state is-gated">{t("drawer.proposalDeferred")}</p> : null}
             {selection.item.status === "gated" ? <div className="personal-proposal-state is-gated"><span><strong>{t("drawer.gateRequiresHost")}</strong>{t("drawer.gateRequiresHostDescription")}</span>{selection.item.gate?.nextAction ? <small>{selection.item.gate.nextAction}</small> : null}</div> : null}
             {selection.item.status === "gated" && selection.item.actionKind === "gate.resolve" ? (() => {
-              const fieldValue = (label: string) => selection.item.fields.find((field) => field.label === label)?.value;
-              const gateGoalId = fieldValue("goal id");
-              const gateTodoId = fieldValue("todo id");
+              const fieldValue = (key: string) => selection.item.fields.find((field) => field.key === key)?.value;
+              const gateGoalId = fieldValue("goal_id");
+              const gateTodoId = fieldValue("todo_id");
               if (!gateGoalId || !gateTodoId) return null;
               return (
                 <section className="personal-detail-card personal-gate-cli-hint">

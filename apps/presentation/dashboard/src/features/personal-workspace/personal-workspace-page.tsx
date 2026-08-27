@@ -65,7 +65,7 @@ export function sanitizeTaskDraftFromReply(reply: string): string {
 function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPreview[] {
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
-    const subject = proposal.fields.find((field) => field.label === "todo id")?.value ?? "";
+    const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
     const key = [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     latest.set(key, proposal);
   });
@@ -263,7 +263,7 @@ function SessionRecordHeader({ onClose, onOpenDetails, run }: {
   );
 }
 
-function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): WorkspaceTimelineItem[] {  const items: WorkspaceTimelineItem[] = [];
+function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t: WorkspaceTranslate): WorkspaceTimelineItem[] {  const items: WorkspaceTimelineItem[] = [];
   if (selectedGoalId === null) {
     model.userTodos.slice(0, 4).forEach((attention) => items.push({
       attention: { ...attention, goalTitle: attention.goalTitle ?? goalTitleFor(model, attention.goalId) },
@@ -340,16 +340,16 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
         label: monitorRun.run.latestActivity || monitorRun.run.title,
         runId: monitorRun.run.runId,
         status: monitorRun.run.status === "waiting" || monitorRun.run.status === "queued" ? "running" : monitorRun.run.status,
-        timestamp: goal.latestActivity || "最近活动",
+        timestamp: goal.latestActivity || t("common.recently"),
       }] : [],
       goalId: goal.goalId,
       label: todo.text,
-      schedule: todo.evidence ?? "由 LoopX continuous_monitor Todo 驱动",
+      schedule: todo.evidence ?? t("schedule.summary"),
       scheduleId: todo.todoId,
       scheduleKind: "monitor",
       sessionId: monitorRun?.run.sessionId,
       status: todo.done || todo.status === "paused" ? "paused" : "active",
-      stopCondition: "Goal 完成或 owner 停止",
+      stopCondition: t("drawer.scheduleDefaultStop"),
       target: todo.text,
       timezone: "Asia/Shanghai",
     },
@@ -358,7 +358,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
   const heartbeatProposal = model.timeline?.find((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && item.proposal.actionKind === "heartbeat.bind" && item.proposal.goalId === goal.goalId);
   if (heartbeatProposal) {
-    const field = (label: string) => heartbeatProposal.proposal.fields.find((item) => item.label === label)?.value;
+    const field = (key: string) => heartbeatProposal.proposal.fields.find((item) => item.key === key)?.value;
     items.push({
       id: `schedule:${goal.goalId}:heartbeat`,
       kind: "schedule",
@@ -366,14 +366,14 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
         agentId: goal.agentId,
         executionHistory: [],
         goalId: goal.goalId,
-        label: `推进 ${goal.title}`,
-        nextRunAt: "等待宿主调度确认",
-        notificationRule: field("notification policy") ?? "仅在需要你时通知",
-        schedule: field("cadence") ?? "由 heartbeat-prompt 生命周期驱动",
+        label: `${t("schedule.heartbeat")} · ${goal.title}`,
+        nextRunAt: t("drawer.schedulePending"),
+        notificationRule: t("drawer.scheduleDefaultNotification"),
+        schedule: field("cadence") ?? t("schedule.summary"),
         scheduleId: `${goal.goalId}:heartbeat`,
         scheduleKind: "heartbeat",
         status: heartbeatProposal.proposal.status === "applied" ? "active" : "draft",
-        stopCondition: field("stop condition") ?? "Goal 完成或 owner 停止",
+        stopCondition: field("stop_condition") ?? t("drawer.scheduleDefaultStop"),
         timezone: field("timezone") ?? "Asia/Shanghai",
       },
     });
@@ -415,9 +415,10 @@ function proposalFields(parameters: Record<string, unknown>, t: WorkspaceTransla
       return (leftIndex < 0 ? priority.length : leftIndex) - (rightIndex < 0 ? priority.length : rightIndex);
     })
     .slice(0, 10)
-    .map(([label, value]) => ({
-    label: fieldLabels[label] ?? label.replaceAll("_", " "),
-    value: label === "workspace_ref"
+    .map(([key, value]) => ({
+    key,
+    label: fieldLabels[key] ?? key.replaceAll("_", " "),
+    value: key === "workspace_ref"
       ? value === "current"
         ? t("proposal.workspace.current")
         : t("proposal.workspace.named", { workspace: String(value ?? "current") })
@@ -754,21 +755,23 @@ export function PersonalWorkspacePage({
           executionHistory: [],
           goalId: proposal.goalId!,
           label: proposal.title,
-          nextRunAt: proposal.status === "applied" ? "等待下次宿主唤醒" : "等待宿主确认",
-          notificationRule: "仅在需要你时通知",
-          schedule: proposal.fields.find((field) => field.label === "cadence")?.value ?? "由 heartbeat-prompt 生命周期驱动",
+          nextRunAt: t("drawer.schedulePending"),
+          notificationRule: t("drawer.scheduleDefaultNotification"),
+          schedule: proposal.fields.find((field) => field.key === "cadence")?.value ?? t("schedule.summary"),
           scheduleId: `${proposal.goalId}:heartbeat`,
           scheduleKind: "heartbeat" as const,
           status: proposal.status === "applied" ? "active" as const : "draft" as const,
-          stopCondition: proposal.fields.find((field) => field.label === "stop condition")?.value ?? "Goal 完成或 owner 停止",
-          timezone: proposal.fields.find((field) => field.label === "timezone")?.value ?? "Asia/Shanghai",
+          stopCondition: proposal.fields.find((field) => field.key === "stop_condition")?.value ?? t("drawer.scheduleDefaultStop"),
+          timezone: proposal.fields.find((field) => field.key === "timezone")?.value ?? "Asia/Shanghai",
         },
       }));
     const merged: WorkspaceTimelineItem[] = [
-      ...defaultTimeline(model, managerProjectionId),
+      ...defaultTimeline(model, managerProjectionId, t),
       ...(model.timeline ?? []),
       ...heartbeatSchedules,
-      ...dedupeProposals(Object.values(proposals)).map((proposal) => ({ id: `proposal:${proposal.previewId}`, kind: "proposal" as const, proposal })),
+      ...dedupeProposals(Object.values(proposals))
+        .filter((proposal) => proposal.actionKind !== "heartbeat.bind" || proposal.status !== "applied")
+        .map((proposal) => ({ id: `proposal:${proposal.previewId}`, kind: "proposal" as const, proposal })),
     ];
     const projected = [...new Map(merged.map((item) => [item.id, item])).values()]
       .filter((item) => item.kind !== "proposal"
@@ -783,7 +786,7 @@ export function PersonalWorkspacePage({
       if (item.kind === "schedule") return item.schedule.goalId === selectedGoalId;
       return item.output.goalId === selectedGoalId;
     });
-  }, [managerProjectionId, model, proposals, selectedAgentId, selectedGoalId, sessionProposalIds]);
+  }, [managerProjectionId, model, proposals, selectedAgentId, selectedGoalId, sessionProposalIds, t]);
   const visibleTimelineItems = useMemo(() => {
     if (!activeSessionRun) return items;
     return items.filter((item) => {
@@ -957,7 +960,11 @@ export function PersonalWorkspacePage({
         || gateKind === "agent_identity_selection_required";
       local = {
         actionKind: request.actionKind,
-        fields: workspaceCandidates.map((candidate) => ({ label: candidate.label, value: candidate.workspaceRef })),
+        fields: workspaceCandidates.map((candidate) => ({
+          key: `workspace_ref:${candidate.workspaceRef}`,
+          label: candidate.label,
+          value: candidate.workspaceRef,
+        })),
         gate: {
           kind: gateKind,
           nextAction: typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
@@ -1545,7 +1552,9 @@ export function PersonalWorkspacePage({
   return (
     <WorkspaceShell
       drawer={drawerSelection ? <ContextDrawer agents={agents} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} larkConnections={readOnly ? [] : larkConnections} onClose={() => {
-        if (drawerSelection.kind === "proposal" && ["applied", "rejected"].includes(drawerSelection.item.status)) {
+        if (drawerSelection.kind === "proposal"
+          && ["applied", "rejected"].includes(drawerSelection.item.status)
+          && !(drawerSelection.item.actionKind === "heartbeat.bind" && drawerSelection.item.status === "applied")) {
           setProposals((current) => {
             const next = { ...current };
             delete next[drawerSelection.item.previewId];

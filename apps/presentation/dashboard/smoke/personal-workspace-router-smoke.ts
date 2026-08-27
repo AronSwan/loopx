@@ -18,6 +18,7 @@ equal(routeWorkspaceInput("我现在该做什么？只读回答，不要修改�
 equal(routeWorkspaceInput("不要设置 Heartbeat，只回答当前进度", goalContext).route, "agent_chat", "negated heartbeat");
 equal(routeWorkspaceInput("每天推进这个 Goal，设置 heartbeat", goalContext).actionKind, "heartbeat.bind", "heartbeat outranks generic daily monitor");
 equal(routeWorkspaceInput("Set up a Heartbeat for this Goal with daily progress", goalContext).actionKind, "heartbeat.bind", "English heartbeat");
+equal(routeWorkspaceInput("Turn Heartbeat off", goalContext).route, "agent_chat", "explicit English heartbeat disable stays in chat");
 equal(routeWorkspaceInput("Add a scheduled check every 2 hours", goalContext).actionKind, "monitor.create", "English monitor");
 equal(routeWorkspaceInput("创建一个 Todo：整理发布说明", goalContext).actionKind, "todo.create", "todo create");
 equal(
@@ -35,6 +36,7 @@ equal(deferUntilPr.normalizedParameters.resume_when, "pr_merged:huangruiteng/loo
 equal(routeWorkspaceInput("帮我修复 MR 冲突，跑测试，然后 push", goalContext).actionKind, "todo.create", "execution task");
 equal(routeWorkspaceInput("创建任务并设置 Heartbeat", goalContext).route, "clarify", "compound intent");
 equal(routeWorkspaceInput("创建任务并设置 Heartbeat", goalContext).missingFields.join(","), "single_intent", "compound missing field");
+equal(routeWorkspaceInput("Create a task and set up a Heartbeat", goalContext).route, "clarify", "English compound intent");
 equal(routeWorkspaceInput("解释一下现在的状态", goalContext).route, "agent_chat", "goal chat");
 equal(routeWorkspaceInput("请问怎么解决一下这个问题？", goalContext).route, "agent_chat", "advice question stays in chat");
 equal(routeWorkspaceInput("请不要部署到生产环境", goalContext).route, "agent_chat", "negated deployment does not trigger gate");
@@ -47,5 +49,7 @@ ok(createGoal.confidence >= 0.9, "goal confidence");
 const createEnglishGoal = routeWorkspaceInput("Create a long-term Goal: prepare my weekly review", { ...goalContext, goalId: null });
 equal(createEnglishGoal.route, "typed_action", "English goal route");
 equal(createEnglishGoal.actionKind, "goal.create", "English goal action");
+equal(routeWorkspaceInput("Create a Goal: off track delivery recovery", { ...goalContext, goalId: null }).actionKind, "goal.create", "off track is not a Goal-disable command");
+equal(routeWorkspaceInput("Create a Goal without Heartbeat", { ...goalContext, goalId: null }).normalizedParameters.heartbeat_enabled, false, "English Goal can explicitly omit Heartbeat");
 
 console.log("personal workspace router smoke passed");
