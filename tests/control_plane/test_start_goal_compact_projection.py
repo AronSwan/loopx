@@ -1854,7 +1854,11 @@ def test_guided_write_ordered_todos_template_is_accepted_by_todo_add(
     validate_todo_add_options(args)
 
 
-def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
+def _write_connected_project_with_todos(
+    root: Path,
+    *,
+    todos_body: str,
+) -> Path:
     project = _write_connected_project(root)
     state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_file.write_text(
@@ -1862,12 +1866,21 @@ def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
         "## Objective\n"
         f"{GOAL_TEXT}\n"
         "## Agent Todo\n"
-        "- [ ] [P1] continue the scheduler coverage fix\n"
-        "  <!-- loopx:todo status=open task_class=advancement_task "
-        f"claimed_by={AGENT_ID} todo_id=todo_3586abcd0001 -->\n",
+        f"{todos_body}\n",
         encoding="utf-8",
     )
     return project
+
+
+def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:
+    return _write_connected_project_with_todos(
+        root,
+        todos_body=(
+            "- [ ] [P1] continue the scheduler coverage fix\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586abcd0001 -->"
+        ),
+    )
 
 
 def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
@@ -1912,19 +1925,14 @@ def test_guided_takeover_without_runnable_frontier_keeps_unconditional_authoring
 
 
 def _write_connected_project_with_blocked_agent_todo(root: Path) -> Path:
-    project = _write_connected_project(root)
-    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-    state_file.write_text(
-        "# Active Goal State\n"
-        "## Objective\n"
-        f"{GOAL_TEXT}\n"
-        "## Agent Todo\n"
-        "- [ ] [P1] continue the scheduler coverage fix\n"
-        "  <!-- loopx:todo status=blocked task_class=advancement_task "
-        f"claimed_by={AGENT_ID} todo_id=todo_3586bbbb0001 -->\n",
-        encoding="utf-8",
+    return _write_connected_project_with_todos(
+        root,
+        todos_body=(
+            "- [ ] [P1] continue the scheduler coverage fix\n"
+            "  <!-- loopx:todo status=blocked task_class=advancement_task "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586bbbb0001 -->"
+        ),
     )
-    return project
 
 
 def test_guided_takeover_with_only_blocked_todo_keeps_unconditional_authoring(
@@ -1940,3 +1948,52 @@ def test_guided_takeover_with_only_blocked_todo_keeps_unconditional_authoring(
     assert "write_ordered_todos" in step_ids
     assert "plan_ranked_todos" in step_ids
     assert "apply_todo_delta" not in step_ids
+
+
+def _write_connected_project_with_peer_claimed_agent_todo(root: Path) -> Path:
+    return _write_connected_project_with_todos(
+        root,
+        todos_body=(
+            "- [ ] [P1] peer agent release work\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            "claimed_by=peer-agent-3586 todo_id=todo_3586cccc0001 -->"
+        ),
+    )
+
+
+def test_guided_takeover_with_only_peer_claimed_todo_keeps_unconditional_authoring(
+    tmp_path: Path,
+) -> None:
+    # A runnable Todo claimed by another agent is not a runnable frontier for
+    # the current agent: the packet must fail closed to unconditional planning
+    # rather than exposing peer-owned work under a writable delta contract.
+    project = _write_connected_project_with_peer_claimed_agent_todo(tmp_path)
+    payload = _build(project, include_detail=False)
+    steps = payload["guided_transaction"]["ordered_steps"]
+    step_ids = [step["id"] for step in steps]
+    assert "write_ordered_todos" in step_ids
+    assert "plan_ranked_todos" in step_ids
+    assert "apply_todo_delta" not in step_ids
+
+
+def test_guided_takeover_filters_out_peer_claimed_todos_from_frontier(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project_with_todos(
+        tmp_path,
+        todos_body=(
+            "- [ ] [P1] own advancement task\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            f"claimed_by={AGENT_ID} todo_id=todo_3586own0001 -->\n"
+            "- [ ] [P1] peer advancement task\n"
+            "  <!-- loopx:todo status=open task_class=advancement_task "
+            "claimed_by=peer-agent-3586 todo_id=todo_3586peer0001 -->"
+        ),
+    )
+    payload = _build(project, include_detail=False)
+    steps = payload["guided_transaction"]["ordered_steps"]
+    delta = next(step for step in steps if step["id"] == "apply_todo_delta")
+    todo_delta = delta["todo_delta"]
+    assert todo_delta["runnable_frontier_count"] == 1
+    assert any("own advancement task" in str(item) for item in todo_delta["frontier"])
+    assert not any("peer advancement task" in str(item) for item in todo_delta["frontier"])

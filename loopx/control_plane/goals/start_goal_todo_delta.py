@@ -33,11 +33,11 @@ def existing_runnable_agent_frontier(
 ) -> list[dict[str, Any]] | None:
     """Runnable advancement agent Todos already present in the goal's state.
 
-    Blocked Todos (``status: blocked``) are not runnable and never enter the
-    frontier. Returns ``None`` whenever the frontier cannot be proven (not
-    connected, unknown goal, missing or unreadable state file, or nothing
-    runnable), so callers keep the unconditional planning contract —
-    fail-closed.
+    Blocked Todos (``status: blocked``) and peer-claimed Todos are not
+    runnable for the effective agent and never enter the frontier. Returns
+    ``None`` whenever the frontier cannot be proven (not connected, unknown
+    goal, missing or unreadable state file, or nothing runnable), so callers
+    keep the unconditional planning contract — fail-closed.
     """
     if inspection.get("connection_state") != "connected":
         return None
@@ -82,13 +82,18 @@ def existing_runnable_agent_frontier(
         and normalize_todo_status(item.get("status")) != "blocked"
     ]
     if effective_agent_id:
-        owned = [
+        runnable = [
             item
             for item in runnable
             if not item.get("claimed_by")
             or str(item.get("claimed_by")) == effective_agent_id
         ]
-        runnable = owned or runnable
+    else:
+        runnable = [
+            item
+            for item in runnable
+            if not item.get("claimed_by")
+        ]
     return runnable or None
 
 
