@@ -32,7 +32,11 @@ from .group_history import (
     _route_context,
     _verify_inbox_events,
 )
-from .inbox_reactions import ensure_lark_event_inbox_received_reaction
+from .inbox_reactions import (
+    ensure_lark_event_inbox_received_reaction,
+    lark_inbox_pending_turn_start_read_message_ids,
+    record_lark_inbox_turn_start_read,
+)
 from .routed_inbox import ingest_routed_lark_event_inbox
 
 CURSOR_SCHEMA_VERSION = "lark_turn_start_sync_cursor_v0"
@@ -293,16 +297,36 @@ def _route_receipt(
                     "external_read_performed": True,
                     "local_private_state_mutated": bool(ingest["write_performed"]),
                 }
-            # Retry every provider-visible pending event in the overlap page,
-            # not only files first accepted by this ingress. The shared
-            # receipt/settlement boundary makes cross-ingress duplicates
-            # idempotent and lets a transient provider failure recover on the
-            # next bounded history pass.
+            try:
+                first_read_count = sum(
+                    int(
+                        record_lark_inbox_turn_start_read(
+                            inbox=route["inbox"]["inbox_path"],
+                            message_id=str(event["message_id"]),
+                        )
+                    )
+                    for event in events
+                )
+                reaction_message_ids = lark_inbox_pending_turn_start_read_message_ids(
+                    inbox=route["inbox"]["inbox_path"]
+                )
+            except (OSError, TypeError, ValueError):
+                return {
+                    "ok": False,
+                    "status": "turn_start_read_receipt_failed",
+                    "error_code": "turn_start_read_receipt_failed",
+                    "accepted_count": int(ingest["accepted_count"]),
+                    "external_read_performed": True,
+                    "local_private_state_mutated": bool(ingest["write_performed"]),
+                }
+            # Retry from the durable Agent-read set, not only the provider's
+            # overlap page. A failed ACK therefore remains recoverable after
+            # the history cursor advances beyond the message timestamp.
             reaction_results = [
                 ensure_lark_event_inbox_received_reaction(
                     project=config["project"],
                     config_path=route["event_inbox_config_ref"],
-                    event=event,
+                    event={"message_id": message_id},
                     create_reaction=lambda message_id, emoji_type: (
                         _create_lark_event_received_reaction(
                             {"message_id": message_id},
@@ -322,7 +346,7 @@ def _route_receipt(
                         )
                     ),
                 )
-                for event in events
+                for message_id in reaction_message_ids
             ]
             reaction_failures = [
                 result for result in reaction_results if result["ok"] is not True
@@ -365,6 +389,7 @@ def _route_receipt(
                     "received_reaction_failed" if reaction_failures else None
                 ),
                 "accepted_count": int(ingest["accepted_count"]),
+                "first_read_count": first_read_count,
                 "duplicate_count": int(ingest["duplicate_count"]),
                 "skipped_count": skipped_count,
                 "self_message_skipped_count": self_message_skipped_count,
@@ -441,16 +466,11 @@ def sync_lark_turn_start_inbox(
     ]
     failures = [receipt for receipt in receipts if receipt["ok"] is not True]
     # A realtime collector may have persisted a message before this hook sees
-    # the same provider-history item.  In that case accepted_count is zero,
-    # but the first read-ack attempt still proves that this turn newly read the
-    # pending message into the Agent processing chain.  Within one route every
-    # newly accepted event is also an ACK candidate when ACKs are configured,
-    # so max() counts the union without double-counting the same message.
+    # the same provider-history item. The owner-private read receipt is
+    # independent of optional provider reactions, so it remains the sole
+    # authority for whether this turn newly placed content in the Agent chain.
     observation_count = sum(
-        max(
-            int(receipt.get("accepted_count") or 0),
-            int(receipt.get("read_ack_attempt_count") or 0),
-        )
+        int(receipt.get("first_read_count") or receipt.get("accepted_count") or 0)
         for receipt in receipts
     )
     agent_read_required = bool(observation_count)

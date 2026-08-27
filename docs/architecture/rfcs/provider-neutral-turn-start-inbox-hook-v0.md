@@ -45,8 +45,9 @@ to a durable effect receipt before inbox ACK.
 
 ```text
 provider-neutral turn_start dispatch
-  -> provider read + owner-private commit/readback
-  -> optional pending-message read acknowledgement + private reaction receipt
+  -> provider read + owner-private inbox commit/readback
+  -> first Agent-read receipt independent of optional provider reaction
+  -> retry optional reaction from durable pending reads
   -> fresh status + quota projection
   -> inbox lane preempts ordinary work when agent_read_required
   -> private drain into the active Agent turn
@@ -64,15 +65,19 @@ collection and quota selection.
 
 ## Failure and replay
 
-- `empty` means a valid provider success envelope was read and no new inbox
-  event was accepted.
+- `empty` means a valid provider success envelope was read and no pending
+  message received its first Agent-owned turn-start read in this dispatch.
 - `provider_contract_error` means the success envelope did not match its
   declared schema; it must never degrade to `empty`.
 - provider permission and availability failures remain typed and isolated.
 - duplicate hook identities run once; duplicate messages collapse by provider
-  message identity, and a private reaction receipt prevents duplicate ACKs.
+  message identity, and separate private read/effect receipts prevent duplicate
+  Agent-read observations and duplicate provider reactions.
 - collector-only capture performs no provider write. The acknowledgement is
   admitted only after the turn-start hook reads and confirms a pending message.
+- reaction disablement never cancels the first-read obligation. Failed effects
+  retry from the owner-private pending-read set rather than relying on the
+  bounded provider overlap window; uncertain effects fail closed before create.
 - attention classification affects scheduling and reply policy, never whether
   a successfully read pending message receives the acknowledgement.
 - a provider-owned self-message filter may run before inbox ingestion only from

@@ -412,6 +412,48 @@ def test_turn_start_sync_respects_explicit_received_reaction_disable(
     assert not any("reactions" in call for call in runner.calls)
 
 
+def test_turn_start_sync_collector_capture_still_requires_read_when_reaction_disabled(
+    tmp_path: Path,
+) -> None:
+    project, config = _project(tmp_path, received_reaction=True)
+    inbox_config = project / ".loopx/config/inbox.json"
+    payload = json.loads(inbox_config.read_text(encoding="utf-8"))
+    payload["reply"]["received_reaction_emoji"] = ""
+    inbox_config.write_text(json.dumps(payload), encoding="utf-8")
+    message = {
+        "message_id": "om_collector_reaction_disabled",
+        "create_time": "2026-08-26T09:59:00Z",
+        "content": "Collector captured this before the turn-start read.",
+        "deleted": False,
+    }
+    inbox = project / ".loopx/inbox/requirements"
+    inbox.mkdir(parents=True)
+    (inbox / "om_collector_reaction_disabled.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_inbox_event_v0",
+                "event_id": "om_collector_reaction_disabled",
+                **message,
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = ReactionPageRunner([_page(message)])
+
+    result = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=config,
+        runner=runner,
+        now=FIRST_NOW,
+    )
+
+    assert result["status"] == "observed"
+    assert result["observation_count"] == 1
+    assert result["agent_read_required"] is True
+    assert result["external_writes_performed"] is False
+    assert not any("reactions" in call for call in runner.calls)
+
+
 def test_turn_start_sync_reports_reaction_write_failure_without_losing_message(
     tmp_path: Path,
 ) -> None:
@@ -445,7 +487,7 @@ def test_turn_start_sync_reports_reaction_write_failure_without_losing_message(
     assert (project / ".loopx/inbox/requirements/om_reaction_failure.json").is_file()
 
 
-def test_turn_start_sync_retries_reaction_for_overlapping_pending_duplicate(
+def test_turn_start_sync_retries_reaction_from_local_read_beyond_overlap_window(
     tmp_path: Path,
 ) -> None:
     project, config = _project(tmp_path, received_reaction=True)
@@ -463,7 +505,9 @@ def test_turn_start_sync_retries_reaction_for_overlapping_pending_duplicate(
     )
 
     assert failed["status"] == "partial"
-    retry_runner = ReactionPageRunner([_page(message)])
+    # The real second provider window begins at 09:59:55, so the 09:59:00
+    # message is no longer visible and cannot be recovered from overlap.
+    retry_runner = ReactionPageRunner([_page()])
     retried = sync_lark_turn_start_inbox(
         project=project,
         config_path=config,
@@ -471,12 +515,14 @@ def test_turn_start_sync_retries_reaction_for_overlapping_pending_duplicate(
         now=SECOND_NOW,
     )
 
-    assert retried["status"] == "observed"
-    assert retried["observation_count"] == 1
-    assert retried["agent_read_required"] is True
+    assert retried["status"] == "empty"
+    assert retried["observation_count"] == 0
+    assert retried["agent_read_required"] is False
     assert retried["received_reaction_count"] == 1
     assert retried["external_writes_performed"] is True
     assert any("reactions" in call for call in retry_runner.calls)
+    history_call = next(call for call in retry_runner.calls if "reactions" not in call)
+    assert history_call[history_call.index("--start") + 1] == "2026-08-26T09:59:55Z"
 
 
 def test_turn_start_sync_excludes_verified_profile_self_message(

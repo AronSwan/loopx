@@ -217,12 +217,14 @@ mean "collector stored the event", "the Bot was mentioned", "a reply is due",
 or "processing completed". Mention, reply, question, and material-review
 classification remain independent scheduling and response decisions.
 
-Failed reactions are retried idempotently from bounded overlap pages while the
-message remains pending. The reaction is a best-effort receipt: provider
-failure increments compact failure accounting but does not discard the Inbox
-event or grant execution authority. A private receipt prevents overlap replay
-from creating a second reaction, and settled or verified Bot-authored messages
-never receive one.
+The hook records its first read in owner-private state independently of this
+optional provider write. Thus a message captured earlier by the realtime
+collector still requires Agent reading even when reactions are explicitly
+disabled. Failed reactions are retried from this durable pending-read set while
+the message remains unsettled, including after the bounded history cursor has
+moved beyond the message timestamp. Provider failure increments compact
+failure accounting but does not discard the Inbox event or grant execution
+authority.
 
 `reply.processing_reaction_emoji` is optional and requires a distinct
 received reaction. The default `Get` satisfies that requirement; when the read
@@ -236,11 +238,13 @@ retryable cleanup status instead of claiming completion.
 
 Reaction ids are stored only in an owner-private receipt ledger under the
 configured inbox. Each message transition is serialized with a private
-per-message lock. LoopX deletes only reaction ids returned by writes made
-through the configured bot profile; it never deletes another participant's
-reaction by emoji type. The receipt ledger is fail-closed: malformed state is
-not ignored, and a provider reaction that cannot be recorded is rolled back
-best-effort.
+per-message lock. A prepared/created operation receipt fences provider creation
+before and after the external effect: a reaction whose normal receipt could not
+be persisted is recovered from the known reaction id without another create;
+an outcome that became uncertain before its id was durably recorded blocks
+replay instead of risking a duplicate. LoopX deletes only reaction ids returned
+by writes made through the configured bot profile; it never deletes another
+participant's reaction by emoji type. Malformed private state fails closed.
 
 The reply path never uses the machine default profile. Before any send it
 verifies that the named profile resolves to the expected bot and that the bot
