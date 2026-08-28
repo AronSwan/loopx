@@ -37,6 +37,11 @@ from .project_prompt import (
     shell_arg,
 )
 from .paths import resolve_runtime_root
+from .control_plane.goals.start_goal_todo_delta import (
+    append_todo_delta_render_line,
+    existing_runnable_agent_frontier,
+    todo_authoring_steps,
+)
 from .registry import registry_goals, resolve_state_file
 from .slash_commands import build_slash_command_catalog
 from .thread_agent_binding import normalize_thread_id, resolve_thread_agent_binding
@@ -1523,6 +1528,17 @@ def build_start_goal_guided_packet(
         if fine_grained
         else []
     )
+    project_connection = command_pack.get("project_connection")
+    guided_frontier = (
+        existing_runnable_agent_frontier(
+            project_connection,
+            resolved_goal_id=str(command_pack.get("goal_id") or ""),
+            effective_agent_id=str(command_pack.get("agent_id") or "") or None,
+        )
+        if isinstance(project_connection, dict)
+        and not isinstance(identity_selection_gate, dict)
+        else None
+    )
     guided_transaction = {
         "schema_version": GUIDED_START_SCHEMA_VERSION,
         "mode": "dry_run_preview",
@@ -1557,42 +1573,15 @@ def build_start_goal_guided_packet(
             },
             *bind_thread_steps,
             *fine_mode_steps,
-            {
-                "id": "plan_ranked_todos",
-                "kind": "model_checkpoint",
-                "prompt": commands.get("goal_start_plan_prompt"),
-                "purpose": (
-                    "produce one public-safe, small, verifiable checkpoint Todo; keep "
-                    "later options as evidence-linked planning notes"
-                    if fine_grained
-                    else "produce concise public-safe P0/P1/P2 todos before todo writeback"
-                ),
-            },
-            {
-                "id": "write_ordered_todos",
-                "kind": "operator_or_agent_actions",
-                "command_template": (
-                    f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_pack.get('command_runtime_root'))} "
-                    f"todo add --goal-id "
-                    f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
-                    "--project . "
-                    "--role agent "
-                    + (
-                        f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
-                        if command_pack.get("agent_id")
-                        else "--claimed-by <agent-id> "
-                    )
-                    + "--task-class advancement_task --action-kind <action_kind> "
-                    "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
-                ),
-                "purpose": (
-                    "write only the current checkpoint Todo; the existing replan path "
-                    "qualifies any successor after completion evidence"
-                    if fine_grained
-                    else "write todos in planner order; capability successors preserve "
-                    "the admitted action_kind and target_key for later quota re-entry"
-                ),
-            },
+            *todo_authoring_steps(
+                existing_runnable_frontier=guided_frontier,
+                plan_prompt=commands.get("goal_start_plan_prompt"),
+                fine_grained=fine_grained,
+                cli_bin=cli_bin,
+                runtime_root=command_pack.get("command_runtime_root"),
+                goal_id=str(command_pack.get("goal_id") or ""),
+                agent_id=command_pack.get("agent_id"),
+            ),
             {
                 "id": "refresh_state",
                 "kind": "state_sync",
@@ -1846,6 +1835,7 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
             continue
         step_label = f"{index}. `{step.step_id}` ({step.kind}): "
         step_lines.append(step_label + str(step.purpose))
+        append_todo_delta_render_line(raw_step, step_lines)
         if command:
             rendered_command = (
                 actionable_shell_command(command)
