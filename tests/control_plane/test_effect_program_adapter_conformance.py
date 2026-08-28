@@ -15,10 +15,7 @@ from loopx.control_plane.effect_program import (
 )
 from loopx.control_plane.quota.settlement import (
     build_codex_app_settlement_plan,
-    require_settlement_spend,
-    require_settlement_terminal_closeout,
-    require_settlement_writeback,
-    resolve_heartbeat_settlement_identity,
+    read_heartbeat_settlement,
 )
 from loopx.control_plane.turn_driver.settlement import (
     TurnSettlementState,
@@ -118,17 +115,6 @@ def _write_run_index(
     )
 
 
-def _preserve_identity(
-    identity: SettlementIdentity,
-    result: SettlementResult[dict[str, Any]],
-) -> SettlementResult[SettlementIdentity]:
-    return SettlementResult(
-        value=identity if result.failure is None else None,
-        receipts=result.receipts,
-        failure=result.failure,
-    )
-
-
 def _run_quota_adapter(runtime_root: Path, scenario: str) -> AdapterObservation:
     plan = build_codex_app_settlement_plan(
         goal_id=GOAL_ID,
@@ -177,46 +163,26 @@ def _run_quota_adapter(runtime_root: Path, scenario: str) -> AdapterObservation:
         include_spend=True,
     )
 
-    calls: list[SettlementStepKind] = []
-
-    def terminal_closeout(
-        resolved: SettlementIdentity,
-    ) -> SettlementResult[SettlementIdentity]:
-        calls.append(SettlementStepKind.TERMINAL_CLOSEOUT)
-        return _preserve_identity(
-            resolved,
-            require_settlement_terminal_closeout(runtime_root, resolved),
-        )
-
-    def writeback(
-        resolved: SettlementIdentity,
-    ) -> SettlementResult[SettlementIdentity]:
-        calls.append(SettlementStepKind.DURABLE_WRITEBACK)
-        return _preserve_identity(
-            resolved,
-            require_settlement_writeback(runtime_root, resolved),
-        )
-
-    def spend(resolved: SettlementIdentity) -> SettlementResult[SettlementIdentity]:
-        calls.append(SettlementStepKind.QUOTA_SPEND)
-        return _preserve_identity(
-            resolved,
-            require_settlement_spend(runtime_root, resolved),
-        )
-
-    result = (
-        resolve_heartbeat_settlement_identity(
-            runtime_root,
-            goal_id=GOAL_ID,
-            agent_id=AGENT_ID,
-            todo_id=TODO_ID,
-            turn_instance_id=TURN_ID,
-        )
-        .bind(writeback)
-        .bind(spend)
-        .bind(terminal_closeout)
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
     )
-    return AdapterObservation(result, tuple(calls), plan)
+    assert readback is not None
+    calls = (
+        ()
+        if scenario == "invalid_identity"
+        else (SettlementStepKind.DURABLE_WRITEBACK,)
+        if scenario == "writeback_failure"
+        else (
+            SettlementStepKind.DURABLE_WRITEBACK,
+            SettlementStepKind.QUOTA_SPEND,
+            SettlementStepKind.TERMINAL_CLOSEOUT,
+        )
+    )
+    return AdapterObservation(readback.terminal_settlement, calls, plan)
 
 
 def _run_turn_adapter(_runtime_root: Path, scenario: str) -> AdapterObservation:

@@ -12,7 +12,7 @@ from loopx.control_plane.effect_program import (
     SettlementStepKind,
 )
 from loopx.control_plane.quota.settlement import (
-    resolve_heartbeat_settlement_identity,
+    read_heartbeat_settlement,
 )
 from loopx.control_plane.turn_driver.settlement import (
     TurnSettlementState,
@@ -195,13 +195,15 @@ def _replay_quota(case: Mapping[str, Any], runtime_root: Path) -> dict[str, Any]
         + "\n",
         encoding="utf-8",
     )
-    result = resolve_heartbeat_settlement_identity(
+    readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         todo_id=TODO_ID,
         turn_instance_id=TURN_ID,
     )
+    assert readback is not None
+    result = readback.identity
     return _observe(result, effect_calls=[], checkpoint_steps=[])
 
 
