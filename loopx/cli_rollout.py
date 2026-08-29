@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
-from .control_plane.capability_hooks import (
-    POST_WRITEBACK_RECEIPT_SCHEMA_VERSION,
-    PostWritebackHookRegistration,
-    dispatch_post_writeback_hooks,
-)
 from .history import load_registry
 from .paths import resolve_runtime_root
 from .rollout_event_log import (
@@ -17,49 +10,6 @@ from .rollout_event_log import (
     build_rollout_event,
     rollout_event_log_path,
 )
-
-
-def _run_post_writeback_hooks(
-    payload: dict[str, object],
-    *,
-    hooks: Sequence[PostWritebackHookRegistration],
-    appended_event: dict[str, Any],
-) -> dict[str, object]:
-    """Dispatch intent-only hooks once, after one newly appended writeback.
-
-    The dispatch happens at this CLI orchestration boundary on purpose: the
-    low-level append helpers stay capability-free, and the receipt handed to
-    hooks is the public-safe event identity only. Dispatch is best-effort and
-    isolated; a hook-side failure is recorded for observation but never rolls
-    back or fails the primary writeback.
-    """
-
-    receipt: dict[str, object] = {
-        "schema_version": POST_WRITEBACK_RECEIPT_SCHEMA_VERSION,
-        "goal_id": str(appended_event.get("goal_id") or ""),
-        "event_id": str(appended_event.get("event_id") or ""),
-        "event_kind": str(appended_event.get("event_kind") or ""),
-        "recorded_at": str(appended_event.get("recorded_at") or ""),
-        "appended": True,
-    }
-    for optional in ("agent_id", "todo_id"):
-        value = appended_event.get(optional)
-        if value:
-            receipt[optional] = str(value)
-    try:
-        payload["post_writeback_hooks"] = dispatch_post_writeback_hooks(
-            hooks, receipt
-        )
-    except Exception as exc:
-        payload["post_writeback_hooks_error"] = {
-            "dispatched": False,
-            "error_type": type(exc).__name__,
-            "message": (
-                "post-writeback hook dispatch failed; primary writeback "
-                "remains authoritative"
-            ),
-        }
-    return payload
 
 
 def append_cli_rollout_event(
@@ -79,18 +29,12 @@ def append_cli_rollout_event(
     details: dict[str, object] | None = None,
     allow_failed: bool = False,
     idempotency_fields: list[str] | None = None,
-    post_writeback_hooks: Sequence[PostWritebackHookRegistration] | None = None,
 ) -> dict[str, object]:
     """Append a compact rollout event for core CLI lifecycle commands.
 
     Rollout logging is intentionally best-effort so the diagnostic log cannot
     turn a successful state transition into a failed CLI command. Failures are
     surfaced in the command payload as compact metadata.
-
-    When ``post_writeback_hooks`` is supplied and this call newly appended the
-    durable event, the hooks are dispatched exactly once with the public-safe
-    receipt. A replayed (idempotent) append dispatches nothing, and the
-    dispatch itself is isolated from the primary writeback.
     """
 
     if not payload.get("ok") and not allow_failed:
@@ -146,11 +90,4 @@ def append_cli_rollout_event(
             "error_type": type(exc).__name__,
             "message": "rollout event append failed; primary command payload remains authoritative",
         }
-        return payload
-    if post_writeback_hooks and newly_appended:
-        payload = _run_post_writeback_hooks(
-            payload,
-            hooks=post_writeback_hooks,
-            appended_event=appended,
-        )
     return payload

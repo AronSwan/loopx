@@ -100,7 +100,9 @@ import {
 import {
   validateInteractionProjectionHookInvocation,
   validateInteractionProjectionHookRegistration,
+  validatePostWritebackHookInput,
   validatePostWritebackHookInvocation,
+  validatePostWritebackHookReceipt,
   validatePostWritebackHookRegistration,
   validateTurnStartHookInvocation,
   validateTurnStartHookRegistration,
@@ -430,10 +432,26 @@ export function createEffectRuntimeHandlers(
       (params) => validatePostWritebackHookRegistration(params.registration),
     ],
     [
+      "capability_hook.post_writeback.validate_input",
+      (params) => validatePostWritebackHookInput({
+        registration: params.registration,
+        hook_input: params.hook_input,
+      }),
+    ],
+    [
       "capability_hook.post_writeback.validate",
       (params) => validatePostWritebackHookInvocation({
         registration: params.registration,
+        hook_input: params.hook_input,
         result: params.result,
+      }),
+    ],
+    [
+      "capability_hook.post_writeback.validate_receipt",
+      (params) => validatePostWritebackHookReceipt({
+        registration: params.registration,
+        hook_input: params.hook_input,
+        receipt: params.receipt,
       }),
     ],
     [

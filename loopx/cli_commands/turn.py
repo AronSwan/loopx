@@ -10,12 +10,6 @@ from ..cli_rollout import append_cli_rollout_event
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
-from ..capabilities.periodic_report.profile import normalize_periodic_report_profile
-from ..capabilities.periodic_report.runtime_hooks import (
-    build_periodic_report_post_writeback_hook,
-    runtime_rollout_event_reader,
-)
-from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
@@ -77,35 +71,6 @@ PrintPayload = Callable[
     None,
 ]
 FormatSelector = Callable[..., str]
-
-
-def _post_writeback_periodic_report_hooks(
-    args: argparse.Namespace,
-    *,
-    runtime_root: Path,
-) -> tuple[PostWritebackHookRegistration, ...] | None:
-    """Register the optional periodic-report post-writeback hook.
-
-    The Turn CLI is the composition root: it reads the project-owned profile,
-    wires the durable rollout event reader, and hands typed registrations to
-    the core writeback boundary. Core code never imports the capability, and
-    the hook only returns a sink-free trigger-evaluation intent. An invalid
-    profile fails fast here, before any primary writeback happens.
-    """
-
-    profile_path_text = getattr(args, "post_writeback_periodic_report", None)
-    if not profile_path_text:
-        return None
-    profile_payload = json.loads(
-        Path(profile_path_text).expanduser().read_text(encoding="utf-8")
-    )
-    profile = normalize_periodic_report_profile(profile_payload)
-    hook = build_periodic_report_post_writeback_hook(
-        profile=profile,
-        trigger_policy=dict(profile["trigger_policy"]),
-        rollout_event_reader=runtime_rollout_event_reader(runtime_root),
-    )
-    return (hook,)
 
 
 def _turn_controller_advisory_primary(
@@ -414,11 +379,6 @@ def handle_turn_command(
                 and persisted_effect_id != settlement_identity.effect_id
             ):
                 raise ValueError("Turn settlement identity effect_id is inconsistent")
-            post_writeback_hooks = _post_writeback_periodic_report_hooks(
-                args,
-                runtime_root=runtime_root,
-            )
-            post_writeback_observations: dict[str, list[object]] = {}
             if args.execute:
                 ensure_turn_heartbeat_settlement_receipt(
                     runtime_root,
@@ -448,7 +408,7 @@ def handle_turn_command(
                     "goal_id": args.goal_id,
                     "runtime_root": str(runtime_root),
                 }
-                writeback_payload = append_cli_rollout_event(
+                append_cli_rollout_event(
                     event_payload,
                     registry_path=registry_path,
                     runtime_root_arg=runtime_root_arg,
@@ -470,15 +430,7 @@ def handle_turn_command(
                         "run_id",
                         *(("status",) if event_kind == "todo_complete" else ()),
                     ],
-                    post_writeback_hooks=post_writeback_hooks,
                 )
-                hook_summary = writeback_payload.get("post_writeback_hooks")
-                if hook_summary is None:
-                    hook_summary = writeback_payload.get("post_writeback_hooks_error")
-                if hook_summary is not None:
-                    post_writeback_observations.setdefault(event_kind, []).append(
-                        hook_summary
-                    )
                 if event_payload.get("rollout_event_log_error"):
                     raise OSError(f"failed to persist {event_kind} settlement receipt")
 
@@ -1059,8 +1011,6 @@ def handle_turn_command(
                 ),
                 scheduler=scheduler if args.execute else None,
             )
-            if post_writeback_observations:
-                payload["post_writeback_hooks"] = post_writeback_observations
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure

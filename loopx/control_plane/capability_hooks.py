@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from ..file_lock import exclusive_file_lock
 from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 
@@ -24,17 +29,23 @@ TURN_START_HOOK_DISPATCH_SCHEMA_VERSION = "loopx_turn_start_capability_hook_disp
 POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION = (
     "loopx_post_writeback_capability_hook_registration_v0"
 )
+POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION = (
+    "loopx_post_writeback_capability_hook_input_v0"
+)
 POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION = (
     "loopx_post_writeback_capability_hook_result_v0"
 )
 POST_WRITEBACK_HOOK_DISPATCH_SCHEMA_VERSION = (
     "loopx_post_writeback_capability_hook_dispatch_v0"
 )
-POST_WRITEBACK_RECEIPT_SCHEMA_VERSION = "loopx_post_writeback_receipt_v0"
+POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION = (
+    "loopx_post_writeback_capability_hook_receipt_v0"
+)
 
 InteractionProjectionProducer = Callable[[], Mapping[str, Any]]
 TurnStartProducer = Callable[[], Mapping[str, Any]]
 PostWritebackProducer = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+_SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,19 +105,16 @@ class TurnStartHookRegistration:
 
 @dataclass(frozen=True, slots=True)
 class PostWritebackHookRegistration:
-    """One intent-only capability observation after a durable writeback.
-
-    The hook receives only the public-safe writeback receipt, subscribes to
-    the durable event kinds it cares about, and returns a typed intent.
-    It is never granted a write scope: effects stay behind the existing
-    authorized boundaries and the primary writeback is never rolled back.
-    """
+    """One effect-free capability observer of a committed primary writeback."""
 
     hook_id: str
     capability_id: str
-    subscribed_event_kinds: tuple[str, ...]
+    event_kinds: tuple[str, ...]
+    intent_kinds: tuple[str, ...]
     requested_read_scope: tuple[str, ...]
     producer: PostWritebackProducer
+    policy_version: str = "v0"
+    max_input_bytes: int = 64 * 1024
     max_result_bytes: int = 16 * 1024
 
     def contract(self) -> dict[str, Any]:
@@ -114,16 +122,188 @@ class PostWritebackHookRegistration:
             "schema_version": POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION,
             "hook_id": self.hook_id,
             "capability_id": self.capability_id,
+            "policy_version": self.policy_version,
             "phase": "post_writeback",
-            "subscribed_event_kinds": list(self.subscribed_event_kinds),
+            "event_kinds": list(self.event_kinds),
+            "intent_kinds": list(self.intent_kinds),
             "budget": {
                 "max_invocations_per_dispatch": 1,
+                "max_input_bytes": self.max_input_bytes,
                 "max_result_bytes": self.max_result_bytes,
             },
             "failure_policy": "isolate",
             "requested_read_scope": list(self.requested_read_scope),
             "requested_write_scope": [],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PostWritebackHookReceiptJournal:
+    """Core-owned sidecar checkpoint for replay-safe hook dispatch."""
+
+    runtime_root: Path
+    goal_id: str
+
+    def __post_init__(self) -> None:
+        if not _SAFE_PATH_SEGMENT_RE.fullmatch(self.goal_id):
+            raise ValueError("post-writeback journal goal_id is not a safe path segment")
+
+    def _path(self, dispatch_id: str) -> Path:
+        if not re.fullmatch(r"pwh_[0-9a-f]{64}", dispatch_id):
+            raise ValueError("post-writeback dispatch_id is invalid")
+        return (
+            self.runtime_root
+            / "goals"
+            / self.goal_id
+            / "post_writeback_hooks"
+            / f"{dispatch_id}.json"
+        )
+
+    def load(self, dispatch_id: str) -> dict[str, Any] | None:
+        path = self._path(dispatch_id)
+        with exclusive_file_lock(path, operation="post_writeback_hook_read"):
+            if not path.exists():
+                return None
+            value = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version")
+            != POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION
+            or value.get("dispatch_id") != dispatch_id
+        ):
+            raise ValueError("post-writeback hook receipt is invalid")
+        return value
+
+    def store(self, receipt: Mapping[str, Any]) -> dict[str, Any]:
+        dispatch_id = str(receipt.get("dispatch_id") or "").strip()
+        path = self._path(dispatch_id)
+        normalized = dict(receipt)
+        if (
+            normalized.get("schema_version")
+            != POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION
+        ):
+            raise ValueError("post-writeback hook receipt schema is invalid")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+        with exclusive_file_lock(path, operation="post_writeback_hook_write"):
+            if path.exists():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if existing != normalized:
+                    raise ValueError("post-writeback dispatch receipt conflicts with replay")
+                return existing
+            path.write_text(serialized, encoding="utf-8")
+        return normalized
+
+
+def _post_writeback_dispatch_id(
+    registration: PostWritebackHookRegistration,
+    hook_input: Mapping[str, Any],
+) -> str:
+    receipt = hook_input.get("receipt")
+    if not isinstance(receipt, Mapping):
+        raise ValueError("post-writeback hook input has no receipt")
+    identity = {
+        "source_receipt_id": str(receipt.get("event_id") or "").strip(),
+        "event_kind": str(receipt.get("event_kind") or "").strip(),
+        "hook_id": registration.hook_id,
+        "capability_id": registration.capability_id,
+        "registration_schema": POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION,
+        "policy_version": registration.policy_version,
+    }
+    if not all(identity.values()):
+        raise ValueError("post-writeback dispatch identity is incomplete")
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"pwh_{digest}"
+
+
+def _validated_post_writeback_receipt(
+    *,
+    registration: PostWritebackHookRegistration,
+    hook_input: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = effect_runtime_result(
+        "capability_hook.post_writeback.validate_receipt",
+        {
+            "registration": registration.contract(),
+            "hook_input": dict(hook_input),
+            "receipt": dict(receipt),
+        },
+    )
+    if not isinstance(normalized, Mapping):
+        raise ValueError("post-writeback receipt runtime result is invalid")
+    return dict(normalized)
+
+
+def build_post_writeback_hook_input(
+    *,
+    event_kind: str,
+    goal_id: str,
+    agent_id: str,
+    todo_id: str,
+    turn_instance_id: str,
+    effect_id: str,
+    state_version: str,
+    committed_at: str,
+    projection: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the compact source packet from a committed primary writeback.
+
+    This packet deliberately does not use the best-effort rollout-event log as
+    authority. Its identity is reconstructible from the durable state-refresh
+    receipt facts and contains no task prose, paths, logs, or provider data.
+    """
+
+    identity = {
+        "goal_id": str(goal_id or "").strip(),
+        "agent_id": str(agent_id or "").strip(),
+        "todo_id": str(todo_id or "").strip(),
+        "turn_instance_id": str(turn_instance_id or "").strip(),
+        "effect_id": str(effect_id or "").strip(),
+    }
+    normalized_event_kind = str(event_kind or "").strip()
+    normalized_state_version = str(state_version or "").strip()
+    normalized_committed_at = str(committed_at or "").strip()
+    if (
+        not all(identity.values())
+        or not normalized_event_kind
+        or not normalized_state_version
+        or not normalized_committed_at
+    ):
+        raise ValueError(
+            "post-writeback hooks require committed goal/agent/todo/turn/effect identity"
+        )
+    receipt_facts = {
+        "event_kind": normalized_event_kind,
+        "identity": identity,
+        "state_version": normalized_state_version,
+        "committed_at": normalized_committed_at,
+    }
+    digest = hashlib.sha256(
+        json.dumps(receipt_facts, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:24]
+    return {
+        "schema_version": POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION,
+        "receipt": {
+            "schema_version": "loopx_primary_writeback_receipt_v0",
+            "event_id": f"pwr_{digest}",
+            "event_kind": normalized_event_kind,
+            "status": "committed",
+            "recorded_at": normalized_committed_at,
+            "durable": True,
+        },
+        "identity": identity,
+        "state_version": normalized_state_version,
+        "projection": dict(projection),
+    }
 
 
 def dispatch_interaction_projection_hooks(
@@ -252,6 +432,179 @@ def dispatch_turn_start_hooks(
     }
 
 
+def dispatch_post_writeback_hooks(
+    registrations: Sequence[PostWritebackHookRegistration] | None,
+    *,
+    hook_input: Mapping[str, Any],
+    journal: PostWritebackHookReceiptJournal | None = None,
+) -> dict[str, Any]:
+    """Dispatch typed intents after, never inside, the primary writeback."""
+
+    intents: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    seen_hook_ids: set[str] = set()
+    seen_intent_keys: set[str] = set()
+    replayed_hooks: list[str] = []
+    invoked_count = 0
+    ordered = sorted(registrations or (), key=lambda item: item.hook_id)
+    for registration in ordered:
+        if registration.hook_id in seen_hook_ids:
+            failures.append(_hook_failure(registration, error_code="duplicate_hook_id"))
+            continue
+        seen_hook_ids.add(registration.hook_id)
+        try:
+            dispatch_id = _post_writeback_dispatch_id(registration, hook_input)
+            existing = journal.load(dispatch_id) if journal is not None else None
+        except (OSError, TypeError, ValueError):
+            failures.append(_hook_failure(registration, error_code="journal_read_failed"))
+            continue
+        if existing is not None:
+            try:
+                existing = _validated_post_writeback_receipt(
+                    registration=registration,
+                    hook_input=hook_input,
+                    receipt=existing,
+                )
+            except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
+                failures.append(_hook_failure(registration, error_code="receipt_conflict"))
+                continue
+            existing_intent = existing.get("intent")
+            if isinstance(existing_intent, Mapping):
+                idempotency_key = str(existing_intent.get("idempotency_key") or "")
+                if idempotency_key in seen_intent_keys:
+                    failures.append(
+                        _hook_failure(registration, error_code="intent_key_conflict")
+                    )
+                    continue
+                seen_intent_keys.add(idempotency_key)
+                intents.append(dict(existing_intent))
+            replayed_hooks.append(registration.hook_id)
+            continue
+        try:
+            effect_runtime_result(
+                "capability_hook.post_writeback.validate_registration",
+                {"registration": registration.contract()},
+            )
+            admitted_input = effect_runtime_result(
+                "capability_hook.post_writeback.validate_input",
+                {
+                    "registration": registration.contract(),
+                    "hook_input": dict(hook_input),
+                },
+            )
+        except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
+            failures.append(
+                _hook_failure(registration, error_code="registration_or_input_rejected")
+            )
+            continue
+        if not isinstance(admitted_input, Mapping):
+            failures.append(
+                _hook_failure(registration, error_code="runtime_input_invalid")
+            )
+            continue
+        try:
+            invoked_count += 1
+            result = dict(registration.producer(dict(admitted_input)))
+        except Exception:  # noqa: BLE001 - optional capability failures are isolated.
+            failures.append(_hook_failure(registration, error_code="producer_failed"))
+            continue
+        try:
+            normalized = effect_runtime_result(
+                "capability_hook.post_writeback.validate",
+                {
+                    "registration": registration.contract(),
+                    "hook_input": dict(admitted_input),
+                    "result": result,
+                },
+            )
+        except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
+            failures.append(_hook_failure(registration, error_code="contract_rejected"))
+            continue
+        if not isinstance(normalized, Mapping):
+            failures.append(
+                _hook_failure(registration, error_code="runtime_result_invalid")
+            )
+            continue
+        if normalized.get("status") != "intent":
+            if journal is not None:
+                try:
+                    journal.store(
+                        _validated_post_writeback_receipt(
+                            registration=registration,
+                            hook_input=admitted_input,
+                            receipt={
+                            "schema_version": POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION,
+                            "dispatch_id": dispatch_id,
+                            "hook_id": registration.hook_id,
+                            "capability_id": registration.capability_id,
+                            "source_receipt_id": str(
+                                dict(admitted_input["receipt"]).get("event_id") or ""
+                            ),
+                            "status": "not_applicable",
+                            "intent": None,
+                            "recorded_at": str(
+                                dict(admitted_input["receipt"]).get("recorded_at") or ""
+                            ),
+                            },
+                        )
+                    )
+                except (EffectRuntimeRejected, OSError, RuntimeError, TypeError, ValueError):
+                    failures.append(
+                        _hook_failure(registration, error_code="journal_write_failed")
+                    )
+            continue
+        intent = normalized.get("intent")
+        if not isinstance(intent, Mapping):
+            failures.append(
+                _hook_failure(registration, error_code="runtime_result_invalid")
+            )
+            continue
+        idempotency_key = str(intent.get("idempotency_key") or "")
+        if idempotency_key in seen_intent_keys:
+            failures.append(_hook_failure(registration, error_code="intent_key_conflict"))
+            continue
+        seen_intent_keys.add(idempotency_key)
+        normalized_intent = dict(intent)
+        if journal is not None:
+            try:
+                journal.store(
+                    _validated_post_writeback_receipt(
+                        registration=registration,
+                        hook_input=admitted_input,
+                        receipt={
+                        "schema_version": POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION,
+                        "dispatch_id": dispatch_id,
+                        "hook_id": registration.hook_id,
+                        "capability_id": registration.capability_id,
+                        "source_receipt_id": str(
+                            dict(admitted_input["receipt"]).get("event_id") or ""
+                        ),
+                        "status": "intent_recorded",
+                        "intent": normalized_intent,
+                        "recorded_at": str(
+                            dict(admitted_input["receipt"]).get("recorded_at") or ""
+                        ),
+                        },
+                    )
+                )
+            except (EffectRuntimeRejected, OSError, RuntimeError, TypeError, ValueError):
+                failures.append(_hook_failure(registration, error_code="journal_write_failed"))
+                continue
+        intents.append(normalized_intent)
+    return {
+        "schema_version": POST_WRITEBACK_HOOK_DISPATCH_SCHEMA_VERSION,
+        "phase": "post_writeback",
+        "registered_count": len(registrations or ()),
+        "invoked_count": invoked_count,
+        "replayed_hooks": replayed_hooks,
+        "intent_count": len(intents),
+        "intents": intents,
+        "failures": failures,
+        "primary_writeback_preserved": True,
+        "external_writes_performed": False,
+    }
+
+
 def _hook_failure(
     registration: (
         InteractionProjectionHookRegistration
@@ -265,163 +618,4 @@ def _hook_failure(
         "hook_id": registration.hook_id,
         "capability_id": registration.capability_id,
         "error_code": error_code,
-    }
-
-
-def _receipt_token(value: object, label: str, *, maximum: int = 128) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{label} must be text")
-    token = value.strip()
-    if not token or len(token) > maximum:
-        raise ValueError(f"{label} is invalid")
-    return token
-
-
-def _writeback_receipt(raw: object) -> dict[str, Any]:
-    if not isinstance(raw, Mapping):
-        raise ValueError("writeback_receipt must be an object")
-    allowed = {
-        "schema_version",
-        "goal_id",
-        "event_id",
-        "event_kind",
-        "recorded_at",
-        "appended",
-        "agent_id",
-        "todo_id",
-        "state_version",
-    }
-    unknown = sorted(set(raw) - allowed)
-    if unknown:
-        raise ValueError(
-            "writeback_receipt contains unsupported fields: " + ", ".join(unknown)
-        )
-    if raw.get("schema_version") != POST_WRITEBACK_RECEIPT_SCHEMA_VERSION:
-        raise ValueError(
-            f"writeback_receipt.schema_version must be {POST_WRITEBACK_RECEIPT_SCHEMA_VERSION!r}"
-        )
-    appended = raw.get("appended")
-    if not isinstance(appended, bool):
-        raise ValueError("writeback_receipt.appended must be boolean")
-    receipt: dict[str, Any] = {
-        "schema_version": POST_WRITEBACK_RECEIPT_SCHEMA_VERSION,
-        "goal_id": _receipt_token(raw.get("goal_id"), "writeback_receipt.goal_id"),
-        "event_id": _receipt_token(raw.get("event_id"), "writeback_receipt.event_id"),
-        "event_kind": _receipt_token(
-            raw.get("event_kind"), "writeback_receipt.event_kind", maximum=64
-        ),
-        "recorded_at": _receipt_token(
-            raw.get("recorded_at"), "writeback_receipt.recorded_at", maximum=64
-        ),
-        "appended": appended,
-    }
-    for optional in ("agent_id", "todo_id", "state_version"):
-        value = raw.get(optional)
-        if value is not None:
-            receipt[optional] = _receipt_token(
-                value, f"writeback_receipt.{optional}"
-            )
-    return receipt
-
-
-def dispatch_post_writeback_hooks(
-    registrations: Sequence[PostWritebackHookRegistration] | None,
-    writeback_receipt: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Run subscribed intent hooks after one successful durable writeback.
-
-    Dispatch is composition-owned: it must only be invoked once the primary
-    durable writeback succeeded and its public-safe event receipt exists.
-    A replayed (not newly appended) receipt dispatches nothing, hooks whose
-    subscribed event kinds do not cover the receipt are never invoked, and
-    every hook failure is isolated so the primary writeback is never
-    affected.
-    """
-
-    receipt = _writeback_receipt(writeback_receipt)
-    results: list[dict[str, Any]] = []
-    failures: list[dict[str, str]] = []
-    skipped: list[dict[str, str]] = []
-    seen_hook_ids: set[str] = set()
-    ordered = sorted(registrations or (), key=lambda item: item.hook_id)
-    if not receipt["appended"]:
-        return {
-            "schema_version": POST_WRITEBACK_HOOK_DISPATCH_SCHEMA_VERSION,
-            "phase": "post_writeback",
-            "receipt": dict(receipt),
-            "registered_count": len(ordered),
-            "invoked_count": 0,
-            "results": results,
-            "failures": failures,
-            "skipped_hooks": sorted(
-                (
-                    {
-                        "hook_id": registration.hook_id,
-                        "capability_id": registration.capability_id,
-                        "reason": "replayed_receipt",
-                    }
-                    for registration in ordered
-                ),
-                key=lambda item: (item["hook_id"], item["capability_id"]),
-            ),
-            "primary_writeback_affected": False,
-        }
-    for registration in ordered:
-        if registration.hook_id in seen_hook_ids:
-            failures.append(_hook_failure(registration, error_code="duplicate_hook_id"))
-            continue
-        seen_hook_ids.add(registration.hook_id)
-        if receipt["event_kind"] not in registration.subscribed_event_kinds:
-            skipped.append(
-                {
-                    "hook_id": registration.hook_id,
-                    "capability_id": registration.capability_id,
-                    "reason": "event_kind_not_subscribed",
-                }
-            )
-            continue
-        try:
-            effect_runtime_result(
-                "capability_hook.post_writeback.validate_registration",
-                {"registration": registration.contract()},
-            )
-        except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
-            failures.append(
-                _hook_failure(registration, error_code="registration_rejected")
-            )
-            continue
-        try:
-            result = dict(registration.producer(dict(receipt)))
-        except Exception:  # noqa: BLE001 - capability failures are isolated.
-            failures.append(_hook_failure(registration, error_code="producer_failed"))
-            continue
-        try:
-            normalized = effect_runtime_result(
-                "capability_hook.post_writeback.validate",
-                {
-                    "registration": registration.contract(),
-                    "result": result,
-                },
-            )
-        except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
-            failures.append(_hook_failure(registration, error_code="contract_rejected"))
-            continue
-        if not isinstance(normalized, Mapping):
-            failures.append(
-                _hook_failure(registration, error_code="runtime_result_invalid")
-            )
-            continue
-        results.append(dict(normalized))
-    return {
-        "schema_version": POST_WRITEBACK_HOOK_DISPATCH_SCHEMA_VERSION,
-        "phase": "post_writeback",
-        "receipt": dict(receipt),
-        "registered_count": len(ordered),
-        "invoked_count": len(results),
-        "results": results,
-        "failures": failures,
-        "skipped_hooks": sorted(
-            skipped, key=lambda item: (item["hook_id"], item["capability_id"])
-        ),
-        "primary_writeback_affected": False,
     }

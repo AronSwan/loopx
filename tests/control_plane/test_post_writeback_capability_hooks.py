@@ -1,162 +1,368 @@
 from __future__ import annotations
 
-import pytest
+import json
 
 from loopx.control_plane.capability_hooks import (
+    POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION,
     POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
-    POST_WRITEBACK_RECEIPT_SCHEMA_VERSION,
     PostWritebackHookRegistration,
+    PostWritebackHookReceiptJournal,
     dispatch_post_writeback_hooks,
+)
+from loopx.capabilities.periodic_report.post_writeback_hook import (
+    build_periodic_report_post_writeback_projection,
+    evaluate_periodic_report_trigger_evaluation_intent,
+    periodic_report_post_writeback_hook,
+    periodic_report_post_writeback_hooks_for_goal,
 )
 
 
-def _receipt(**overrides: object) -> dict[str, object]:
+def _input() -> dict[str, object]:
     return {
-        "schema_version": POST_WRITEBACK_RECEIPT_SCHEMA_VERSION,
-        "goal_id": "long-research",
-        "event_id": "evt-0001",
-        "event_kind": "todo_complete",
-        "recorded_at": "2026-08-24T12:00:00Z",
-        "appended": True,
-        **overrides,
+        "schema_version": POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION,
+        "receipt": {
+            "schema_version": "loopx_rollout_event_v0",
+            "event_id": "evt-stage-1",
+            "event_kind": "refresh_state",
+            "status": "appended",
+            "recorded_at": "2026-08-30T01:00:00+08:00",
+            "durable": True,
+        },
+        "identity": {
+            "goal_id": "goal-1",
+            "agent_id": "agent-1",
+            "todo_id": "todo-1",
+            "turn_instance_id": "turn-1",
+            "effect_id": "goal-1:agent-1:todo-1:turn-1",
+        },
+        "state_version": "vision-revision-2",
+        "projection": {
+            "stage_completion": {
+                "schema_version": "periodic_report_stage_completion_receipt_v0",
+                "stage_identity": "stage-123",
+            }
+        },
     }
 
 
-def _result(**overrides: object) -> dict[str, object]:
-    return {
-        "schema_version": POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
-        "hook_id": "periodic_report.post_writeback_trigger",
-        "capability_id": "periodic-report",
-        "phase": "post_writeback",
-        "status": "intent_ready",
-        "intent_kind": "periodic_report_trigger_evaluation",
-        "idempotency_key": "sha256:" + "0" * 64,
-        "intent": {"report_kind": "milestone_update"},
-        "error_code": None,
-        **overrides,
-    }
+def _hook(*, key: str = "periodic-report:stage-123") -> PostWritebackHookRegistration:
+    def producer(value: object) -> dict[str, object]:
+        assert isinstance(value, dict)
+        return {
+            "schema_version": POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
+            "hook_id": "periodic_report.stage_completion",
+            "capability_id": "periodic-report",
+            "phase": "post_writeback",
+            "status": "intent",
+            "intent": {
+                "schema_version": "loopx_capability_intent_v0",
+                "intent_kind": "periodic_report.trigger_evaluation",
+                "idempotency_key": key,
+                "source_receipt_id": "evt-stage-1",
+                "payload": {"stage_identity": "stage-123"},
+                "requested_write_scope": [],
+            },
+        }
 
-
-def _hook(producer: object | None = None) -> PostWritebackHookRegistration:
     return PostWritebackHookRegistration(
-        hook_id="periodic_report.post_writeback_trigger",
+        hook_id="periodic_report.stage_completion",
         capability_id="periodic-report",
-        subscribed_event_kinds=("refresh_state", "todo_complete"),
-        requested_read_scope=("durable_rollout_events",),
-        producer=producer or (lambda receipt: _result()),  # type: ignore[arg-type]
+        event_kinds=("refresh_state",),
+        intent_kinds=("periodic_report.trigger_evaluation",),
+        requested_read_scope=("stage_completion",),
+        producer=producer,
     )
 
 
-def test_post_writeback_hook_returns_validated_intent() -> None:
-    dispatch = dispatch_post_writeback_hooks([_hook()], _receipt())
+def test_post_writeback_dispatch_returns_one_effect_free_intent() -> None:
+    dispatch = dispatch_post_writeback_hooks([_hook()], hook_input=_input())
 
+    assert dispatch["intent_count"] == 1
     assert dispatch["failures"] == []
-    assert dispatch["invoked_count"] == 1
-    assert dispatch["results"][0]["intent_kind"] == (
-        "periodic_report_trigger_evaluation"
+    assert dispatch["primary_writeback_preserved"] is True
+    assert dispatch["external_writes_performed"] is False
+
+
+def test_post_writeback_dispatch_isolates_failures_and_duplicate_hooks() -> None:
+    failed = PostWritebackHookRegistration(
+        hook_id="periodic_report.failed",
+        capability_id="periodic-report",
+        event_kinds=("refresh_state",),
+        intent_kinds=("periodic_report.trigger_evaluation",),
+        requested_read_scope=("stage_completion",),
+        producer=lambda _value: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    assert dispatch["primary_writeback_affected"] is False
-
-
-def test_replayed_receipt_dispatches_nothing() -> None:
-    calls: list[dict[str, object]] = []
-
-    def produce(receipt: dict[str, object]) -> dict[str, object]:
-        calls.append(receipt)
-        return _result()
 
     dispatch = dispatch_post_writeback_hooks(
-        [_hook(produce)], _receipt(appended=False)
+        [_hook(), _hook(), failed],
+        hook_input=_input(),
     )
 
-    assert calls == []
-    assert dispatch["invoked_count"] == 0
-    assert dispatch["results"] == []
-    assert dispatch["failures"] == []
-    assert dispatch["skipped_hooks"] == [
-        {
-            "hook_id": "periodic_report.post_writeback_trigger",
-            "capability_id": "periodic-report",
-            "reason": "replayed_receipt",
-        }
-    ]
+    assert dispatch["intent_count"] == 1
+    assert {item["error_code"] for item in dispatch["failures"]} == {
+        "duplicate_hook_id",
+        "producer_failed",
+    }
 
 
-def test_unsubscribed_event_kind_is_never_invoked() -> None:
-    calls: list[dict[str, object]] = []
+def test_post_writeback_dispatch_rejects_non_durable_input_before_provider() -> None:
+    called = False
 
-    def produce(receipt: dict[str, object]) -> dict[str, object]:
-        calls.append(receipt)
-        return _result()
+    def producer(_value: object) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {}
 
+    hook = PostWritebackHookRegistration(
+        hook_id="periodic_report.stage_completion",
+        capability_id="periodic-report",
+        event_kinds=("refresh_state",),
+        intent_kinds=("periodic_report.trigger_evaluation",),
+        requested_read_scope=("stage_completion",),
+        producer=producer,
+    )
+    pending = _input()
+    pending["receipt"] = {**pending["receipt"], "durable": False}  # type: ignore[arg-type]
+
+    dispatch = dispatch_post_writeback_hooks([hook], hook_input=pending)
+
+    assert called is False
+    assert dispatch["intent_count"] == 0
+    assert dispatch["failures"][0]["error_code"] == "registration_or_input_rejected"
+
+
+def test_periodic_report_hook_emits_only_an_approval_neutral_trigger_intent() -> None:
     dispatch = dispatch_post_writeback_hooks(
-        [_hook(produce)], _receipt(event_kind="goal_closed")
+        [periodic_report_post_writeback_hook()],
+        hook_input=_input(),
     )
 
-    assert calls == []
-    assert dispatch["invoked_count"] == 0
-    assert dispatch["skipped_hooks"][0]["reason"] == "event_kind_not_subscribed"
+    intent = dispatch["intents"][0]
+    assert intent["intent_kind"] == "periodic_report.trigger_evaluation"
+    assert intent["requested_write_scope"] == []
+    assert intent["payload"]["generation_authorized"] is False
+    assert intent["payload"]["external_delivery_authorized"] is False
 
 
-def test_incomplete_intent_is_contract_rejected() -> None:
-    dispatch = dispatch_post_writeback_hooks(
-        [_hook(lambda receipt: _result(intent=None))], _receipt()
+def test_post_writeback_sidecar_replay_skips_provider(tmp_path) -> None:
+    calls = 0
+    base = _hook()
+
+    def producer(value: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return dict(base.producer(value))  # type: ignore[arg-type]
+
+    hook = PostWritebackHookRegistration(
+        hook_id=base.hook_id,
+        capability_id=base.capability_id,
+        event_kinds=base.event_kinds,
+        intent_kinds=base.intent_kinds,
+        requested_read_scope=base.requested_read_scope,
+        producer=producer,
     )
+    journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
 
-    assert dispatch["results"] == []
-    assert dispatch["failures"] == [
-        {
-            "hook_id": "periodic_report.post_writeback_trigger",
-            "capability_id": "periodic-report",
-            "error_code": "contract_rejected",
-        }
-    ]
+    first = dispatch_post_writeback_hooks([hook], hook_input=_input(), journal=journal)
+    replay = dispatch_post_writeback_hooks([hook], hook_input=_input(), journal=journal)
 
-
-def test_not_applicable_result_must_stay_empty() -> None:
-    dispatch = dispatch_post_writeback_hooks(
-        [_hook(lambda receipt: _result(status="not_applicable"))], _receipt()
-    )
-
-    assert dispatch["results"] == []
-    assert dispatch["failures"][0]["error_code"] == "contract_rejected"
+    assert calls == 1
+    assert first["intent_count"] == replay["intent_count"] == 1
+    assert replay["invoked_count"] == 0
+    assert replay["replayed_hooks"] == ["periodic_report.stage_completion"]
+    assert replay["intents"] == first["intents"]
 
 
-def test_producer_failure_is_isolated() -> None:
-    def broken(receipt: dict[str, object]) -> dict[str, object]:
-        raise RuntimeError("capability exploded")
+def test_post_writeback_policy_version_rotates_replay_identity(tmp_path) -> None:
+    calls = 0
+    base = _hook()
 
-    dispatch = dispatch_post_writeback_hooks([_hook(broken)], _receipt())
+    def producer(value: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return dict(base.producer(value))  # type: ignore[arg-type]
 
-    assert dispatch["results"] == []
-    assert dispatch["failures"] == [
-        {
-            "hook_id": "periodic_report.post_writeback_trigger",
-            "capability_id": "periodic-report",
-            "error_code": "producer_failed",
-        }
-    ]
-    assert dispatch["primary_writeback_affected"] is False
-
-
-def test_post_writeback_hooks_are_single_flight_by_identity() -> None:
-    hook = _hook()
-
-    dispatch = dispatch_post_writeback_hooks([hook, hook], _receipt())
-
-    assert dispatch["invoked_count"] == 1
-    assert dispatch["failures"][0]["error_code"] == "duplicate_hook_id"
-
-
-def test_receipt_schema_mismatch_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        dispatch_post_writeback_hooks(
-            [_hook()], _receipt(schema_version="loopx_writeback_receipt_v0")
+    journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
+    for policy_version in ("v0", "v1"):
+        hook = PostWritebackHookRegistration(
+            hook_id=base.hook_id,
+            capability_id=base.capability_id,
+            event_kinds=base.event_kinds,
+            intent_kinds=base.intent_kinds,
+            requested_read_scope=base.requested_read_scope,
+            producer=producer,
+            policy_version=policy_version,
         )
-
-
-def test_unknown_receipt_field_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        dispatch_post_writeback_hooks(
-            [_hook()], _receipt(raw_task_text="secret")
+        dispatch = dispatch_post_writeback_hooks(
+            [hook], hook_input=_input(), journal=journal
         )
+        assert dispatch["invoked_count"] == 1
+
+    assert calls == 2
+    assert (
+        len(
+            list(
+                (tmp_path / "goals" / "goal-1" / "post_writeback_hooks").glob("*.json")
+            )
+        )
+        == 2
+    )
+
+
+def test_periodic_report_hook_requires_explicit_goal_profile_opt_in(tmp_path) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal-1",
+                        "control_plane": {
+                            "periodic_report": {
+                                "enabled": False,
+                                "profile_preset": "weekly",
+                            }
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        periodic_report_post_writeback_hooks_for_goal(
+            registry_path=registry_path, goal_id="goal-1"
+        )
+        == ()
+    )
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["control_plane"]["periodic_report"]["enabled"] = True
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    hooks = periodic_report_post_writeback_hooks_for_goal(
+        registry_path=registry_path, goal_id="goal-1"
+    )
+    assert len(hooks) == 1
+    assert hooks[0].hook_id == "periodic_report.runtime_trigger"
+
+    hook_input = _input()
+    hook_input["projection"] = {
+        "stage_completion": {
+            "schema_version": "periodic_report_stage_completion_receipt_v0",
+            "stage_identity": "stage-123",
+            "agent_id": "agent-1",
+            "closed_vision_revision": "2026-08-30T10:00:00Z",
+            "frontier_identity": "frontier-2",
+            "transition": "successor_frontier_settled",
+            "completed_at": "2026-08-30T11:00:00Z",
+            "acceptance": "validated",
+            "outcome_checkpoint_satisfied": True,
+            "durable_writeback_required": True,
+            "evidence_refs": ["frontier-2"],
+        }
+    }
+    dispatch = dispatch_post_writeback_hooks(hooks, hook_input=hook_input)
+    decision = evaluate_periodic_report_trigger_evaluation_intent(
+        dispatch["intents"][0]
+    )
+
+    assert decision["eligible"] is True
+    assert decision["selected_trigger_kind"] == "bounded_segment_milestone"
+    assert decision["boundary"]["external_writes_performed"] is False
+
+
+def test_periodic_report_projection_reduces_durable_successor_transition(
+    tmp_path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    state_path = tmp_path / "goal.md"
+    state_path.write_text(
+        """# Goal
+
+## User Todo
+
+## Agent Todo
+
+- [ ] Analyze the next bounded family.
+  <!-- loopx:todo todo_id=todo-next status=open task_class=advancement_task claimed_by=agent-1 -->
+""",
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal-1",
+                        "repo": str(tmp_path),
+                        "state_file": "goal.md",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = runtime_root / "goals" / "goal-1" / "runs"
+    runs_dir.mkdir(parents=True)
+    runs = [
+        {
+            "generated_at": "2026-08-30T11:00:00Z",
+            "goal_id": "goal-1",
+            "agent_vision": {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": "agent-1",
+                "state": "active",
+                "vision_patch": {"acceptance_summary": "Next family is bounded."},
+            },
+            "autonomous_replan_ack": {
+                "recorded": True,
+                "frontier_identity": "frontier-2",
+                "semantic_delta": {
+                    "accepted": True,
+                    "outcomes": ["fresh_vision_path_outcome"],
+                    "trigger_kinds": ["vision_successor_required"],
+                    "obligation_id": "replan-2",
+                },
+            },
+        },
+        {
+            "generated_at": "2026-08-30T10:00:00Z",
+            "goal_id": "goal-1",
+            "agent_vision": {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": "agent-1",
+                "state": "vision_closed",
+                "vision_patch": {"acceptance_summary": "First family accepted."},
+            },
+            "vision_checkpoint": {
+                "schema_version": "vision_checkpoint_v0",
+                "satisfied": True,
+                "decision": "patched",
+                "triggers": [
+                    {
+                        "kind": "material_delivery_outcome",
+                        "delivery_outcome": "outcome_progress",
+                    }
+                ],
+            },
+        },
+    ]
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in runs),
+        encoding="utf-8",
+    )
+
+    projection = build_periodic_report_post_writeback_projection(
+        payload={"state": {"path": str(state_path)}},
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id="goal-1",
+        agent_id="agent-1",
+    )
+
+    receipt = projection["stage_completion"]
+    assert receipt["transition"] == "successor_frontier_settled"
+    assert receipt["frontier_identity"] == "frontier-2"
