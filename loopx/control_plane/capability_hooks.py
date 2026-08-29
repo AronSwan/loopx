@@ -646,6 +646,177 @@ def dispatch_turn_start_hooks(
     }
 
 
+def _invoke_post_writeback_hook_producer(
+    *,
+    registration: PostWritebackHookRegistration,
+    hook_input: Mapping[str, Any],
+    dispatch_id: str,
+    journal: PostWritebackHookReceiptJournal | None,
+    receipt_path: Path | None,
+    attempt_count: int,
+    seen_intent_keys: set[str],
+) -> tuple[dict[str, Any] | None, dict[str, str] | None, bool]:
+    try:
+        effect_runtime_result(
+            "capability_hook.post_writeback.validate_registration",
+            {"registration": registration.contract()},
+        )
+        admitted_input = effect_runtime_result(
+            "capability_hook.post_writeback.validate_input",
+            {
+                "registration": registration.contract(),
+                "hook_input": dict(hook_input),
+            },
+        )
+    except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
+        return (
+            None,
+            _hook_failure(registration, error_code="registration_or_input_rejected"),
+            False,
+        )
+    if not isinstance(admitted_input, Mapping):
+        return (
+            None,
+            _hook_failure(registration, error_code="runtime_input_invalid"),
+            False,
+        )
+
+    try:
+        result = dict(registration.producer(dict(admitted_input)))
+    except Exception:  # noqa: BLE001 - optional capability failures are isolated.
+        return (
+            None,
+            _record_retryable_post_writeback_failure_unlocked(
+                journal=journal,
+                receipt_path=receipt_path,
+                registration=registration,
+                hook_input=admitted_input,
+                dispatch_id=dispatch_id,
+                error_code="producer_failed",
+                attempt_count=attempt_count,
+            ),
+            True,
+        )
+
+    try:
+        normalized = effect_runtime_result(
+            "capability_hook.post_writeback.validate",
+            {
+                "registration": registration.contract(),
+                "hook_input": dict(admitted_input),
+                "result": result,
+            },
+        )
+    except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
+        return (
+            None,
+            _record_retryable_post_writeback_failure_unlocked(
+                journal=journal,
+                receipt_path=receipt_path,
+                registration=registration,
+                hook_input=admitted_input,
+                dispatch_id=dispatch_id,
+                error_code="contract_rejected",
+                attempt_count=attempt_count,
+            ),
+            True,
+        )
+
+    if not isinstance(normalized, Mapping):
+        return (
+            None,
+            _record_retryable_post_writeback_failure_unlocked(
+                journal=journal,
+                receipt_path=receipt_path,
+                registration=registration,
+                hook_input=admitted_input,
+                dispatch_id=dispatch_id,
+                error_code="runtime_result_invalid",
+                attempt_count=attempt_count,
+            ),
+            True,
+        )
+
+    if normalized.get("status") != "intent":
+        if journal is not None and receipt_path is not None:
+            try:
+                _store_post_writeback_sidecar_unlocked(
+                    journal=journal,
+                    receipt_path=receipt_path,
+                    registration=registration,
+                    hook_input=admitted_input,
+                    dispatch_id=dispatch_id,
+                    status="not_applicable",
+                    intent=None,
+                    error_code=None,
+                    attempt_count=attempt_count,
+                )
+            except (
+                EffectRuntimeRejected,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ):
+                return (
+                    None,
+                    _hook_failure(registration, error_code="journal_write_failed"),
+                    True,
+                )
+        return None, None, True
+
+    intent = normalized.get("intent")
+    if not isinstance(intent, Mapping):
+        return (
+            None,
+            _hook_failure(registration, error_code="runtime_result_invalid"),
+            True,
+        )
+    idempotency_key = str(intent.get("idempotency_key") or "")
+    if idempotency_key in seen_intent_keys:
+        return (
+            None,
+            _record_retryable_post_writeback_failure_unlocked(
+                journal=journal,
+                receipt_path=receipt_path,
+                registration=registration,
+                hook_input=admitted_input,
+                dispatch_id=dispatch_id,
+                error_code="intent_key_conflict",
+                attempt_count=attempt_count,
+            ),
+            True,
+        )
+    seen_intent_keys.add(idempotency_key)
+    normalized_intent = dict(intent)
+    if journal is not None and receipt_path is not None:
+        try:
+            _store_post_writeback_sidecar_unlocked(
+                journal=journal,
+                receipt_path=receipt_path,
+                registration=registration,
+                hook_input=admitted_input,
+                dispatch_id=dispatch_id,
+                status="intent_recorded",
+                intent=normalized_intent,
+                error_code=None,
+                attempt_count=attempt_count,
+            )
+        except (
+            EffectRuntimeRejected,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            return (
+                None,
+                _hook_failure(registration, error_code="journal_write_failed"),
+                True,
+            )
+    return normalized_intent, None, True
+
+
 def dispatch_post_writeback_hooks(
     registrations: Sequence[PostWritebackHookRegistration] | None,
     *,
@@ -728,157 +899,22 @@ def dispatch_post_writeback_hooks(
                         replayed_hooks.append(registration.hook_id)
                         continue
 
-                try:
-                    effect_runtime_result(
-                        "capability_hook.post_writeback.validate_registration",
-                        {"registration": registration.contract()},
-                    )
-                    admitted_input = effect_runtime_result(
-                        "capability_hook.post_writeback.validate_input",
-                        {
-                            "registration": registration.contract(),
-                            "hook_input": dict(hook_input),
-                        },
-                    )
-                except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
-                    failures.append(
-                        _hook_failure(registration, error_code="registration_or_input_rejected")
-                    )
-                    continue
-                if not isinstance(admitted_input, Mapping):
-                    failures.append(
-                        _hook_failure(registration, error_code="runtime_input_invalid")
-                    )
-                    continue
-
                 attempt_count = previous_attempt_count + 1
-                try:
+                intent, failure, did_invoke = _invoke_post_writeback_hook_producer(
+                    registration=registration,
+                    hook_input=hook_input,
+                    dispatch_id=dispatch_id,
+                    journal=journal,
+                    receipt_path=receipt_path,
+                    attempt_count=attempt_count,
+                    seen_intent_keys=seen_intent_keys,
+                )
+                if did_invoke:
                     invoked_count += 1
-                    result = dict(registration.producer(dict(admitted_input)))
-                except Exception:  # noqa: BLE001 - optional capability failures are isolated.
-                    failures.append(
-                        _record_retryable_post_writeback_failure_unlocked(
-                            journal=journal,
-                            receipt_path=receipt_path,
-                            registration=registration,
-                            hook_input=admitted_input,
-                            dispatch_id=dispatch_id,
-                            error_code="producer_failed",
-                            attempt_count=attempt_count,
-                        )
-                    )
-                    continue
-
-                try:
-                    normalized = effect_runtime_result(
-                        "capability_hook.post_writeback.validate",
-                        {
-                            "registration": registration.contract(),
-                            "hook_input": dict(admitted_input),
-                            "result": result,
-                        },
-                    )
-                except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
-                    failures.append(
-                        _record_retryable_post_writeback_failure_unlocked(
-                            journal=journal,
-                            receipt_path=receipt_path,
-                            registration=registration,
-                            hook_input=admitted_input,
-                            dispatch_id=dispatch_id,
-                            error_code="contract_rejected",
-                            attempt_count=attempt_count,
-                        )
-                    )
-                    continue
-
-                if not isinstance(normalized, Mapping):
-                    failures.append(
-                        _record_retryable_post_writeback_failure_unlocked(
-                            journal=journal,
-                            receipt_path=receipt_path,
-                            registration=registration,
-                            hook_input=admitted_input,
-                            dispatch_id=dispatch_id,
-                            error_code="runtime_result_invalid",
-                            attempt_count=attempt_count,
-                        )
-                    )
-                    continue
-
-                if normalized.get("status") != "intent":
-                    if journal is not None and receipt_path is not None:
-                        try:
-                            _store_post_writeback_sidecar_unlocked(
-                                journal=journal,
-                                receipt_path=receipt_path,
-                                registration=registration,
-                                hook_input=admitted_input,
-                                dispatch_id=dispatch_id,
-                                status="not_applicable",
-                                intent=None,
-                                error_code=None,
-                                attempt_count=attempt_count,
-                            )
-                        except (
-                            EffectRuntimeRejected,
-                            OSError,
-                            RuntimeError,
-                            TypeError,
-                            ValueError,
-                        ):
-                            failures.append(
-                                _hook_failure(registration, error_code="journal_write_failed")
-                            )
-                    continue
-
-                intent = normalized.get("intent")
-                if not isinstance(intent, Mapping):
-                    failures.append(
-                        _hook_failure(registration, error_code="runtime_result_invalid")
-                    )
-                    continue
-                idempotency_key = str(intent.get("idempotency_key") or "")
-                if idempotency_key in seen_intent_keys:
-                    failures.append(
-                        _record_retryable_post_writeback_failure_unlocked(
-                            journal=journal,
-                            receipt_path=receipt_path,
-                            registration=registration,
-                            hook_input=admitted_input,
-                            dispatch_id=dispatch_id,
-                            error_code="intent_key_conflict",
-                            attempt_count=attempt_count,
-                        )
-                    )
-                    continue
-                seen_intent_keys.add(idempotency_key)
-                normalized_intent = dict(intent)
-                if journal is not None and receipt_path is not None:
-                    try:
-                        _store_post_writeback_sidecar_unlocked(
-                            journal=journal,
-                            receipt_path=receipt_path,
-                            registration=registration,
-                            hook_input=admitted_input,
-                            dispatch_id=dispatch_id,
-                            status="intent_recorded",
-                            intent=normalized_intent,
-                            error_code=None,
-                            attempt_count=attempt_count,
-                        )
-                    except (
-                        EffectRuntimeRejected,
-                        OSError,
-                        RuntimeError,
-                        TypeError,
-                        ValueError,
-                    ):
-                        failures.append(
-                            _hook_failure(registration, error_code="journal_write_failed")
-                        )
-                        continue
-                intents.append(normalized_intent)
+                if failure is not None:
+                    failures.append(failure)
+                elif intent is not None:
+                    intents.append(intent)
         except LockAcquireTimeoutError:
             failures.append(
                 _hook_failure(registration, error_code="lock_acquire_timeout")
