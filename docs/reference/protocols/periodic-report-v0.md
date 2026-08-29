@@ -221,9 +221,12 @@ revision, and derived `periodic_report_stage_completion_receipt_v0`. Its result
 is an idempotent `periodic_report.trigger_evaluation` intent with an empty write
 scope. Core validates registration, input, result, and the sidecar receipt in
 TypeScript, then stores the bounded receipt separately from the primary
-transaction. Exact replay skips provider invocation; conflicts and optional
-hook failures remain isolated and cannot roll back the primary writeback or
-alter quota-spend eligibility.
+transaction. Terminal replay skips provider invocation. A transient provider
+or result-contract failure persists a `retryable_failure` receipt with a stable
+dispatch reference and monotonic attempt count; exact replay may atomically
+advance that receipt to `intent_recorded` or `not_applicable`. Conflicts and
+optional hook failures remain isolated and cannot roll back the primary
+writeback or alter quota-spend eligibility.
 
 Recorded trigger intent means neither report generation nor publication. A
 later governed executor must evaluate the intent, and composition, rendering,

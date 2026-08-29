@@ -139,6 +139,8 @@ const POST_WRITEBACK_SIDECAR_RECEIPT_FIELDS = new Set([
   "source_receipt_id",
   "status",
   "intent",
+  "error_code",
+  "attempt_count",
   "recorded_at",
 ]);
 const TURN_START_WRITE_SCOPES = new Set([
@@ -724,13 +726,33 @@ export function validatePostWritebackHookReceipt(input: {
   ) {
     throw new Error("post-writeback sidecar receipt identity is invalid");
   }
-  if (receipt.status === "not_applicable") {
-    if (receipt.intent !== null) {
-      throw new Error("not-applicable sidecar receipt must not contain an intent");
-    }
-    return { ...receipt };
+  const attemptCount = requireInteger(
+    receipt.attempt_count,
+    "post-writeback sidecar receipt attempt_count",
+  );
+  if (attemptCount < 1 || attemptCount > 10_000) {
+    throw new Error("post-writeback sidecar receipt attempt_count is invalid");
   }
-  if (receipt.status !== "intent_recorded") {
+  const errorCode = receipt.error_code;
+  if (
+    errorCode !== null &&
+    (typeof errorCode !== "string" || !TOKEN_RE.test(errorCode))
+  ) {
+    throw new Error("post-writeback sidecar receipt error_code is invalid");
+  }
+  if (receipt.status === "retryable_failure") {
+    if (receipt.intent !== null || errorCode === null) {
+      throw new Error("retryable sidecar receipt requires only error_code");
+    }
+    return { ...receipt, attempt_count: attemptCount };
+  }
+  if (receipt.status === "not_applicable") {
+    if (receipt.intent !== null || errorCode !== null) {
+      throw new Error("not-applicable sidecar receipt must be empty");
+    }
+    return { ...receipt, attempt_count: attemptCount };
+  }
+  if (receipt.status !== "intent_recorded" || errorCode !== null) {
     throw new Error("post-writeback sidecar receipt status is invalid");
   }
   const result = validatePostWritebackHookInvocation({
@@ -745,5 +767,5 @@ export function validatePostWritebackHookReceipt(input: {
       intent: receipt.intent,
     },
   });
-  return { ...receipt, intent: result.intent };
+  return { ...receipt, intent: result.intent, attempt_count: attemptCount };
 }

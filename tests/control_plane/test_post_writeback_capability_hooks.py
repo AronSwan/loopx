@@ -173,6 +173,60 @@ def test_post_writeback_sidecar_replay_skips_provider(tmp_path) -> None:
     assert replay["intents"] == first["intents"]
 
 
+def test_post_writeback_retryable_failure_recovers_after_restart(tmp_path) -> None:
+    calls = 0
+    base = _hook()
+
+    def producer(value: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient")
+        return dict(base.producer(value))  # type: ignore[arg-type]
+
+    hook = PostWritebackHookRegistration(
+        hook_id=base.hook_id,
+        capability_id=base.capability_id,
+        event_kinds=base.event_kinds,
+        intent_kinds=base.intent_kinds,
+        requested_read_scope=base.requested_read_scope,
+        producer=producer,
+    )
+    first = dispatch_post_writeback_hooks(
+        [hook],
+        hook_input=_input(),
+        journal=PostWritebackHookReceiptJournal(tmp_path, "goal-1"),
+    )
+
+    assert first["intent_count"] == 0
+    assert first["failures"][0]["error_code"] == "producer_failed"
+    assert first["failures"][0]["durable_receipt_ref"].startswith(
+        "post-writeback-hook:pwh_"
+    )
+    receipt_path = next(
+        (tmp_path / "goals" / "goal-1" / "post_writeback_hooks").glob("*.json")
+    )
+    failed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert failed_receipt["status"] == "retryable_failure"
+    assert failed_receipt["attempt_count"] == 1
+
+    restarted_journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
+    recovered = dispatch_post_writeback_hooks(
+        [hook], hook_input=_input(), journal=restarted_journal
+    )
+    replay = dispatch_post_writeback_hooks(
+        [hook], hook_input=_input(), journal=restarted_journal
+    )
+
+    assert calls == 2
+    assert recovered["intent_count"] == replay["intent_count"] == 1
+    assert recovered["retried_hooks"] == ["periodic_report.stage_completion"]
+    assert replay["replayed_hooks"] == ["periodic_report.stage_completion"]
+    recovered_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert recovered_receipt["status"] == "intent_recorded"
+    assert recovered_receipt["attempt_count"] == 2
+
+
 def test_post_writeback_policy_version_rotates_replay_identity(tmp_path) -> None:
     calls = 0
     base = _hook()

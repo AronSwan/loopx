@@ -128,8 +128,11 @@ Goal/Agent/Todo/Turn/effect identity, core dispatches the TypeScript-validated
 `post_writeback` hook outside the primary transaction. The capability receives
 only a bounded stage-completion projection and may propose one idempotent
 `periodic_report.trigger_evaluation` intent. Core checkpoints that proposal in
-a replay-safe sidecar; replay returns the original receipt without invoking the
-provider again. Disabled profiles, incomplete settlement identity, ordinary
+a replay-safe sidecar. A transient failure is durably recorded as
+`retryable_failure`; the next exact replay advances its attempt and may replace
+it with `intent_recorded` or `not_applicable`, while terminal replay returns the
+original receipt without invoking the provider again. Disabled profiles,
+incomplete settlement identity, ordinary
 Todo completion, and generic replan produce no provider invocation or intent.
 
 The intent is not a report and grants no generation, publication, connector,

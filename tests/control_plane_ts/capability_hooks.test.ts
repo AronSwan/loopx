@@ -150,6 +150,15 @@ test("post-writeback hook binds intent to the exact durable receipt", () => {
     }),
     /does not bind/,
   );
+
+  assert.throws(
+    () => validatePostWritebackHookInvocation({
+      registration: postWritebackRegistration(),
+      hook_input: postWritebackInput(),
+      result: postWritebackResult({ intent: [] }),
+    }),
+    /object/,
+  );
 });
 
 test("post-writeback hook requires the complete settlement identity", () => {
@@ -176,6 +185,8 @@ test("post-writeback sidecar receipt revalidates the exact typed intent", () => 
       source_receipt_id: "evt-stage-1",
       status: "intent_recorded",
       intent: (postWritebackResult().intent as Record<string, unknown>),
+      error_code: null,
+      attempt_count: 1,
       recorded_at: "2026-08-30T01:00:00+08:00",
     },
   });
@@ -189,6 +200,19 @@ test("post-writeback sidecar receipt revalidates the exact typed intent", () => 
     }),
     /identity/,
   );
+
+  const retryable = validatePostWritebackHookReceipt({
+    registration: postWritebackRegistration(),
+    hook_input: postWritebackInput(),
+    receipt: {
+      ...receipt,
+      status: "retryable_failure",
+      intent: null,
+      error_code: "producer_failed",
+      attempt_count: 2,
+    },
+  });
+  assert.equal(retryable.status, "retryable_failure");
 });
 
 function registration(overrides: Record<string, unknown> = {}) {

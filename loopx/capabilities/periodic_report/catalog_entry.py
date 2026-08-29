@@ -170,7 +170,7 @@ PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
         "The document builder compiles hero summaries only from typed primary outcomes, risks, and next actions; renderers reject authored or stale summaries.",
         "Markdown and HTML render from one normalized document; runtime and delivery-receipt items must be supporting, HTML collapses them, and Markdown preserves them in a labeled appendix.",
         "Raw content, messages, logs, transcripts, credentials, secrets, and private paths are rejected.",
-        "The default-off post-writeback hook is admitted only after a committed identity-complete primary writeback; it records an idempotent trigger-evaluation intent in a core-owned sidecar and grants no generation or external-delivery authority.",
+        "The default-off post-writeback hook is admitted only after a committed identity-complete primary writeback; its core-owned sidecar atomically advances retryable failures to one idempotent trigger-evaluation intent and grants no generation or external-delivery authority.",
         "The optional openviking-periodic-report extension implements only the archive sink; it rejects activation unless the periodic-report profile is enabled, its sink binding matches, and openviking_context_write is observed.",
     ],
     "next_real_step": (
