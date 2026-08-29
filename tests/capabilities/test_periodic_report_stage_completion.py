@@ -81,6 +81,54 @@ def test_successor_replan_settlement_derives_stage_completion() -> None:
     assert receipt["stage_identity"].startswith("stage-")
 
 
+def test_other_agent_only_frontier_cannot_settle_current_agent_stage() -> None:
+    values = _successor_inputs()
+    values["successor_frontier"] = {
+        "schema_version": "goal_frontier_projection_v0",
+        "replan_required": False,
+        "remaining_advancement_frontier": {
+            "current_agent_claimed_advancement_count": 0,
+            "unclaimed_advancement_count": 0,
+            "other_agent_claimed_advancement_count": 1,
+        },
+    }
+
+    assert (
+        derive_periodic_report_stage_completion(
+            closed_vision=_vision(
+                state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+            ),
+            outcome_checkpoint=_checkpoint(),
+            **values,
+        )
+        is None
+    )
+
+
+def test_unclaimed_frontier_can_settle_current_agent_stage() -> None:
+    values = _successor_inputs()
+    values["successor_frontier"] = {
+        "schema_version": "goal_frontier_projection_v0",
+        "replan_required": False,
+        "remaining_advancement_frontier": {
+            "current_agent_claimed_advancement_count": 0,
+            "unclaimed_advancement_count": 1,
+            "other_agent_claimed_advancement_count": 0,
+        },
+    }
+
+    receipt = derive_periodic_report_stage_completion(
+        closed_vision=_vision(
+            state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+        ),
+        outcome_checkpoint=_checkpoint(),
+        **values,
+    )
+
+    assert receipt is not None
+    assert receipt["transition"] == "successor_frontier_settled"
+
+
 def test_validated_terminal_goal_derives_stage_completion() -> None:
     receipt = derive_periodic_report_stage_completion(
         closed_vision=_vision(
