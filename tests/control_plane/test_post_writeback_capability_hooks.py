@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 
@@ -9,6 +13,7 @@ from loopx.control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
     PostWritebackHookRegistration,
     PostWritebackHookReceiptJournal,
+    _post_writeback_dispatch_id,
     dispatch_post_writeback_hooks,
 )
 from loopx.capabilities.periodic_report.post_writeback_hook import (
@@ -615,3 +620,135 @@ def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
     assert receipt["transition"] == "successor_frontier_settled"
     assert receipt["agent_id"] == "agent-a"
     assert receipt["frontier_identity"] == "frontier-a"
+
+
+def test_post_writeback_concurrent_exact_dispatch_lease_timeout_isolated(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    lock = threading.Lock()
+    started = threading.Event()
+    base = _hook()
+
+    def producer(value: object) -> dict[str, object]:
+        nonlocal calls
+        with lock:
+            calls += 1
+        started.set()
+        time.sleep(0.3)
+        return dict(base.producer(value))  # type: ignore[arg-type]
+
+    hook = PostWritebackHookRegistration(
+        hook_id=base.hook_id,
+        capability_id=base.capability_id,
+        event_kinds=base.event_kinds,
+        intent_kinds=base.intent_kinds,
+        requested_read_scope=base.requested_read_scope,
+        producer=producer,
+    )
+    journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
+    results: dict[str, dict[str, object]] = {}
+
+    def worker_slow() -> None:
+        results["slow"] = dispatch_post_writeback_hooks(
+            [hook], hook_input=_input(), journal=journal
+        )
+
+    t_slow = threading.Thread(target=worker_slow)
+    t_slow.start()
+
+    assert started.wait(timeout=5.0)
+
+    # Second caller attempts exact dispatch with small lease timeout while producer is holding lease
+    result_timeout = dispatch_post_writeback_hooks(
+        [hook],
+        hook_input=_input(),
+        journal=journal,
+        lease_timeout_seconds=0.05,
+    )
+
+    t_slow.join(timeout=5.0)
+    result_slow = results["slow"]
+
+    # Contention timeout is isolated: does not raise, preserves primary writeback, returns typed failure
+    assert result_timeout["primary_writeback_preserved"] is True
+    assert result_timeout["intent_count"] == 0
+    assert result_timeout["invoked_count"] == 0
+    assert len(result_timeout["failures"]) == 1
+    assert result_timeout["failures"][0]["error_code"] == "lock_acquire_timeout"
+    assert result_timeout["failures"][0]["hook_id"] == "periodic_report.stage_completion"
+
+    # Slow worker completes successfully and records intent
+    assert result_slow["primary_writeback_preserved"] is True
+    assert result_slow["intent_count"] == 1
+    assert result_slow["invoked_count"] == 1
+    assert result_slow["failures"] == []
+
+    # Total producer invocations is exactly 1
+    assert calls == 1
+
+    # Subsequent dispatch replays cleanly from terminal receipt without invoking producer
+    replay = dispatch_post_writeback_hooks(
+        [hook], hook_input=_input(), journal=journal
+    )
+    assert replay["intent_count"] == 1
+    assert replay["invoked_count"] == 0
+    assert replay["replayed_hooks"] == ["periodic_report.stage_completion"]
+    assert replay["intents"] == result_slow["intents"]
+    assert calls == 1
+
+
+def test_post_writeback_lease_timeout_isolated_across_processes(
+    tmp_path: Path,
+) -> None:
+    journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
+    hook = _hook()
+    input_data = _input()
+    dispatch_id = _post_writeback_dispatch_id(hook, input_data)
+
+    script = """
+import sys
+import time
+from pathlib import Path
+from loopx.control_plane.capability_hooks import PostWritebackHookReceiptJournal
+
+journal = PostWritebackHookReceiptJournal(Path(sys.argv[1]), sys.argv[2])
+with journal.execution_lease(sys.argv[3]):
+    print("READY", flush=True)
+    time.sleep(10)
+"""
+    env = dict(os.environ)
+    if "PYTHONPATH" not in env:
+        env["PYTHONPATH"] = str(Path.cwd())
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path), "goal-1", dispatch_id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == "READY"
+
+        result = dispatch_post_writeback_hooks(
+            [hook],
+            hook_input=input_data,
+            journal=journal,
+            lease_timeout_seconds=0.05,
+        )
+
+        assert result["primary_writeback_preserved"] is True
+        assert result["intent_count"] == 0
+        assert result["invoked_count"] == 0
+        assert len(result["failures"]) == 1
+        assert result["failures"][0]["error_code"] == "lock_acquire_timeout"
+        assert result["failures"][0]["hook_id"] == "periodic_report.stage_completion"
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3)
