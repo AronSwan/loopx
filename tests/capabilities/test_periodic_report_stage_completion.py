@@ -219,3 +219,66 @@ def test_stage_receipt_flattens_to_public_rollout_details() -> None:
     )
     assert details["stage_transition"] == "goal_terminal"
     assert details["stage_completed_at"] == "2026-08-29T10:00:00Z"
+
+
+def test_cross_agent_ack_or_obligation_fails_closed() -> None:
+    values = _successor_inputs()
+    values["replan_ack"] = {
+        **dict(values["replan_ack"]),  # type: ignore[arg-type]
+        "agent_id": "other-agent",
+    }
+    assert (
+        derive_periodic_report_stage_completion(
+            closed_vision=_vision(
+                state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+            ),
+            outcome_checkpoint=_checkpoint(),
+            **values,  # type: ignore[arg-type]
+        )
+        is None
+    )
+
+
+def test_other_agent_claimed_frontier_fails_closed() -> None:
+    values = _successor_inputs()
+    values["successor_frontier"] = {
+        "schema_version": "goal_frontier_projection_v0",
+        "replan_required": False,
+        "remaining_advancement_frontier": {
+            "current_agent_claimed_advancement_count": 0,
+            "unclaimed_advancement_count": 0,
+            "other_agent_claimed_advancement_count": 1,
+        },
+    }
+    assert (
+        derive_periodic_report_stage_completion(
+            closed_vision=_vision(
+                state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+            ),
+            outcome_checkpoint=_checkpoint(),
+            **values,  # type: ignore[arg-type]
+        )
+        is None
+    )
+
+
+def test_unclaimed_advancement_frontier_settles_successor() -> None:
+    values = _successor_inputs()
+    values["successor_frontier"] = {
+        "schema_version": "goal_frontier_projection_v0",
+        "replan_required": False,
+        "remaining_advancement_frontier": {
+            "current_agent_claimed_advancement_count": 0,
+            "unclaimed_advancement_count": 1,
+            "other_agent_claimed_advancement_count": 0,
+        },
+    }
+    receipt = derive_periodic_report_stage_completion(
+        closed_vision=_vision(
+            state="vision_closed", generated_at="2026-08-29T10:00:00Z"
+        ),
+        outcome_checkpoint=_checkpoint(),
+        **values,  # type: ignore[arg-type]
+    )
+    assert receipt is not None
+    assert receipt["transition"] == "successor_frontier_settled"

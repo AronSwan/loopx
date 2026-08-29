@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 from loopx.control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION,
@@ -420,3 +422,196 @@ def test_periodic_report_projection_reduces_durable_successor_transition(
     receipt = projection["stage_completion"]
     assert receipt["transition"] == "successor_frontier_settled"
     assert receipt["frontier_identity"] == "frontier-2"
+
+
+def test_post_writeback_concurrent_exact_dispatch_single_flight(tmp_path) -> None:
+    calls = 0
+    lock = threading.Lock()
+    base = _hook()
+
+    def producer(value: object) -> dict[str, object]:
+        nonlocal calls
+        time.sleep(0.05)
+        with lock:
+            calls += 1
+        return dict(base.producer(value))  # type: ignore[arg-type]
+
+    hook = PostWritebackHookRegistration(
+        hook_id=base.hook_id,
+        capability_id=base.capability_id,
+        event_kinds=base.event_kinds,
+        intent_kinds=base.intent_kinds,
+        requested_read_scope=base.requested_read_scope,
+        producer=producer,
+    )
+    journal = PostWritebackHookReceiptJournal(tmp_path, "goal-1")
+    barrier = threading.Barrier(2)
+    results: list[dict[str, object]] = []
+
+    def worker() -> None:
+        barrier.wait()
+        res = dispatch_post_writeback_hooks([hook], hook_input=_input(), journal=journal)
+        results.append(res)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert calls == 1
+    assert len(results) == 2
+    invoked_counts = [res["invoked_count"] for res in results]
+    assert sorted(invoked_counts) == [0, 1]
+    replayed_results = [res for res in results if res["invoked_count"] == 0]
+    assert replayed_results[0]["replayed_hooks"] == ["periodic_report.stage_completion"]
+    assert results[0]["intents"] == results[1]["intents"]
+
+
+def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
+    tmp_path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    state_path = tmp_path / "goal.md"
+    state_path.write_text(
+        """# Goal
+
+## User Todo
+
+## Agent Todo
+
+- [ ] Analyze the next bounded family for Agent B.
+  <!-- loopx:todo todo_id=todo-b status=open task_class=advancement_task claimed_by=agent-b -->
+""",
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal-1",
+                        "repo": str(tmp_path),
+                        "state_file": "goal.md",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = runtime_root / "goals" / "goal-1" / "runs"
+    runs_dir.mkdir(parents=True)
+    runs = [
+        {
+            "generated_at": "2026-08-30T11:00:00Z",
+            "goal_id": "goal-1",
+            "agent_vision": {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": "agent-a",
+                "state": "active",
+                "vision_patch": {"acceptance_summary": "Agent A next vision."},
+            },
+            "autonomous_replan_ack": {
+                "recorded": True,
+                "agent_id": "agent-b",
+                "frontier_identity": "frontier-b",
+                "semantic_delta": {
+                    "accepted": True,
+                    "outcomes": ["fresh_vision_path_outcome"],
+                    "trigger_kinds": ["vision_successor_required"],
+                    "obligation_id": "replan-b",
+                },
+            },
+        },
+        {
+            "generated_at": "2026-08-30T10:00:00Z",
+            "goal_id": "goal-1",
+            "agent_vision": {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": "agent-a",
+                "state": "vision_closed",
+                "vision_patch": {"acceptance_summary": "Agent A first vision."},
+            },
+            "vision_checkpoint": {
+                "schema_version": "vision_checkpoint_v0",
+                "satisfied": True,
+                "decision": "patched",
+                "triggers": [
+                    {
+                        "kind": "material_delivery_outcome",
+                        "delivery_outcome": "outcome_progress",
+                    }
+                ],
+            },
+        },
+    ]
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in runs),
+        encoding="utf-8",
+    )
+
+    # Agent B's ACK and Agent B's claimed Todo must NOT settle Agent A's stage.
+    projection_a = build_periodic_report_post_writeback_projection(
+        payload={"state": {"path": str(state_path)}},
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id="goal-1",
+        agent_id="agent-a",
+    )
+    assert "stage_completion" not in projection_a
+
+    # Now make the Todo unclaimed and provide Agent A's own ACK in run history
+    runs.insert(
+        0,
+        {
+            "generated_at": "2026-08-30T11:30:00Z",
+            "goal_id": "goal-1",
+            "agent_vision": {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": "agent-a",
+                "state": "active",
+                "vision_patch": {"acceptance_summary": "Agent A next vision."},
+            },
+            "autonomous_replan_ack": {
+                "recorded": True,
+                "agent_id": "agent-a",
+                "frontier_identity": "frontier-a",
+                "semantic_delta": {
+                    "accepted": True,
+                    "outcomes": ["fresh_vision_path_outcome"],
+                    "trigger_kinds": ["vision_successor_required"],
+                    "obligation_id": "replan-a",
+                },
+            },
+        },
+    )
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in runs),
+        encoding="utf-8",
+    )
+    state_path.write_text(
+        """# Goal
+
+## User Todo
+
+## Agent Todo
+
+- [ ] Analyze the next bounded family.
+  <!-- loopx:todo todo_id=todo-unclaimed status=open task_class=advancement_task -->
+""",
+        encoding="utf-8",
+    )
+
+    projection_a_unclaimed = build_periodic_report_post_writeback_projection(
+        payload={"state": {"path": str(state_path)}},
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id="goal-1",
+        agent_id="agent-a",
+    )
+    receipt = projection_a_unclaimed["stage_completion"]
+    assert receipt["transition"] == "successor_frontier_settled"
+    assert receipt["agent_id"] == "agent-a"
+    assert receipt["frontier_identity"] == "frontier-a"

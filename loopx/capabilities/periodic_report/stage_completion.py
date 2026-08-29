@@ -69,15 +69,9 @@ def _successor_frontier_owned(value: Mapping[str, Any]) -> bool:
     if value.get("schema_version") != _FRONTIER_SCHEMA:
         return False
     frontier = _mapping(value.get("remaining_advancement_frontier"))
-    advancement_count = sum(
-        int(frontier.get(key) or 0)
-        for key in (
-            "current_agent_claimed_advancement_count",
-            "unclaimed_advancement_count",
-            "other_agent_claimed_advancement_count",
-        )
-        if type(frontier.get(key) or 0) is int
-    )
+    current_count = int(frontier.get("current_agent_claimed_advancement_count") or 0)
+    unclaimed_count = int(frontier.get("unclaimed_advancement_count") or 0)
+    advancement_count = current_count + unclaimed_count
     blocking_gate_count = value.get("blocking_handoff_gate_count")
     return bool(
         value.get("replan_required") is False
@@ -138,10 +132,20 @@ def derive_periodic_report_stage_completion(
         if not any(trigger.get("kind") == _SUCCESSOR_TRIGGER for trigger in triggers):
             return None
         frontier_identity = _text(obligation.get("frontier_identity"))
+        obligation_agent = _text(obligation.get("agent_id") or obligation.get("claimed_by"))
+        if obligation_agent and obligation_agent != agent_id:
+            return None
         normalized_ack = normalize_projected_autonomous_replan_ack(dict(replan_ack or {}))
         semantic_delta = _mapping(
             normalized_ack.get("semantic_delta") if normalized_ack else None
         )
+        ack_agent = _text(
+            normalized_ack.get("agent_id") or normalized_ack.get("claimed_by")
+            if normalized_ack
+            else None
+        )
+        if ack_agent and ack_agent != agent_id:
+            return None
         ack_outcomes = {_text(value) for value in semantic_delta.get("outcomes") or []}
         ack_trigger_kinds = {
             _text(value) for value in semantic_delta.get("trigger_kinds") or []

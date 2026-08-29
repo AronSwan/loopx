@@ -12,7 +12,12 @@ from ...control_plane.capability_hooks import (
 )
 from ...control_plane.goals.goal_frontier.terminal import derive_goal_terminal_state
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from ...control_plane.todos.projection import todo_summary_open_task_counts
+from ...control_plane.todos.contract import TODO_TASK_CLASS_ADVANCEMENT
+from ...control_plane.todos.projection import (
+    todo_item_is_actionable_open,
+    todo_item_task_class,
+    todo_summary_open_task_counts,
+)
 from ...history import collect_history, load_registry
 from ...registry import registry_goals
 from .stage_completion import STAGE_COMPLETION_RECEIPT_SCHEMA
@@ -94,7 +99,11 @@ def periodic_report_post_writeback_hooks_for_goal(
 
 
 def _frontier_projection(
-    *, state_text: str, goal: Mapping[str, Any], state_path: Path
+    *,
+    state_text: str,
+    goal: Mapping[str, Any],
+    state_path: Path,
+    agent_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     todos = parse_active_state_todos(
         state_text,
@@ -114,6 +123,50 @@ def _frontier_projection(
     )
     user_counts = todo_summary_open_task_counts(user_summary)
     agent_counts = todo_summary_open_task_counts(agent_summary)
+    normalized_agent_id = str(agent_id or "").strip()
+
+    seen: set[tuple[Any, str]] = set()
+    current_agent_claimed = 0
+    unclaimed = 0
+    other_agent_claimed = 0
+    for key in (
+        "claimed_advancement_open_items",
+        "unclaimed_priority_open_items",
+        "executable_backlog_items",
+        "first_executable_items",
+        "first_open_items",
+        "backlog_items",
+    ):
+        raw_items = agent_summary.get(key)
+        if not isinstance(raw_items, list):
+            continue
+        for item in raw_items:
+            if not isinstance(item, Mapping):
+                continue
+            if not todo_item_is_actionable_open(dict(item)):
+                continue
+            if todo_item_task_class(dict(item)) != TODO_TASK_CLASS_ADVANCEMENT:
+                continue
+            identity = (item.get("index"), str(item.get("text") or "").strip())
+            if identity in seen:
+                continue
+            seen.add(identity)
+            claimed_by = str(item.get("claimed_by") or "").strip()
+            if not claimed_by:
+                unclaimed += 1
+            elif normalized_agent_id and claimed_by == normalized_agent_id:
+                current_agent_claimed += 1
+            else:
+                other_agent_claimed += 1
+
+    total_classified = current_agent_claimed + unclaimed + other_agent_claimed
+    if total_classified < agent_counts["advancement"]:
+        diff = agent_counts["advancement"] - total_classified
+        if normalized_agent_id:
+            unclaimed += diff
+        else:
+            current_agent_claimed += diff
+
     projection: dict[str, Any] = {
         "schema_version": "goal_frontier_projection_v0",
         "normalized_progress": {
@@ -124,9 +177,9 @@ def _frontier_projection(
             "agent_monitor_due_count": agent_counts["monitor_due"],
         },
         "remaining_advancement_frontier": {
-            "current_agent_claimed_advancement_count": agent_counts["advancement"],
-            "unclaimed_advancement_count": 0,
-            "other_agent_claimed_advancement_count": 0,
+            "current_agent_claimed_advancement_count": current_agent_claimed,
+            "unclaimed_advancement_count": unclaimed,
+            "other_agent_claimed_advancement_count": other_agent_claimed,
         },
         "monitor_only_lanes": {
             "present": agent_counts["monitor"] > 0,
@@ -182,6 +235,7 @@ def build_periodic_report_post_writeback_projection(
         state_text=state_path.read_text(encoding="utf-8"),
         goal=goal,
         state_path=state_path,
+        agent_id=normalized_agent_id,
     )
     history = collect_history(
         registry_path=registry_path,
@@ -201,11 +255,27 @@ def build_periodic_report_post_writeback_projection(
     for run in latest_runs:
         if not isinstance(run, Mapping):
             continue
+        run_agent_id = str(
+            run.get("agent_id")
+            or (
+                run.get("agent_vision")
+                if isinstance(run.get("agent_vision"), Mapping)
+                else {}
+            ).get("agent_id")
+            or ""
+        ).strip()
         ack = run.get("autonomous_replan_ack")
+        if not isinstance(ack, Mapping):
+            continue
+        ack_agent_id = str(ack.get("agent_id") or ack.get("claimed_by") or "").strip()
+        if ack_agent_id:
+            if ack_agent_id != normalized_agent_id:
+                continue
+        elif run_agent_id and run_agent_id != normalized_agent_id:
+            continue
         semantic_delta = ack.get("semantic_delta") if isinstance(ack, Mapping) else None
         if (
-            isinstance(ack, Mapping)
-            and ack.get("recorded") is True
+            ack.get("recorded") is True
             and isinstance(semantic_delta, Mapping)
             and "vision_successor_required"
             in {str(value) for value in semantic_delta.get("trigger_kinds") or []}
@@ -216,6 +286,7 @@ def build_periodic_report_post_writeback_projection(
     if settled_ack is not None:
         settled_obligation = {
             "frontier_identity": settled_ack.get("frontier_identity"),
+            "agent_id": normalized_agent_id,
             "triggers": [{"kind": "vision_successor_required"}],
         }
     receipt = derive_periodic_report_stage_completion_from_runs(
