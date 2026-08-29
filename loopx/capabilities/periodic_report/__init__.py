@@ -35,14 +35,6 @@ from .profile import (
     build_periodic_report_activation,
     normalize_periodic_report_profile,
 )
-from .post_writeback_hook import (
-    PERIODIC_REPORT_POST_WRITEBACK_HOOK_ID,
-    PERIODIC_REPORT_TRIGGER_EVALUATION_INTENT,
-    build_periodic_report_post_writeback_projection,
-    evaluate_periodic_report_trigger_evaluation_intent,
-    periodic_report_post_writeback_hook,
-    periodic_report_post_writeback_hooks_for_goal,
-)
 from .project_progress import (
     PROJECT_PROGRESS_PROJECTION_SCHEMA,
     build_project_progress_periodic_report_source,
@@ -66,8 +58,6 @@ __all__ = [
     "PeriodicReportSourceAdapter",
     "PERIODIC_REPORT_PROFILE_PRESET_ALIASES",
     "PERIODIC_REPORT_PROFILE_PRESET_IDS",
-    "PERIODIC_REPORT_POST_WRITEBACK_HOOK_ID",
-    "PERIODIC_REPORT_TRIGGER_EVALUATION_INTENT",
     "PROJECT_PROGRESS_PROJECTION_SCHEMA",
     "STAGE_COMPLETION_RECEIPT_SCHEMA",
     "WEEKLY_PROGRESS_PRESET_ID",
@@ -79,8 +69,6 @@ __all__ = [
     "build_periodic_report_extension_readiness",
     "build_periodic_report_generation_bundle",
     "build_periodic_report_preset_activation",
-    "build_periodic_report_post_writeback_projection",
-    "evaluate_periodic_report_trigger_evaluation_intent",
     "build_project_progress_periodic_report_source",
     "build_periodic_report_archive_bundle",
     "build_periodic_report_run",
@@ -93,8 +81,6 @@ __all__ = [
     "normalize_periodic_report_audience_policy",
     "normalize_periodic_report_sink_bindings",
     "normalize_periodic_report_trigger_policy",
-    "periodic_report_post_writeback_hook",
-    "periodic_report_post_writeback_hooks_for_goal",
     "project_progress_periodic_report_source_adapter",
     "resolve_periodic_report_profile_preset",
     "verify_periodic_report_archive_receipts",
