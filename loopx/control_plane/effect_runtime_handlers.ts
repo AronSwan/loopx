@@ -77,6 +77,7 @@ import {
   evaluateDeliveryRoute,
 } from "./turn_driver/delivery_continuity.ts";
 import { reduceTurnSettlementTransaction } from "./turn_driver/settlement.ts";
+import { evaluateHostTodoCompletion } from "./turn_driver/host_todo_completion.ts";
 import {
   projectReplanSettlementContract,
   projectTodoLifecycleSettlementReentry,
@@ -498,6 +499,7 @@ export function createEffectRuntimeHandlers(
       ),
     ],
     ["turn.settlement.reduce", reduceTurnSettlementTransaction],
+    ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     [
       "work_item.replan_settlement.reentry",
