@@ -40,12 +40,6 @@ from .project_progress import (
     build_project_progress_periodic_report_source,
     project_progress_periodic_report_source_adapter,
 )
-from .stage_completion import (
-    STAGE_COMPLETION_RECEIPT_SCHEMA,
-    derive_periodic_report_stage_completion,
-    derive_periodic_report_stage_completion_from_runs,
-    project_periodic_report_stage_completion_event_details,
-)
 from .triggers import (
     build_periodic_report_trigger_decision,
     normalize_periodic_report_trigger_policy,
@@ -59,7 +53,6 @@ __all__ = [
     "PERIODIC_REPORT_PROFILE_PRESET_ALIASES",
     "PERIODIC_REPORT_PROFILE_PRESET_IDS",
     "PROJECT_PROGRESS_PROJECTION_SCHEMA",
-    "STAGE_COMPLETION_RECEIPT_SCHEMA",
     "WEEKLY_PROGRESS_PRESET_ID",
     "build_periodic_report_activation",
     "build_periodic_report_announcement_plan",
@@ -74,9 +67,6 @@ __all__ = [
     "build_periodic_report_run",
     "build_periodic_report_source_result",
     "build_periodic_report_trigger_decision",
-    "derive_periodic_report_stage_completion",
-    "derive_periodic_report_stage_completion_from_runs",
-    "project_periodic_report_stage_completion_event_details",
     "normalize_periodic_report_profile",
     "normalize_periodic_report_audience_policy",
     "normalize_periodic_report_sink_bindings",

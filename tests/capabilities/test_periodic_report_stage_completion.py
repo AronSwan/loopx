@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from loopx.capabilities.periodic_report import (
+from loopx.capabilities.periodic_report.stage_completion import (
     derive_periodic_report_stage_completion,
     derive_periodic_report_stage_completion_from_runs,
     project_periodic_report_stage_completion_event_details,

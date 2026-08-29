@@ -195,6 +195,15 @@ def test_control_plane_does_not_gain_outward_dependencies() -> None:
 
 
 def test_periodic_report_hook_does_not_break_cold_imports() -> None:
+    periodic_report_facade = (
+        PACKAGE_ROOT / "capabilities" / "periodic_report" / "__init__.py"
+    )
+    facade_imports = _resolved_imports(periodic_report_facade)
+    assert not {
+        "loopx.capabilities.periodic_report.post_writeback_hook",
+        "loopx.capabilities.periodic_report.stage_completion",
+    } & facade_imports
+
     import_statements = (
         "import loopx.quota",
         (
