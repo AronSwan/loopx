@@ -9,6 +9,15 @@ from ...control_plane.todos.active_state_todo_parser import parse_active_state_t
 from ...registry import find_registry_goal, read_json, resolve_state_file
 
 
+_META_ACTION_KINDS = frozenset(
+    {
+        "consume_periodic_report_intent",
+        "repair_periodic_report_intent_consumption",
+        "repair_periodic_report_editorial",
+    }
+)
+
+
 def build_project_progress_snapshot(
     *, registry_path: Path, goal_id: str, agent_id: str, completed_at: str
 ) -> dict[str, Any] | None:
@@ -69,6 +78,7 @@ def build_project_progress_snapshot_from_state(
         and item.get("status") == "done"
         and str(item.get("claimed_by") or "") == agent_id
         and not_after_stage(item)
+        and str(item.get("action_kind") or "") not in _META_ACTION_KINDS
     ]
     done.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     progress_items: list[dict[str, Any]] = []
