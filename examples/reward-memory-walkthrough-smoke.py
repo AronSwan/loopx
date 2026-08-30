@@ -276,6 +276,33 @@ def feedback_event(*, peer_ref: str = PEER, project_ref: str = PROJECT) -> dict[
     }
 
 
+def recall_payload(**overrides: Any) -> dict[str, Any]:
+    """Function-boundary recall payload; scope fields are overridable for fail-closed cases."""
+    payload: dict[str, Any] = {
+        "workspace_ref": WORKSPACE,
+        "project_ref": PROJECT,
+        "user_ref": USER,
+        "peer_ref": PEER,
+        "session_ref": SESSION,
+        "surface_id": SURFACE,
+        "revision_ref": "revision:abc123",
+        "mode": "function_boundary",
+        "queries": [
+            {"query": "turn guidance", "query_summary": "turn admission"},
+        ],
+        "limit": 3,
+        "observed_at": OBSERVED_AT,
+        "freshness_context": {
+            "source_truth_current": True,
+            "source_revision": "revision:abc123",
+        },
+        "conflict_state": "clear",
+        "raw_content_captured": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def experiment_raw(*, automatic_recall: bool) -> dict[str, Any]:
     selected = corpus()
     return {
@@ -428,30 +455,11 @@ def main() -> int:
     assert recalled["raw_provider_payload_captured"] is False
     assert_public_safe(recalled)
 
-    # 4) Explicit Reward Memory recall/application remains advisory.
+    # 4) Explicit Reward Memory recall/application remains advisory; wrong
+    #    project/session scope fails closed before any provider call.
     request = build_reward_memory_recall_request(
         corpus(),
-        {
-            "workspace_ref": WORKSPACE,
-            "project_ref": PROJECT,
-            "user_ref": USER,
-            "peer_ref": PEER,
-            "session_ref": SESSION,
-            "surface_id": SURFACE,
-            "revision_ref": "revision:abc123",
-            "mode": "function_boundary",
-            "queries": [
-                {"query": "turn guidance", "query_summary": "turn admission"},
-            ],
-            "limit": 3,
-            "observed_at": OBSERVED_AT,
-            "freshness_context": {
-                "source_truth_current": True,
-                "source_revision": "revision:abc123",
-            },
-            "conflict_state": "clear",
-            "raw_content_captured": False,
-        },
+        recall_payload(),
         read_authority_checkpoint=checkpoint(),
     )
     assert request["status"] == "ready"
@@ -488,33 +496,23 @@ def main() -> int:
     assert applied["receipt"]["grants_new_action_authority"] is False
     assert_public_safe(applied)
 
-    wrong_project = build_reward_memory_recall_request(
-        corpus(),
-        {
-            "workspace_ref": WORKSPACE,
-            "project_ref": "repository:other",
-            "user_ref": USER,
-            "peer_ref": PEER,
-            "session_ref": SESSION,
-            "surface_id": SURFACE,
-            "revision_ref": "revision:abc123",
-            "mode": "function_boundary",
-            "queries": [
-                {"query": "turn guidance", "query_summary": "turn admission"},
-            ],
-            "limit": 3,
-            "observed_at": OBSERVED_AT,
-            "freshness_context": {
-                "source_truth_current": True,
-                "source_revision": "revision:abc123",
-            },
-            "conflict_state": "clear",
-            "raw_content_captured": False,
-        },
-        read_authority_checkpoint=checkpoint(),
-    )
-    assert wrong_project["status"] == "guard_blocked"
-    assert "project_scope_mismatch" in wrong_project["guard"]["reason_codes"]
+    # Mirrors tests/capabilities/test_reward_memory_agent_scoped_recall.py:
+    # wrong and missing agent/task scope must both fail closed at the guard.
+    scope_negatives = [
+        ("project_ref", {"project_ref": "repository:other"}, "project_scope_mismatch"),
+        ("session_ref", {"session_ref": "task:other"}, "session_ref_scope_mismatch"),
+        ("missing session_ref", {"session_ref": None}, "session_ref_scope_mismatch"),
+    ]
+    scope_blocked: dict[str, str] = {}
+    for label, overrides, reason_code in scope_negatives:
+        blocked = build_reward_memory_recall_request(
+            corpus(),
+            recall_payload(**overrides),
+            read_authority_checkpoint=checkpoint(),
+        )
+        assert blocked["status"] == "guard_blocked", label
+        assert reason_code in blocked["guard"]["reason_codes"], label
+        scope_blocked[label] = blocked["status"]
 
     # 5) Scoped feedback: plan without provider write; wrong peer fails closed.
     planned = ingest_scoped_feedback_reward_memory_event(
@@ -571,6 +569,7 @@ def main() -> int:
                 "external_sinks_suppressed": recalled["suppress_external_sinks"],
                 "scoped_feedback": planned["status"],
                 "wrong_peer_blocked": blocked_peer["status"],
+                "scope_negatives_blocked": scope_blocked,
             },
             sort_keys=True,
         )
