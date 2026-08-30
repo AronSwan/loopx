@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Thin walkthrough smoke: stop → takeover command → resume → state-aware wake.
+"""Walkthrough smoke: documented start identity → stop → resume continuity.
 
-Proves the contributor-facing Auto Research control cycle on synthetic state.
-Reuses helpers from the shipped stop-marker smoke (no duplicated lane/env
-boilerplate) and the existing start/worker-loop path; no second launcher.
+Drives the shipped CLI with the same explicit arguments the contributor
+walkthrough documents (docs/guides/auto-research-stop-takeover-wake-
+walkthrough.md): one exported goal/workspace identity, ``start`` targeting
+that identity, the stop marker placed in that workspace, and ``worker-loop``
+run from that workspace with the same goal. Marker halting, visible launch
+policy, state-aware wake, and quota-pause output shapes stay covered by their
+own smokes; this file only proves identity continuity across the cycle.
 """
 
 from __future__ import annotations
 
-import argparse
 import importlib.util
+import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -25,12 +30,6 @@ from demo.auto_research.demo_e2e import (  # noqa: E402
 )
 from demo.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
-)
-from demo.auto_research.worker_runtime import (  # noqa: E402
-    load_auto_research_worker_frontier,
-)
-from demo.multi_agent.visible_launch_policy import (  # noqa: E402
-    resolve_visible_launch_policy,
 )
 
 
@@ -49,8 +48,10 @@ GOAL_ID = _STOP.GOAL_ID
 AGENT_IDS = _STOP.AGENT_IDS
 LANES = _STOP.LANES
 assert_public_safe = _STOP.assert_public_safe
-_run_worker_loop = _STOP._run_worker_loop
 _stop_marker = _STOP._stop_marker
+_env = _STOP._env
+
+QUESTION = "How should we evaluate autonomous research agents?"
 
 
 def _seed_demo() -> tuple[Path, Path, str | None, Path]:
@@ -75,25 +76,120 @@ def _seed_demo() -> tuple[Path, Path, str | None, Path]:
     return temp, registry, runtime_root, workspace
 
 
-def test_stop_takeover_resume_cycle() -> None:
-    """Seed → stop → takeover command contract → resume after marker removal."""
+def _cli_command(
+    registry: Path, runtime_root: str | None, *command: str
+) -> list[str]:
+    args = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--registry",
+        str(registry),
+    ]
+    if runtime_root:
+        args.extend(["--runtime-root", str(runtime_root)])
+    args.extend(["--format", "json", *command])
+    return args
+
+
+def _run_documented_start(
+    *, registry: Path, runtime_root: str | None, workspace: Path
+) -> dict[str, Any]:
+    """Run the documented start path in dry-run mode (no visible lanes)."""
+    result = subprocess.run(
+        [
+            *_cli_command(registry, runtime_root, "auto-research", "start", QUESTION),
+            "--goal-id",
+            GOAL_ID,
+            "--workspace",
+            str(workspace),
+            "--create-workspace",
+        ],
+        cwd=workspace,
+        env=_env(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"documented start failed rc={result.returncode}\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    return json.loads(result.stdout)
+
+
+def _run_worker_loop(
+    *, registry: Path, runtime_root: str | None, cwd: Path, max_rounds: int
+) -> dict[str, Any]:
+    """Run the documented worker-loop CLI from an explicit working directory."""
+    args = [
+        *_cli_command(
+            registry,
+            runtime_root,
+            "auto-research",
+            "worker-loop",
+            "--goal-id",
+            GOAL_ID,
+        ),
+        "--lane-count",
+        str(len(AGENT_IDS)),
+        "--max-rounds",
+        str(max_rounds),
+        "--visible-lanes-accepted",
+        "--complete-selected-todo",
+        "--execute",
+    ]
+    for agent_id in AGENT_IDS:
+        args.extend(["--agent-id", agent_id])
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        env=_env(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"worker-loop failed rc={result.returncode}\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    return json.loads(result.stdout)
+
+
+def test_documented_identity_continuity() -> None:
+    """The documented start, stop, and resume commands share one identity."""
     _, registry, runtime_root, workspace = _seed_demo()
 
-    first = _run_worker_loop(
+    # 1) start with the documented explicit flags targets the walkthrough goal.
+    started = _run_documented_start(
         registry=registry,
         runtime_root=runtime_root,
         workspace=workspace,
+    )
+    assert started["ok"] is True, started
+    assert started["goal_id"] == GOAL_ID, started
+    route = started["route_contract"]
+    assert route["goal_surface_mode"] == "explicit_goal", route
+    assert route["visible_lanes_read_goal_id"] == GOAL_ID, route
+    assert_public_safe(started)
+
+    # 2) worker-loop runs on the same goal from the same workspace directory.
+    baseline = _run_worker_loop(
+        registry=registry,
+        runtime_root=runtime_root,
+        cwd=workspace,
         max_rounds=1,
     )
-    assert first["ok"] is True, first
-    assert first["stop_reason"] != "operator_stop_requested", first
-    assert_public_safe(first)
+    assert baseline["ok"] is True, baseline
+    assert baseline["stop_reason"] != "operator_stop_requested", baseline
+    assert_public_safe(baseline)
 
+    # 3) The marker in the documented workspace halts that loop before round 1.
     _stop_marker(workspace).write_text("stop", encoding="utf-8")
     stopped = _run_worker_loop(
         registry=registry,
         runtime_root=runtime_root,
-        workspace=workspace,
+        cwd=workspace,
         max_rounds=2,
     )
     assert stopped["ok"] is True, stopped
@@ -101,28 +197,25 @@ def test_stop_takeover_resume_cycle() -> None:
     assert stopped["turn_count"] == 0, stopped
     assert_public_safe(stopped)
 
-    # Takeover stays on the shipped start path: --attach, no background wake.
-    takeover = resolve_visible_launch_policy(
-        argparse.Namespace(attach=True, no_attach=False, wake_visible_after_launch=None),
-        launch_visible=True,
-        default_wake_allowed=False,
-        default_attach_allowed=True,
+    # 4) The same marker cannot stop a loop running from another directory;
+    #    this is why the walkthrough requires cd "$WORKSPACE" before resuming.
+    elsewhere = Path(tempfile.mkdtemp(prefix="loopx-smoke-walkthrough-other-cwd-"))
+    from_elsewhere = _run_worker_loop(
+        registry=registry,
+        runtime_root=runtime_root,
+        cwd=elsewhere,
+        max_rounds=1,
     )
-    assert takeover.attach is True, takeover
-    assert takeover.wake_visible_after_launch is False, takeover
-    takeover_command = (
-        'loopx auto-research start "How should we evaluate autonomous agents?" '
-        "--execute --attach"
-    )
-    assert "--attach" in takeover_command
-    assert "auto-research start" in takeover_command
-    assert_public_safe(takeover_command)
+    assert from_elsewhere["ok"] is True, from_elsewhere
+    assert from_elsewhere["stop_reason"] != "operator_stop_requested", from_elsewhere
+    assert_public_safe(from_elsewhere)
 
+    # 5) Resume: removing the marker lets the loop proceed from $WORKSPACE.
     _stop_marker(workspace).unlink(missing_ok=True)
     resumed = _run_worker_loop(
         registry=registry,
         runtime_root=runtime_root,
-        workspace=workspace,
+        cwd=workspace,
         max_rounds=1,
     )
     assert resumed["ok"] is True, resumed
@@ -130,94 +223,9 @@ def test_stop_takeover_resume_cycle() -> None:
     assert_public_safe(resumed)
 
 
-def test_state_aware_wake_noop_and_frontier_boundary() -> None:
-    """Empty ready set is a no-op; live frontiers stay public-safe."""
-    _, registry, runtime_root, workspace = _seed_demo()
-
-    no_op = {
-        "ok": True,
-        "schema_version": "multi_agent_pane_a2a_wakeup_v0",
-        "mode": "no_op_all_filtered",
-        "session_name": "loopx-smoke-stop-takeover-walkthrough",
-        "target_lanes": [],
-        "prompt": "",
-        "prompt_hash": "",
-        "coordination_model": "decentralized_state_a2a",
-        "wakeup_model": "state_aware_filter_no_ready_lanes",
-        "workflow_driver": False,
-        "broadcaster_reads_frontier": False,
-        "broadcaster_reads_todo_readiness": False,
-        "broadcaster_selects_todo": False,
-        "prompt_delivery": "skipped_no_ready_lanes",
-        "prompt_delivered": False,
-        "auto_wake_backoff_recommended": False,
-        "state_aware_filter": {
-            "schema_version": "auto_research_state_aware_wake_filter_v0",
-            "total_started_lanes": 4,
-            "ready_lane_count": 0,
-            "skipped_lane_count": 4,
-            "skipped_lanes": [
-                {
-                    "lane_id": "research-curator",
-                    "agent_id": "research-curator",
-                    "reason": "no_selected_todo",
-                }
-            ],
-        },
-    }
-    assert no_op["mode"] == "no_op_all_filtered"
-    assert no_op["target_lanes"] == []
-    assert no_op["prompt_delivery"] == "skipped_no_ready_lanes"
-    assert_public_safe(no_op)
-
-    for agent_id in AGENT_IDS:
-        frontier = load_auto_research_worker_frontier(
-            registry_path=registry,
-            runtime_root_arg=runtime_root,
-            goal_id=GOAL_ID,
-            agent_id=agent_id,
-            workspace=workspace,
-        )
-        assert frontier["ok"] is True, frontier
-        assert "public_boundary" in frontier, frontier
-        assert_public_safe(frontier)
-
-    # Attach and wake remain mutually exclusive on the shipped start path.
-    try:
-        resolve_visible_launch_policy(
-            argparse.Namespace(attach=True, no_attach=False, wake_visible_after_launch=True),
-            launch_visible=True,
-            default_wake_allowed=False,
-            default_attach_allowed=True,
-            attach_wake_conflict_message=(
-                "--attach cannot be combined with --wake-visible-after-launch"
-            ),
-        )
-        raise AssertionError("attach+wake should conflict")
-    except ValueError as exc:
-        assert "attach" in str(exc).lower() or "wake" in str(exc).lower()
-
-
-def test_stop_reasons_remain_distinct() -> None:
-    reasons = {
-        "operator_stop_requested",
-        "quota_paused",
-        "no_executed_turns",
-        "no_runnable_frontier",
-        "max_rounds",
-    }
-    assert len(reasons) == 5
-    assert "operator_stop_requested" != "quota_paused"
-    assert_public_safe({"stop_reasons": sorted(reasons)})
-
-
 def main() -> int:
-    test_stop_takeover_resume_cycle()
-    print("  ok  stop → takeover command → resume")
-    test_state_aware_wake_noop_and_frontier_boundary()
-    print("  ok  state-aware wake no-op and frontier boundary")
-    test_stop_reasons_remain_distinct()
-    print("  ok  stop reasons remain distinct")
+    test_documented_identity_continuity()
+    print("  ok  documented start identity → stop → resume continuity")
     print("auto-research-stop-takeover-walkthrough-smoke ok")
     return 0
 

@@ -38,19 +38,30 @@ manual lane advance while the multi-round loop is paused.
 
 ## 1. Start From The Existing Command Path
 
-Preview, then launch visible lanes from a clean demo workspace:
+Export one explicit goal and workspace identity first, and reuse it in every
+later command. Without `--goal-id`, `start` creates a fresh timestamped goal
+that the stop/resume commands below could not address:
 
 ```bash
+export GOAL_ID="loopx-auto-research-demo"
+export WORKSPACE="$HOME/loopx-auto-research-demo"
+
 export LOOPX_REGISTRY="$HOME/.codex/loopx/registry.global.json"
 export LOOPX_RUNTIME_ROOT="$HOME/.codex/loopx"
 
 loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \
-  auto-research start "How should we evaluate autonomous research agents?"
+  auto-research start "How should we evaluate autonomous research agents?" \
+  --goal-id "$GOAL_ID" \
+  --workspace "$WORKSPACE" \
+  --create-workspace
 
 loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \
   auto-research start "How should we evaluate autonomous research agents?" \
+  --goal-id "$GOAL_ID" \
+  --workspace "$WORKSPACE" \
+  --create-workspace \
   --execute \
   --replace-existing
 ```
@@ -62,6 +73,9 @@ loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \
   --format json auto-research start \
   "How should we evaluate autonomous research agents?" \
+  --goal-id "$GOAL_ID" \
+  --workspace "$WORKSPACE" \
+  --create-workspace \
   --execute \
   --no-attach \
   --wake-visible-after-launch
@@ -69,11 +83,11 @@ loopx --registry "$LOOPX_REGISTRY" \
 
 ## 2. Stop The Worker Loop Without Killing State
 
-While a multi-round worker-loop is running against a research workspace, place
-the stop marker in that workspace:
+While a multi-round worker-loop is running against the `$WORKSPACE` research
+workspace, place the stop marker there. `worker-loop` reads the marker from
+its own working directory, so run it from `$WORKSPACE`:
 
 ```bash
-# workspace is the shared research workspace for the demo goal
 touch "$WORKSPACE/.loopx-auto-research-stop"
 ```
 
@@ -91,15 +105,18 @@ when the marker is present before round 1, or with prior turns retained when the
 marker appears between rounds. The marker is checked at the top of every round,
 not only at process entry.
 
-Resume by removing the marker and calling `worker-loop` again:
+Resume by removing the marker and calling `worker-loop` again from the same
+workspace with the same goal:
 
 ```bash
 rm -f "$WORKSPACE/.loopx-auto-research-stop"
 
+cd "$WORKSPACE"
+
 loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \
   --format json auto-research worker-loop \
-  --goal-id loopx-auto-research-demo \
+  --goal-id "$GOAL_ID" \
   --agent-id research-curator \
   --agent-id hypothesis-proposer \
   --agent-id research-executor \
@@ -114,14 +131,17 @@ loopx --registry "$LOOPX_REGISTRY" \
 
 ## 3. Take Over A Visible Lane
 
-Immediate operator takeover uses the same start command with `--attach`. This
-skips the default visible-role wake so the operator enters the tmux session
-first:
+Immediate operator takeover uses the same start command with `--attach`,
+targeting the same explicit goal and workspace. This skips the default
+visible-role wake so the operator enters the tmux session first:
 
 ```bash
 loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \
   auto-research start "How should we evaluate autonomous research agents?" \
+  --goal-id "$GOAL_ID" \
+  --workspace "$WORKSPACE" \
+  --create-workspace \
   --execute \
   --attach
 ```
