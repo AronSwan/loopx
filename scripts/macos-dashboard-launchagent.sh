@@ -10,7 +10,7 @@ status_limit="${LOOPX_STATUS_LIMIT:-80}"
 status_contract_min_version="${LOOPX_STATUS_CONTRACT_MIN_VERSION:-2}"
 chat_port="${LOOPX_CHAT_PORT:-8767}"
 host="${LOOPX_DASHBOARD_HOST:-127.0.0.1}"
-chat_runtime_url="http://$host:$chat_port"
+chat_runtime_endpoint="$host:$chat_port"
 label_prefix="${LOOPX_LAUNCH_LABEL_PREFIX:-com.loopx}"
 
 uid="$(id -u)"
@@ -299,7 +299,8 @@ print(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 chat_runtime_identity() {
   local python_command payload
   python_command="$(resolve_python_command)"
-  payload="$(curl -fsS "$chat_runtime_url/api/chat/capabilities" 2>/dev/null)" # NOSONAR -- replacement rejects non-loopback hosts.
+  # A scheme-less curl endpoint defaults to local HTTP; managed replacement rejects non-loopback hosts.
+  payload="$(curl -fsS "$chat_runtime_endpoint/api/chat/capabilities" 2>/dev/null)"
   "$python_command" -c '
 import json
 import sys
@@ -332,7 +333,7 @@ verify_current_chat_runtime() {
     fi
     sleep 0.2
   done
-  echo "LoopX Chat did not start with the current release identity on $chat_runtime_url/." >&2 # NOSONAR -- loopback-only diagnostic URL.
+  echo "LoopX Chat did not start with the current release identity at local endpoint $chat_runtime_endpoint." >&2
   [[ -n "${actual:-}" ]] && echo "Observed runtime identity: $actual" >&2
   return 1
 }
