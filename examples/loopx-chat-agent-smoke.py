@@ -104,6 +104,25 @@ for line in sys.stdin:
                     "method": "item/started",
                     "params": {"threadId": "thread-loopx-chat", "turnId": turn_id, "item": {"id": f"work-{index}"}},
                 }), flush=True)
+        if "retryable error" in prompt:
+            print(json.dumps({
+                "method": "error",
+                "params": {
+                    "threadId": "thread-loopx-chat",
+                    "turnId": turn_id,
+                    "willRetry": True,
+                    "error": {"message": "synthetic transient failure"},
+                },
+            }), flush=True)
+        if "ends in terminal failure" in prompt:
+            print(json.dumps({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-loopx-chat",
+                    "turn": {"id": turn_id, "status": "failed"},
+                },
+            }), flush=True)
+            continue
         visible_answer = "Reviewed " + params.get("cwd", "") + ".\n"
         response = (
             visible_answer + '<loopx-review-json>'
@@ -213,6 +232,17 @@ def main() -> None:
                 "inspect attached image",
                 attachments=[{"data_url": "data:image/png;base64,aW1hZ2U="}],
             )
+            retry_events = []
+            retry_result = session.send(
+                "recover after retryable error",
+                on_event=lambda kind, payload: retry_events.append((kind, payload)),
+            )
+            try:
+                session.send("retryable error ends in terminal failure")
+            except CodexChatAgentError as exc:
+                assert str(exc) == "Codex app-server reported a terminal turn failure.", exc
+            else:
+                raise AssertionError("terminal failed status should fail the Chat turn")
         finally:
             session.close()
 
@@ -227,6 +257,14 @@ def main() -> None:
         ], result
         assert result["gate"] is None, result
         assert image_result["message"] == "Reviewed [project].", image_result
+        assert retry_result["message"] == "Reviewed [project].", retry_result
+        assert any(
+            kind == "agent.phase"
+            and payload.get("method") == "error"
+            and payload.get("label") == "Codex 正在重试"
+            for kind, payload in retry_events
+        ), retry_events
+        assert not any(kind == "turn.failed" for kind, _ in retry_events), retry_events
         assert str(root) not in json.dumps(result), result
         visible = "".join(
             str(payload.get("text") or "")

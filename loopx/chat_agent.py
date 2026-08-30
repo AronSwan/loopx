@@ -556,8 +556,28 @@ class CodexChatAgentSession:
                         visible_delta_count += 1
                         on_event("answer.delta", {"text": visible})
             elif method == "turn/completed":
+                turn = params.get("turn") if isinstance(params, dict) else None
+                turn_status = str(turn.get("status") or "") if isinstance(turn, dict) else ""
+                if turn_status == "failed":
+                    raise self._runtime_error("Codex app-server reported a terminal turn failure.")
+                if turn_status == "interrupted":
+                    raise CodexChatAgentError(
+                        "Codex app-server reported an interrupted turn.",
+                        error_code="interrupted",
+                        gate=_host_tool_gate(
+                            "The Codex Chat turn was interrupted.",
+                            "Send a new message to continue in the same session.",
+                        ),
+                    )
                 break
             elif method == "error":
+                if isinstance(params, dict) and params.get("willRetry") is True:
+                    if on_event:
+                        on_event(
+                            "agent.phase",
+                            {"label": "Codex 正在重试", "method": method},
+                        )
+                    continue
                 raise self._runtime_error("Codex app-server reported a turn error.")
         visible_tail = display_filter.finish()
         if visible_tail and on_event:
