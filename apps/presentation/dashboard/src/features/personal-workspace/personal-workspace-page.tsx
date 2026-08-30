@@ -1436,16 +1436,6 @@ export function PersonalWorkspacePage({
         });
         return;
       }
-      if (selectedGoalId && intentRoute.actionKind === "goal.update") {
-        await createPreview({
-          actionKind: "goal.update",
-          context: { kind: "goal", goal_id: selectedGoalId, natural_language: message },
-          idempotencyKey: `workspace-protected-${selectedGoalId}-${Date.now().toString(36)}`,
-          normalizedParameters: { goal_id: selectedGoalId, status: "operator_gate_requested" },
-          summary: `请求受保护操作：${message.slice(0, 160)}`,
-        });
-        return;
-      }
       if (!selectedGoalId) setManagerConversationReceiptVisible(true);
       else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
       const semanticPreview = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId);
