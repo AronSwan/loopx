@@ -31,6 +31,7 @@ from .post_writeback_hook import (
     PERIODIC_REPORT_TRIGGER_EVALUATION_INTENT,
     evaluate_periodic_report_trigger_evaluation_intent,
 )
+from .project_progress_snapshot import build_project_progress_snapshot
 
 
 PENDING_INTENT_SCHEMA = "pending_capability_intent_projection_v0"
@@ -49,11 +50,6 @@ _ANALYSIS_SECTION_CONTRACT = (
     ("coverage_and_actions", "版本覆盖与处置"),
     ("next_actions", "下一步"),
 )
-_META_ACTION_KINDS = {
-    "consume_periodic_report_intent",
-    "repair_periodic_report_intent_consumption",
-    "repair_periodic_report_editorial",
-}
 _SECTION_CONTENT_KINDS = {
     "overview": "decision",
     "problem_map": "risk",
@@ -409,96 +405,87 @@ def periodic_report_pending_intent_interaction_hook(
 def _progress_facts(
     *, registry_path: Path, goal_id: str, agent_id: str, completed_at: str
 ) -> list[dict[str, Any]]:
-    registry = read_json(registry_path)
-    goal = find_registry_goal(registry, goal_id)
-    if not isinstance(goal, Mapping):
-        raise ValueError("periodic-report Goal is not registered")
-    repo = Path(str(goal.get("repo") or "")).expanduser()
-    state_path = resolve_state_file(repo, str(goal.get("state_file") or ""))
-    if state_path is None or not state_path.is_file():
-        raise ValueError("periodic-report active state is unavailable")
-    parsed = parse_active_state_todos(
-        state_path.read_text(encoding="utf-8"),
-        goal=dict(goal),
-        state_path=state_path,
-        item_limit=None,
+    snapshot = build_project_progress_snapshot(
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        completed_at=completed_at,
     )
-    agent_summary = parsed.get("agent_todos")
-    items = agent_summary.get("items") if isinstance(agent_summary, Mapping) else []
-    stage_time = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("periodic-report has no public-safe progress items")
+    return _progress_facts_from_snapshot(
+        snapshot,
+        goal_id=goal_id,
+        completed_at=completed_at,
+    )
 
-    def not_after_stage(item: Mapping[str, Any]) -> bool:
-        raw = str(item.get("completed_at") or item.get("updated_at") or "").strip()
-        if not raw:
-            return False
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")) <= stage_time
-        except ValueError:
-            return False
 
-    done = [
-        dict(item)
-        for item in items or []
-        if isinstance(item, Mapping)
-        and item.get("status") == "done"
-        and str(item.get("claimed_by") or "") == agent_id
-        and not_after_stage(item)
-    ]
-    done.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+def _progress_facts_from_snapshot(
+    snapshot: Mapping[str, Any], *, goal_id: str, completed_at: str
+) -> list[dict[str, Any]]:
+    if (
+        snapshot.get("schema_version")
+        != "periodic_report_project_progress_projection_v0"
+        or snapshot.get("goal_id") != goal_id
+        or snapshot.get("observed_at") != completed_at
+    ):
+        raise ValueError("periodic-report progress snapshot identity is invalid")
+    raw_items = snapshot.get("items")
+    if not isinstance(raw_items, list):
+        raise ValueError("periodic-report progress snapshot items are invalid")
     facts: list[dict[str, Any]] = []
-    reportable_done = [
-        item
-        for item in done
-        if str(item.get("action_kind") or "") not in _META_ACTION_KINDS
-    ]
-    for index, item in enumerate(reportable_done[:12]):
-        summary = " ".join(
-            str(
-                item.get("evidence")
-                or item.get("note")
-                or item.get("text")
-                or ""
-            ).split()
-        )
-        title = " ".join(
-            str(item.get("text") or "Completed project work").split()
-        )
-        facts.append(
-            {
-                "fact_id": f"completed_{index + 1}",
-                "title": title[:500],
-                "summary": summary[:1000]
-                or "Validated completion is durably recorded.",
-                "status": "done",
-                "completed_at": str(
-                    item.get("completed_at") or item.get("updated_at") or ""
-                ),
-                "source_ref": f"todo:{item.get('todo_id')}",
-            }
-        )
-    open_items = [
-        dict(item)
-        for item in items or []
-        if isinstance(item, Mapping)
-        and item.get("status") == "open"
-        and str(item.get("claimed_by") or "") == agent_id
-        and item.get("task_class") != "continuous_monitor"
-        and str(item.get("action_kind") or "") not in _META_ACTION_KINDS
-    ]
-    if open_items:
-        next_item = open_items[0]
-        facts.append(
-            {
-                "fact_id": "next_action",
-                "title": "Open successor",
-                "summary": " ".join(str(next_item.get("text") or "").split())[:1000],
-                "status": "open",
-                "source_ref": f"todo:{next_item.get('todo_id')}",
-            }
-        )
+    seen_source_refs: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, Mapping):
+            raise ValueError(f"periodic-report progress snapshot item {index} is invalid")
+        item_id = str(raw_item.get("item_id") or "").strip()
+        title = " ".join(str(raw_item.get("title") or "").split())
+        summary = " ".join(str(raw_item.get("summary") or "").split())
+        source_ref = str(raw_item.get("source_ref") or "").strip()
+        content_kind = str(raw_item.get("content_kind") or "").strip()
+        if not item_id or not title or not summary or not source_ref:
+            raise ValueError("periodic-report progress snapshot item is incomplete")
+        if source_ref in seen_source_refs:
+            raise ValueError("periodic-report progress snapshot source is duplicated")
+        raw_completed_at = str(raw_item.get("completed_at") or "").strip()
+        if content_kind == "outcome":
+            status = "done"
+            completed = _validated_snapshot_timestamp(
+                raw_completed_at,
+                observed_at=completed_at,
+            )
+        elif content_kind == "next_action":
+            status = "open"
+            completed = None
+        else:
+            raise ValueError("periodic-report progress snapshot item kind is invalid")
+        fact: dict[str, Any] = {
+            "fact_id": item_id,
+            "title": title[:500],
+            "summary": summary[:1000],
+            "status": status,
+            "source_ref": source_ref,
+        }
+        if completed is not None:
+            fact["completed_at"] = completed
+        facts.append(fact)
+        seen_source_refs.add(source_ref)
     if not facts:
         raise ValueError("periodic-report has no public-safe progress items")
     return facts
+
+
+def _validated_snapshot_timestamp(value: str, *, observed_at: str) -> str:
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        boundary = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            "periodic-report progress snapshot timestamp is invalid"
+        ) from exc
+    if timestamp.tzinfo is None or boundary.tzinfo is None or timestamp > boundary:
+        raise ValueError("periodic-report progress snapshot timestamp is invalid")
+    return value
 
 
 def _build_editorial_request(
@@ -843,11 +830,20 @@ def consume_pending_periodic_report_intent(
     payload = intent["payload"]
     stage = payload["stage_completion"]
     completed_at = str(stage["completed_at"])
-    facts = _progress_facts(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        completed_at=completed_at,
+    project_progress = payload.get("project_progress")
+    facts = (
+        _progress_facts_from_snapshot(
+            project_progress,
+            goal_id=goal_id,
+            completed_at=completed_at,
+        )
+        if isinstance(project_progress, Mapping)
+        else _progress_facts(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            completed_at=completed_at,
+        )
     )
     actionable, rejection_revision = _next_attempt_revision(
         registry_path=registry_path,

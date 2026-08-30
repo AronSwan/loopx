@@ -20,6 +20,7 @@ from ...registry import registry_goals
 from .stage_completion import STAGE_COMPLETION_RECEIPT_SCHEMA
 from .stage_completion import derive_periodic_report_stage_completion_from_runs
 from .presets import build_periodic_report_preset_activation
+from .project_progress_snapshot import build_project_progress_snapshot_from_state
 from .triggers import build_periodic_report_trigger_decision
 
 
@@ -166,8 +167,9 @@ def build_periodic_report_post_writeback_projection(
         ),
         {},
     )
+    state_text = state_path.read_text(encoding="utf-8")
     projection, _user_summary, _agent_summary = _frontier_projection(
-        state_text=state_path.read_text(encoding="utf-8"),
+        state_text=state_text,
         goal=goal,
         state_path=state_path,
         goal_id=goal_id,
@@ -231,7 +233,20 @@ def build_periodic_report_post_writeback_projection(
         settled_replan_obligation=settled_obligation,
         settled_replan_ack=settled_ack,
     )
-    return {"stage_completion": receipt} if receipt is not None else {}
+    if receipt is None:
+        return {}
+    result: dict[str, object] = {"stage_completion": receipt}
+    project_progress = build_project_progress_snapshot_from_state(
+        state_text=state_text,
+        goal=goal,
+        state_path=state_path,
+        goal_id=goal_id,
+        agent_id=normalized_agent_id,
+        completed_at=str(receipt["completed_at"]),
+    )
+    if project_progress is not None:
+        result["project_progress"] = project_progress
+    return result
 
 
 def periodic_report_post_writeback_hook(
@@ -261,6 +276,21 @@ def periodic_report_post_writeback_hook(
             return _result(status="not_applicable", intent=None)
         receipt_id = str(receipt.get("event_id") or "")
         stage_identity = str(stage["stage_identity"])
+        project_progress = (
+            projection.get("project_progress")
+            if isinstance(projection, Mapping)
+            else None
+        )
+        intent_payload: dict[str, Any] = {
+            "schema_version": "periodic_report_trigger_evaluation_intent_v0",
+            "stage_completion": dict(stage),
+            "profile_ref": dict(profile_ref or {}),
+            "trigger_policy": dict(trigger_policy or {}),
+            "generation_authorized": False,
+            "external_delivery_authorized": False,
+        }
+        if isinstance(project_progress, Mapping):
+            intent_payload["project_progress"] = dict(project_progress)
         return _result(
             status="intent",
             intent={
@@ -268,14 +298,7 @@ def periodic_report_post_writeback_hook(
                 "intent_kind": PERIODIC_REPORT_TRIGGER_EVALUATION_INTENT,
                 "idempotency_key": f"periodic-report:{stage_identity}",
                 "source_receipt_id": receipt_id,
-                "payload": {
-                    "schema_version": "periodic_report_trigger_evaluation_intent_v0",
-                    "stage_completion": dict(stage),
-                    "profile_ref": dict(profile_ref or {}),
-                    "trigger_policy": dict(trigger_policy or {}),
-                    "generation_authorized": False,
-                    "external_delivery_authorized": False,
-                },
+                "payload": intent_payload,
                 "requested_write_scope": [],
             },
         )
@@ -285,7 +308,7 @@ def periodic_report_post_writeback_hook(
         capability_id="periodic-report",
         event_kinds=("refresh_state", "todo_complete"),
         intent_kinds=(PERIODIC_REPORT_TRIGGER_EVALUATION_INTENT,),
-        requested_read_scope=("stage_completion",),
+        requested_read_scope=("stage_completion", "project_progress"),
         producer=producer,
         policy_version=policy_version,
     )
