@@ -20,16 +20,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.demo_e2e import (  # noqa: E402
+from demo.auto_research.demo_e2e import (  # noqa: E402
     _seed_visible_demo_control_plane,
 )
-from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
+from demo.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
 )
-from loopx.capabilities.auto_research.worker_runtime import (  # noqa: E402
+from demo.auto_research.worker_runtime import (  # noqa: E402
     load_auto_research_worker_frontier,
 )
-from loopx.control_plane.agents.multi_agent.visible_launch_policy import (  # noqa: E402
+from demo.multi_agent.visible_launch_policy import (  # noqa: E402
     resolve_visible_launch_policy,
 )
 
