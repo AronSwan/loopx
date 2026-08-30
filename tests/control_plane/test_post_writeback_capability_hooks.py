@@ -139,9 +139,29 @@ def test_post_writeback_dispatch_rejects_non_durable_input_before_provider() -> 
 
 
 def test_periodic_report_hook_emits_only_an_approval_neutral_trigger_intent() -> None:
+    hook_input = _input()
+    hook_input["projection"] = {
+        **hook_input["projection"],  # type: ignore[dict-item]
+        "project_progress": {
+            "schema_version": "periodic_report_project_progress_projection_v0",
+            "goal_id": "goal-1",
+            "observed_at": "2026-08-30T09:00:00Z",
+            "language": "zh-CN",
+            "items": [
+                {
+                    "item_id": "completed_1",
+                    "title": "Frozen stage outcome",
+                    "summary": "The stage snapshot is captured at writeback.",
+                    "content_kind": "outcome",
+                    "value_rank": 10,
+                    "source_ref": "todo:todo-1",
+                }
+            ],
+        },
+    }
     dispatch = dispatch_post_writeback_hooks(
         [periodic_report_post_writeback_hook()],
-        hook_input=_input(),
+        hook_input=hook_input,
     )
 
     intent = dispatch["intents"][0]
@@ -149,6 +169,9 @@ def test_periodic_report_hook_emits_only_an_approval_neutral_trigger_intent() ->
     assert intent["requested_write_scope"] == []
     assert intent["payload"]["generation_authorized"] is False
     assert intent["payload"]["external_delivery_authorized"] is False
+    assert intent["payload"]["project_progress"]["items"][0]["title"] == (
+        "Frozen stage outcome"
+    )
 
 
 def test_periodic_report_hook_accepts_durable_todo_completion() -> None:
@@ -444,6 +467,7 @@ def test_periodic_report_projection_reduces_durable_successor_transition(
     receipt = projection["stage_completion"]
     assert receipt["transition"] == "successor_frontier_settled"
     assert receipt["frontier_identity"] == "frontier-2"
+    assert projection["project_progress"]["observed_at"] == receipt["completed_at"]
 
 
 def test_periodic_report_projection_reduces_terminal_after_todo_completion(

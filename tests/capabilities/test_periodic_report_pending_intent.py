@@ -10,6 +10,10 @@ from loopx.capabilities.periodic_report.pending_intent import (
     pending_periodic_report_intents,
     periodic_report_pending_intent_interaction_hook,
 )
+from loopx.capabilities.periodic_report.project_progress_snapshot import (
+    build_project_progress_snapshot,
+)
+from loopx.todos import add_goal_todo
 from loopx.control_plane.capability_hooks import dispatch_interaction_projection_hooks
 from loopx.control_plane.quota.live_decision import (
     _apply_pending_capability_intent_precedence,
@@ -382,6 +386,49 @@ def test_consumption_is_local_and_exact_replay_does_not_duplicate_gate(
     state = (registry.parent / "ACTIVE_GOAL_STATE.md").read_text(encoding="utf-8")
     assert state.count("approve_periodic_report_payload") == 1
     assert "批准前不得发布妙搭或发送群消息" in state
+
+
+def test_consumption_uses_the_stage_progress_snapshot(tmp_path: Path) -> None:
+    registry, runtime = _fixture(tmp_path)
+    sidecar = next(
+        (runtime / "goals" / GOAL_ID / "post_writeback_hooks").glob("*.json")
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["intent"]["payload"]["project_progress"] = build_project_progress_snapshot(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        completed_at="2026-08-30T09:00:00Z",
+    )
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Follow-up work added after stage completion",
+        claimed_by=AGENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    result = consume_pending_periodic_report_intent(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        execute=True,
+    )
+    assert result["status"] == "editorial_required"
+    request = json.loads(
+        Path(result["editorial_request_path"]).read_text(encoding="utf-8")
+    )
+    facts = request["facts"]
+
+    assert any("Finish the bounded analysis" in fact["title"] for fact in facts)
+    assert not any(
+        "Follow-up work added after stage completion" in fact["title"]
+        for fact in facts
+    )
 
 
 def test_consumption_recovers_when_gate_precedes_receipt_write(tmp_path: Path) -> None:
