@@ -32,6 +32,7 @@ def _valid_snapshot() -> dict:
             "auto/gpt-5.6-sol",
             "codex-a/gpt-5.6-sol",
             "codex-b/gpt-5.6-sol",
+            "gpt-5.6-luna",
             "ark/deepseek-v4-flash",
         ],
         "hidden_models": ["gpt-5.6-sol"],
@@ -39,16 +40,44 @@ def _valid_snapshot() -> dict:
             "auto/gpt-5.6-sol": ["text", "image"],
             "codex-a/gpt-5.6-sol": ["text", "image"],
             "codex-b/gpt-5.6-sol": ["text", "image"],
+            "gpt-5.6-luna": ["text", "image"],
             "ark/deepseek-v4-flash": ["text"],
         },
         "fast_models": [
             "auto/gpt-5.6-sol",
             "codex-a/gpt-5.6-sol",
             "codex-b/gpt-5.6-sol",
+            "gpt-5.6-luna",
         ],
         "default_service_tier": "default",
         "endpoint_host": "127.0.0.1",
         "affinity_policy": "hint_revalidated_per_attempt",
+        "route_traversal": {
+            "auto/gpt-5.6-sol": {
+                "entrypoint": "affinity_then_first",
+                "ordered_candidates": ["codex-a", "codex-b", "ark-text"],
+                "fallback_tail": ["ark-text"],
+                "max_cycles": 1,
+            },
+            "codex-a/gpt-5.6-sol": {
+                "entrypoint": "codex-a",
+                "ordered_candidates": ["codex-a", "codex-b", "ark-text"],
+                "fallback_tail": ["ark-text"],
+                "max_cycles": 1,
+            },
+            "codex-b/gpt-5.6-sol": {
+                "entrypoint": "codex-b",
+                "ordered_candidates": ["codex-b", "codex-a", "ark-text"],
+                "fallback_tail": ["ark-text"],
+                "max_cycles": 1,
+            },
+            "gpt-5.6-luna": {
+                "entrypoint": "affinity_then_first",
+                "ordered_candidates": ["codex-a", "codex-b"],
+                "fallback_tail": [],
+                "max_cycles": 1,
+            },
+        },
         "settings_revision_durable": True,
         "turn_revision_matches": True,
         "commit_barrier": "before_first_visible_output_or_tool_call",
@@ -73,6 +102,36 @@ def main() -> int:
     assert auto["eligible_candidates"]["text"] == ["codex-a", "codex-b", "ark-text"]
     assert auto["fast_candidates"] == ["codex-a", "codex-b"]
     assert auto["routing_policy"]["session_affinity"] == "hint_revalidated_per_attempt"
+    assert auto["ring_id"] == "codex-accounts"
+    assert auto["entrypoint"] == "affinity_then_first"
+    assert auto["routing_policy"]["max_cycles"] == 1
+    prefer_a = next(
+        route for route in catalog["routes"] if route["slug"].startswith("codex-a/")
+    )
+    prefer_b = next(
+        route for route in catalog["routes"] if route["slug"].startswith("codex-b/")
+    )
+    assert prefer_a["candidates"] == ["codex-a", "codex-b", "ark-text"]
+    assert prefer_b["candidates"] == ["codex-b", "codex-a", "ark-text"]
+    assert prefer_a["routing_mode"] == prefer_b["routing_mode"] == "preferred"
+    luna = next(route for route in catalog["routes"] if route["slug"] == "gpt-5.6-luna")
+    assert luna["candidates"] == ["codex-a", "codex-b"]
+    assert luna["eligible_candidates"]["image"] == ["codex-a", "codex-b"]
+    assert luna["reasoning_levels"] == ["low", "medium", "high", "xhigh", "max"]
+    assert luna["fast_candidates"] == ["codex-a", "codex-b"]
+
+    repeated_ring = copy.deepcopy(_source())
+    repeated_ring["rings"][0]["max_cycles"] = 2
+    expect_error(
+        lambda: compile_catalog(repeated_ring), "multi-cycle fallback ring was accepted"
+    )
+
+    overlapping_tail = copy.deepcopy(_source())
+    overlapping_tail["routes"][1]["fallback_tail"] = ["codex-b"]
+    expect_error(
+        lambda: compile_catalog(overlapping_tail),
+        "fallback tail overlapping the account ring was accepted",
+    )
 
     leaked = copy.deepcopy(_source())
     leaked["profiles"][0]["access_token"] = "example-sensitive-value"
@@ -115,6 +174,32 @@ def main() -> int:
         "modality_aware_affinity",
         "settings_revision",
     }
+
+    wrong_prefer_b = _valid_snapshot()
+    wrong_prefer_b["route_traversal"]["codex-b/gpt-5.6-sol"]["ordered_candidates"] = [
+        "codex-a",
+        "codex-b",
+        "ark-text",
+    ]
+    failed = qualify_snapshot(wrong_prefer_b)
+    assert failed["qualified"] is False
+    assert "preferred_route_order" in {
+        item["id"] for item in failed["checks"] if not item["passed"]
+    }
+
+    luna_with_ark = _valid_snapshot()
+    luna_with_ark["route_traversal"]["gpt-5.6-luna"]["ordered_candidates"] = [
+        "codex-a",
+        "codex-b",
+        "ark-text",
+    ]
+    luna_with_ark["route_traversal"]["gpt-5.6-luna"]["fallback_tail"] = ["ark-text"]
+    failed = qualify_snapshot(luna_with_ark)
+    assert failed["qualified"] is False
+    assert {
+        "preferred_route_order",
+        "terminal_fallback_tail",
+    } <= {item["id"] for item in failed["checks"] if not item["passed"]}
 
     plan = build_upgrade_plan(
         {
