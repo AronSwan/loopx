@@ -398,11 +398,16 @@ def test_refresh_state_dispatches_and_replays_post_writeback_sidecar(
         "sync_human_gate_after_refresh",
         lambda **kwargs: {"enabled": False},
     )
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps({"common_runtime_root": str(runtime_root), "goals": []}),
+        encoding="utf-8",
+    )
 
     for _ in range(2):
         result = project_lifecycle.handle_project_lifecycle_command(
             args,
-            registry_path=tmp_path / "registry.json",
+            registry_path=registry_path,
             print_payload=lambda payload, fmt, renderer: captured.update(payload),
             output_format=lambda args: "json",
             append_cli_rollout_event=lambda *args, **kwargs: {},
