@@ -81,6 +81,8 @@ assert.match(router, /route: "projection" \| "typed_action" \| "agent_chat" \| "
 assert.match(router, /function executionIntent/, "Execution intent stays inside the Router implementation");
 assert.match(router, /function negates/, "Router can honor explicit negation");
 assert.doesNotMatch(router, /protectedActionIntent|protectedActionRules/, "Free-text protected operations are not interpreted by browser keyword rules");
+assert.doesNotMatch(router, /"goal\.update"/, "The browser Router type cannot emit a protected Goal action");
+assert.doesNotMatch(page, /intentRoute\.actionKind === "goal\.update"|workspace-protected-/, "Free-text send has no legacy protected-action preview branch");
 assert.match(chatData, /protected_action: protectedActionProposalSchema/, "Chat accepts one narrow semantic protected-action proposal");
 assert.match(dashboard, /response\.protected_action/, "Agent semantic protected intent is projected only after the Chat response");
 assert.match(dashboard, /normalizedMessage\.includes\(normalizedTarget\)/, "A model-invented protected target cannot reach typed preview");

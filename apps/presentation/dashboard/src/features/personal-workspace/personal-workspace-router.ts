@@ -1,6 +1,5 @@
 export type WorkspaceRouterActionKind =
   | "goal.create"
-  | "goal.update"
   | "todo.create"
   | "todo.update"
   | "agent.bind"
