@@ -165,10 +165,13 @@ def _append_archived_steps(
     pending: dict[str, dict[str, Any]] = {}
     for item in items:
         item_type = item.get("type")
-        if item_type == "function_call":
+        if item_type in {"function_call", "custom_tool_call"}:
             call_id = str(item.get("call_id") or item.get("id") or "")
             if not call_id or call_id in pending:
                 raise ValueError("traex_function_call_identity_invalid")
+            arguments_field = (
+                "input" if item_type == "custom_tool_call" else "arguments"
+            )
             step: dict[str, Any] = {
                 "step_id": str(len(steps) + 1),
                 "source": "agent",
@@ -176,29 +179,35 @@ def _append_archived_steps(
                 "tool_calls": [
                     {
                         "function_name": str(item.get("name") or "unknown"),
-                        "arguments": _tool_arguments(item.get("arguments") or {}),
+                        "arguments": _tool_arguments(item.get(arguments_field) or {}),
                     }
                 ],
             }
             steps.append(step)
             pending[call_id] = step
-        elif item_type == "function_call_output":
+        elif item_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = str(item.get("call_id") or "")
             if call_id not in pending:
                 raise ValueError("traex_function_call_output_unmatched")
             step = pending.pop(call_id)
             step["observation"] = item.get("output")
-        elif item_type == "message" and item.get("role") == "assistant":
-            message = _text_content(item.get("content"))
-            if message:
-                steps.append(
-                    {
-                        "step_id": str(len(steps) + 1),
-                        "source": "agent",
-                        "message": message,
-                        "tool_calls": [],
-                    }
-                )
+        elif item_type == "message":
+            role = item.get("role")
+            if role not in {"assistant", "developer", "system", "user"}:
+                raise ValueError("traex_archive_message_role_unsupported")
+            if role == "assistant":
+                message = _text_content(item.get("content"))
+                if message:
+                    steps.append(
+                        {
+                            "step_id": str(len(steps) + 1),
+                            "source": "agent",
+                            "message": message,
+                            "tool_calls": [],
+                        }
+                    )
+        elif item_type != "reasoning":
+            raise ValueError("traex_archive_action_unsupported")
     if pending:
         raise ValueError("traex_function_call_output_missing")
 

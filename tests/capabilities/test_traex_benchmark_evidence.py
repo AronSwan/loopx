@@ -184,6 +184,65 @@ def test_archive_history_mutation_is_supported_when_response_items_are_absent() 
     assert trajectory["steps"][0]["message"] == "done"
 
 
+def test_archive_custom_tool_pair_converts_without_losing_action() -> None:
+    trajectory = convert_traex_events_to_atif(
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\n*** End Patch",
+                    "call_id": "call-custom-1",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-custom-1",
+                    "output": "Done!",
+                },
+            },
+        ]
+    )
+
+    assert trajectory["steps"] == [
+        {
+            "step_id": "1",
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {
+                    "function_name": "apply_patch",
+                    "arguments": "*** Begin Patch\n*** End Patch",
+                }
+            ],
+            "observation": "Done!",
+        }
+    ]
+
+
+def test_archive_unknown_action_fails_closed_before_integrity_qualification() -> None:
+    with pytest.raises(ValueError, match="traex_archive_action_unsupported"):
+        convert_traex_events_to_atif(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "computer_call", "id": "action-1"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"text": "done"}],
+                    },
+                },
+            ]
+        )
+
+
 def test_archive_history_replace_supersedes_prior_items() -> None:
     trajectory = convert_traex_events_to_atif(
         [

@@ -314,8 +314,9 @@ or paths. Stdout JSONL normally has no runtime route event, so omitting
 `--route-source-jsonl` does not prove which model ran. When a separate archive is
 supplied, its session id must exactly match the stdout `thread.started` id. The
 converter covers the observed TraeX command and file-change stdout events plus
-archived function-call events; an unknown completed action fails closed rather than
-producing a partial audit trajectory. This command does not launch TraeX, read
+archived function-call and custom-tool-call pairs; an unknown action-bearing stdout
+or archive item fails closed rather than producing a partial audit trajectory. This
+command does not launch TraeX, read
 verifier data, score a run, or publish either artifact.
 
 Run integrity qualification after the agent phase and after the runner has produced
