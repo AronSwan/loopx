@@ -243,6 +243,28 @@ def test_archive_unknown_action_fails_closed_before_integrity_qualification() ->
         )
 
 
+def test_archive_malformed_response_item_fails_closed() -> None:
+    with pytest.raises(ValueError, match="traex_archive_response_item_invalid"):
+        convert_traex_events_to_atif(
+            [
+                {"type": "response_item", "payload": "unparsed-action"},
+                {
+                    "type": "history_mutation",
+                    "payload": {
+                        "operation": "append",
+                        "items": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"text": "done"}],
+                            }
+                        ],
+                    },
+                },
+            ]
+        )
+
+
 def test_archive_history_replace_supersedes_prior_items() -> None:
     trajectory = convert_traex_events_to_atif(
         [

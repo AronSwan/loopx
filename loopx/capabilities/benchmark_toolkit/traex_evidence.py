@@ -127,12 +127,14 @@ def build_traex_model_route_receipt(
 
 
 def _archived_items(events: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    response_items = [
-        payload
-        for event in events
-        if event.get("type") == "response_item"
-        and isinstance((payload := event.get("payload")), Mapping)
-    ]
+    response_items: list[Mapping[str, Any]] = []
+    for event in events:
+        if event.get("type") != "response_item":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("traex_archive_response_item_invalid")
+        response_items.append(payload)
     if response_items:
         return response_items
 
