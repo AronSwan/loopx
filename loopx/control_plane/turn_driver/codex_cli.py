@@ -539,16 +539,15 @@ def run_codex_cli_host(
         category = failure_categories[0] if failure_categories else "exit_nonzero"
         if returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
             _discard_codex_cli_session(runtime_root, lineage=lineage)
-        if observed_session:
-            if (
-                returncode == 0
-                or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
-            ):
-                _store_codex_cli_session(
-                    runtime_root,
-                    lineage=lineage,
-                    session_id=observed_session[0],
-                )
+        if observed_session and (
+            returncode == 0
+            or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
+        ):
+            _store_codex_cli_session(
+                runtime_root,
+                lineage=lineage,
+                session_id=observed_session[0],
+            )
         if returncode != 0:
             raise BuiltInHostError(
                 f"codex_cli_{category}",

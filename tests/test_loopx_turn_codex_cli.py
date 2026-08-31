@@ -359,10 +359,11 @@ def test_codex_cli_host_classifies_provider_capacity_as_retryable_without_prose(
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
     project.mkdir()
+    request = _request()
 
     with pytest.raises(BuiltInHostError) as exc_info:
         run_codex_cli_host(
-            _request(),
+            request,
             runtime_root=runtime_root,
             project=project,
             codex_bin=str(executable),
