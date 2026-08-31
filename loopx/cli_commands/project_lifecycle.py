@@ -695,6 +695,7 @@ def handle_project_lifecycle_command(
                     exc,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
+                    runtime_root=args.runtime_root,
                 )
                 payload["replan_transition"] = transition
                 payload["error"] += " Required transition: " + "; ".join(

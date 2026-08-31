@@ -917,6 +917,33 @@ def test_generic_cli_without_turn_identity_keeps_legacy_unbound_actions() -> Non
     assert all("--turn-instance-id" not in action for action in channel["next_cli_actions"])
 
 
+def test_interaction_contract_cli_actions_keep_runtime_root() -> None:
+    runtime_root = "/tmp/loopx-runtime-root-fixture"
+    command_prefix = f"loopx --runtime-root {runtime_root}"
+
+    contract = build_interaction_contract(
+        _generic_cli_contract_payload(),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
+        ),
+        turn_instance_id=TURN_ID,
+        runtime_root=runtime_root,
+    )
+
+    channel = contract["cli_channel"]
+    assert channel["next_cli_actions"][0].startswith(
+        f"{command_prefix} refresh-state "
+    )
+    assert channel["next_cli_actions"][1].startswith(
+        f"{command_prefix} quota spend-slot "
+    )
+    plan = channel["settlement_plan"]
+    for step in plan["ordered_steps"]:
+        command = step.get("command_template")
+        if command:
+            assert command.startswith(command_prefix)
+
+
 def test_guard_receipt_resolves_stable_settlement_identity(tmp_path: Path) -> None:
     _append_guard_receipt(tmp_path)
 

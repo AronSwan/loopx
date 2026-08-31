@@ -48,6 +48,12 @@ def render_cli_command_prefix(
     return prefix
 
 
+def _render_global_registry_arg(runtime_root: str | Path | None) -> str:
+    if runtime_root is not None:
+        return ""
+    return f"--registry {SHARED_GLOBAL_REGISTRY} "
+
+
 def render_goal_start_bootstrap_command(
     *,
     project: str,
@@ -194,7 +200,7 @@ def render_quota_guard_command(
     else:
         turn_arg = ""
     registry_arg = (
-        f"--registry {SHARED_GLOBAL_REGISTRY} " if include_shared_registry else ""
+        _render_global_registry_arg(runtime_root) if include_shared_registry else ""
     )
     return (
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
@@ -209,14 +215,15 @@ def render_quota_spend_command(
     *,
     source: str = "adapter",
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
 ) -> str:
     agent_arg = f" --agent-id {shell_arg(agent_id)}" if agent_id else ""
     capability_args = render_available_capability_args(available_capabilities)
     return (
-        f"{shell_arg(cli_bin)} --format json "
-        f"--registry {SHARED_GLOBAL_REGISTRY} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
+        f"{_render_global_registry_arg(runtime_root)}"
         "quota spend-slot "
         f"--goal-id {shell_arg(goal_id)} "
         f"--slots 1 --source {shell_arg(source)} --execute{agent_arg}{capability_args}"
@@ -264,6 +271,7 @@ def render_accountable_progress_refresh_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
     classification: str = "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
@@ -273,6 +281,7 @@ def render_accountable_progress_refresh_command(
     return render_refresh_state_command(
         goal_id,
         cli_bin=cli_bin,
+        runtime_root=runtime_root,
         agent_id=agent_id,
         progress_scope=progress_scope,
         classification=classification,
