@@ -265,6 +265,58 @@ def test_archive_malformed_response_item_fails_closed() -> None:
         )
 
 
+def test_archive_ignores_only_known_non_action_items() -> None:
+    trajectory = convert_traex_events_to_atif(
+        [
+            {"type": "response_item", "payload": {"type": "reasoning"}},
+            *[
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": role,
+                        "content": [{"text": f"{role}-prompt"}],
+                    },
+                }
+                for role in ("developer", "system", "user")
+            ],
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"text": "done"}],
+                },
+            },
+        ]
+    )
+
+    assert trajectory["steps"] == [
+        {
+            "step_id": "1",
+            "source": "agent",
+            "message": "done",
+            "tool_calls": [],
+        }
+    ]
+
+
+def test_archive_unknown_message_role_fails_closed() -> None:
+    with pytest.raises(ValueError, match="traex_archive_message_role_unsupported"):
+        convert_traex_events_to_atif(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "tool",
+                        "content": [{"text": "hidden action"}],
+                    },
+                }
+            ]
+        )
+
+
 def test_archive_history_replace_supersedes_prior_items() -> None:
     trajectory = convert_traex_events_to_atif(
         [
