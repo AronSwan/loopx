@@ -510,20 +510,17 @@ def _event_failure_categories(
     # 1. A provider error code is the most specific signal. If it exists but is
     # unknown, fail closed instead of reinterpreting its English message.
     code_containers = (event, *error_containers)
-    code_present = False
     code_categories: list[str] = []
     for container in code_containers:
         for field in ("code", "error_code", "errorCode"):
             candidate = container.get(field)
             if not _meaningful_structured_value(candidate):
                 continue
-            code_present = True
-            if category := _structured_failure_category(candidate):
-                code_categories.append(category)
+            code_categories.append(
+                _structured_failure_category(candidate) or "unknown"
+            )
     if code_categories:
         return _select_failure_category(code_categories), None
-    if code_present:
-        return "unknown", None
 
     # 2. Codex app-server error variants are typed discriminators too. Unknown
     # variants are not safe to reinterpret from prose.

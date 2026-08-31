@@ -11,7 +11,9 @@ import pytest
 from loopx.control_plane.turn_driver.codex_cli import (
     CODEX_CLI_SESSION_SCHEMA_VERSION,
     _diagnostic_failure_category,
+    _event_failure_categories,
     _event_failure_category,
+    _select_failure_category,
     codex_cli_result_schema,
     codex_cli_session_binding,
     load_codex_cli_session,
@@ -237,6 +239,51 @@ def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
     }
 
     assert _event_failure_category(event) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("outer_code", "inner_code"),
+    [
+        ("future_provider_failure", "rate_limit_exceeded"),
+        ("rate_limit_exceeded", "future_provider_failure"),
+    ],
+)
+def test_codex_cli_host_fails_closed_on_mixed_structured_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outer_code: str,
+    inner_code: str,
+) -> None:
+    failure_event: dict[str, object] = {
+        "type": "response.failed",
+        "code": outer_code,
+        "response": {"error": {"code": inner_code}},
+    }
+
+    assert _event_failure_categories(failure_event) == ("unknown", None)
+
+    error, _runtime_root = _capture_fake_codex_failure(
+        tmp_path,
+        monkeypatch,
+        failure_event=failure_event,
+    )
+
+    assert error.reason == "codex_cli_unknown"
+    assert error.failure_kind == "unknown"
+    assert error.recovery_kind is None
+
+
+@pytest.mark.parametrize(
+    "categories",
+    [
+        ["unknown", "rate_limited"],
+        ["rate_limited", "unknown"],
+    ],
+)
+def test_failure_category_reduction_is_order_independent(
+    categories: list[str],
+) -> None:
+    assert _select_failure_category(categories) == "unknown"
 
 
 def test_codex_cli_specific_quota_code_wins_over_http_429() -> None:
