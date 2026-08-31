@@ -287,6 +287,37 @@ adapter check; it must not promote the check into a default LoopX requirement.
 
 ## Integrity qualification
 
+### TraeX evidence capture
+
+TraeX `exec --json` emits an automation-facing stdout JSONL stream rather than a
+complete copy of its archived session. Convert that private stream into ATIF before
+integrity qualification, and optionally provide the matching private archived JSONL
+for an independently observed runtime model route:
+
+```bash
+loopx benchmark traex-evidence \
+  --source-jsonl .local/private-run/traex-stdout.jsonl \
+  --route-source-jsonl .local/private-run/traex-session.jsonl \
+  --atif-output .local/private-run/agent/trajectory.json \
+  --route-receipt-output .local/private-run/public/model-route.json \
+  --requested-model GPT-5.4 \
+  --require-runtime-route \
+  --execute --format json
+```
+
+Without `--execute`, the command validates and previews without writing. The private
+ATIF retains tool arguments and observations for local integrity analysis. The route
+receipt contains only compact requested and observed route labels and one of
+`runtime_route_verified`, `runtime_route_mismatch`, `runtime_route_ambiguous`, or
+`route_requested_not_runtime_audited`; it never contains prompts, raw tool content,
+or paths. Stdout JSONL normally has no runtime route event, so omitting
+`--route-source-jsonl` does not prove which model ran. When a separate archive is
+supplied, its session id must exactly match the stdout `thread.started` id. The
+converter covers the observed TraeX command and file-change stdout events plus
+archived function-call events; an unknown completed action fails closed rather than
+producing a partial audit trajectory. This command does not launch TraeX, read
+verifier data, score a run, or publish either artifact.
+
 Run integrity qualification after the agent phase and after the runner has produced
 its isolation attestation. The trajectory and any sensitive values remain private
 local inputs:
