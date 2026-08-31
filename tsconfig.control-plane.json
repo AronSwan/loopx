@@ -23,6 +23,7 @@
     "loopx/control_plane/quota/settlement_workspace_causality.ts",
     "loopx/control_plane/quota/settlement_readback.ts",
     "loopx/control_plane/quota/spend_commit.ts",
+    "loopx/control_plane/quota/turn_envelope.ts",
     "loopx/control_plane/scheduler/state_store.ts",
     "loopx/control_plane/scheduler/heartbeat_commit.ts",
     "loopx/control_plane/scheduler/heartbeat_commit_cli.ts",
