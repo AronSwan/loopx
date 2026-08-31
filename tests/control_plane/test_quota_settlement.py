@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -39,6 +40,7 @@ from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
 )
+from loopx.cli_commands.todo import _completion_settlement_error
 from loopx.rollout_event_log import rollout_event_log_path
 
 GOAL_ID = "settlement-goal"
@@ -269,6 +271,78 @@ def test_quota_settlement_readback_returns_the_complete_typed_chain(
         SettlementStepKind.QUOTA_SPEND,
     ]
     assert readback.spend_run is not None
+
+
+def test_advancement_completion_requires_the_complete_settlement_chain(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    _append_guard_receipt(runtime_root, effect_id=identity.effect_id)
+
+    incomplete = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+    assert incomplete is not None
+    error = _completion_settlement_error(
+        {
+            "role": "agent",
+            "task_class": "advancement_task",
+            "action_kind": "implement",
+            "text": "Ship the repository change.",
+        },
+        incomplete,
+        no_follow_up=False,
+    )
+    assert error is not None
+    assert error.startswith(
+        "turn-scoped advancement completion requires matching writeback and "
+        "quota spend receipts:"
+    )
+
+    settled = replace(
+        incomplete,
+        settlement=SettlementResult(
+            value={},
+            receipts=(
+                _receipt(SettlementStepKind.VALIDATION, "validation"),
+                _receipt(SettlementStepKind.DURABLE_WRITEBACK, "writeback"),
+                _receipt(SettlementStepKind.QUOTA_SPEND, "spend"),
+            ),
+            failure=None,
+        ),
+    )
+    assert (
+        _completion_settlement_error(
+            {
+                "role": "agent",
+                "task_class": "advancement_task",
+                "action_kind": "implement",
+                "text": "Ship the repository change.",
+            },
+            settled,
+            no_follow_up=False,
+        )
+        is None
+    )
+    assert (
+        _completion_settlement_error(
+            {
+                "role": "agent",
+                "task_class": "advancement_task",
+                "action_kind": "research",
+                "continuation_policy": "same_agent_non_delivery",
+                "text": "Analyze the evidence.",
+            },
+            incomplete,
+            no_follow_up=False,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

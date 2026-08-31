@@ -846,6 +846,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
     binding = (
         "--agent-id",
         AGENT_ID,
@@ -1224,6 +1225,14 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
     project, runtime, registry_path = _write_fixture(
         tmp_path,
         required_capability="network",
+    )
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate ",
+            "action_kind=validate continuation_policy=same_agent_non_delivery ",
+        ),
+        encoding="utf-8",
     )
     binding = (
         "--agent-id",
@@ -3163,6 +3172,7 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
     guard_args = (
         "quota",
         "should-run",

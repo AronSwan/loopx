@@ -6,10 +6,14 @@ from pathlib import Path
 
 from ..control_plane.todos.contract import (
     TODO_CONTINUATION_POLICY_VALUES,
+    TODO_TASK_CLASS_ADVANCEMENT,
+    normalize_todo_continuation_policy,
+    normalize_todo_task_class,
     replan_successor_semantic_binding,
 )
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
+    QuotaSettlementReadback,
     read_heartbeat_settlement,
     settlement_result_payload,
 )
@@ -65,6 +69,48 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+
+
+def _completion_settlement_requirement(
+    todo: dict[str, object],
+    *,
+    no_follow_up: bool,
+) -> str | None:
+    if no_follow_up:
+        return "terminal no-follow-up closeout"
+    task_class = normalize_todo_task_class(
+        todo.get("task_class"),
+        text=str(todo.get("text") or ""),
+        action_kind=todo.get("action_kind"),
+    )
+    continuation_policy = normalize_todo_continuation_policy(
+        todo.get("continuation_policy")
+    )
+    if (
+        str(todo.get("role") or "") == "agent"
+        and task_class == TODO_TASK_CLASS_ADVANCEMENT
+        and continuation_policy != "same_agent_non_delivery"
+    ):
+        return "turn-scoped advancement completion"
+    return None
+
+
+def _completion_settlement_error(
+    todo: dict[str, object],
+    settlement_readback: QuotaSettlementReadback,
+    *,
+    no_follow_up: bool,
+) -> str | None:
+    requirement = _completion_settlement_requirement(
+        todo,
+        no_follow_up=no_follow_up,
+    )
+    if requirement is None or settlement_readback.settlement.failure is None:
+        return None
+    return (
+        f"{requirement} requires matching writeback and quota spend receipts: "
+        + settlement_readback.settlement.failure.reason
+    )
 
 
 def _validated_replan_successor_obligation(
@@ -776,6 +822,8 @@ def handle_todo_command(
             settlement_result = None
             settlement_identity = None
             settlement_readback = None
+            completion_requires_settlement = False
+            completion_error = None
             completion_turn_key = None
             completion_identity_source = None
             if getattr(args, "turn_instance_id", None):
@@ -801,56 +849,96 @@ def handle_todo_command(
                     raise ValueError("turn-scoped Todo completion has no identity")
                 identity = settlement_result.value
                 settlement_identity = identity
-                if args.no_follow_up:
+                todo_payload = list_goal_todos(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                    todo_id=args.todo_id,
+                    project=Path(args.project).expanduser() if args.project else None,
+                    state_file=(
+                        Path(args.state_file).expanduser()
+                        if args.state_file
+                        else None
+                    ),
+                    runtime_root_arg=runtime_root_arg,
+                )
+                todo = (
+                    todo_payload.get("todo")
+                    if isinstance(todo_payload.get("todo"), dict)
+                    else None
+                )
+                if todo is None:
+                    raise ValueError(
+                        "turn-scoped Todo completion requires one durable Todo"
+                    )
+                completion_requirement = _completion_settlement_requirement(
+                    todo,
+                    no_follow_up=bool(args.no_follow_up),
+                )
+                completion_requires_settlement = completion_requirement is not None
+                completion_error = _completion_settlement_error(
+                    todo,
+                    settlement_readback=settlement_readback,
+                    no_follow_up=bool(args.no_follow_up),
+                )
+                if completion_error is not None:
                     settlement_result = settlement_readback.settlement
-                    if settlement_result.failure is not None:
-                        raise ValueError(
-                            "terminal no-follow-up closeout requires matching "
-                            "writeback and quota spend receipts: "
-                            + settlement_result.failure.reason
-                        )
+                    payload = {
+                        "ok": False,
+                        "dry_run": bool(args.dry_run),
+                        "completed": False,
+                        "changed": False,
+                        "goal_id": args.goal_id,
+                        "todo_id": args.todo_id,
+                        "settlement_blocked_completion": True,
+                        "settlement_identity": identity.as_dict(),
+                        "settlement_result": settlement_result_payload(
+                            settlement_result
+                        ),
+                        "error": completion_error,
+                    }
                 completion_turn_key = identity.effect_id
                 completion_identity_source = "turn_settlement"
             elif getattr(args, "completion_identity_key", None):
                 completion_turn_key = str(args.completion_identity_key)
                 completion_identity_source = "lifecycle_reentry"
-            payload = complete_goal_todo(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                todo_id=args.todo_id,
-                role=args.role,
-                decision_outcome=args.decision_outcome,
-                evidence=args.evidence,
-                completion_turn_key=completion_turn_key,
-                completion_identity_source=completion_identity_source,
-                task_lease_idempotency_key=args.task_lease_idempotency_key,
-                task_lease_expected_version=args.task_lease_expected_version,
-                note=args.note,
-                no_followup=bool(args.no_follow_up),
-                successor_todo_ids=args.successor_todo_ids,
-                claimed_by=args.claimed_by,
-                clear_claim=bool(args.clear_claim),
-                next_agent_todo=args.next_agent_todo,
-                next_user_todo=args.next_user_todo,
-                next_user_task_class=args.next_user_task_class,
-                next_claimed_by=args.next_claimed_by,
-                next_task_class=args.next_task_class,
-                next_action_kind=args.next_action_kind,
-                next_task_repository=args.next_task_repository,
-                next_required_capabilities=args.next_required_capabilities,
-                next_continuation_policy=args.next_continuation_policy,
-                next_excluded_agents=args.next_excluded_agents,
-                self_merged=bool(args.self_merged),
-                agent_id=args.agent_id,
-                authority_reason=args.authority_reason,
-                **_todo_path_args(args),
-                dry_run=bool(args.dry_run),
-            )
-            if settlement_identity is not None:
-                payload["settlement_identity"] = settlement_identity.as_dict()
-                payload["settlement_result"] = settlement_result_payload(
-                    settlement_result
+            if completion_error is None:
+                payload = complete_goal_todo(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                    todo_id=args.todo_id,
+                    role=args.role,
+                    decision_outcome=args.decision_outcome,
+                    evidence=args.evidence,
+                    completion_turn_key=completion_turn_key,
+                    completion_identity_source=completion_identity_source,
+                    task_lease_idempotency_key=args.task_lease_idempotency_key,
+                    task_lease_expected_version=args.task_lease_expected_version,
+                    note=args.note,
+                    no_followup=bool(args.no_follow_up),
+                    successor_todo_ids=args.successor_todo_ids,
+                    claimed_by=args.claimed_by,
+                    clear_claim=bool(args.clear_claim),
+                    next_agent_todo=args.next_agent_todo,
+                    next_user_todo=args.next_user_todo,
+                    next_user_task_class=args.next_user_task_class,
+                    next_claimed_by=args.next_claimed_by,
+                    next_task_class=args.next_task_class,
+                    next_action_kind=args.next_action_kind,
+                    next_task_repository=args.next_task_repository,
+                    next_required_capabilities=args.next_required_capabilities,
+                    next_continuation_policy=args.next_continuation_policy,
+                    next_excluded_agents=args.next_excluded_agents,
+                    self_merged=bool(args.self_merged),
+                    agent_id=args.agent_id,
+                    authority_reason=args.authority_reason,
+                    **_todo_path_args(args),
+                    dry_run=bool(args.dry_run),
                 )
+                if settlement_identity is not None:
+                    payload["settlement_identity"] = settlement_identity.as_dict()
+                    payload["settlement_result"] = settlement_result_payload(
+                        settlement_result
+                    )
         elif args.todo_command == "supersede":
             validate_todo_supersede_options(args)
             payload = supersede_goal_todo(
@@ -966,6 +1054,8 @@ def handle_todo_command(
         settlement_result = (
             settlement_readback.terminal_settlement
             if args.no_follow_up and settlement_identity is not None
+            else settlement_readback.settlement
+            if completion_requires_settlement
             else settlement_readback.identity
         )
         payload["settlement_result"] = settlement_result_payload(
