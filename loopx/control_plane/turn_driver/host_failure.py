@@ -15,6 +15,8 @@ HOST_FAILURE_KINDS = frozenset(
         "contract_rejected",
         "executor_timeout",
         "provider_capacity",
+        "provider_overloaded",
+        "quota_exhausted",
         "rate_limited",
         "session_missing",
         "transport_lost",
@@ -29,6 +31,7 @@ HOST_RETRY_STRATEGY = "same_configuration"
 _RETRY_POLICIES = {
     "executor_timeout": (2, 5),
     "provider_capacity": (3, 30),
+    "provider_overloaded": (3, 30),
     "rate_limited": (3, 60),
     "transport_lost": (3, 10),
 }

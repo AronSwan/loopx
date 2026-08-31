@@ -333,15 +333,21 @@ test("failed Host recovery uses only the supplied Session Binding check", () => 
 });
 
 test("retryable Host failure may reinvoke only inside its attempt budget", () => {
-  const input = failedHostRetryRequest();
-  const result = interpretTurnJournal(input);
+  for (const [kind, backoffSeconds] of [
+    ["provider_capacity", 30],
+    ["provider_overloaded", 30],
+    ["rate_limited", 60],
+  ] as const) {
+    const input = failedHostRetryRequest({ kind, backoffSeconds });
+    const result = interpretTurnJournal(input);
 
-  assert.equal(result.recovery_decision.action, "continue");
-  assert.equal(result.recovery_decision.reinvoke_host, true);
-  assert.deepEqual(result.recovery_decision.checks, [
-    { kind: "journal_consistency", outcome: "passed" },
-    { kind: "host_retry_policy", outcome: "passed" },
-  ]);
+    assert.equal(result.recovery_decision.action, "continue");
+    assert.equal(result.recovery_decision.reinvoke_host, true);
+    assert.deepEqual(result.recovery_decision.checks, [
+      { kind: "journal_consistency", outcome: "passed" },
+      { kind: "host_retry_policy", outcome: "passed" },
+    ]);
+  }
 });
 
 test("exhausted Host retry budget blocks another invocation", () => {

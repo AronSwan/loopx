@@ -32,6 +32,7 @@ from loopx.control_plane.turn_driver.loop_controller import (
     BoundedTurnBudget,
     ValidatedTurnReceipt,
 )
+from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
 from loopx.control_plane.turn_driver.loop_controller import (
     decide_loop_disposition as _decide_loop_disposition,
 )
@@ -612,20 +613,21 @@ def test_failure_receipts_route_to_repair(failure_kind: str) -> None:
     assert failure_kind in str(payload["reason"])
 
 
-def test_retryable_provider_capacity_waits_with_same_turn_backoff() -> None:
+@pytest.mark.parametrize(
+    ("failure_kind", "backoff_seconds"),
+    [
+        ("provider_capacity", 30),
+        ("provider_overloaded", 30),
+        ("rate_limited", 60),
+    ],
+)
+def test_retryable_host_failure_waits_with_same_turn_backoff(
+    failure_kind: str,
+    backoff_seconds: int,
+) -> None:
     receipt = _validated_receipt(
         result_kind=LoopXTurnResultKind.HOST_FAILURE,
-        host_failure={
-            "schema_version": "loopx_turn_host_failure_v0",
-            "kind": "provider_capacity",
-            "attempt": 1,
-            "retryable": True,
-            "retry": {
-                "strategy": "same_configuration",
-                "max_attempts": 3,
-                "backoff_seconds": 30,
-            },
-        },
+        host_failure=build_host_failure_record(failure_kind, attempt=1),
     )
     payload = decide_loop_disposition(
         turn_receipt=receipt,
@@ -639,7 +641,7 @@ def test_retryable_provider_capacity_waits_with_same_turn_backoff() -> None:
         "same_turn": True,
         "retry_failed_turn": True,
         "strategy": "same_configuration",
-        "retry_after_seconds": 30,
+        "retry_after_seconds": backoff_seconds,
         "attempt": 1,
         "max_attempts": 3,
         "fresh_envelope_required": True,
@@ -647,20 +649,14 @@ def test_retryable_provider_capacity_waits_with_same_turn_backoff() -> None:
     }
 
 
-def test_exhausted_provider_capacity_retry_budget_routes_to_repair() -> None:
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["provider_capacity", "provider_overloaded", "rate_limited"],
+)
+def test_exhausted_host_retry_budget_routes_to_repair(failure_kind: str) -> None:
     receipt = _validated_receipt(
         result_kind=LoopXTurnResultKind.HOST_FAILURE,
-        host_failure={
-            "schema_version": "loopx_turn_host_failure_v0",
-            "kind": "provider_capacity",
-            "attempt": 3,
-            "retryable": True,
-            "retry": {
-                "strategy": "same_configuration",
-                "max_attempts": 3,
-                "backoff_seconds": 120,
-            },
-        },
+        host_failure=build_host_failure_record(failure_kind, attempt=3),
     )
     payload = decide_loop_disposition(
         turn_receipt=receipt,
@@ -671,6 +667,27 @@ def test_exhausted_provider_capacity_retry_budget_routes_to_repair() -> None:
 
     _assert_markers(payload, "repair")
     assert "exhausted" in str(payload["reason"])
+
+
+def test_exhausted_quota_failure_routes_to_repair_without_retry_metadata() -> None:
+    receipt = _validated_receipt(
+        result_kind=LoopXTurnResultKind.HOST_FAILURE,
+        host_failure={
+            "schema_version": "loopx_turn_host_failure_v0",
+            "kind": "quota_exhausted",
+            "attempt": 1,
+            "retryable": False,
+        },
+    )
+    payload = decide_loop_disposition(
+        turn_receipt=receipt,
+        quota_decision=_envelope(
+            should_run=True, predecessor_turn_key=receipt.turn_key
+        ),
+    )
+
+    _assert_markers(payload, "repair")
+    assert "retry_continuation" not in payload
 
 
 def test_stale_todo_receipt_raises_not_terminal() -> None:

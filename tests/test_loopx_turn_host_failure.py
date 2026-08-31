@@ -10,17 +10,28 @@ from loopx.control_plane.turn_driver.host_failure import (
 )
 
 
-def test_provider_capacity_uses_bounded_exponential_backoff() -> None:
-    first = build_host_failure_record("provider_capacity", attempt=1)
-    second = build_host_failure_record("provider_capacity", attempt=2)
-    exhausted = build_host_failure_record("provider_capacity", attempt=3)
+@pytest.mark.parametrize(
+    ("kind", "base_backoff_seconds"),
+    [
+        ("provider_capacity", 30),
+        ("provider_overloaded", 30),
+        ("rate_limited", 60),
+    ],
+)
+def test_transient_provider_failure_uses_bounded_exponential_backoff(
+    kind: str,
+    base_backoff_seconds: int,
+) -> None:
+    first = build_host_failure_record(kind, attempt=1)
+    second = build_host_failure_record(kind, attempt=2)
+    exhausted = build_host_failure_record(kind, attempt=3)
 
     assert first["retry"] == {
         "strategy": "same_configuration",
         "max_attempts": 3,
-        "backoff_seconds": 30,
+        "backoff_seconds": base_backoff_seconds,
     }
-    assert second["retry"]["backoff_seconds"] == 60
+    assert second["retry"]["backoff_seconds"] == base_backoff_seconds * 2
     assert host_failure_retry_available(first) is True
     assert host_failure_retry_available(exhausted) is False
 
@@ -42,6 +53,14 @@ def test_non_retryable_failure_has_no_automatic_retry_policy() -> None:
         "attempt": 1,
         "retryable": False,
     }
+    assert host_failure_retry_available(failure) is False
+
+
+def test_exhausted_quota_requires_repair_instead_of_timed_retry() -> None:
+    failure = build_host_failure_record("quota_exhausted", attempt=1)
+
+    assert failure["retryable"] is False
+    assert "retry" not in failure
     assert host_failure_retry_available(failure) is False
 
 

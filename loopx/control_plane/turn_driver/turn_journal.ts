@@ -111,6 +111,8 @@ const hostFailureKinds: ReadonlySet<string> = new Set([
   "contract_rejected",
   "executor_timeout",
   "provider_capacity",
+  "provider_overloaded",
+  "quota_exhausted",
   "rate_limited",
   "session_missing",
   "transport_lost",
@@ -122,6 +124,7 @@ const hostRetryPolicies: Readonly<Record<string, {
 }>> = Object.freeze({
   executor_timeout: { maxAttempts: 2, baseBackoffSeconds: 5 },
   provider_capacity: { maxAttempts: 3, baseBackoffSeconds: 30 },
+  provider_overloaded: { maxAttempts: 3, baseBackoffSeconds: 30 },
   rate_limited: { maxAttempts: 3, baseBackoffSeconds: 60 },
   transport_lost: { maxAttempts: 3, baseBackoffSeconds: 10 },
 });
