@@ -153,6 +153,14 @@ from .runtime_observation import (
     BenchmarkRuntimeTransition,
     build_benchmark_runtime_observation,
 )
+from .traex_evidence import (
+    ATIF_SCHEMA_VERSION,
+    BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION,
+    TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION,
+    build_traex_model_route_receipt,
+    capture_traex_benchmark_evidence,
+    convert_traex_events_to_atif,
+)
 from .source_revision_fence import (
     BENCHMARK_SOURCE_REVISION_FENCE_SCHEMA_VERSION,
     BenchmarkSourceRevisionFence,
@@ -162,6 +170,7 @@ from .source_revision_fence import (
 )
 
 __all__ = [
+    "ATIF_SCHEMA_VERSION",
     "BENCHMARK_CANDIDATE_SOURCE_BOUNDARY_SCHEMA_VERSION",
     "BENCHMARK_CONCURRENCY_ENVELOPE_FILENAME",
     "BENCHMARK_CONCURRENCY_ENVELOPE_SCHEMA_VERSION",
@@ -177,6 +186,7 @@ __all__ = [
     "BENCHMARK_FOUR_ARM_SPEC_SCHEMA_VERSION",
     "BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION",
     "BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION",
+    "BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION",
     "BENCHMARK_RESOURCE_HEADROOM_RECEIPT_SCHEMA_VERSION",
     "BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION",
@@ -225,6 +235,7 @@ __all__ = [
     "RunPermissionAction",
     "RunnerOwnedProviderGateway",
     "StdioNativeGoalTransport",
+    "TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION",
     "admit_benchmark_case",
     "attach_native_goal",
     "benchmark_experiment_board_row_key",
@@ -238,6 +249,9 @@ __all__ = [
     "build_benchmark_integrity_qualification",
     "build_benchmark_runtime_continuity",
     "build_benchmark_runtime_observation",
+    "build_traex_model_route_receipt",
+    "capture_traex_benchmark_evidence",
+    "convert_traex_events_to_atif",
     "build_native_codex_isolation_envelope",
     "build_native_goal_public_trajectory_summary",
     "build_run_permission_policy",
