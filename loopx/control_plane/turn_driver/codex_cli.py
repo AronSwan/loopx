@@ -15,13 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from ...runtime import validate_goal_id_path_segment
+from .driver import selected_turn_todo
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
     HOST_RESULT_TEXT_LIMITS,
-    BuiltInHostError,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
 )
-from .driver import selected_turn_todo
+from .host_failure import BuiltInHostError
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
@@ -42,6 +42,15 @@ SESSION_INVALIDATING_FAILURE_CATEGORIES = frozenset(
         "session_missing",
     }
 )
+_FAILURE_KINDS = {
+    "auth_failed": "auth_failed",
+    "model_requires_newer_codex": "contract_rejected",
+    "output_schema_rejected": "contract_rejected",
+    "provider_capacity": "provider_capacity",
+    "rate_limited": "rate_limited",
+    "session_missing": "session_missing",
+}
+_SESSION_RESUMABLE_FAILURE_CATEGORIES = frozenset({"provider_capacity", "rate_limited"})
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -297,6 +306,16 @@ def codex_cli_session_id_from_jsonl(value: str) -> str | None:
 
 def _stderr_failure_category(line: str) -> str | None:
     text = line.lower()
+    if any(
+        marker in text
+        for marker in (
+            "selected model is at capacity",
+            "model is at capacity",
+            "provider is at capacity",
+            "service is overloaded",
+        )
+    ):
+        return "provider_capacity"
     if "requires a newer version of codex" in text:
         return "model_requires_newer_codex"
     if "invalid_json_schema" in text or ("output schema" in text and "invalid" in text):
@@ -313,6 +332,30 @@ def _stderr_failure_category(line: str) -> str | None:
         return "rate_limited"
     if "session" in text and "not found" in text:
         return "session_missing"
+    return None
+
+
+def _event_failure_category(event: Mapping[str, Any]) -> str | None:
+    """Classify only known error-event fields; never retain their prose."""
+
+    if str(event.get("type") or "") not in {
+        "error",
+        "turn.failed",
+        "turn_failed",
+    }:
+        return None
+    error = _mapping(event.get("error"))
+    for candidate in (
+        event.get("message"),
+        event.get("detail"),
+        error.get("message"),
+        error.get("detail"),
+        error.get("code"),
+    ):
+        if isinstance(candidate, str):
+            category = _stderr_failure_category(candidate)
+            if category is not None:
+                return category
     return None
 
 
@@ -452,6 +495,9 @@ def run_codex_cli_host(
                     candidate = codex_cli_event_session_id(event)
                     if candidate and not observed_session:
                         observed_session.append(candidate)
+                    category = _event_failure_category(event)
+                    if category and not failure_categories:
+                        failure_categories.append(category)
 
         reader = threading.Thread(target=discard_events, daemon=True)
 
@@ -487,20 +533,33 @@ def run_codex_cli_host(
                 )
             raise BuiltInHostError(
                 "codex_cli_timeout",
+                failure_kind="executor_timeout",
                 recovery_kind=("resume_session" if observed_session else None),
             )
         category = failure_categories[0] if failure_categories else "exit_nonzero"
         if returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
             _discard_codex_cli_session(runtime_root, lineage=lineage)
         if observed_session:
-            if returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES:
+            if (
+                returncode == 0
+                or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
+            ):
                 _store_codex_cli_session(
                     runtime_root,
                     lineage=lineage,
                     session_id=observed_session[0],
                 )
         if returncode != 0:
-            raise BuiltInHostError(f"codex_cli_{category}")
+            raise BuiltInHostError(
+                f"codex_cli_{category}",
+                failure_kind=_FAILURE_KINDS.get(category, "unknown"),
+                recovery_kind=(
+                    "resume_session"
+                    if observed_session
+                    and category in _SESSION_RESUMABLE_FAILURE_CATEGORIES
+                    else None
+                ),
+            )
         try:
             result = json.loads(output_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:

@@ -15,6 +15,7 @@ from loopx.control_plane.turn_driver.codex_cli import (
     load_codex_cli_session,
     run_codex_cli_host,
 )
+from loopx.control_plane.turn_driver.executor import BuiltInHostError
 
 
 def _request(
@@ -77,6 +78,14 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
         print("This model requires a newer version of Codex.", file=sys.stderr)
     if os.environ.get("FAKE_CODEX_FAILURE_CATEGORY") == "session":
         print("Session not found.", file=sys.stderr)
+    if os.environ.get("FAKE_CODEX_FAILURE_CATEGORY") == "capacity-stderr":
+        print("Selected model is at capacity. Please try a different model.", file=sys.stderr)
+    if os.environ.get("FAKE_CODEX_FAILURE_CATEGORY") == "capacity-event":
+        print(json.dumps({
+            "type": "error",
+            "message": "Selected model is at capacity. Please try a different model.",
+            "private_material": "must-not-persist"
+        }), flush=True)
     raise SystemExit(9)
 if os.environ.get("FAKE_CODEX_SLEEP"):
     time.sleep(float(os.environ["FAKE_CODEX_SLEEP"]))
@@ -335,6 +344,39 @@ def test_codex_cli_host_classifies_failure_without_persisting_stderr(
         json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
     ]
     assert "resume" not in argv_rows[1]
+
+
+@pytest.mark.parametrize("source", ["capacity-stderr", "capacity-event"])
+def test_codex_cli_host_classifies_provider_capacity_as_retryable_without_prose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
+    monkeypatch.setenv("FAKE_CODEX_FAILURE_CATEGORY", source)
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+
+    with pytest.raises(BuiltInHostError) as exc_info:
+        run_codex_cli_host(
+            _request(),
+            runtime_root=runtime_root,
+            project=project,
+            codex_bin=str(executable),
+            timeout_seconds=5,
+        )
+
+    assert exc_info.value.reason == "codex_cli_provider_capacity"
+    assert exc_info.value.failure_kind == "provider_capacity"
+    assert exc_info.value.recovery_kind == "resume_session"
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8") for path in runtime_root.rglob("*.json")
+    )
+    assert "at capacity" not in persisted
+    assert "private_material" not in persisted
 
 
 def test_codex_cli_host_discards_missing_resume_session(

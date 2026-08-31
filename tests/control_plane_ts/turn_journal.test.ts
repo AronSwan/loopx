@@ -298,6 +298,122 @@ test("failed Host recovery uses only the supplied Session Binding check", () => 
   ]);
 });
 
+test("retryable Host failure may reinvoke only inside its attempt budget", () => {
+  const input = request("failed");
+  input.retry_failed = true;
+  input.journal.completed_phases = [];
+  input.journal.receipt = { turn_key: turnKey, failed_phase: "host_execute" };
+  input.journal.host_attempt_count = 1;
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "provider_capacity",
+    attempt: 1,
+    retryable: true,
+    retry: {
+      strategy: "same_configuration",
+      max_attempts: 3,
+      backoff_seconds: 30,
+    },
+  };
+  const result = interpretTurnJournal(input);
+
+  assert.equal(result.recovery_decision.action, "continue");
+  assert.equal(result.recovery_decision.reinvoke_host, true);
+  assert.deepEqual(result.recovery_decision.checks, [
+    { kind: "journal_consistency", outcome: "passed" },
+    { kind: "host_retry_policy", outcome: "passed" },
+  ]);
+});
+
+test("exhausted Host retry budget blocks another invocation", () => {
+  const input = request("failed");
+  input.retry_failed = true;
+  input.journal.completed_phases = [];
+  input.journal.receipt = { turn_key: turnKey, failed_phase: "host_execute" };
+  input.journal.host_attempt_count = 3;
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "provider_capacity",
+    attempt: 3,
+    retryable: true,
+    retry: {
+      strategy: "same_configuration",
+      max_attempts: 3,
+      backoff_seconds: 120,
+    },
+  };
+
+  const result = interpretTurnJournal(input);
+
+  assert.equal(result.recovery_decision.action, "blocked");
+  assert.equal(result.recovery_decision.reinvoke_host, false);
+  assert.equal(result.recovery_decision.reason, "host_retry_budget_exhausted");
+});
+
+test("caller-authored Host retryability fails closed", () => {
+  const input = request("failed");
+  input.retry_failed = true;
+  input.journal.completed_phases = [];
+  input.journal.receipt = { turn_key: turnKey, failed_phase: "host_execute" };
+  input.journal.host_attempt_count = 1;
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "auth_failed",
+    attempt: 1,
+    retryable: true,
+    retry: {
+      strategy: "same_configuration",
+      max_attempts: 3,
+      backoff_seconds: 30,
+    },
+  };
+
+  const result = interpretTurnJournal(input);
+
+  assert.equal(result.recovery_decision.action, "blocked");
+  assert.equal(result.recovery_decision.reason, "host_retry_contract_invalid");
+});
+
+test("Host retry metadata with extra fields fails closed", () => {
+  const input = request("failed");
+  input.retry_failed = true;
+  input.journal.completed_phases = [];
+  input.journal.receipt = { turn_key: turnKey, failed_phase: "host_execute" };
+  input.journal.host_attempt_count = 1;
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "provider_capacity",
+    attempt: 1,
+    retryable: true,
+    provider_message: "must-not-cross-the-public-boundary",
+    retry: {
+      strategy: "same_configuration",
+      max_attempts: 3,
+      backoff_seconds: 30,
+    },
+  };
+
+  let result = interpretTurnJournal(input);
+  assert.equal(result.recovery_decision.action, "blocked");
+  assert.equal(result.recovery_decision.reason, "host_retry_contract_invalid");
+
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "provider_capacity",
+    attempt: 1,
+    retryable: true,
+    retry: {
+      strategy: "same_configuration",
+      max_attempts: 3,
+      backoff_seconds: 30,
+      private_detail: "must-not-persist",
+    },
+  };
+  result = interpretTurnJournal(input);
+  assert.equal(result.recovery_decision.action, "blocked");
+  assert.equal(result.recovery_decision.reason, "host_retry_contract_invalid");
+});
+
 test("prepared effects are delegated to the existing provider readback step", () => {
   const input = request("in_progress");
   input.journal.completed_phases = ["host_execute", "typed_result", "validation"];

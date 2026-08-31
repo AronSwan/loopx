@@ -114,6 +114,7 @@ def _validated_receipt(
     failed_phase: str | None = None,
     continuation: str = "active_goal",
     successor_todo_ids: list[str] | None = None,
+    host_failure: dict[str, object] | None = None,
 ) -> ValidatedTurnReceipt:
     return ValidatedTurnReceipt.from_execution(
         _execution(
@@ -123,6 +124,7 @@ def _validated_receipt(
             failed_phase=failed_phase,
             continuation=continuation,
             successor_todo_ids=successor_todo_ids,
+            host_failure=host_failure,
         )
     )
 
@@ -135,6 +137,7 @@ def _execution(
     failed_phase: str | None = None,
     continuation: str = "active_goal",
     successor_todo_ids: list[str] | None = None,
+    host_failure: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = _plan(lineage=lineage)
     if completed_phases is None and result_kind in _FAILURE_PHASES:
@@ -189,6 +192,8 @@ def _execution(
                 else {}
             ),
         }
+    if host_failure is not None:
+        execution["host_failure"] = host_failure
     return execution
 
 
@@ -605,6 +610,67 @@ def test_failure_receipts_route_to_repair(failure_kind: str) -> None:
     )
     _assert_markers(payload, "repair")
     assert failure_kind in str(payload["reason"])
+
+
+def test_retryable_provider_capacity_waits_with_same_turn_backoff() -> None:
+    receipt = _validated_receipt(
+        result_kind=LoopXTurnResultKind.HOST_FAILURE,
+        host_failure={
+            "schema_version": "loopx_turn_host_failure_v0",
+            "kind": "provider_capacity",
+            "attempt": 1,
+            "retryable": True,
+            "retry": {
+                "strategy": "same_configuration",
+                "max_attempts": 3,
+                "backoff_seconds": 30,
+            },
+        },
+    )
+    payload = decide_loop_disposition(
+        turn_receipt=receipt,
+        quota_decision=_envelope(
+            should_run=True, predecessor_turn_key=receipt.turn_key
+        ),
+    )
+
+    _assert_markers(payload, "wait")
+    assert payload["retry_continuation"] == {
+        "same_turn": True,
+        "retry_failed_turn": True,
+        "strategy": "same_configuration",
+        "retry_after_seconds": 30,
+        "attempt": 1,
+        "max_attempts": 3,
+        "fresh_envelope_required": True,
+        "model_fallback_allowed": False,
+    }
+
+
+def test_exhausted_provider_capacity_retry_budget_routes_to_repair() -> None:
+    receipt = _validated_receipt(
+        result_kind=LoopXTurnResultKind.HOST_FAILURE,
+        host_failure={
+            "schema_version": "loopx_turn_host_failure_v0",
+            "kind": "provider_capacity",
+            "attempt": 3,
+            "retryable": True,
+            "retry": {
+                "strategy": "same_configuration",
+                "max_attempts": 3,
+                "backoff_seconds": 120,
+            },
+        },
+    )
+    payload = decide_loop_disposition(
+        turn_receipt=receipt,
+        quota_decision=_envelope(
+            should_run=True, predecessor_turn_key=receipt.turn_key
+        ),
+    )
+
+    _assert_markers(payload, "repair")
+    assert "exhausted" in str(payload["reason"])
 
 
 def test_stale_todo_receipt_raises_not_terminal() -> None:
