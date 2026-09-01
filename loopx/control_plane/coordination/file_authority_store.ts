@@ -38,8 +38,8 @@ function isObject(value: unknown): value is JsonObject {
 }
 
 function hasExactKeys(value: JsonObject, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
+  const actual = Object.keys(value).sort(pythonUnicodeCompare);
+  const expected = [...keys].sort(pythonUnicodeCompare);
   return actual.length === expected.length &&
     actual.every((key, index) => key === expected[index]);
 }

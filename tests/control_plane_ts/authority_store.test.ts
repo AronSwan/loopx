@@ -76,6 +76,21 @@ test("file provider atomically persists one LoopX transition and its receipt", a
   }
 });
 
+test("file provider persists object keys in deterministic Unicode order", async (t) => {
+  const { store } = await fixture(t);
+  const ordered = commit(null, "operation-order", 1, 1);
+  (ordered.next_projection as Record<string, unknown>).coordination = {
+    "😀": true,
+    "é": true,
+    z: true,
+    a: true,
+  };
+
+  assert.equal((await store.commitAuthority(ordered)).status, "applied");
+  const persisted = JSON.parse(await readFile(store.path, "utf8"));
+  assert.deepEqual(Object.keys(persisted.head.coordination), ["a", "z", "é", "😀"]);
+});
+
 test("provider profiles map one logical contract onto different backend primitives", () => {
   assert.equal(AUTHORITY_STORE_REQUIRED_GUARANTEES.length, 6);
   assert.deepEqual(Object.keys(AUTHORITY_STORE_PROVIDER_PROFILES), [
