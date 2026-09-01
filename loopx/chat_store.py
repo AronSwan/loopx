@@ -280,6 +280,99 @@ class ChatSessionStore:
                 _atomic_write_json(path, payload, preserve_mode=True)
                 return payload
 
+    def prepare_managed_session_resume(
+        self,
+        session_id: str,
+        *,
+        preserve_active_turn: bool,
+    ) -> tuple[dict[str, Any], bool]:
+        """Begin managed resume without taking ownership from an active Turn."""
+
+        path = self._session_path(session_id)
+        with self._session_lock(session_id):
+            with exclusive_file_lock(
+                path,
+                agent_id="loopx-chat",
+                operation="prepare_managed_chat_resume",
+            ):
+                payload = self.load_session(session_id)
+                if payload is None or payload.get("status") == "closed":
+                    raise KeyError("chat session was not found")
+                active_turn_id = str(payload.get("active_turn_id") or "")
+                active_turn = (
+                    self.load_turn(session_id, active_turn_id)
+                    if active_turn_id
+                    else None
+                )
+                if (
+                    preserve_active_turn
+                    and active_turn is not None
+                    and active_turn.get("status")
+                    in {"queued", "starting", "running", "interrupting"}
+                ):
+                    return payload, True
+                resume_snapshot = dict(payload)
+                payload.update(
+                    {
+                        "status": "stale",
+                        "active_turn_id": None,
+                        "last_error_code": None,
+                        "updated_at": utc_now(),
+                    }
+                )
+                _atomic_write_json(path, payload, preserve_mode=True)
+                return resume_snapshot, False
+
+    def restore_managed_session_if_idle(
+        self,
+        session_id: str,
+        *,
+        upstream_thread_id: str | None = None,
+        upstream_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Restore a managed Session only while it has no active Turn."""
+
+        path = self._session_path(session_id)
+        with self._session_lock(session_id):
+            with exclusive_file_lock(
+                path,
+                agent_id="loopx-chat",
+                operation="restore_managed_chat_session",
+            ):
+                payload = self.load_session(session_id)
+                if payload is None:
+                    raise KeyError("chat session was not found")
+                if payload.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+                    raise ValueError("the selected Session is an attached host session")
+                if payload.get("status") == "closed":
+                    raise KeyError("chat session was not found")
+                identity_changes: dict[str, Any] = {}
+                if upstream_thread_id is not None:
+                    identity_changes["upstream_thread_id"] = _upstream_id(
+                        upstream_thread_id
+                    )
+                if upstream_mode is not None:
+                    identity_changes["upstream_mode"] = _opaque_id(
+                        upstream_mode,
+                        field="upstream_mode",
+                    )
+                if payload.get("active_turn_id"):
+                    if identity_changes:
+                        payload.update(identity_changes)
+                        payload["updated_at"] = utc_now()
+                        _atomic_write_json(path, payload, preserve_mode=True)
+                    return payload
+                changes = {
+                    "status": "ready",
+                    "last_error_code": None,
+                    "last_activity_at": utc_now(),
+                    **identity_changes,
+                }
+                payload.update(changes)
+                payload["updated_at"] = utc_now()
+                _atomic_write_json(path, payload, preserve_mode=True)
+                return payload
+
     def release_active_turn(
         self,
         session_id: str,

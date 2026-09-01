@@ -43,6 +43,19 @@ class _BlockingChatAdapter:
         return True
 
 
+class _HealthyChatAdapter:
+    upstream_thread_id = "thread-one"
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def healthcheck(self) -> bool:
+        return True
+
+    def close_session(self) -> None:
+        self.closed = True
+
+
 def _slow_new_turn_writes(monkeypatch) -> set[str]:
     original_atomic_write = chat_store._atomic_write_json
     turn_write_threads: set[str] = set()
@@ -352,6 +365,312 @@ def test_managed_close_rejects_active_turn_before_closing_adapter(
         timeout_sec=2,
     )["status"] == "completed"
     assert runtime.close_session(session_id) is True
+
+
+def test_resume_with_healthy_adapter_restores_persisted_ready_state(
+    tmp_path: Path,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _HealthyChatAdapter()
+    runtime.adapters[session_id] = adapter  # type: ignore[assignment]
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+
+    assert restored["status"] == "ready"
+    persisted = store.load_session(session_id)
+    assert persisted is not None
+    assert persisted["status"] == "ready"
+    assert persisted["active_turn_id"] is None
+
+
+def test_legacy_codex_resume_persists_chat_mode_after_one_time_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="legacy-thread",
+        upstream_mode="default",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _HealthyChatAdapter()
+    start_calls: list[dict[str, object]] = []
+
+    def start_adapter(**kwargs: object) -> _HealthyChatAdapter:
+        start_calls.append(kwargs)
+        return adapter
+
+    monkeypatch.setattr(runtime, "_start_adapter", start_adapter)
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+
+    assert restored["status"] == "ready"
+    persisted = store.load_session(session_id)
+    assert persisted is not None
+    assert persisted["upstream_thread_id"] == "thread-one"
+    assert persisted["upstream_mode"] == "chat"
+    assert start_calls[0]["resume_thread_id"] is None
+
+    runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+    assert len(start_calls) == 1
+
+
+def test_legacy_codex_resume_commits_identity_when_new_turn_wins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="legacy-thread",
+        upstream_mode="default",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _HealthyChatAdapter()
+    start_calls: list[dict[str, object]] = []
+    winning_turn: dict[str, object] = {}
+
+    def start_adapter(**kwargs: object) -> _HealthyChatAdapter:
+        start_calls.append(kwargs)
+        turn, _created = store.create_turn(
+            session_id,
+            client_turn_id="identity-race-turn",
+            message="new turn wins before restore",
+        )
+        winning_turn.update(turn)
+        store.update_turn(session_id, str(turn["turn_id"]), status="running")
+        return adapter
+
+    monkeypatch.setattr(runtime, "_start_adapter", start_adapter)
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+
+    assert restored["status"] == "busy"
+    assert restored["active_turn_id"] == winning_turn["turn_id"]
+    persisted = store.load_session(session_id)
+    assert persisted is not None
+    assert persisted["upstream_thread_id"] == "thread-one"
+    assert persisted["upstream_mode"] == "chat"
+    assert start_calls[0]["resume_thread_id"] is None
+
+    store.update_turn(
+        session_id,
+        str(winning_turn["turn_id"]),
+        status="completed",
+        completed_at="2026-09-01T00:00:00Z",
+    )
+    assert store.release_active_turn(
+        session_id,
+        str(winning_turn["turn_id"]),
+        last_activity_at="2026-09-01T00:00:01Z",
+        last_error_code=None,
+    )
+    runtime.adapters.pop(session_id)
+    runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+
+    assert start_calls[1]["resume_thread_id"] == "thread-one"
+    assert start_calls[1]["history"] is None
+
+
+def test_resume_does_not_clear_a_healthy_active_turn(
+    tmp_path: Path,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    turn, _created = store.create_turn(
+        session_id,
+        client_turn_id="active-resume-turn",
+        message="keep this active",
+    )
+    store.update_turn(session_id, str(turn["turn_id"]), status="running")
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    runtime.adapters[session_id] = _HealthyChatAdapter()  # type: ignore[assignment]
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="resume this session",
+    )
+
+    assert restored["status"] == "busy"
+    assert restored["active_turn_id"] == turn["turn_id"]
+    with pytest.raises(RuntimeError, match=str(turn["turn_id"])):
+        runtime.submit_turn(
+            session_id=session_id,
+            client_turn_id="blocked-during-active-resume",
+            message="must wait",
+            work_dir=tmp_path,
+            objective="resume this session",
+        )
+
+
+def test_resume_cannot_reopen_a_session_closed_during_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _HealthyChatAdapter()
+
+    def close_before_restore(*_args: object, **_kwargs: object) -> object:
+        store.update_session(session_id, status="closed", active_turn_id=None)
+        runtime.adapters[session_id] = adapter  # type: ignore[assignment]
+        return adapter
+
+    monkeypatch.setattr(runtime, "_ensure_adapter", close_before_restore)
+
+    with pytest.raises(KeyError, match="chat session was not found"):
+        runtime.resume_session(
+            session_id=session_id,
+            work_dir=tmp_path,
+            objective="resume this session",
+        )
+
+    persisted = store.load_session(session_id)
+    assert persisted is not None
+    assert persisted["status"] == "closed"
+    assert persisted["active_turn_id"] is None
+    assert session_id not in runtime.adapters
+    assert adapter.closed is True
+
+
+def test_close_wins_during_adapter_start_without_reopening_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _HealthyChatAdapter()
+    start_entered = threading.Event()
+    release_start = threading.Event()
+
+    def start_adapter(*_args: object, **_kwargs: object) -> _HealthyChatAdapter:
+        start_entered.set()
+        release_start.wait(timeout=2)
+        return adapter
+
+    monkeypatch.setattr(runtime, "_start_adapter", start_adapter)
+    resume_error: list[BaseException] = []
+
+    def resume() -> None:
+        try:
+            runtime.resume_session(
+                session_id=session_id,
+                work_dir=tmp_path,
+                objective="resume this session",
+            )
+        except BaseException as exc:  # pragma: no cover - assertion captures it.
+            resume_error.append(exc)
+
+    worker = threading.Thread(target=resume)
+    worker.start()
+    assert start_entered.wait(timeout=2)
+    assert runtime.close_session(session_id) is True
+    release_start.set()
+    worker.join(timeout=2)
+
+    assert len(resume_error) == 1
+    assert isinstance(resume_error[0], KeyError)
+    assert str(resume_error[0]) == "'chat session was not found'"
+    persisted = store.load_session(session_id)
+    assert persisted is not None
+    assert persisted["status"] == "closed"
+    assert session_id not in runtime.adapters
+    assert adapter.closed is True
+
+
+def test_restore_ready_does_not_clear_a_new_active_turn(
+    tmp_path: Path,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    store.update_session(session_id, status="stale")
+    turn, _created = store.create_turn(
+        session_id,
+        client_turn_id="resume-race-turn",
+        message="new turn wins",
+    )
+
+    restored = store.restore_managed_session_if_idle(
+        session_id,
+        upstream_thread_id="thread-one",
+    )
+
+    assert restored["status"] == "busy"
+    assert restored["active_turn_id"] == turn["turn_id"]
 
 
 def test_managed_close_rejects_pending_queue_without_stranding_it(
