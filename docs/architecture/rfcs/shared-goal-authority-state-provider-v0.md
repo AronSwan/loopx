@@ -203,6 +203,60 @@ or provider-neutral core. This RFC neither requires a repository split nor
 selects separate license terms; the current policy remains
 [`LoopX Licensing`](../../project/licensing.md).
 
+### 1.3 Prospective license path by distribution boundary
+
+This subsection is non-normative and does not change the license of any current
+LoopX source or release. It records the boundary that a future license RFC
+should evaluate if the service-grade horizon becomes a separately shipped
+product.
+
+| Distribution boundary | Delivery horizon | Recommended path |
+| --- | --- | --- |
+| RFCs, schemas, typed commands, receipts, provider-neutral decisions, store contracts/codecs, client SDKs, conformance fixtures, and examples | Stages 1-4 | Remain in the Apache-2.0 open core so runtimes and providers can implement one coordination contract without adopting a server distribution |
+| Embedded/local authority, file parity backend, and shared-store adapters for NoKV or PostgreSQL | Stages 1-4 | Remain Apache-2.0; an adapter does not acquire LoopX semantic authority, and the underlying provider keeps its own license |
+| Test-only shadowing, canary, migration fixtures, and authority-source promotion proof | Stages 3-4 | Remain Apache-2.0 qualification material; evidence that a deployment is correct is not by itself a separately licensed product |
+| Independently versioned shared-authority server that owns authentication, tenant isolation, audit, durable receipt service, migration/promotion, capacity controls, recovery, and HA | Stage 5 | May be evaluated for AGPL-3.0 in a separate license RFC once this is more than a thin wrapper around the Apache core |
+| Persistent Supervisor/reconciliation worker shipped as part of that server distribution | Stage 5 | May follow the server's AGPL-3.0 candidate terms when it owns restart-safe observation, reclaim, remote-resume orchestration, and wake requests through authority commands |
+| Separately delivered managed operations or enterprise-only modules | After a service boundary exists | May use separate commercial terms when they are not included in the Apache or AGPL distribution and their dependency boundary is explicit |
+
+An illustrative package boundary, if these distributions are later created,
+is:
+
+```text
+loopx/control_plane/coordination/             Apache-2.0
+packages/loopx-authority-client/              Apache-2.0
+packages/loopx-authority-provider-*/          Apache-2.0
+packages/loopx-shared-authority-server/       AGPL-3.0 candidate
+packages/loopx-persistent-supervisor/         AGPL-3.0 candidate, or part of the server
+```
+
+The names are illustrative rather than a Stage 0 layout requirement. The
+dependency direction is the durable rule: an AGPL server distribution may
+consume Apache contracts, core logic, and providers; Apache artifacts must not
+import, bundle, or require the AGPL server. The NoKV or PostgreSQL server is
+not relicensed by a LoopX adapter, and an adapter must not be used as an
+artificial license boundary.
+
+Any Stage 5 license proposal must satisfy all of these gates before changing
+the current policy:
+
+1. identify one independently deployable and versioned server artifact;
+2. show that the artifact owns a real network trust and reconciliation
+   boundary rather than only forwarding Apache-core calls;
+3. preserve Apache client, protocol, embedded-mode, provider, and conformance
+   paths for interoperable adoption;
+4. define package metadata, nested license/NOTICE files, SPDX markings, and
+   build checks that prevent cross-license bundling;
+5. decide the inbound contribution policy before accepting contributions to
+   any AGPL component, especially if commercial dual licensing may be needed;
+6. apply any change prospectively through an explicit version boundary without
+   narrowing rights already granted by MIT or Apache releases.
+
+The current RFC therefore keeps Stages 1-4 under the repository's Apache-2.0
+policy. Stage 5 creates a decision point, not an automatic license transition.
+No source path becomes AGPL-3.0 merely because it implements a shared-authority
+contract or passes a remote-provider canary.
+
 ## 2. What We Will Do, and What We Will Not
 
 **What this version will do**
