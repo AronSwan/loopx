@@ -12,8 +12,10 @@
   `publish_bytes` generation-CAS mapping was exercised once by hand against a
   live NoKV stack at that pin (see the example README); the run is evidence for
   the mapping only, not part of any merge gate
-- PostgreSQL baseline: contract and delivery plan only. This RFC does not claim
-  that a PostgreSQL provider or shared authority service already ships
+- PostgreSQL baseline: the TypeScript Stage 2B candidate implements the store
+  contract and has passed a real PostgreSQL 16 transaction matrix. No shared
+  authority service, runtime caller, authentication boundary, or authority
+  promotion ships yet
 - Language note: the
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
@@ -964,6 +966,22 @@ tracks. Workstream labels are responsibility boundaries, not authority grants:
 | PostgreSQL provider owner | Generic PostgreSQL provider/service; transaction isolation, authentication, tenancy, audit, and operational deployment contract |
 | Joint qualification | Provider conformance matrix, one-way shadow parity, one-Goal/two-Agent TEST ONLY canary, and promotion evidence |
 
+The shared control plane is a composition of independently owned ledgers, not
+one large coordination aggregate. Stage 3/4 qualification must preserve these
+ownership and proof boundaries:
+
+| Ledger / decision | Authority and stable identity | Failure boundary | Stage 3/4 proof |
+| --- | --- | --- | --- |
+| Coordination head, Todo/claim, and lease fence | `AuthorityStore`; `(tenant_id, goal_id)`, `operation_id`, authority revision, and lease epoch | provider CAS/transaction plus operation-receipt readback | provider parity for projection, legal claim/lease transitions, fence, receipt, head, and cursor |
+| Turn admission and quota | independent Turn/quota ledgers; obligation, admission, debit, and void receipt identities | their own append/idempotency boundary; never absorbed into a coordination commit | end-to-end observation that admitted work references the accepted coordination head and accounts quota once |
+| Delivery, inbox, and external effects | independent delivery/inbox/provider ledgers; event cursor, effect identity, and provider receipt | connector/effect ambiguity is reconciled at its owning ledger | end-to-end observation that steering changes a later decision and an effect is not duplicated |
+| Settlement and run history | independent settlement journal and run ledger; settlement/phase receipt and run identity | ordered settlement checkpoints and idempotent replay | end-to-end observation of exactly-once settlement across restart, referenced from rather than stored inside coordination state |
+
+Only the first row qualifies an `AuthorityStore` implementation. The remaining
+rows qualify control-plane composition through typed references and receipts;
+passing them must not be reported as additional state owned or transacted by
+the coordination provider.
+
 The sequence is:
 
 1. **Stage 0 - merge the recoverable reference foundation.** Integrate #3669
@@ -980,13 +998,17 @@ The sequence is:
    semantics.
 4. **Stage 3 - one-way shadow parity.** Local control-plane files remain the
    only authority while committed observations are projected to the candidate
-   provider. Compare Todo/claim, lease fence, Turn admission, quota,
-   settlement, receipt, projection head, and cursor. Do not perform bidirectional
-   synchronization or provider-to-file writes.
+   provider. Provider parity compares Todo/claim, lease fence, operation
+   receipt, projection head, and cursor. Turn admission, quota, settlement,
+   inbox, and run history remain independent ledgers: the shadow records only
+   typed references needed to verify their end-to-end composition. Do not
+   perform bidirectional synchronization or provider-to-file writes.
 5. **Stage 4 - TEST ONLY canary.** One Goal and two Agents must show no duplicate
-   claim or effect, correct expiry/fencing, restart resume, inbox steering,
-   idempotent exactly-once settlement, and fail-closed writes during network
-   failure.
+   claim, correct expiry/fencing, restart resume, and fail-closed coordination
+   writes during network failure. The same canary separately observes that no
+   external effect is duplicated, inbox steering changes a later decision,
+   and settlement is idempotent and exactly-once; those are composition proofs
+   over their owning ledgers, not `AuthorityStore` conformance claims.
 6. **Stage 5 - flip one authority source.** Only after a reviewed promotion,
    make the shared LoopX service the sole writer. Local `.loopx` state becomes
    cache, offline projection, and diagnostic material. Never keep a long-lived
@@ -1048,6 +1070,46 @@ contract must never collapse `missing` into `unavailable` or `failed`.
 independent version domains. Likewise, a restore may preserve frozen bytes and
 lineage without granting current authority: promoting restored state to the
 live authority head requires an explicit lineage and binding fence.
+
+#### Stage 2B PostgreSQL candidate status (2026-09-01)
+
+The first PostgreSQL candidate now implements the LoopX-owned TypeScript store
+contract instead of introducing a second semantic authority. A store handle is
+bound to `(tenant_id, goal_id)` and receives only a service-owned database
+pool. Its fixed `loopx_control_plane` schema separates the scoped head,
+committed operations, ordered events, and ordered receipts. One SQL transaction
+creates or locks the scoped head row, checks the opaque provider revision,
+fences `operation_id` with a unique constraint, allocates the per-goal cursor,
+inserts the commit/events/receipts, advances the projection head, and commits.
+An error before `COMMIT` is rolled back and typed `failed`; an error after the
+`COMMIT` attempt starts is typed `ambiguous` and can be reconciled only by
+receipt readback. Database-incarnation metadata is installed administratively
+and cannot be rebound implicitly.
+
+This slice also moves strict JSON validation and commit normalization out of
+the file implementation into one TypeScript authority-store codec. File and
+PostgreSQL now run the same provider-neutral conformance suite for atomic
+projection-plus-receipt commit, CAS contention, historical receipt replay,
+operation fencing, ordered cursor scans, isolation of returned values, and
+pre-write rejection of malformed JSON.
+
+Real PostgreSQL qualification starts here, not at shadow or canary. A
+PostgreSQL 16 instance passed nine durable rows: the shared conformance matrix,
+same-head concurrent CAS, tenant-scoped reuse of the same goal and operation
+ids, transaction rollback with no visible head or receipt, receipt recovery
+after a committed transaction loses its response, and database-incarnation
+rebind refusal. A fake can still exercise adapter branches, but it cannot prove
+row locking, unique constraints, rollback, or commit visibility; every later
+PostgreSQL provider slice must therefore retain a real-database gate.
+
+The candidate remains coverage-only. No production LoopX entry point constructs
+it, local mode remains unchanged, and Agents cannot receive the injected pool.
+Service authentication and database roles, tenant authorization/RLS, restore
+incarnation rotation, pool exhaustion/cancellation/failover, one-way shadow
+parity, and authority-source promotion remain explicit holds. The expected
+route to the TEST ONLY canary is three further reviewed slices: service trust
+and deployment boundaries; one-way runtime shadow plus parity; then the bounded
+canary and promotion gate.
 
 The file-backed provider shadow is Stage 2; its first slice is merged on
 `main` through #3529, and the evidence behind it is recorded in the Stage 2
@@ -1246,7 +1308,8 @@ shipped production capability.
 
 - the LoopX-owned TypeScript transaction/store boundary and file-provider
   conformance described in Section 6.2;
-- NoKV and PostgreSQL providers qualified independently behind that boundary;
+- NoKV qualification and the remaining PostgreSQL service, failure, and
+  promotion holds behind that boundary;
 - one-way shadow parity, the one-Goal/two-Agent TEST ONLY canary, and a
   single-source authority flip with no long-lived dual-write or dual-master;
 - an explicit shared-mode migration and rollback/export operation, local
