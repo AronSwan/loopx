@@ -138,6 +138,7 @@ replay、receipt 与 settlement。这个架构选择已经落地，不再是假�
 | Scheduler durable state（[#3440](https://github.com/huangruiteng/loopx/pull/3440)） | State normalization、persistence、replay 与一笔粗粒度 transition 由 TS 拥有 | Python compatibility path 仍承担跨 runtime transport 税 |
 | Scheduler heartbeat/state transaction | TypeScript 拥有 receipt freshness、ACK 与 host-failure validation、state construction、failure-cache transition、replay/CAS fencing、atomic write，以及 public JSON/Markdown projection | 生成的 receipt-bound host follow-up 直接进入 native TS CLI；Python 只处理 unbound/manual compatibility call 与 external host mutation |
 | Quota spend commit transaction | TypeScript 拥有最终 spend transition 校验、typed event 构造、effect replay/CAS fencing、crash repair，以及 JSON/Markdown/index write set | Python 仍投影 `should-run` 与 settlement readback facts，并在 CLI/index writer 进程内迁移前持有 legacy cross-writer index lock |
+| Quota monitor-poll commit transaction | TypeScript 拥有 monitor admission 复核、target/event/result 构造、effect replay/index CAS、provider intent，以及可修复的 JSON/Markdown/index persistence | Python 投影 compact `should-run` facts，在最多两次 reduction 之间调用真实 Todo provider，刷新 legacy status，并持有 cross-writer index lock |
 | Runtime decoder（[#3443](https://github.com/huangruiteng/loopx/pull/3443)） | 稳定 primitive decoding 进入一个很小的共享模块；domain decoder 仍留在本地 | 没有理由建设更大的 schema framework |
 | Transaction 兑现（[#3464](https://github.com/huangruiteng/loopx/pull/3464)、[#3481](https://github.com/huangruiteng/loopx/pull/3481) 与 Todo completion） | Turn settlement、quota delivery routing 与 Todo completion 均只跨一个粗粒度 TS boundary；Todo transaction 拥有 identity、replay fence、validation planning/result reduction、continuation/recovery 与 completion metadata | Python 仍执行显式 external provider，并物化 legacy Markdown/event result；其他 domain 仍需各自的 bounded cutover |
 
@@ -265,6 +266,19 @@ window 仍需 differential proof 时才保留 characterization corpus；引入�
   Provider-neutral coordination executor 通过 typed Python adapter，对 acquire、renew、
   transfer、release 到达同一份纯 TypeScript decision；#3669 跟踪的 shared provider
   execution、CAS 与 authority receipt 仍不属于本次 cutover。
+- Quota monitor-poll commit：TypeScript 复核 quiet、due、external 与
+  exact-blocked-wait admission，构造 canonical monitor target/event，在 mutation
+  前记录 Todo-provider intent，并拥有 effect replay、index CAS、artifact path
+  fence 与 prepared/committed repair。无 Todo 的 poll 和所有已完成 replay 都只用
+  一次 reduction。真实 Todo writeback 仍是显式幂等 Python provider，位于一次
+  preflight 与一次 final reduction 之间。Provider retry 绑定到持久化 monitor
+  effect identity，较旧 effect 不能覆盖更新 observation。
+- Task-lease acquire：TypeScript 拥有 identity normalization、settlement plan
+  projection、provider failure classification、ordered receipt construction 与
+  canonical result。Python 在一次 preflight 与一次 final reduction 之间调用现有
+  atomic provider；provider 继续拥有 per-goal lock、owner eligibility、conflict、
+  compare-and-swap、idempotency 与 lease-file durability check。无效 identity 会在
+  provider 前停止；provider 后发生 crash/retry 时则重入同 key 的幂等路径。
 
 Quota-spend cutover 删除了 Python spend-event builder 与三文件 writer。它的 bounded
 facade 会在 quota CLI 和剩余 run-index writer 进程内执行 transaction 后退出；在此
@@ -313,6 +327,25 @@ exactly-once 保证；原 handler 可能仍存活时，caller 不得启动第二
 | 恢复契约 | Operation receipt 绑定 retry identity 与 expected generation。Fence receipt 区分 acquired、held、closed；返回幂等结果前会重验当前 authority 以及当前或 retired lease generation。 |
 | 锁迁移债务 | PID liveness、token claim、stale reclaim 与抗替换文件身份使 Python/Node 共享锁可安全恢复。handoff-mode transition 与所有剩余 Python lease-lock holder 进程内迁移后，删除这层有界协议。 |
 | 非目标 | 本次 cutover 共享 ordinary lifecycle decision，但不实现 #3669 的 shared-provider execution、CAS 或 authority receipt；也不承诺 client timeout 后原 Node handler 仍运行时，第二个请求具备 exactly-once execution。 |
+
+Monitor-poll cutover 删除了 Python admission-policy、monitor-target module，以及
+Python event/replay/artifact writer。它的 bounded facade 会在 quota `should-run`、
+Todo monitor persistence、status projection 与剩余 run-index writer 都进入原生
+TypeScript 进程后退出；在此之前只承载 compact facts、具名 Todo provider、legacy
+after-projection 与共享 Python index lock。
+
+本次 cutover 以最终 merge-base 计算的 migration economics receipt 如下：
+
+| 字段 | 证据 |
+| --- | --- |
+| Canonical owner | 变更前由 Python `monitor_poll.py`、`monitor_poll_policy.py` 与 `monitor_target.py` 拥有。变更后，版本化 TypeScript `quota.monitor_poll.commit` transaction 拥有 admission、target/event/result 构造、replay/CAS、provider intent 与 durable artifact；Python 只保留 compact fact projection、具名 Todo provider、transport 与 legacy after-projection。 |
+| 删除的旧语义代码 | 删除 826 行 Python 产品代码，包括 `monitor_poll.py` 中被替换的 601 行、161 行 policy module 与 64 行 target module。 |
+| 新增的 bridge 代码 | 有界 bridge 新增 495 行 Python diff LOC，其中 455 行位于 `_NativeMonitorPollRejected`、`_mapping`、`_monitor_candidate`、`_due_monitor_candidates`、`_vision_wait_state`、`_registry_due_monitor`、`_decision_packet`、`_observation_packet`、`_index_digest`、`_native_result`、`_request`、`build_quota_monitor_poll_event`、`find_quota_monitor_poll_turn`、`_status_with_monitor_poll`、`_reload_status_after_monitor_writeback`、`_monitor_poll_failure`、`_capability_declaration_retry` 与 `record_quota_monitor_poll_for_decision`，另有 40 行 import/schema wiring。34 行 `_provider_writeback` 是真实保留 provider 的 adapter，不计入 bridge。 |
+| 跨 runtime 调用 | 变更前整条路径由 Python 拥有，因此为零。变更后，无 Todo 写入、exact replay 或 recovery 使用一次 request/response；真实 Todo provider 运行时使用一次 preflight 与一次 final reduction。 |
+| 产品代码净增减 | 产品代码新增 2,743 行、删除 831 行，净增 1,912 行；test/example 另计新增 1,045 行、删除 242 行，净增 803 行，docs 不计入。该临时增长交付一笔完整 transaction，不能连续复制；当 quota decision、Todo persistence、status projection 与剩余 index writer 原生化后，下一项删除是 495 行 bridge。 |
+| 迁移 scaffolding | 删除 218 行 implementation-specific policy smoke 与 18 行 target-helper assertion。没有提交临时 parity harness；保留 typed boundary、public CLI、replay/CAS、malformed input、provider 与 repair 测试，因为它们表达已交付或持久化 contract。 |
+| Facade 退出 | Python facade 只剩 compact source facts、Todo provider、一个共享 cross-writer lock、transport 与 legacy result projection。当 `should-run`、Todo monitor persistence、status projection 与全部 run-index writer 在原生 TypeScript 进程执行时删除。 |
+| 正确性与性能 | Identity/admission、effect isolation、provider fence、malformed receipt、concurrent CAS、crash repair、packaging 与 launcher coverage 均通过。Managed runtime 的 cold start p50/p95 为 274.35/450.44 ms，warm event 为 1.13/1.72 ms，durable commit 为 2.06/2.27 ms，idle/burst memory 均为 126.0 MiB。在把 prepared-plus-staged receipt 序列收敛为一份保守的 prepared WAL、继续以 index 作为 commit proof，并且只在 registry 可证明位于 Git worktree 之外时跳过 Git subprocess 后，最终 64 对交错 full-CLI 样本中，Todo write 的 baseline/candidate p50/p95 为 663.34/971.40 与 631.96/878.10 ms，candidate p95 增量为 -93.31 ms（-9.61%）；replay 为 598.23/910.75 与 580.13/900.69 ms，candidate p95 增量为 -10.06 ms（-1.10%）。两条路径的 p95 增量均同时落在完整 CLI 的 5% 与 25 ms 门槛内，因此此前的 owner-review hold 已解除。 |
 
 ### Stage 3 — CLI 与 App 汇合
 

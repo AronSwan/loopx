@@ -159,6 +159,7 @@ choice is now implemented rather than hypothetical.
 | Scheduler durable state ([#3440](https://github.com/huangruiteng/loopx/pull/3440)) | State normalization, persistence, replay, and one coarse transition are TS-owned | The Python compatibility path still pays a cross-runtime transport tax |
 | Scheduler heartbeat/state transaction | TypeScript owns receipt freshness, ACK and host-failure validation, state construction, failure-cache transitions, replay/CAS fencing, atomic writes, and the public JSON/Markdown projection | Generated, receipt-bound host follow-up runs through the native TS CLI; Python remains only for unbound/manual compatibility calls and external host mutation |
 | Quota spend commit transaction | TypeScript owns final spend-transition validation, typed event construction, effect replay/CAS fencing, crash repair, and the JSON/Markdown/index write set | Python still projects `should-run` and settlement readback facts, and holds the legacy cross-writer index lock until the CLI/index writers move in-process |
+| Quota monitor-poll commit transaction | TypeScript owns monitor admission revalidation, target/event/result construction, effect replay/index CAS, provider intent, and repairable JSON/Markdown/index persistence | Python projects compact `should-run` facts, invokes the real Todo provider between at most two reductions, reloads legacy status, and holds the cross-writer index lock |
 | Runtime decoders ([#3443](https://github.com/huangruiteng/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/huangruiteng/loopx/pull/3464), [#3481](https://github.com/huangruiteng/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown/event results; other domains still need their own bounded cutovers |
 
@@ -310,6 +311,22 @@ shipped Stage 2B cutovers are in place:
   decisions for acquire, renew, transfer, and release through typed Python
   adapters. Shared provider execution, CAS, and authority receipts tracked by
   #3669 remain outside this cutover.
+- Quota monitor-poll commit: TypeScript revalidates quiet, due, external, and
+  exact-blocked-wait admission; constructs the canonical monitor target and
+  event; journals a Todo-provider intent before mutation; and owns effect
+  replay, index CAS, artifact-path fencing, and prepared/committed repair. A
+  no-Todo poll and every completed replay use one reduction. A real Todo
+  writeback remains an explicit idempotent Python provider between one
+  preflight and one final reduction. Provider retry is bound to a persisted
+  monitor effect identity, and stale older effects cannot overwrite a newer
+  observation.
+- Task-lease acquire: TypeScript owns identity normalization, settlement-plan
+  projection, provider failure classification, ordered receipt construction,
+  and the canonical result. Python invokes the existing atomic provider between
+  one preflight and one final reduction; the provider retains the per-goal lock,
+  owner eligibility, conflict, compare-and-swap, idempotency, and lease-file
+  durability checks. Invalid identities stop before the provider, while a
+  crash/retry after the provider re-enters its same-key idempotent path.
 
 The quota-spend cutover removes the Python spend-event builder and three-file
 writer. Its bounded facade exits when the quota CLI and remaining run-index
@@ -365,6 +382,26 @@ not start a second independent operation while that handler may still be live.
 | Recovery contract | Operation receipts fence retry identity and expected generation. Fence receipts distinguish acquired, held, and closed states; replay revalidates current authority and the current or retired lease generation before returning an idempotent result. |
 | Locking debt | PID liveness, token claims, stale reclaim, and replacement-resistant file identity make the shared lock safe across Python and Node. This bounded protocol is deleted after the handoff-mode transition and every remaining Python lease-lock holder move in-process. |
 | Out of scope | This cutover shares the ordinary lifecycle decision but does not implement #3669's shared-provider execution, CAS, or authority receipts, and does not promise exactly-once execution for a second request issued while the original Node handler is still running after a client timeout. |
+
+The monitor-poll cutover removes the Python admission-policy and monitor-target
+modules and the Python event/replay/artifact writer. Its bounded facade exits
+when quota `should-run`, Todo monitor persistence, status projection, and the
+remaining run-index writers execute in the native TypeScript process; until
+then it carries compact facts, the named Todo provider, legacy after-projection,
+and the shared Python index lock only.
+
+The final merge-base migration economics receipt for this cutover is:
+
+| Field | Evidence |
+| --- | --- |
+| Canonical owner | Before: Python `monitor_poll.py`, `monitor_poll_policy.py`, and `monitor_target.py`. After: the versioned TypeScript `quota.monitor_poll.commit` transaction owns admission, target/event/result construction, replay/CAS, provider intent, and durable artifacts; Python retains compact fact projection, the named Todo provider, transport, and legacy after-projection only. |
+| Legacy semantic code deleted | 826 Python product LOC: 601 replaced lines in `monitor_poll.py`, the 161-line policy module, and the 64-line target module. |
+| Bridge code added | 495 Python diff LOC used only by the bounded bridge: 455 lines across `_NativeMonitorPollRejected`, `_mapping`, `_monitor_candidate`, `_due_monitor_candidates`, `_vision_wait_state`, `_registry_due_monitor`, `_decision_packet`, `_observation_packet`, `_index_digest`, `_native_result`, `_request`, `build_quota_monitor_poll_event`, `find_quota_monitor_poll_turn`, `_status_with_monitor_poll`, `_reload_status_after_monitor_writeback`, `_monitor_poll_failure`, `_capability_declaration_retry`, and `record_quota_monitor_poll_for_decision`, plus 40 import/schema wiring lines. The 34-line `_provider_writeback` is excluded because it adapts the retained real provider. |
+| Cross-runtime calls | Before: zero because Python owned the whole path. After: one request/response for a no-Todo write, exact replay, or recovery; one preflight plus one final reduction when the real Todo provider runs. |
+| Product-code net change | 2,743 added minus 831 deleted product LOC, net +1,912; tests/examples are separately 1,045 added minus 242 deleted, net +803, and docs are excluded. The temporary increase buys one complete transaction and cannot repeat: the next deletion is the 495-line bridge when quota decision, Todo persistence, status projection, and remaining index writers are native. |
+| Migration scaffolding | Deleted the 218-line implementation-specific policy smoke and 18 target-helper assertions. No temporary parity harness is committed; typed boundary, public CLI, replay/CAS, malformed-input, provider, and repair tests remain because they express shipped or persisted contracts. |
+| Facade exit | The Python facade remains only for compact source facts, the Todo provider, one shared cross-writer lock, transport, and legacy result projection. Delete it when `should-run`, Todo monitor persistence, status projection, and every run-index writer execute in the native TypeScript process. |
+| Correctness and performance | Identity/admission, effect isolation, provider fencing, malformed receipts, concurrent CAS, crash repair, packaging, and launcher coverage pass. Managed-runtime cold start is 274.35/450.44 ms p50/p95, warm event 1.13/1.72 ms, durable commit 2.06/2.27 ms, and memory is 126.0 MiB idle/after burst. After replacing the prepared-plus-staged receipt sequence with one conservative prepared WAL that retains the index as commit proof, and skipping Git subprocesses only when a registry is provably outside a worktree, the final 64 interleaved full-CLI pairs report Todo write baseline/candidate p50/p95 of 663.34/971.40 versus 631.96/878.10 ms (candidate p95 -93.31 ms, -9.61%) and replay of 598.23/910.75 versus 580.13/900.69 ms (candidate p95 -10.06 ms, -1.10%). Both p95 deltas stay within the 5% and 25 ms full-CLI limits, resolving the earlier owner-review hold. |
 
 ### Stage 3 — CLI and App convergence
 
