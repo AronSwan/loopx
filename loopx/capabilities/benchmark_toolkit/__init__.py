@@ -1,5 +1,15 @@
 """Built-in provider-neutral benchmark experiment toolkit."""
 
+from .adaptive_concurrency import (
+    BENCHMARK_ADAPTIVE_CONCURRENCY_DECISION_SCHEMA_VERSION,
+    BENCHMARK_ADAPTIVE_CONCURRENCY_POLICY_SCHEMA_VERSION,
+    BENCHMARK_CONCURRENCY_FEEDBACK_SCHEMA_VERSION,
+    build_benchmark_adaptive_concurrency_decision,
+    build_benchmark_adaptive_concurrency_policy,
+    normalize_benchmark_adaptive_concurrency_policy,
+    normalize_benchmark_concurrency_feedback,
+    tune_benchmark_concurrency_target,
+)
 from .artifacts import (
     BENCHMARK_CANDIDATE_SOURCE_BOUNDARY_SCHEMA_VERSION,
     build_benchmark_candidate_source_boundary,
@@ -44,6 +54,13 @@ from .experiment_board import (
     read_benchmark_experiment_board_rows,
     render_benchmark_experiment_board_markdown,
     upsert_benchmark_experiment_board_row,
+)
+from .external_agent import (
+    BENCHMARK_CONTINUATION_DECISION_SCHEMA_VERSION,
+    BENCHMARK_PUBLIC_PROGRESS_SCHEMA_VERSION,
+    BenchmarkContinuationDecision,
+    build_benchmark_continuation_decision,
+    normalize_benchmark_public_progress,
 )
 from .factorial_contrast import (
     BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION,
@@ -171,9 +188,13 @@ from .source_revision_fence import (
 
 __all__ = [
     "ATIF_SCHEMA_VERSION",
+    "BENCHMARK_ADAPTIVE_CONCURRENCY_DECISION_SCHEMA_VERSION",
+    "BENCHMARK_ADAPTIVE_CONCURRENCY_POLICY_SCHEMA_VERSION",
     "BENCHMARK_CANDIDATE_SOURCE_BOUNDARY_SCHEMA_VERSION",
     "BENCHMARK_CONCURRENCY_ENVELOPE_FILENAME",
     "BENCHMARK_CONCURRENCY_ENVELOPE_SCHEMA_VERSION",
+    "BENCHMARK_CONCURRENCY_FEEDBACK_SCHEMA_VERSION",
+    "BENCHMARK_CONTINUATION_DECISION_SCHEMA_VERSION",
     "BENCHMARK_EXACT_CONTAINER_BINDING_SCHEMA_VERSION",
     "BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME",
     "BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION",
@@ -188,6 +209,7 @@ __all__ = [
     "BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION",
     "BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION",
     "BENCHMARK_RESOURCE_HEADROOM_RECEIPT_SCHEMA_VERSION",
+    "BENCHMARK_PUBLIC_PROGRESS_SCHEMA_VERSION",
     "BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION",
@@ -206,6 +228,7 @@ __all__ = [
     "RUN_PERMISSION_POLICY_SCHEMA_VERSION",
     "RUN_PERMISSION_QUOTA_PROJECTION_SCHEMA_VERSION",
     "BenchmarkEventWindowState",
+    "BenchmarkContinuationDecision",
     "BenchmarkJobReceiptState",
     "BenchmarkRunnerOwnerState",
     "BenchmarkRuntimeClassification",
@@ -239,9 +262,12 @@ __all__ = [
     "admit_benchmark_case",
     "attach_native_goal",
     "benchmark_experiment_board_row_key",
+    "build_benchmark_adaptive_concurrency_decision",
+    "build_benchmark_adaptive_concurrency_policy",
     "build_benchmark_candidate_source_boundary",
     "build_benchmark_concurrency_config",
     "build_benchmark_concurrency_status",
+    "build_benchmark_continuation_decision",
     "build_benchmark_experiment_board",
     "build_benchmark_factorial_contrasts",
     "build_benchmark_four_arm_contract",
@@ -274,8 +300,11 @@ __all__ = [
     "materialize_public_benchmark_artifacts",
     "native_codex_app_server_shell_policy_args",
     "native_codex_profile_environment",
+    "normalize_benchmark_adaptive_concurrency_policy",
     "normalize_benchmark_concurrency_config",
     "normalize_benchmark_concurrency_envelope",
+    "normalize_benchmark_concurrency_feedback",
+    "normalize_benchmark_public_progress",
     "normalize_benchmark_experiment_board_row",
     "normalize_benchmark_resource_headroom_receipt",
     "observe_native_goal_event",
@@ -297,6 +326,7 @@ __all__ = [
     "select_exact_docker_container",
     "serve_runner_owned_provider_gateway",
     "start_native_goal_turn",
+    "tune_benchmark_concurrency_target",
     "upsert_benchmark_experiment_board_row",
     "validate_run_permission_policy",
     "verify_verifier_reward_file",

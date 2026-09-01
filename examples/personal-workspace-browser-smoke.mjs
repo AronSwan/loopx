@@ -2,6 +2,7 @@
 // Focused browser smoke for the personal Agent workspace first screen and interactions.
 
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,20 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboardDir = resolve(repoRoot, "apps/presentation/dashboard");
 const outputDir = resolve(repoRoot, "output/playwright/personal-workspace");
 const port = Number(process.env.LOOPX_PERSONAL_WORKSPACE_PORT ?? "5196");
+const packaged = process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED === "1";
+
+function startServer() {
+  if (packaged) {
+    return spawn(process.env.LOOPX_PYTHON_BIN || "python3", [
+      "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web"),
+    ], {
+      cwd: repoRoot,
+      env: { ...process.env },
+      stdio: "ignore",
+    });
+  }
+  return startViteDashboardServer({ dashboardDir, port });
+}
 
 async function visibleElementCount(locator) {
   return locator.evaluateAll((elements) => elements.filter((element) => {
@@ -496,10 +511,10 @@ async function main() {
   const observations = [];
   const pass = (criterion, note) => results.set(criterion, { status: "PASS", note });
   const fail = (criterion, note) => results.set(criterion, { status: "FAIL", note });
-  const server = startViteDashboardServer({ dashboardDir, port });
+  const server = startServer();
   let browser;
   try {
-    const url = `http://127.0.0.1:${port}/?statusUrl=/status.json`;
+    const url = `http://127.0.0.1:${port}/${packaged ? "chat/" : ""}?statusUrl=/status.json`;
     await waitForHttp(url);
     browser = await launchBrowser(chromium);
     const page = await browser.newPage({ viewport: { width: 1512, height: 982 } });
@@ -539,20 +554,19 @@ async function main() {
     const stoppedDirectory = page.locator(".personal-stopped-goals");
     if (!(await stoppedDirectory.isVisible()) || await stoppedDirectory.getAttribute("open") !== null) throw new Error("Stopped Goals are not available in a collapsed directory section");
     const writesBeforeLifecyclePreview = api.durableWriteCount;
-    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
-    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
-    const stopPreview = api.actionPreviews.findLast((preview) => preview.action_kind === "goal.lifecycle" && preview.normalized_parameters.operation === "stop");
-    if (!stopPreview || stopPreview.normalized_parameters.goal_id !== "product-release") throw new Error("Goal stop did not create the expected typed preview");
-    if (api.durableWriteCount !== writesBeforeLifecyclePreview) throw new Error("Goal stop preview wrote state before owner confirmation");
     const statusRequestsBeforeStop = api.statusRequestCount;
     api.nextLifecycleApplyDelayMs = 900;
     api.nextStatusDelayMs = 900;
-    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
     await page.waitForFunction(
       () => document.querySelectorAll(".personal-goal-list:not(.is-stopped) .personal-goal-row").length === 2,
       null,
       { timeout: 600 },
     );
+    const stopPreview = api.actionPreviews.findLast((preview) => preview.action_kind === "goal.lifecycle" && preview.normalized_parameters.operation === "stop");
+    if (!stopPreview || stopPreview.normalized_parameters.goal_id !== "product-release") throw new Error("Goal stop did not create the expected typed preview");
+    if (api.durableWriteCount !== writesBeforeLifecyclePreview) throw new Error("Goal stop wrote durable state before its typed apply completed");
+    if (await page.getByText("确认执行", { exact: true }).count()) throw new Error("Goal stop still opened a redundant confirmation drawer");
     if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 2) throw new Error("Optimistic Goal stop did not update the active sidebar immediately");
     await page.waitForTimeout(2_000);
     if (api.statusRequestCount <= statusRequestsBeforeStop) throw new Error("Successful Goal stop did not start background full-status reconciliation");
@@ -569,10 +583,8 @@ async function main() {
     await page.waitForTimeout(1_100);
     if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 3) throw new Error("Full-status reconciliation reverted a successful Goal resume");
 
-    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
-    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
     api.nextStatusDelayMs = 1_600;
-    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
     await page.getByRole("button", { name: "恢复 Product Release", exact: true }).waitFor({ state: "attached" });
     await page.getByRole("button", { name: "恢复 Product Release", exact: true }).click();
     await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
@@ -581,19 +593,15 @@ async function main() {
     await page.waitForTimeout(1_800);
     if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 3) throw new Error("A stale background response overwrote a newer optimistic Goal transition");
 
-    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
-    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
     api.failNextLifecycleApply = true;
     api.nextLifecycleApplyDelayMs = 900;
-    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
     await page.getByRole("button", { name: "恢复 Product Release", exact: true }).waitFor({ state: "attached", timeout: 600 });
     await page.getByRole("button", { name: "停止 Product Release", exact: true }).waitFor({ state: "attached", timeout: 2_000 });
     if (api.goalActivationStates.get("product-release") !== "active") throw new Error("Rejected Goal stop mutated the durable fixture state");
-    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
-    await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
     api.failNextStatusRequest = true;
     api.nextStatusDelayMs = 400;
-    await page.getByRole("button", { name: "停止 Goal", exact: true }).click();
+    await page.getByRole("button", { name: "停止 Product Release", exact: true }).click();
     await page.waitForTimeout(900);
     if (await page.getByText("无法读取状态", { exact: false }).count()) throw new Error("Background lifecycle reconciliation replaced the workspace with a fatal status error");
     if ((await page.locator(".personal-goal-list:not(.is-stopped) .personal-goal-row").count()) !== 2) throw new Error("Background reconciliation failure reverted the successful optimistic Goal state");
@@ -604,7 +612,7 @@ async function main() {
     if (stoppedChevronTransition !== "0s") throw new Error(`Stopped Goals disclosure ignores reduced motion: ${stoppedChevronTransition}`);
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.screenshot({ path: resolve(outputDir, "goal-lifecycle-directory.png"), fullPage: false, animations: "disabled" });
-    pass(1, "Goal stop/resume updates the sidebar optimistically, rolls back a rejected apply, and still reconciles the full status payload in the background.");
+    pass(1, "Goal stop applies directly without a redundant confirmation, while resume stays reviewed; both update optimistically, roll back rejected applies, and reconcile status in the background.");
     if (await page.locator(".personal-timeline-row").filter({ hasText: /纠偏/u }).count()) throw new Error("Browse rows expose repeated correction actions");
     pass(2, "Browse rows are full-row click targets and Session rows state that they open execution progress and results.");
     await page.screenshot({ path: resolve(outputDir, "desktop-first-screen.png"), fullPage: false, animations: "disabled" });
@@ -1431,7 +1439,7 @@ async function main() {
     pass(20, "Empty and populated Tasks boards keep identical width and four equal columns at desktop and wide desktop viewports.");
     const report = { criteria: Object.fromEntries(results), observations };
     await writeFile(resolve(outputDir, "acceptance-results.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    console.log(`personal-workspace-browser-smoke: ok\npreview=${url}\nscreenshot=${resolve(outputDir, "desktop-first-screen.png")}`);
+    console.log(`personal-workspace-browser-smoke (${packaged ? "packaged" : "development"}): ok\npreview=${url}\nscreenshot=${resolve(outputDir, "desktop-first-screen.png")}`);
     const failures = [...results.entries()].filter(([, result]) => result.status !== "PASS");
     if (failures.length) throw new Error(`Acceptance failures: ${failures.map(([criterion, result]) => `${criterion} ${result.status}: ${result.note}`).join(" | ")}`);
   } finally {

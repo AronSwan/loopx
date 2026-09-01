@@ -1,21 +1,20 @@
 """Deterministic probes for the coordination authority proof.
 
 Run ``python probes.py contract`` without NoKV or external services.  Every
-claim/CAS probe drives the production Stage 2 modules
+claim/CAS probe drives the production coordination modules
 (``loopx.control_plane.coordination.head`` and ``.executor``) - there is no
 second reference authority - and finishes by round-tripping its persisted
 head through the production ``validated_head``, so a probe that passes is
 evidence about the exact code the runtime ships.  The claim/CAS probes do
 not qualify NoKV restart, recovery, GC, HA, or a live deployment.  The
-durable-completion probes are the read-side comparison registered by RFC
-shared-goal-authority-state-provider-v0 (later runtime qualification slice):
-they prove the provider byte-CAS can hold and read back a post-completion
+durable-completion probes are the offline read-side comparison registered by
+RFC shared-goal-authority-state-provider-v0.  They prove the provider byte-CAS
+can hold and read back a post-completion
 head whose durable records project to the same typed continuation outcomes
 (``successor | no_followup | active_goal``, fail-closed on
-contradiction/dangling) as the LoopX projection seam.  Because completion is
-a later slice, those evolved heads deliberately carry fields outside the v0
-closed set and are not v0-validated.  They do not implement or qualify the
-atomic ``complete_todo_with_successor`` write side.
+contradiction/dangling) as the LoopX projection seam.  They deliberately
+mutate provider bytes to construct negative read fixtures; Stage 3 focused
+tests and ``live_e2e.py`` qualify the actual atomic completion write side.
 """
 
 from __future__ import annotations
@@ -78,6 +77,10 @@ class DeterministicProvider:
         self._barrier_loads_left = 0
         self._fault = None
         self._contention_advances = 0
+        self.identity = "probe:store"
+
+    def store_identity(self) -> str:
+        return self.identity
 
     def arm_load_barrier(self, parties: int) -> None:
         self._barrier = threading.Barrier(parties)
@@ -184,6 +187,7 @@ def bootstrap(provider, goal_id: str, todo_ids) -> int:
     head = bootstrap_head(
         goal_id,
         {todo_id: initial_todo() for todo_id in todo_ids},
+        store_binding=provider.store_identity(),
     )
     result = provider.compare_and_put(0, head)
     assert result["result"] == "applied", result
@@ -239,7 +243,7 @@ def claim(operation_id: str, goal_id: str, todo_id: str, **values) -> dict:
 
 def assert_bootstrap_rejected(todo: dict, message: str | None = None) -> None:
     try:
-        bootstrap_head("goal-private", {"todo-private": todo})
+        bootstrap_head("goal-private", {"todo-private": todo}, store_binding="probe:store")
     except ValueError as exc:
         if message is not None:
             assert message in str(exc)
@@ -262,6 +266,7 @@ def probe_bootstrap_and_preconditions() -> None:
             "todo-dependency-blocked": initial_todo(dependencies_satisfied=False),
             "todo-gate-blocked": initial_todo(gates_open=False),
         },
+        store_binding=provider.store_identity(),
     )
     bootstrap_result = provider.compare_and_put(0, initial_head)
     assert bootstrap_result["result"] == "applied"
@@ -666,9 +671,8 @@ def probe_version_domains_and_retain_all() -> None:
 def _evolve_completion_head(provider, todo_mutations: dict) -> None:
     """CAS-write an evolved post-completion head over a bootstrapped open one.
 
-    The v0 authority proof only knows ``claim_work``; durable completion is a
-    later slice.  Each mutated todo is committed the way the future atomic
-    ``complete_todo_with_successor`` write will leave it (``status="done"``,
+    Each mutated todo is committed in the shape the atomic ``complete_work``
+    transition leaves behind (``status="done"``,
     the declared continuation fields, and the explicit
     ``completion_continuation`` the LoopX lifecycle records durably), so the
     probes read the bytes back through the provider seam rather than through
@@ -904,7 +908,7 @@ def probe_nokv_adapter_exception_mapping() -> None:
     client = FakeNoKVClient()
     goal_id = "adapter-mapping"
     provider = NoKVCoordinationProvider(client, "wb-adapter", goal_id)
-    head = bootstrap_head(goal_id, {})
+    head = bootstrap_head(goal_id, {}, store_binding="probe:adapter")
 
     assert provider.load() == (None, 0)
     created = provider.compare_and_put(0, head)

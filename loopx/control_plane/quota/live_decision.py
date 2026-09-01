@@ -207,18 +207,22 @@ def bind_action_selection_cli_routes(
         tokens = shlex.split(route_prefix)
     except ValueError:
         return
-    if tokens == ["loopx", "--format", "json"]:
-        selection_command["route_prefix"] = shlex.join(
-            [
-                "loopx",
-                "--registry",
-                str(registry_path.expanduser().resolve()),
+    if len(tokens) >= 3 and tokens[0] == "loopx":
+        try:
+            format_index = tokens.index("--format")
+        except ValueError:
+            return
+        if tokens[format_index : format_index + 2] != ["--format", "json"]:
+            return
+        if "--registry" not in tokens:
+            tokens[1:1] = ["--registry", str(registry_path.expanduser().resolve())]
+        if "--runtime-root" not in tokens:
+            format_index = tokens.index("--format")
+            tokens[format_index:format_index] = [
                 "--runtime-root",
                 str(runtime_root.expanduser().resolve()),
-                "--format",
-                "json",
             ]
-        )
+        selection_command["route_prefix"] = shlex.join(tokens)
 
 
 def build_live_quota_should_run_decision(
@@ -265,7 +269,10 @@ def build_live_quota_should_run_decision(
         if observation.get("available") is True:
             observed_rrule = str(observation.get("rrule") or "")
             observed_automation_id = str(observation.get("automation_id") or "").strip()
-    decision_status_payload = status_payload
+    decision_status_payload = {
+        **status_payload,
+        "runtime_root": str(runtime_root),
+    }
     if bounded_research_frontier_projector is not None:
         frontier = bounded_research_frontier_projector(
             runtime_root=runtime_root,
@@ -275,7 +282,7 @@ def build_live_quota_should_run_decision(
         )
         if isinstance(frontier, Mapping):
             decision_status_payload = {
-                **status_payload,
+                **decision_status_payload,
                 "bounded_research_frontier": dict(frontier),
             }
     settlement_readback = read_heartbeat_settlement(
@@ -309,7 +316,10 @@ def build_live_quota_should_run_decision(
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
+        runtime_root=runtime_root,
     )
+    if route_source.startswith("loopx_turn_"):
+        payload["runtime_root"] = str(runtime_root)
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
     projections = hook_dispatch["projections"]
     if isinstance(projections, Mapping):

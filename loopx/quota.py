@@ -872,6 +872,7 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
+    runtime_root: str | Path | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -895,6 +896,7 @@ def build_quota_should_run(
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
+        runtime_root=runtime_root,
     )
 
 

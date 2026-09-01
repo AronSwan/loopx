@@ -264,14 +264,8 @@ def register_project_lifecycle_commands(
             "value on retries."
         ),
     )
-    refresh_state_parser.add_argument(
-        "--completion-todo-id",
-        help=argparse.SUPPRESS,
-    )
-    refresh_state_parser.add_argument(
-        "--completion-turn-key",
-        help=argparse.SUPPRESS,
-    )
+    refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
         "--autonomous-replan-recorded",
         action="store_true",
@@ -695,6 +689,7 @@ def handle_project_lifecycle_command(
                     exc,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
+                    runtime_root=args.runtime_root,
                 )
                 payload["replan_transition"] = transition
                 payload["error"] += " Required transition: " + "; ".join(

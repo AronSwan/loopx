@@ -50,6 +50,37 @@ consuming the result or starting a verifier, because the solver may exit while
 leaving detached descendants behind. A runner without that lifecycle must fail
 closed before invoking `agent-phase`.
 
+### Bounded continuation decision
+
+When a benchmark treatment deliberately adds LoopX-governed continuation, keep
+process launch and progress observation in the runner and ask LoopX only for the
+next disposition:
+
+```bash
+loopx benchmark continuation-decision \
+  --progress-json .local/private-run/public-progress.json \
+  --expected-first-prompt-sha256 "$EXPECTED_PROMPT_SHA256" \
+  --observed-first-prompt-sha256 "$OBSERVED_PROMPT_SHA256" \
+  --expected-total-unit-count 5 \
+  --previous-completed-unit-count 2 \
+  --completed-segment-count 1 \
+  --max-agent-segments 2 \
+  --elapsed-ms 300000 \
+  --total-budget-ms 7200000 \
+  --format json
+```
+
+The command is read-only. It accepts only aggregate public progress counts and
+returns `continue`, `stop_complete`, `stop_prompt_mismatch`,
+`stop_progress_regression`, `stop_task_shape_mismatch`, `stop_round_limit`, or
+`stop_time_budget`, plus a fair-share timeout for the next segment. The runner
+must give the first solver
+segment the complete original task prompt, freeze the initial unit count, and supply
+matching independently calculated digests. Later prompts may add
+only public progress; they must not disclose verifier output or hidden evaluation.
+The runner remains responsible for invoking the next agent segment, measuring the
+shared total budget, preserving containment, and collecting evidence.
+
 ## Source revision admission
 
 A long-running campaign can keep launching from an old installed checkout after
@@ -731,9 +762,12 @@ loopx benchmark concurrency-release \
 Configuration, admission, and release are project-local, locked, and atomic.
 `max-active-cases` is the hard ceiling; `target-active-cases` is desired occupancy.
 Below target, status reports the exact gap, a preferred arm group, and
-`next_action=backfill_to_target`. `active_counts` is an admission ledger, not
-runtime proof. On each launch, terminal or runner-invalid transition, and a bounded
-periodic cadence, pass exact-job receipt and runner-owner facts through
+`next_action=backfill_to_target`. At target, new admission fails closed with
+`target_capacity_exhausted`. When target is lowered below current occupancy, status
+reports `next_action=drain_to_target`; no active run is terminated, and replacement
+admission remains closed until occupancy falls below target. `active_counts` is an
+admission ledger, not runtime proof. On each launch, terminal or runner-invalid
+transition, and a bounded periodic cadence, pass exact-job receipt and runner-owner facts through
 `runtime-observation`. Apply its typed terminal or runner-invalid transition before
 releasing that reservation, then backfill the reported gap.
 
@@ -743,14 +777,67 @@ capacity, file descriptors, persistent storage, or provider capacity, enable
 fresh `benchmark_resource_headroom_receipt_v0`. The provider observes its own
 environment and supplies only typed `sufficient`, `insufficient`, or `unresolved`
 checks plus a validity window of at most 15 minutes. Missing, expired, future,
-unresolved, or
-insufficient receipts fail closed before the slot is reserved. LoopX never records
-raw metrics, paths, provider logs, or the receipt in the envelope, and the receipt
-does not grant launch authority.
+unresolved, or insufficient receipts fail closed before the slot is reserved. Each
+check must observe the runner-resolved resource actually consumed by the launch—for
+example its profile, cache, scratch, and artifact filesystems—not merely a generic
+host default such as `/tmp`; if that binding cannot be proven, report `unresolved`.
+LoopX never records raw metrics, paths, provider logs, or the receipt in the
+envelope, and the receipt does not grant launch authority.
 
 Read back the gate with `concurrency-status`. To disable it, rerun
 `concurrency-configure` with the same capacity values and omit
 `--require-resource-headroom-receipt`; existing active reservations are preserved.
+
+To ramp toward the hard ceiling without guessing a new occupancy on every monitor
+cycle, feed compact runner-owned health into the adaptive tuner. It uses additive
+increase after consecutive saturated healthy windows and subtractive decrease on
+launch, provider-capacity, runner-invalid, or typed resource-pressure evidence:
+
+```bash
+loopx benchmark concurrency-tune \
+  --goal-id <goal-id> \
+  --feedback-json concurrency-feedback.json \
+  --resource-headroom-json resource-headroom.json \
+  --saturated-healthy-windows-required 2 \
+  --increase-step 1 \
+  --decrease-step 1 \
+  --execute \
+  --format json
+```
+
+`concurrency-tune` changes only `target-active-cases`. The configured
+`max-active-cases`, baseline/test caps, and reserved test slots remain
+operator-owned. Lowering the target never terminates an active run; it only prevents
+replacement admissions until occupancy falls below the new target. Missing, stale,
+future, or unresolved feedback/headroom produces a hold; malformed input fails closed
+without a write. Feedback also carries the exact `updated_at` revision of the
+concurrency envelope it observed. Any configure, target change, admission, or release
+invalidates that receipt, so one healthy window cannot be replayed across target
+levels. A runner may preserve its healthy-window streak across ordinary campaign
+churn only when the transition is a qualified terminal run followed by a successful
+refill and the whole observation window has no launch failure, provider-capacity
+rejection, runner-invalid transition, or typed resource pressure. It must then issue
+new feedback bound to the post-refill envelope revision; the pre-transition receipt
+remains invalid. Reset the streak for any failed refill, unresolved terminal state,
+or pressure signal. Preview
+is the default; `--execute` atomically writes the selected target. The runner remains
+responsible for measuring resources, constructing `benchmark_concurrency_feedback_v0`,
+and launching admitted work; raw metrics and receipts are never persisted.
+
+```json
+{
+  "schema_version": "benchmark_concurrency_feedback_v0",
+  "observed_envelope_updated_at": "2026-09-01T03:49:30Z",
+  "window_started_at": "2026-09-01T03:50:00Z",
+  "observed_at": "2026-09-01T04:00:00Z",
+  "expires_at": "2026-09-01T04:05:00Z",
+  "saturated_healthy_window_streak": 2,
+  "launch_attempts": 1,
+  "launch_failures": 0,
+  "provider_capacity_rejections": 0,
+  "runner_invalid_transitions": 0
+}
+```
 
 ```json
 {
@@ -773,7 +860,9 @@ shared authority instead of configuring one envelope per host.
 At campaign startup, create the capability packet's
 `concurrency_occupancy.monitor_todo_template` as one goal-scoped
 `continuous_monitor` todo. This preserves the obligation to notice and fill safe
-capacity without granting launch authority. The runner still owns launch, liveness,
+capacity without granting launch authority. On material monitor windows, preview
+`concurrency-tune`; execute its target change only when the runner-authorized campaign
+has opted into adaptive occupancy. The runner still owns launch, liveness,
 termination, credentials, verifier ordering, scoring, upload, and submission.
 
 ## Experiment board
@@ -866,6 +955,53 @@ active prevents a long run from silently accumulating results. This monitor is p
 of the benchmark lifecycle, not an optional cleanup pass. The catalog entry is a
 guidance template rather than a scheduler: the benchmark startup provider creates
 the todo, and the registered monitor runtime owns its cadence.
+
+### Monitor-to-advancement handoff
+
+A benchmark `continuous_monitor` is an observation and control-plane lane. Do not
+put repository delivery, runner repair, experiment redesign, or PR work only in
+the monitor text and expect it to execute. When a monitor poll discovers material
+bounded work, record the transition and create an independent executable successor
+in one writeback:
+
+```bash
+loopx quota monitor-poll \
+  --goal-id <goal-id> \
+  --todo-id <monitor-todo-id> \
+  --agent-id <registered-agent> \
+  --result-hash <public-safe-hash> \
+  --material-change \
+  --next-agent-todo "<bounded public-safe work>" \
+  --next-action-kind <action-kind> \
+  --next-task-repository <git-repository> \
+  --next-required-capability <capability> \
+  --execute \
+  --format json
+```
+
+The monitor remains open, while the new `advancement_task` enters ordinary claim,
+lease, validation, and delivery lifecycle. The poll itself spends no delivery
+quota. An unchanged poll creates no successor.
+
+When the main campaign Todo must remain visible but cannot advance until a monitor
+generation changes—for example, target occupancy is full—keep that Todo `open` and
+pair the wait with an already-created independent runnable successor:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> \
+  --todo-id <waiting-advancement-todo-id> \
+  --agent-id <registered-agent> \
+  --status open \
+  --resume-when monitor_changed:<monitor-todo-id> \
+  --successor-todo-id <independent-runnable-successor-id> \
+  --reason "<public-safe external-wait rationale>" \
+  --format json
+```
+
+The resume condition removes the waiting Todo from runnable selection until the
+monitor records a newer material-change generation. Do not mark this typed external
+wait `blocked`, and do not use the monitor itself as the runnable successor.
 
 A material user update should include the current countable arm and pair coverage,
 aggregate primary metric by arm, binary outcomes when the benchmark exposes them,
