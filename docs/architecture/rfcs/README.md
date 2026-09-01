@@ -87,6 +87,11 @@ promote a proposal beyond that status.
 
 ## Draft Integration Proposals
 
+- [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md)
+  ([中文版](obelisk-session-evidence-provider-v0.zh-CN.md)): evaluate an
+  optional, read-only historical-evidence provider for typed Replan cold paths,
+  defaulting to same-agent and same-repository history while keeping retrieval,
+  Replan settlement, memory lifecycle, and action authority separate.
 - [LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md)
   ([中文版](desktop-execution-frontends-v0.zh-CN.md)): support both
   attachment to an externally owned Codex App session and a LoopX-managed Pi or
