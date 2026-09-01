@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import effect_runtime_result
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -31,13 +31,10 @@ def _turn_envelope_result(
 ) -> dict[str, Any]:
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
-    try:
-        result = effect_runtime_result(
-            "quota.turn_envelope.evaluate",
-            {"operation": operation, **params},
-        )
-    except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from None
+    result = effect_runtime_result(
+        "quota.turn_envelope.evaluate",
+        {"operation": operation, **params},
+    )
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
