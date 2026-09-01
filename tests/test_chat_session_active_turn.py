@@ -3,8 +3,44 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
+
 import loopx.chat_store as chat_store
-from loopx.chat_store import ChatSessionStore, SESSION_QUEUE_MAX_PENDING
+from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_store import (
+    SESSION_QUEUE_MAX_PENDING,
+    TERMINAL_TURN_STATES,
+    ChatSessionStore,
+)
+
+
+class _BlockingChatAdapter:
+    upstream_thread_id = "fake-upstream"
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.closed = False
+
+    def capabilities(self) -> dict[str, object]:
+        return {}
+
+    def start_turn(self, message: str, event_sink) -> dict[str, object]:
+        del message, event_sink
+        self.started.set()
+        self.release.wait(timeout=2)
+        return {"message": "late response"}
+
+    def interrupt_turn(self, turn_id: str | None = None) -> None:
+        del turn_id
+        self.release.set()
+
+    def close_session(self) -> None:
+        self.closed = True
+        self.release.set()
+
+    def healthcheck(self) -> bool:
+        return True
 
 
 def _slow_new_turn_writes(monkeypatch) -> set[str]:
@@ -272,3 +308,113 @@ def test_queued_turn_rejects_closed_session(tmp_path: Path) -> None:
         assert str(exc) == "'chat session was not found'"
     else:  # pragma: no cover - safety net for unexpected passes.
         raise AssertionError("closed session should not accept queued turns")
+
+
+def test_managed_close_rejects_active_turn_before_closing_adapter(
+    tmp_path: Path,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _BlockingChatAdapter()
+    runtime.adapters[session_id] = adapter  # type: ignore[assignment]
+    turn, created = runtime.submit_turn(
+        session_id=session_id,
+        client_turn_id="managed-close-active",
+        message="keep running",
+        work_dir=tmp_path,
+        objective="sample objective",
+    )
+
+    assert created is True
+    assert adapter.started.wait(timeout=2)
+    with pytest.raises(RuntimeError, match="managed_session_turn_active"):
+        runtime.close_session(session_id)
+
+    current = store.load_session(session_id)
+    assert current is not None
+    assert current["status"] == "busy"
+    assert current["active_turn_id"] == turn["turn_id"]
+    assert adapter.closed is False
+
+    adapter.release.set()
+    assert runtime.wait_for_turn(
+        session_id=session_id,
+        turn_id=str(turn["turn_id"]),
+        timeout_sec=2,
+    )["status"] == "completed"
+    assert runtime.close_session(session_id) is True
+
+
+def test_managed_close_rejects_pending_queue_without_stranding_it(
+    tmp_path: Path,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    queued, created = store.create_queued_turn(
+        session_id,
+        client_turn_id="managed-close-queued",
+        message="do not strand me",
+    )
+
+    assert created is True
+    with pytest.raises(RuntimeError, match="managed_session_queue_pending"):
+        runtime.close_session(session_id)
+
+    current = store.load_session(session_id)
+    assert current is not None
+    assert current["status"] == "ready"
+    assert current["active_turn_id"] is None
+    assert store.load_turn(session_id, str(queued["turn_id"]))["status"] == "queued"  # type: ignore[index]
+
+
+@pytest.mark.parametrize("terminal_status", sorted(TERMINAL_TURN_STATES))
+def test_managed_close_clears_terminal_active_turn_left_by_crash(
+    tmp_path: Path,
+    terminal_status: str,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal-one",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_thread_id="thread-one",
+        upstream_mode="chat",
+    )
+    session_id = str(session["session_id"])
+    turn, created = store.create_turn(
+        session_id,
+        client_turn_id=f"managed-close-{terminal_status}",
+        message="terminal state persisted before owner release",
+    )
+    assert created is True
+    store.update_turn(session_id, str(turn["turn_id"]), status=terminal_status)
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+    adapter = _BlockingChatAdapter()
+    runtime.adapters[session_id] = adapter  # type: ignore[assignment]
+
+    assert runtime.close_session(session_id) is True
+
+    current = store.load_session(session_id)
+    assert current is not None
+    assert current["status"] == "closed"
+    assert current["active_turn_id"] is None
+    assert adapter.closed is True

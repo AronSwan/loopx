@@ -13,14 +13,16 @@ from typing import Any, Callable, Protocol
 from .chat_acp import ACPStdioAdapter
 from .chat_agent import CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError
 from .chat_endpoints import AgentEndpointRegistry
-from .chat_store import CHAT_SESSION_MODE_ATTACHED, ChatSessionStore, utc_now
+from .chat_store import (
+    CHAT_SESSION_MODE_ATTACHED,
+    TERMINAL_TURN_STATES,
+    ChatSessionStore,
+    utc_now,
+)
 from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
-TERMINAL_TURN_STATES = {"completed", "interrupted", "timed_out", "failed"}
-
-
 class ChatRuntimeAdapter(Protocol):
     @property
     def upstream_thread_id(self) -> str: ...
@@ -979,6 +981,9 @@ class ChatRuntimeController:
             return False
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             return self.store.close_attached_session(session_id)
+        closed = self.store.close_managed_session(session_id)
+        if not closed:
+            return False
         with self.lock:
             adapter = self.adapters.pop(session_id, None)
             event_buffers = [
@@ -990,7 +995,6 @@ class ChatRuntimeController:
             event_buffer.close()
         if adapter is not None:
             adapter.close_session()
-        self.store.update_session(session_id, status="closed", active_turn_id=None)
         return True
 
     def resume_session(self, *, session_id: str, work_dir: Path, objective: str) -> dict[str, Any]:
