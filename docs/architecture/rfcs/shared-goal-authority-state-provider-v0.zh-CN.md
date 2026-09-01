@@ -165,6 +165,51 @@ owner 与 ledger 管理，通过 typed command、projection 或 opaque pointer �
 provider-neutral core 切分。本 RFC 既不要求拆仓，也不选择独立 license；当前政策
 仍以 [`LoopX Licensing`](../../project/licensing.md) 为准。
 
+### 1.3 按发行边界演进许可证的候选路径
+
+本小节是非规范性说明，不改变任何当前 LoopX 源码或已发布版本的许可证。它记录的
+是：若服务级能力未来成为独立交付产品，后续 license RFC 应沿什么边界评估。
+
+| 发行边界 | 交付阶段 | 推荐路径 |
+| --- | --- | --- |
+| RFC、schema、typed command、receipt、provider-neutral decision、store contract/codec、client SDK、conformance fixture 与示例 | Stage 1-4 | 继续属于 Apache-2.0 open core，让 runtime 与 provider 无需采用 server distribution 也能实现同一协调合同 |
+| embedded/local authority、file parity backend，以及 NoKV/PostgreSQL shared-store adapter | Stage 1-4 | 继续使用 Apache-2.0；adapter 不会取得 LoopX 语义权威，底层 provider 继续遵守自身许可证 |
+| TEST ONLY shadow、canary、迁移 fixture 与 authority-source promotion proof | Stage 3-4 | 继续作为 Apache-2.0 资格验证材料；证明某个 deployment 正确，并不会自动形成独立授权的产品 |
+| 独立版本化、真正拥有认证、租户隔离、审计、耐久回执服务、迁移/promotion、容量治理、恢复与 HA 的 shared-authority server | Stage 5 | 当它已不再只是 Apache core 的薄 wrapper 时，可以通过独立 license RFC 评估 AGPL-3.0 |
+| 随该 server distribution 交付的 Persistent Supervisor/reconciliation worker | Stage 5 | 当它真正拥有 restart-safe observation、reclaim、remote-resume 编排与经 authority command 发出的 wake request 时，可以跟随 server 的 AGPL-3.0 候选条款 |
+| 独立交付的 managed operations 或 enterprise-only module | 形成服务边界之后 | 若它们不包含在 Apache 或 AGPL distribution 内，且依赖边界明确，可以采用独立商业条款 |
+
+若将来真的创建这些发行物，示意性的 package 边界可以是：
+
+```text
+loopx/control_plane/coordination/             Apache-2.0
+packages/loopx-authority-client/              Apache-2.0
+packages/loopx-authority-provider-*/          Apache-2.0
+packages/loopx-shared-authority-server/       AGPL-3.0 candidate
+packages/loopx-persistent-supervisor/         AGPL-3.0 candidate，或并入 server
+```
+
+这些名称不是 Stage 0 的目录要求。长期不变量是依赖方向：AGPL server distribution
+可以消费 Apache contract、core 与 provider；Apache artifact 不得 import、bundle 或
+依赖 AGPL server。LoopX adapter 不会重许可 NoKV 或 PostgreSQL server，也不应把
+adapter 人为包装成许可证边界。
+
+任何 Stage 5 许可证提案都必须先满足以下门槛，才能改变当前政策：
+
+1. 明确一个可以独立部署、独立版本化的 server artifact；
+2. 证明它拥有真实的网络信任与持续协调边界，而不只是转发 Apache core 调用；
+3. 保留 Apache client、protocol、embedded mode、provider 与 conformance 路径，
+   继续支持互操作采用；
+4. 定义 package metadata、嵌套 LICENSE/NOTICE、SPDX 标记与构建检查，阻止跨许可证
+   artifact 被意外打包；
+5. 在 AGPL 组件接受贡献之前确定 inbound contribution policy，尤其是在未来可能
+   需要商业双授权时；
+6. 通过明确版本边界向前生效，不缩窄已经由 MIT 或 Apache 发布版授予的权利。
+
+因此，本 RFC 继续让 Stage 1-4 遵循仓库的 Apache-2.0 政策。Stage 5 只是形成新的
+决策点，不会自动触发许可证切换。源码不会仅仅因为实现 shared-authority contract
+或通过远端 provider canary 就变成 AGPL-3.0。
+
 ## 2. 要做的，以及不要做的
 
 **这版要做的**
