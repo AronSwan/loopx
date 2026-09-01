@@ -55,6 +55,13 @@ from .experiment_board import (
     render_benchmark_experiment_board_markdown,
     upsert_benchmark_experiment_board_row,
 )
+from .external_agent import (
+    BENCHMARK_CONTINUATION_DECISION_SCHEMA_VERSION,
+    BENCHMARK_PUBLIC_PROGRESS_SCHEMA_VERSION,
+    BenchmarkContinuationDecision,
+    build_benchmark_continuation_decision,
+    normalize_benchmark_public_progress,
+)
 from .factorial_contrast import (
     BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION,
     build_benchmark_factorial_contrasts,
@@ -178,6 +185,7 @@ __all__ = [
     "BENCHMARK_CONCURRENCY_ENVELOPE_FILENAME",
     "BENCHMARK_CONCURRENCY_ENVELOPE_SCHEMA_VERSION",
     "BENCHMARK_CONCURRENCY_FEEDBACK_SCHEMA_VERSION",
+    "BENCHMARK_CONTINUATION_DECISION_SCHEMA_VERSION",
     "BENCHMARK_EXACT_CONTAINER_BINDING_SCHEMA_VERSION",
     "BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME",
     "BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION",
@@ -191,6 +199,7 @@ __all__ = [
     "BENCHMARK_INTEGRITY_POLICY_SCHEMA_VERSION",
     "BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION",
     "BENCHMARK_RESOURCE_HEADROOM_RECEIPT_SCHEMA_VERSION",
+    "BENCHMARK_PUBLIC_PROGRESS_SCHEMA_VERSION",
     "BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION",
@@ -209,6 +218,7 @@ __all__ = [
     "RUN_PERMISSION_POLICY_SCHEMA_VERSION",
     "RUN_PERMISSION_QUOTA_PROJECTION_SCHEMA_VERSION",
     "BenchmarkEventWindowState",
+    "BenchmarkContinuationDecision",
     "BenchmarkJobReceiptState",
     "BenchmarkRunnerOwnerState",
     "BenchmarkRuntimeClassification",
@@ -246,6 +256,7 @@ __all__ = [
     "build_benchmark_candidate_source_boundary",
     "build_benchmark_concurrency_config",
     "build_benchmark_concurrency_status",
+    "build_benchmark_continuation_decision",
     "build_benchmark_experiment_board",
     "build_benchmark_factorial_contrasts",
     "build_benchmark_four_arm_contract",
@@ -279,6 +290,7 @@ __all__ = [
     "normalize_benchmark_concurrency_config",
     "normalize_benchmark_concurrency_envelope",
     "normalize_benchmark_concurrency_feedback",
+    "normalize_benchmark_public_progress",
     "normalize_benchmark_experiment_board_row",
     "normalize_benchmark_resource_headroom_receipt",
     "observe_native_goal_event",

@@ -50,6 +50,37 @@ consuming the result or starting a verifier, because the solver may exit while
 leaving detached descendants behind. A runner without that lifecycle must fail
 closed before invoking `agent-phase`.
 
+### Bounded continuation decision
+
+When a benchmark treatment deliberately adds LoopX-governed continuation, keep
+process launch and progress observation in the runner and ask LoopX only for the
+next disposition:
+
+```bash
+loopx benchmark continuation-decision \
+  --progress-json .local/private-run/public-progress.json \
+  --expected-first-prompt-sha256 "$EXPECTED_PROMPT_SHA256" \
+  --observed-first-prompt-sha256 "$OBSERVED_PROMPT_SHA256" \
+  --expected-total-unit-count 5 \
+  --previous-completed-unit-count 2 \
+  --completed-segment-count 1 \
+  --max-agent-segments 2 \
+  --elapsed-ms 300000 \
+  --total-budget-ms 7200000 \
+  --format json
+```
+
+The command is read-only. It accepts only aggregate public progress counts and
+returns `continue`, `stop_complete`, `stop_prompt_mismatch`,
+`stop_progress_regression`, `stop_task_shape_mismatch`, `stop_round_limit`, or
+`stop_time_budget`, plus a fair-share timeout for the next segment. The runner
+must give the first solver
+segment the complete original task prompt, freeze the initial unit count, and supply
+matching independently calculated digests. Later prompts may add
+only public progress; they must not disclose verifier output or hidden evaluation.
+The runner remains responsible for invoking the next agent segment, measuring the
+shared total budget, preserving containment, and collecting evidence.
+
 ## Source revision admission
 
 A long-running campaign can keep launching from an old installed checkout after

@@ -78,6 +78,26 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "command": (
+                "loopx benchmark continuation-decision "
+                "--progress-json <public-progress.json> "
+                "--expected-first-prompt-sha256 <sha256> "
+                "--observed-first-prompt-sha256 <sha256> "
+                "--expected-total-unit-count <n> "
+                "--previous-completed-unit-count <n> "
+                "--completed-segment-count <n> --max-agent-segments <n> "
+                "--elapsed-ms <ms> --total-budget-ms <ms> --format json"
+            ),
+            "purpose": (
+                "Choose a bounded next agent segment from public progress while "
+                "preserving first-prompt parity and the total time budget."
+            ),
+            "write_boundary": (
+                "read-only decision; caller owns progress observation, process "
+                "lifecycle, continuation prompt construction, and evidence capture"
+            ),
+        },
+        {
+            "command": (
                 "loopx benchmark experiment-board-show --goal-id <goal-id> "
                 "[--four-arm-contract-json <compact-contract.json>] --format json"
             ),
@@ -594,6 +614,20 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
     },
     "implemented_protocols": [
+        {
+            "schema_version": "benchmark_public_progress_v0",
+            "purpose": (
+                "Carry aggregate completed and total unit counts without unit ids, "
+                "paths, task text, or verifier output."
+            ),
+        },
+        {
+            "schema_version": "benchmark_continuation_decision_v0",
+            "purpose": (
+                "Choose a bounded continue or stop disposition without invoking "
+                "the host, writing state, or owning benchmark lifecycle."
+            ),
+        },
         {
             "schema_version": "benchmark_four_arm_contract_v0",
             "module": "loopx.capabilities.benchmark_toolkit.four_arm_contract",

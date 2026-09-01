@@ -63,6 +63,18 @@ def test_benchmark_toolkit_catalog_exposes_integrity_boundary() -> None:
         for command in capability["commands"]
     )
     assert any(
+        "continuation-decision" in command["command"]
+        for command in capability["commands"]
+    )
+    assert any(
+        protocol["schema_version"] == "benchmark_public_progress_v0"
+        for protocol in capability["implemented_protocols"]
+    )
+    assert any(
+        protocol["schema_version"] == "benchmark_continuation_decision_v0"
+        for protocol in capability["implemented_protocols"]
+    )
+    assert any(
         protocol["schema_version"] == "benchmark_integrity_qualification_v0"
         for protocol in capability["implemented_protocols"]
     )
