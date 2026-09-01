@@ -699,9 +699,12 @@ loopx benchmark concurrency-release \
 Configuration, admission, and release are project-local, locked, and atomic.
 `max-active-cases` is the hard ceiling; `target-active-cases` is desired occupancy.
 Below target, status reports the exact gap, a preferred arm group, and
-`next_action=backfill_to_target`. `active_counts` is an admission ledger, not
-runtime proof. On each launch, terminal or runner-invalid transition, and a bounded
-periodic cadence, pass exact-job receipt and runner-owner facts through
+`next_action=backfill_to_target`. At target, new admission fails closed with
+`target_capacity_exhausted`. When target is lowered below current occupancy, status
+reports `next_action=drain_to_target`; no active run is terminated, and replacement
+admission remains closed until occupancy falls below target. `active_counts` is an
+admission ledger, not runtime proof. On each launch, terminal or runner-invalid
+transition, and a bounded periodic cadence, pass exact-job receipt and runner-owner facts through
 `runtime-observation`. Apply its typed terminal or runner-invalid transition before
 releasing that reservation, then backfill the reported gap.
 
@@ -711,14 +714,67 @@ capacity, file descriptors, persistent storage, or provider capacity, enable
 fresh `benchmark_resource_headroom_receipt_v0`. The provider observes its own
 environment and supplies only typed `sufficient`, `insufficient`, or `unresolved`
 checks plus a validity window of at most 15 minutes. Missing, expired, future,
-unresolved, or
-insufficient receipts fail closed before the slot is reserved. LoopX never records
-raw metrics, paths, provider logs, or the receipt in the envelope, and the receipt
-does not grant launch authority.
+unresolved, or insufficient receipts fail closed before the slot is reserved. Each
+check must observe the runner-resolved resource actually consumed by the launch—for
+example its profile, cache, scratch, and artifact filesystems—not merely a generic
+host default such as `/tmp`; if that binding cannot be proven, report `unresolved`.
+LoopX never records raw metrics, paths, provider logs, or the receipt in the
+envelope, and the receipt does not grant launch authority.
 
 Read back the gate with `concurrency-status`. To disable it, rerun
 `concurrency-configure` with the same capacity values and omit
 `--require-resource-headroom-receipt`; existing active reservations are preserved.
+
+To ramp toward the hard ceiling without guessing a new occupancy on every monitor
+cycle, feed compact runner-owned health into the adaptive tuner. It uses additive
+increase after consecutive saturated healthy windows and subtractive decrease on
+launch, provider-capacity, runner-invalid, or typed resource-pressure evidence:
+
+```bash
+loopx benchmark concurrency-tune \
+  --goal-id <goal-id> \
+  --feedback-json concurrency-feedback.json \
+  --resource-headroom-json resource-headroom.json \
+  --saturated-healthy-windows-required 2 \
+  --increase-step 1 \
+  --decrease-step 1 \
+  --execute \
+  --format json
+```
+
+`concurrency-tune` changes only `target-active-cases`. The configured
+`max-active-cases`, baseline/test caps, and reserved test slots remain
+operator-owned. Lowering the target never terminates an active run; it only prevents
+replacement admissions until occupancy falls below the new target. Missing, stale,
+future, or unresolved feedback/headroom produces a hold; malformed input fails closed
+without a write. Feedback also carries the exact `updated_at` revision of the
+concurrency envelope it observed. Any configure, target change, admission, or release
+invalidates that receipt, so one healthy window cannot be replayed across target
+levels. A runner may preserve its healthy-window streak across ordinary campaign
+churn only when the transition is a qualified terminal run followed by a successful
+refill and the whole observation window has no launch failure, provider-capacity
+rejection, runner-invalid transition, or typed resource pressure. It must then issue
+new feedback bound to the post-refill envelope revision; the pre-transition receipt
+remains invalid. Reset the streak for any failed refill, unresolved terminal state,
+or pressure signal. Preview
+is the default; `--execute` atomically writes the selected target. The runner remains
+responsible for measuring resources, constructing `benchmark_concurrency_feedback_v0`,
+and launching admitted work; raw metrics and receipts are never persisted.
+
+```json
+{
+  "schema_version": "benchmark_concurrency_feedback_v0",
+  "observed_envelope_updated_at": "2026-09-01T03:49:30Z",
+  "window_started_at": "2026-09-01T03:50:00Z",
+  "observed_at": "2026-09-01T04:00:00Z",
+  "expires_at": "2026-09-01T04:05:00Z",
+  "saturated_healthy_window_streak": 2,
+  "launch_attempts": 1,
+  "launch_failures": 0,
+  "provider_capacity_rejections": 0,
+  "runner_invalid_transitions": 0
+}
+```
 
 ```json
 {
@@ -741,7 +797,9 @@ shared authority instead of configuring one envelope per host.
 At campaign startup, create the capability packet's
 `concurrency_occupancy.monitor_todo_template` as one goal-scoped
 `continuous_monitor` todo. This preserves the obligation to notice and fill safe
-capacity without granting launch authority. The runner still owns launch, liveness,
+capacity without granting launch authority. On material monitor windows, preview
+`concurrency-tune`; execute its target change only when the runner-authorized campaign
+has opted into adaptive occupancy. The runner still owns launch, liveness,
 termination, credentials, verifier ordering, scoring, upload, and submission.
 
 ## Experiment board
