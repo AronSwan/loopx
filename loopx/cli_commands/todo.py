@@ -17,13 +17,7 @@ from ..control_plane.quota.settlement import (
     read_heartbeat_settlement,
     settlement_result_payload,
 )
-from ..control_plane.todos.handoff_mode import HandoffModeError
-from ..control_plane.todos.external_wait_contract import (
-    TodoExternalWaitAuthoringError,
-)
 from ..control_plane.todos.markdown import render_todo_markdown
-from ..control_plane.work_items.task_lease import TaskLeaseError
-from ..file_lock import lock_timeout_error_fields
 from ..history import load_index, load_registry
 from ..paths import resolve_runtime_root
 from ..registry import registry_goals
@@ -62,7 +56,11 @@ from .todo_argument_validation import (
     validate_todo_supersede_options,
     validate_todo_update_options,
 )
-from .todo_event import RolloutEventAppender, append_todo_rollout_event
+from .todo_event import (
+    RolloutEventAppender,
+    append_todo_rollout_event,
+    todo_error_payload,
+)
 from .post_writeback import (
     PostWritebackProjectionBuilder,
     dispatch_committed_cli_post_writeback_hooks,
@@ -1010,28 +1008,7 @@ def handle_todo_command(
         else:
             raise ValueError("unsupported todo command")
     except Exception as exc:
-        payload = {
-            "ok": False,
-            "dry_run": True
-            if args.todo_command == "suggest"
-            else not bool(args.execute)
-            if args.todo_command == "archive-completed"
-            else bool(args.dry_run),
-            "added": False,
-            "already_exists": False,
-            "goal_id": args.goal_id,
-            "role": args.role,
-            "todo": args.text or "",
-            "error": str(exc),
-            **lock_timeout_error_fields(exc),
-        }
-        if isinstance(exc, (TaskLeaseError, HandoffModeError)):
-            payload["error_code"] = exc.code
-            payload.update(exc.payload)
-        elif isinstance(exc, TodoExternalWaitAuthoringError):
-            payload["error_code"] = exc.code
-            if exc.authoring_contract is not None:
-                payload["authoring_contract"] = exc.authoring_contract
+        payload = todo_error_payload(args, exc)
     append_todo_rollout_event(
         payload,
         args=args,
