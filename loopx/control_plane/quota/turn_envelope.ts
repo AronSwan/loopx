@@ -88,11 +88,25 @@ function object(value: unknown): JsonObject {
     : {};
 }
 
-function pythonString(value: unknown): string {
+type PythonScalar = string | number | boolean | null | undefined;
+
+function pythonString(value: PythonScalar): string {
   if (value === null || value === undefined) return "None";
   if (value === true) return "True";
   if (value === false) return "False";
   return String(value);
+}
+
+function scalarString(value: unknown, label: string, fallback = ""): string {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean"
+  ) {
+    throw new EffectRuntimeRequestError(`${label} must be scalar-compatible`);
+  }
+  return pythonString(value);
 }
 
 function integer(value: unknown, label: string): number {
@@ -107,7 +121,7 @@ function integer(value: unknown, label: string): number {
 
 function text(value: unknown, limit: number): string | null {
   if (value === null || value === undefined) return null;
-  const compact = pythonString(value).trim().split(/\s+/u).join(" ");
+  const compact = scalarString(value, "text value").trim().split(/\s+/u).join(" ");
   if (!compact) return null;
   if (compact.length <= limit) return compact;
   return `${compact.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
@@ -147,8 +161,19 @@ function canonicalValue(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   const source = value as JsonObject;
   return Object.fromEntries(
-    Object.keys(source).sort().map((key) => [key, canonicalValue(source[key])]),
+    Object.keys(source).sort(comparePythonUnicode).map((key) => [key, canonicalValue(source[key])]),
   );
+}
+
+function comparePythonUnicode(left: string, right: string): number {
+  const leftPoints = Array.from(left, (item) => item.codePointAt(0) ?? 0);
+  const rightPoints = Array.from(right, (item) => item.codePointAt(0) ?? 0);
+  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = leftPoints[index] - rightPoints[index];
+    if (difference !== 0) return difference;
+  }
+  return leftPoints.length - rightPoints.length;
 }
 
 function compactJson(value: unknown): string {
@@ -238,7 +263,7 @@ function userChannel(interaction: JsonObject, payload: JsonObject): JsonObject {
   const channel: JsonObject = {
     action_required: Boolean(source.action_required ?? payload.action_required),
     open_count: integer(payload.open_count, "payload.open_count"),
-    notify: String(source.notify || "DONT_NOTIFY"),
+    notify: scalarString(source.notify, "interaction.user_channel.notify", "DONT_NOTIFY"),
   };
   const actions = textList(source.actions, 3, 360);
   if (actions.length > 0) channel.actions = actions;
@@ -283,7 +308,9 @@ function requiredReads(interaction: JsonObject, payload: JsonObject): JsonObject
 
 function boundary(payload: JsonObject): JsonObject {
   const source = object(payload.goal_boundary);
-  const result: JsonObject = { rule: String(source.rule || "stay_in_scope_or_stop") };
+  const result: JsonObject = {
+    rule: scalarString(source.rule, "goal_boundary.rule", "stay_in_scope_or_stop"),
+  };
   const adapter = object(source.adapter);
   if (Object.keys(adapter).length > 0) {
     result.adapter = Object.fromEntries(
@@ -381,9 +408,12 @@ function executionPolicy(payload: JsonObject): JsonObject {
 }
 
 function renderProtocolActionPacketSummary(fields: JsonObject): string {
-  return Object.entries(fields).map(([key, value]) =>
-    `${key}=${typeof value === "boolean" ? String(value) : String(value)}`
-  ).join(" ");
+  return Object.entries(fields).map(([key, value]) => {
+    const rendered = typeof value === "boolean"
+      ? String(value)
+      : scalarString(value, `protocol_action_fields.${key}`);
+    return `${key}=${rendered}`;
+  }).join(" ");
 }
 
 function derivedProtocolActionPacketFields(
@@ -395,7 +425,7 @@ function derivedProtocolActionPacketFields(
   const interaction = object(capsule.interaction_contract);
   const workLane = object(capsule.work_lane_contract);
   const automation = object(capsule.automation_liveness);
-  const mode = String(interaction.mode || "");
+  const mode = scalarString(interaction.mode, "interaction_contract.mode");
   const userRequired = Boolean(user.action_required);
   const agentRequired = Boolean(action.must_attempt);
   const actor = userRequired && ["scoped_user_gate_fallback", "bounded_delivery_with_user_notice"].includes(mode)
@@ -498,9 +528,12 @@ function contractCapsule(
 
 function actionProjection(payload: JsonObject, protocolActionFields: JsonObject): JsonObject {
   const agentIdentity = object(payload.agent_identity);
-  const semanticAgentId = String(payload.agent_id || agentIdentity.agent_id || "").trim() || null;
+  const semanticAgentId = scalarString(
+    payload.agent_id || agentIdentity.agent_id,
+    "quota payload agent_id",
+  ).trim() || null;
   const turn = interpretQuotaShouldRunPacket(payload, {
-    goal_id: String(payload.goal_id || "") || null,
+    goal_id: scalarString(payload.goal_id, "quota payload goal_id") || null,
     agent_id: semanticAgentId,
   });
   const interaction = object(payload.interaction_contract);
@@ -537,7 +570,11 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
     const successorCommand = writebackContract.successor_command;
     const refreshCommand = nextCliActions.find((item) => item.includes("refresh-state"));
     nextCliActions = [];
-    if (successorCommand) nextCliActions.push(pythonString(successorCommand));
+    if (successorCommand) {
+      nextCliActions.push(
+        scalarString(successorCommand, "replan_action_packet.writeback_contract.successor_command"),
+      );
+    }
     if (refreshCommand) nextCliActions.push(refreshCommand);
   }
   const selectionRequired = cliChannel.selection_required === true;
@@ -647,7 +684,7 @@ function shellQuote(value: string): string {
 }
 
 function commandPrefix(runtimeRoot: unknown): string {
-  const runtimeRootText = String(runtimeRoot || "").trim();
+  const runtimeRootText = scalarString(runtimeRoot, "quota payload runtime_root").trim();
   return runtimeRootText ? `loopx --runtime-root ${shellQuote(runtimeRootText)}` : "loopx";
 }
 
@@ -656,7 +693,7 @@ function coldPath(
   agentId: string | null,
   schedulerExecutionArgs: string,
 ): JsonObject {
-  const goalId = String(payload.goal_id || "<goal-id>");
+  const goalId = scalarString(payload.goal_id, "quota payload goal_id", "<goal-id>");
   const agentArg = agentId ? ` --agent-id ${agentId}` : "";
   const prefix = commandPrefix(payload.runtime_root);
   return {
@@ -689,7 +726,10 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     );
   }
   const schedulerExecutionArgs = request.scheduler_execution_args;
-  const agentId = String(object(payload.agent_identity).agent_id || "").trim() || null;
+  const agentId = scalarString(
+    object(payload.agent_identity).agent_id,
+    "quota payload agent_identity.agent_id",
+  ).trim() || null;
   const actionProjectionValue = turnActionProjection(payload, protocolActionFields);
   const envelope: JsonObject = {
     ok: Boolean(payload.ok),

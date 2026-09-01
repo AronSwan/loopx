@@ -147,6 +147,36 @@ test("v0 compaction metric preserves Unicode code-point compatibility", () => {
   );
 });
 
+test("signature key ordering preserves Python Unicode code-point compatibility", () => {
+  const source = {
+    goal_id: "g",
+    agent_identity: { agent_id: "a" },
+    interaction_contract: {
+      schema_version: "loopx_interaction_contract_v0",
+      mode: "quiet",
+      user_channel: { action_required: false, notify: "DONT_NOTIFY" },
+      agent_channel: {
+        must_attempt: false,
+        delivery_allowed: false,
+        quiet_noop_allowed: true,
+      },
+      cli_channel: {},
+    },
+    goal_boundary: {
+      execution_profile: { "𐀀": "astral", "": "bmp" },
+    },
+  };
+  const envelope = buildTurnEnvelope({
+    payload: source,
+    protocol_action_fields: {},
+    scheduler_execution_args: "",
+  });
+  assert.equal(
+    (envelope.action_signature as Record<string, unknown>).source_decision_hash,
+    "sha256:c68a197d600a6b89b6d2816a77e2de4c03e0cc6a7ac5821d039d9320ab341795",
+  );
+});
+
 test("selected Todo text references preserve Unicode casefold compatibility", () => {
   const source = payload();
   source.recommended_action = "STRASSE";
@@ -211,6 +241,35 @@ test("transaction boundary rejects malformed prepared facts", () => {
   assert.throws(
     () => buildTurnEnvelope({
       payload: invalid,
+      protocol_action_fields: protocolActionFields,
+      scheduler_execution_args: "",
+    }),
+    EffectRuntimeRequestError,
+  );
+
+  for (const [field, invalidValue] of [
+    ["goal_id", { injected: true }],
+    ["runtime_root", ["unexpected"]],
+  ] as const) {
+    const malformed = payload();
+    malformed[field] = invalidValue;
+    assert.throws(
+      () => buildTurnEnvelope({
+        payload: malformed,
+        protocol_action_fields: protocolActionFields,
+        scheduler_execution_args: "",
+      }),
+      EffectRuntimeRequestError,
+    );
+  }
+
+  const malformedMode = payload();
+  (malformedMode.interaction_contract as Record<string, unknown>).mode = {
+    injected: true,
+  };
+  assert.throws(
+    () => buildTurnEnvelope({
+      payload: malformedMode,
       protocol_action_fields: protocolActionFields,
       scheduler_execution_args: "",
     }),
