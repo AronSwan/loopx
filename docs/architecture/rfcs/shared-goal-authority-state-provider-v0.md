@@ -662,6 +662,54 @@ quota semantics, settlement idempotency, and receipt meaning. In particular,
 an adapter must not reinterpret a provider transaction result as a domain
 decision.
 
+The Stage 1 TypeScript contract makes read failure classes explicit. A proven
+`missing` head is different from `unavailable` storage, while corrupt bytes or
+an invalid lineage are `failed`; only proven absence may authorize bootstrap.
+Commit has the closed storage outcomes `applied | conflict | ambiguous |
+failed`. `ambiguous` means a publish was attempted but durability cannot be
+proved from the response, so the authority must reconcile through
+`read_receipt` and a fresh head read. A provider exception or human-readable
+error string is never itself commit proof.
+
+The three adapters implement those logical verbs through different native
+primitives; the contract does not pretend they are interchangeable databases:
+
+| Concern | File Stage 1 | NoKV Stage 2A | PostgreSQL Stage 2B |
+| --- | --- | --- | --- |
+| conditional revision | revision chain compared under the cross-process document lock | path `generation` passed to compare-and-publish | per-tenant/per-goal head-row revision, checked under a row lock or conditional update |
+| atomic event/projection/receipt commit | one complete journal document, file fsync, atomic rename, directory fsync | one generation-CAS envelope; receipt and scan data remain embedded until a qualified multi-record protocol exists | one SQL transaction updating the head and inserting ordered event/receipt rows |
+| operation uniqueness | retained journal rejects duplicate `operation_id` | authority receipt index in the CAS envelope | unique `(tenant_id, goal_id, operation_id)` constraint, used as storage fencing rather than a domain decision |
+| cursor | document-local monotonically increasing opaque string | embedded journal cursor, still subject to capacity qualification | per-goal sequence allocated in the same transaction; never a global ordering claim |
+| lineage | durable directory `store-identity` | workbench plus never-reused `workspace_incarnation_id` | service-managed database incarnation bound to the provider deployment |
+| trust boundary | trusted embedded LoopX process | LoopX-authority-owned NoKV credentials | authenticated tenant-scoped LoopX service role; Agents never receive table credentials |
+
+For PostgreSQL, `commit_authority` is one transaction, not a series of
+independent repository calls: lock or conditionally update the scoped head,
+verify the expected provider revision, allocate the next scoped cursor, insert
+the committed transaction/events/receipts, update the projection head, and
+commit. A connection failure before any write is a proved `failed` result; a
+connection loss after commit may have started is `ambiguous` and is reconciled
+by the unique operation row and receipt read. `READ COMMITTED` plus an explicit
+per-head row lock/conditional update can implement this contract; choosing
+`SERIALIZABLE` is an adapter decision, not a substitute for LoopX CAS,
+operation identity, or lease fencing. Authentication, tenant routing, audit,
+pool exhaustion, cancellation, timeout, and failover must all fail closed at
+the service boundary.
+
+For NoKV, the existing `load` / `compare_and_put` reference already maps
+missing, generation conflict, ambiguous publication, and workbench-incarnation
+lineage. It does **not** yet prove the widened event/receipt/cursor service
+contract. Until capacity, retention, restart/restore, availability, and HA are
+qualified, `read_receipt` and `scan_committed` can only be implemented by
+reading the retained journal inside the one CAS envelope; they must not be
+silently mapped to an eventually consistent listing API.
+
+The file provider is therefore conformance evidence, not a production-scale
+event store. Its retained journal intentionally makes atomicity and historical
+receipt replay easy to inspect, at the cost of whole-document growth. That
+tradeoff is acceptable for Stage 1 and is explicitly not inherited as the
+PostgreSQL physical schema or accepted as NoKV capacity proof.
+
 ### 6.3 The three version numbers are not the same thing
 
 | Domain | Owner | Meaning | Consumer |

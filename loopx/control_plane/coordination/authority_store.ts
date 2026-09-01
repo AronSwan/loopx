@@ -1,28 +1,93 @@
 import type { JsonObject } from "../effect_program.ts";
 
-export const AUTHORITY_STORE_CAPABILITIES = [
+/**
+ * Logical guarantees every promoted authority store must expose.
+ *
+ * These are LoopX persistence guarantees, not claims that file, NoKV, and
+ * PostgreSQL have the same native primitives. The provider profile below
+ * records how each backend can implement them and which qualifications remain.
+ */
+export const AUTHORITY_STORE_REQUIRED_GUARANTEES = [
   "atomic_event_projection_receipt_commit",
-  "compare_and_swap",
-  "durable_readback",
-  "opaque_revision",
+  "conditional_provider_revision",
+  "durable_same_key_readback",
+  "explicit_ambiguous_commit",
   "ordered_cursor_scan",
-  "stable_store_identity",
+  "stable_store_lineage",
 ] as const;
-export type AuthorityStoreCapability =
-  (typeof AUTHORITY_STORE_CAPABILITIES)[number];
+export type AuthorityStoreRequiredGuarantee =
+  (typeof AUTHORITY_STORE_REQUIRED_GUARANTEES)[number];
 
-export const AUTHORITY_STORE_PROVIDER_CONFORMANCE = {
-  file: AUTHORITY_STORE_CAPABILITIES,
-  nokv: AUTHORITY_STORE_CAPABILITIES,
-  postgresql: AUTHORITY_STORE_CAPABILITIES,
+export type AuthorityStoreProviderKind = "file" | "nokv" | "postgresql";
+export type AuthorityStoreProviderStage =
+  | "stage1_implemented"
+  | "stage2a_candidate"
+  | "stage2b_planned";
+
+export interface AuthorityStoreProviderProfile {
+  stage: AuthorityStoreProviderStage;
+  revision_primitive: string;
+  atomic_commit_mapping: string;
+  receipt_and_cursor_mapping: string;
+  store_lineage_mapping: string;
+  trust_boundary: string;
+  qualification_holds: readonly string[];
+}
+
+/**
+ * Concrete backend mappings used to review adapters without flattening their
+ * failure or transaction models into a fictional universal database.
+ */
+export const AUTHORITY_STORE_PROVIDER_PROFILES = {
+  file: {
+    stage: "stage1_implemented",
+    revision_primitive: "locked_document_revision_chain",
+    atomic_commit_mapping: "single_durable_document_replace",
+    receipt_and_cursor_mapping: "retained_embedded_journal",
+    store_lineage_mapping: "directory_store_identity_file",
+    trust_boundary: "trusted_embedded_loopx_process",
+    qualification_holds: [
+      "authority_source_promotion",
+      "local_writer_fencing",
+    ],
+  },
+  nokv: {
+    stage: "stage2a_candidate",
+    revision_primitive: "path_generation_compare_and_publish",
+    atomic_commit_mapping: "single_cas_envelope",
+    receipt_and_cursor_mapping: "embedded_journal_pending_capacity_proof",
+    store_lineage_mapping: "workbench_workspace_incarnation_id",
+    trust_boundary: "loopx_authority_owned_nokv_credentials",
+    qualification_holds: [
+      "service_grade_contract_adapter",
+      "restart_and_restore_recovery",
+      "capacity_and_receipt_retention",
+      "availability_and_ha",
+    ],
+  },
+  postgresql: {
+    stage: "stage2b_planned",
+    revision_primitive: "goal_head_row_version_or_locked_revision",
+    atomic_commit_mapping: "one_sql_transaction_over_head_events_and_receipts",
+    receipt_and_cursor_mapping: "unique_operation_row_and_per_goal_sequence",
+    store_lineage_mapping: "service_managed_database_incarnation",
+    trust_boundary: "authenticated_tenant_scoped_loopx_service_role",
+    qualification_holds: [
+      "provider_implementation",
+      "transaction_isolation_and_commit_ambiguity",
+      "authentication_and_tenant_isolation",
+      "audit_and_fail_closed_network_behavior",
+    ],
+  },
 } as const satisfies Record<
-  "file" | "nokv" | "postgresql",
-  readonly AuthorityStoreCapability[]
+  AuthorityStoreProviderKind,
+  AuthorityStoreProviderProfile
 >;
 
-/** Provider-neutral persistence seam for one goal's shared authority. */
 export interface AuthorityStoreCommit {
+  /** Opaque storage token. Never substitute authority_revision or lease_epoch. */
   expected_provider_revision: string | null;
+  /** Stored for lookup/uniqueness; interpreted only by LoopX authority. */
   operation_id: string;
   events: readonly JsonObject[];
   next_projection: JsonObject;
@@ -30,9 +95,9 @@ export interface AuthorityStoreCommit {
 }
 
 export interface AuthorityStoreHead {
-  head: JsonObject | null;
-  provider_revision: string | null;
-  cursor: string | null;
+  head: JsonObject;
+  provider_revision: string;
+  cursor: string;
 }
 
 export interface AuthorityStoreCommittedTransaction {
@@ -44,23 +109,54 @@ export interface AuthorityStoreCommittedTransaction {
   receipts: readonly JsonObject[];
 }
 
+export type AuthorityStoreReadFailure =
+  | { status: "unavailable"; reason_code: string; reason: string }
+  | { status: "failed"; reason_code: string; reason: string };
+
+export type AuthorityStoreIdentityResult =
+  | { status: "available"; store_identity: string }
+  | AuthorityStoreReadFailure;
+
+export type AuthorityStoreLoadResult =
+  | ({ status: "loaded" } & AuthorityStoreHead)
+  | { status: "missing" }
+  | AuthorityStoreReadFailure;
+
 export type AuthorityStoreCommitResult =
   | { status: "applied"; provider_revision: string; cursor: string }
   | {
     status: "conflict";
+    conflict_kind: "provider_revision_mismatch" | "operation_id_exists";
     current_provider_revision: string | null;
     current_cursor: string | null;
   }
-  | { status: "ambiguous"; reason: string }
-  | { status: "failed"; reason: string };
+  | { status: "ambiguous"; reason_code: string; reason: string }
+  | { status: "failed"; reason_code: string; reason: string };
 
+export type AuthorityStoreReceiptResult =
+  | {
+    status: "found";
+    cursor: string;
+    provider_revision: string;
+    receipts: readonly JsonObject[];
+  }
+  | { status: "missing" }
+  | AuthorityStoreReadFailure;
+
+export type AuthorityStoreScanResult =
+  | {
+    status: "page";
+    transactions: readonly AuthorityStoreCommittedTransaction[];
+    next_cursor: string | null;
+    has_more: boolean;
+  }
+  | AuthorityStoreReadFailure;
+
+/** Storage-only seam. Legal transitions and receipt meaning stay in LoopX. */
 export interface AuthorityStore {
-  storeIdentity(): Promise<string>;
-  loadAuthority(): Promise<AuthorityStoreHead>;
+  storeIdentity(): Promise<AuthorityStoreIdentityResult>;
+  loadAuthority(): Promise<AuthorityStoreLoadResult>;
   commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult>;
-  readReceipt(operationId: string): Promise<readonly JsonObject[] | null>;
-  scanCommitted(
-    afterCursor: string | null,
-    limit: number,
-  ): Promise<readonly AuthorityStoreCommittedTransaction[]>;
+  readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult>;
+  scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult>;
 }
