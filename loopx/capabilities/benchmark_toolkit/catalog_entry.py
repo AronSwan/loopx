@@ -241,6 +241,24 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             ),
         },
         {
+            "command": (
+                "loopx benchmark traex-evidence "
+                "--source-jsonl <private-stdout.jsonl> "
+                "--route-source-jsonl <private-session.jsonl> "
+                "--atif-output <private-trajectory.json> "
+                "--route-receipt-output <public-route.json> "
+                "--requested-model <model> --execute --format json"
+            ),
+            "purpose": (
+                "Convert TraeX stdout or archived tool events into private ATIF "
+                "and independently reduce archived runtime route evidence."
+            ),
+            "write_boundary": (
+                "writes caller-selected local evidence files only; the command "
+                "receipt and route receipt omit prompts, tool content, and paths"
+            ),
+        },
+        {
             "command": "loopx benchmark classify-artifacts <paths...> --format json",
             "purpose": "Classify benchmark artifacts before reading or publishing them.",
             "write_boundary": "path classification only; no file reads or writes",
