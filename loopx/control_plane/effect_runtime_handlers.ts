@@ -45,6 +45,7 @@ import {
 import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace_causality.ts";
 import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { readQuotaSettlement } from "./quota/settlement_readback.ts";
+import { evaluateTurnEnvelope } from "./quota/turn_envelope.ts";
 import { evaluateDeliveryWorkspace } from "./agents/delivery_workspace.ts";
 import {
   interpretTurnJournal,
@@ -344,6 +345,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["quota.spend.commit", evaluateQuotaSpendCommit],
     ["quota.settlement.read", readQuotaSettlement],
+    ["quota.turn_envelope.evaluate", evaluateTurnEnvelope],
     ["task_lease.acquire.decide", evaluateTaskLeaseAcquireDecision],
     ["task_lease.acquire.native", executeTaskLeaseAcquire],
     ["task_lease.write_scopes.overlap", evaluateTaskLeaseWriteScopesOverlap],
