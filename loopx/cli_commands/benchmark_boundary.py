@@ -9,11 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..capabilities.benchmark_toolkit import (
+    BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION,
     BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION,
     BENCHMARK_FOUR_ARM_QUALIFICATION_SCOPE,
     BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION,
     BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION,
     BENCHMARK_SOURCE_REVISION_FENCE_SCHEMA_VERSION,
+    TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION,
     BenchmarkEventWindowState,
     BenchmarkJobReceiptState,
     BenchmarkRunnerOwnerState,
@@ -25,6 +27,7 @@ from ..capabilities.benchmark_toolkit import (
     build_benchmark_integrity_qualification,
     build_benchmark_runtime_continuity,
     build_benchmark_runtime_observation,
+    capture_traex_benchmark_evidence,
     compact_benchmark_four_arm_contract,
     compact_benchmark_source_revision_fence_receipt,
     filter_public_benchmark_artifact_paths,
@@ -46,6 +49,7 @@ BENCHMARK_TOOLKIT_COMMANDS = {
     "runtime-continuity",
     "runtime-observation",
     "source-revision-fence",
+    "traex-evidence",
     "verify-verifier-reward",
 }
 
@@ -151,6 +155,19 @@ def _render_runtime_continuity(payload: dict[str, object]) -> str:
     )
 
 
+def _render_traex_evidence(payload: dict[str, object]) -> str:
+    route = payload.get("model_route")
+    route = route if isinstance(route, dict) else {}
+    return (
+        "# TraeX Benchmark Evidence\n\n"
+        f"- Captured: `{payload.get('ok')}`\n"
+        f"- Steps: `{payload.get('step_count')}`\n"
+        f"- Tool calls: `{payload.get('tool_call_count')}`\n"
+        f"- Runtime route: `{route.get('status')}`\n"
+        "- Raw content recorded in receipt: `False`\n"
+    )
+
+
 def register_benchmark_boundary_commands(
     benchmark_subparsers: argparse._SubParsersAction,
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
@@ -253,6 +270,30 @@ def register_benchmark_boundary_commands(
     integrity_parser.add_argument("--sensitive-value-env", action="append", default=[])
     integrity_parser.add_argument("--require-qualified", action="store_true")
 
+    traex_parser = benchmark_subparsers.add_parser(
+        "traex-evidence",
+        help="Convert private TraeX JSONL to ATIF and a safe route receipt.",
+    )
+    add_subcommand_format(traex_parser)
+    traex_parser.add_argument("--source-jsonl", required=True)
+    traex_parser.add_argument(
+        "--route-source-jsonl",
+        help=(
+            "Optional archived TraeX JSONL containing runtime token-count route "
+            "events. Stdout JSONL alone normally cannot audit the model route."
+        ),
+    )
+    traex_parser.add_argument("--atif-output", required=True)
+    traex_parser.add_argument("--route-receipt-output", required=True)
+    traex_parser.add_argument("--requested-model", required=True)
+    traex_parser.add_argument("--requested-provider", default="trae")
+    traex_parser.add_argument("--require-runtime-route", action="store_true")
+    traex_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Write the private ATIF and public-safe route receipt.",
+    )
+
     reward_parser = benchmark_subparsers.add_parser(
         "verify-verifier-reward",
         help="Validate a verifier reward.json against the numeric-only contract.",
@@ -328,6 +369,38 @@ def _invalid_runtime_continuity_input() -> dict[str, object]:
             "path_recorded": False,
         },
         "write_performed": False,
+    }
+
+
+def _invalid_traex_evidence_input() -> dict[str, object]:
+    return {
+        "ok": False,
+        "schema_version": TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION,
+        "source_runtime": "traex",
+        "status": "input_invalid",
+        "event_count": 0,
+        "route_event_count": 0,
+        "route_source_bound": False,
+        "step_count": 0,
+        "tool_call_count": 0,
+        "private_atif_written": False,
+        "route_receipt_written": False,
+        "write_performed": False,
+        "model_route": {
+            "schema_version": BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION,
+            "runtime": "traex",
+            "status": "route_requested_not_runtime_audited",
+            "runtime_audited": False,
+            "matched": False,
+            "observed_route_count": 0,
+            "raw_content_recorded": False,
+            "input_path_recorded": False,
+        },
+        "public_boundary": {
+            "raw_content_recorded": False,
+            "input_path_recorded": False,
+            "output_path_recorded": False,
+        },
     }
 
 
@@ -421,6 +494,31 @@ def handle_benchmark_boundary_command(
         payload = verify_verifier_reward_file(args.reward_json)
         print_payload(payload, output_format(args), _render_reward_contract)
         return 1 if args.require_valid and not payload.get("valid") else 0
+
+    if args.benchmark_command == "traex-evidence":
+        try:
+            payload = capture_traex_benchmark_evidence(
+                source_jsonl=args.source_jsonl,
+                atif_output=args.atif_output,
+                route_receipt_output=args.route_receipt_output,
+                requested_model=args.requested_model,
+                requested_provider=args.requested_provider,
+                route_source_jsonl=args.route_source_jsonl,
+                execute=args.execute,
+            )
+        except (OSError, UnicodeError, TypeError, ValueError):
+            payload = _invalid_traex_evidence_input()
+        print_payload(payload, output_format(args), _render_traex_evidence)
+        if not payload.get("ok"):
+            return 1
+        route = payload.get("model_route")
+        route = route if isinstance(route, dict) else {}
+        if (
+            args.require_runtime_route
+            and route.get("status") != "runtime_route_verified"
+        ):
+            return 1
+        return 0
 
     try:
         trajectory = _read_json_object(args.trajectory_json, "--trajectory-json")
