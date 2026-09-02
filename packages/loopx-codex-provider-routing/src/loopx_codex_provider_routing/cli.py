@@ -14,6 +14,7 @@ from .contract import (
     normalize_selector_request,
     project_runtime_status,
     qualify_snapshot,
+    reconcile_integration_candidate,
     reject_private_material,
 )
 
@@ -45,6 +46,7 @@ def _doctor() -> int:
                 "normalize_selector_request",
                 "project_runtime_status",
                 "qualify_snapshot",
+                "reconcile_integration_candidate",
                 "upgrade_plan",
             ],
             "effect_boundary": "read_only_public_safe",
@@ -65,10 +67,11 @@ def _run_request(request: Any) -> dict[str, Any]:
         "normalize_selector_request": "normalization",
         "project_runtime_status": "status",
         "qualify_snapshot": "snapshot",
+        "reconcile_integration_candidate": "integration",
         "upgrade_plan": "upgrade",
     }
     if not isinstance(operation, str):
-        raise ValueError(f"unsupported operation: {operation!r}")
+        raise TypeError(f"operation must be a string, got {operation!r}")
     expected_field = operation_fields.get(operation)
     if expected_field is None:
         raise ValueError(f"unsupported operation: {operation!r}")
@@ -97,6 +100,13 @@ def _run_request(request: Any) -> dict[str, Any]:
         if not isinstance(snapshot, Mapping):
             raise ValueError("qualify_snapshot requires object `snapshot`")
         result = qualify_snapshot(snapshot)
+    elif operation == "reconcile_integration_candidate":
+        integration = request.get("integration")
+        if not isinstance(integration, Mapping):
+            raise ValueError(
+                "reconcile_integration_candidate requires object `integration`"
+            )
+        result = reconcile_integration_candidate(integration)
     else:
         upgrade = request.get("upgrade")
         if not isinstance(upgrade, Mapping):

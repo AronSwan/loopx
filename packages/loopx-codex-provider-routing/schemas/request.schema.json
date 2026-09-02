@@ -5,8 +5,24 @@
     {
       "properties": {
         "operation": {
+          "const": "reconcile_integration_candidate"
+        },
+        "normalization": false,
+        "snapshot": false,
+        "source": false,
+        "status": false,
+        "upgrade": false
+      },
+      "required": [
+        "integration"
+      ]
+    },
+    {
+      "properties": {
+        "operation": {
           "const": "project_runtime_status"
         },
+        "integration": false,
         "normalization": false,
         "snapshot": false,
         "source": false,
@@ -21,6 +37,7 @@
         "operation": {
           "const": "compile_catalog"
         },
+        "integration": false,
         "normalization": false,
         "snapshot": false,
         "status": false,
@@ -35,6 +52,7 @@
         "operation": {
           "const": "normalize_selector_request"
         },
+        "integration": false,
         "snapshot": false,
         "source": false,
         "status": false,
@@ -49,6 +67,7 @@
         "operation": {
           "const": "qualify_snapshot"
         },
+        "integration": false,
         "normalization": false,
         "source": false,
         "status": false,
@@ -63,6 +82,7 @@
         "operation": {
           "const": "upgrade_plan"
         },
+        "integration": false,
         "normalization": false,
         "snapshot": false,
         "source": false,
@@ -80,6 +100,7 @@
         "normalize_selector_request",
         "project_runtime_status",
         "qualify_snapshot",
+        "reconcile_integration_candidate",
         "upgrade_plan"
       ]
     },
@@ -87,6 +108,9 @@
       "const": "loopx_codex_provider_routing_request_v0"
     },
     "normalization": {
+      "type": "object"
+    },
+    "integration": {
       "type": "object"
     },
     "snapshot": {

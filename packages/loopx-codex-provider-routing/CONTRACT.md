@@ -10,6 +10,8 @@ Catalog: `codex_provider_routing_catalog_v1`
 
 Runtime status: `codex_provider_routing_runtime_status_v0`
 
+Integration candidate: `codex_provider_integration_candidate_v0`
+
 The provider accepts exactly one public-safe operation per invocation and
 returns a deterministic JSON result. An input containing credential-shaped
 keys fails before any operation runs.
@@ -18,6 +20,20 @@ The provider has no Kernel transition authority and no external write
 permission. A qualification result is evidence, not permission to edit a
 Codex home, install CPA, change a model, start a turn, rotate a credential or
 merge an upstream PR.
+
+The integration-candidate operation composes with, but does not replace,
+LoopX core `integration-branch`. It accepts only public Git refs, full commit
+SHAs, symbolic source IDs, source kinds and changed-seam labels. The caller
+must supply both current observations and the last successful sync receipt.
+Every observed source head must equal its declared exact head, and the ordered
+source set must cover every required seam. Base movement, source movement or an
+unexpected integration head produces `sync_required`; no Git effect is run.
+
+After a separately authorized core sync, deployment remains operator-owned.
+The returned contract requires a content-addressed binary, isolated smoke,
+field-level configuration comparison, catalog/retry/runtime readback and a
+retained previous binary/config pointer. Task/session stores are preserved in
+place and are never copied or deleted as part of candidate maintenance.
 
 Runtime status deliberately has two projections. `host_identity` records only
 that the operator's ChatGPT identity is retained but is not projected by the
