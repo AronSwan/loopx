@@ -22,6 +22,7 @@ compile_catalog = contract.compile_catalog
 normalize_selector_request = contract.normalize_selector_request
 project_runtime_status = contract.project_runtime_status
 qualify_snapshot = contract.qualify_snapshot
+reconcile_integration_candidate = contract.reconcile_integration_candidate
 
 
 def _source() -> dict[str, Any]:
@@ -554,6 +555,45 @@ def main() -> int:
     assert "effective_priority_admission" in plan["required_checks"]
     assert "turn_revision_match" in plan["required_checks"]
 
+    integration_request = json.loads(
+        (PACKAGE_ROOT / "examples" / "integration-candidate.json").read_text()
+    )
+    integration = reconcile_integration_candidate(integration_request["integration"])
+    assert integration["status"] == "in_sync"
+    assert integration["sync_required"] is False
+    assert integration["core_integration_plan"]["source_refs"] == [
+        "fork/provider-history-normalization",
+        "fork/reusable-http2-transport",
+        "operator/modality-routing",
+        "fork/route-specific-fallback",
+    ]
+    assert integration["deployment_contract"]["session_store_policy"] == (
+        "preserve_in_place_never_copy_or_delete"
+    )
+
+    moved_source = copy.deepcopy(integration_request["integration"])
+    moved_source["observed"]["source_heads"]["transport-pool"] = (
+        "7777777777777777777777777777777777777777"
+    )
+    moved_source["sources"][1]["head_sha"] = "7777777777777777777777777777777777777777"
+    integration = reconcile_integration_candidate(moved_source)
+    assert integration["sync_required"] is True
+    assert integration["drift_reasons"] == [
+        {
+            "kind": "source_moved",
+            "source_id": "transport-pool",
+            "last_sync_sha": "3333333333333333333333333333333333333333",
+            "observed_sha": "7777777777777777777777777777777777777777",
+        }
+    ]
+
+    uncovered = copy.deepcopy(integration_request["integration"])
+    uncovered["required_seams"].append("retry_policy")
+    expect_error(
+        lambda: reconcile_integration_candidate(uncovered),
+        "integration candidate without a required seam was accepted",
+    )
+
     response = _run_request(
         {
             "schema_version": REQUEST_SCHEMA_VERSION,
@@ -567,6 +607,7 @@ def main() -> int:
         "normalize-request.json",
         "runtime-status.json",
         "qualification-snapshot.json",
+        "integration-candidate.json",
         "upgrade-request.json",
     ):
         example_request = json.loads(
