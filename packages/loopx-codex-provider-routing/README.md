@@ -57,6 +57,12 @@ qualification.
   remaining quota and reports fallback only when more than one provider was
   attempted. It never accepts account identity, auth-file names or tokens.
 
+`reconcile_integration_candidate`
+: Validates one ordered multi-source CPA candidate against its last sync
+  receipt. It proves exact base/source heads, required runtime-seam coverage and
+  whether reconciliation is needed, then returns inputs for LoopX core
+  `integration-branch`. It never fetches, merges, pushes, builds or deploys.
+
 `upgrade_plan`
 : Produces a bounded upgrade/rollback checklist from public current and target
   refs plus the changed seams. It never installs, switches or deletes a
@@ -81,6 +87,10 @@ loopx extension run loopx-codex-provider-routing \
   --input-json packages/loopx-codex-provider-routing/examples/normalize-request.json \
   --execute \
   --format json
+loopx extension run loopx-codex-provider-routing \
+  --input-json packages/loopx-codex-provider-routing/examples/integration-candidate.json \
+  --execute \
+  --format json
 ```
 
 The extension runtime owns install/enable/disable/doctor registration. Package
@@ -96,6 +106,7 @@ The earlier operator scripts split into three classes:
 | Secret-free profile/catalog compiler | Migrated into `compile_catalog` and strengthened with modality/service-tier eligibility |
 | Fast selector catalog generation and request-tier normalization | Migrated into `compile_catalog` plus `normalize_selector_request`; the CPA adapter remains the online enforcement point |
 | App/CPA model readback assertions | Migrated as the content-free `qualify_snapshot` contract |
+| Ordered PR/patch candidate inventory and drift detection | Migrated as `reconcile_integration_candidate`; Git composition remains owned by LoopX core `integration-branch` |
 | Upgrade matrix, snapshot order and rollback triggers | Migrated as `upgrade_plan`; effect execution remains operator-owned |
 | CPA process launcher, OAuth login/reconcile, Ark key loading | Excluded; these are provider runtime and credential lifecycle, not LoopX state |
 | Direct App config writes, private snapshots and rollback copies | Excluded from v0; require an explicit permissioned execution envelope before productization |
