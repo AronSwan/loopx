@@ -465,14 +465,15 @@ def assert_technical_direction_governance_is_current() -> None:
         assert required in direction_zh, required
 
     for required in (
-        "## Accepted Architecture",
-        "## Active Research Programs",
-        "## Drafts Under Review",
-        "## Draft Integration Proposals",
+        "## Control-Plane Kernel, State, And Migration",
+        "## Planning, Research, And Adaptive Intelligence",
+        "## Runtime, Capability, And Collaboration Integration",
+        "## Operator Experience And Observability",
+        "## Benchmark And Reliability Engineering",
         "Current Technical Directions",
     ):
         assert required in rfc_index, required
-    assert "## Active Drafts" not in rfc_index
+    assert "## Status matrix" not in rfc_index
 
     for required in (
         "Long-Horizon Benchmarks and Evidence",
