@@ -31,6 +31,9 @@ concurrency:
   group: full-public-smokes-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LOOPX_USAGE_PING: "0"
+
 jobs:
   full-public-smokes:
     if: github.repository == 'loopx-project/loopx'
