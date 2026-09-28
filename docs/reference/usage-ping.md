@@ -105,6 +105,14 @@ settings also block all channels, even after explicit enable:
 - `DO_NOT_TRACK` set to a nonempty value other than `0`
 - `CI` set to a nonempty value other than `0|false`
 
+Project Python CI and public smoke workflows explicitly set `LOOPX_USAGE_PING=0`.
+Pytest and the canary smoke runner also disable collection for local validation.
+Native Codex benchmark profiles force the same opt-out during installation,
+runtime and Agent shell execution, even when a minimal environment removes `CI`
+or the parent requests collection. Release qualification uses the same boundary.
+These synthetic runs must not count as reporting installations. Telemetry tests
+may explicitly enable collection only against a disposable local collector.
+
 `LOOPX_USAGE_POLICY=consent_required` requires explicit enable; merely displaying
 the notice is insufficient. Default policy is `opt_out`; unknown policies fail
 closed. Distribution owners must choose the applicable policy before shipping;
