@@ -48,7 +48,7 @@ OS is `darwin|linux|windows|other`, CPU is `x64|arm64|x86|other`, and channel is
 `pip|local_release|source|unknown`. Version accepts only numeric major.minor.patch;
 a custom version containing a private suffix is not sent.
 
-**Closed-day CLI aggregate** (`POST /v1/aggregate`):
+**CLI aggregate batch** (`POST /v1/aggregate`):
 
 ```json
 {"schema":"loopx_usage_aggregate_v1","counters":[{"feature":"todo","outcome":"ok","duration":"lt_1s","error":"none","count":4}]}
@@ -128,16 +128,31 @@ CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
 
-Each installation attempts at most one heartbeat per UTC day. The detached
-sender persists that daily claim and starts the request under one short lock;
-network waiting happens after release, so another observer cannot consume the
-claim between persistence and request initiation. Counts are capped
-at 128 distinct rows and 10,000 per row, then flushed on the first eligible
-command after the UTC day closes. Unsent counts older than seven days are
-discarded. An installation that never runs again will not flush its final day.
-Lock contention, crashes and failed requests can lose counts. There are no
-immediate retries and no durable network queue. Clock rollback does not reopen
-a daily attempt. These are **lossy diagnostics**, not billing or audit records.
+Each installation attempts at most one heartbeat per UTC day. The first measured
+CLI result attempts an aggregate send immediately, including a failed result.
+Later eligible activity sends buffered deltas at most once every 15 minutes;
+UTC midnight does not reset that interval. Heartbeats and CLI batches have
+independent claims, so a heartbeat attempt cannot suppress a completed result.
+Startup alone never invents a result. Settings/status operations never flush.
+This replaces next-day-only CLI delivery for enabled installations across
+interactive and unattended CLI lanes; Goal-duration snapshots remain daily.
+
+Counts are capped at 128 distinct rows and 10,000 per row. Buffered counts expire
+after seven UTC days measured from the oldest buffered day. Existing daily
+buffers remain readable on upgrade. Each batch is removed and its attempt time
+persisted before the request starts under the same short lock; network waiting
+happens after release. Attempts are spaced even on failure or clock rollback.
+There are no immediate retries, background timers or durable network queues.
+A session that stops within the interval can still lose its unsent tail; this
+reduces dependence on next-day return without promising complete coverage.
+Lock contention, crashes and failed requests can also lose counts. These are
+**lossy diagnostics**, not billing or audit records.
+
+CLI batches still contain no installation ID, version or event date. The
+collector groups them by UTC reception date, which can differ from the activity
+date. Do not divide their totals by reporting installations to infer per-install
+usage, or attribute them to a release version. More frequent requests can make
+network timing correlation easier; identity-free payloads do not prevent that.
 
 Requests have a three-second deadline, do not block command completion, and
 cannot change its output or exit code. They use the supported Node runtime's
