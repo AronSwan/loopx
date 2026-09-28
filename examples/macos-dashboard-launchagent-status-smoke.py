@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Smoke-test LaunchAgent status output without touching real launchctl."""
+
+from __future__ import annotations
+
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LAUNCHAGENT_SCRIPT = REPO_ROOT / "scripts" / "macos-dashboard-launchagent.sh"
+
+
+def write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def run_script(fake_bin: Path, home: Path, args: list[str], *, schema_version: int, write_enabled: bool = False, extra_env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        "FAKE_STATUS_CONTRACT_SCHEMA_VERSION": str(schema_version),
+        "FAKE_CONTROL_PLANE_WRITE_ENABLED": "true" if write_enabled else "false",
+        "LOOPX_STATUS_CONTRACT_MIN_VERSION": "2",
+        "CODEX_HOME": "",
+        "LOOPX_CHAT_CODEX_HOME": "",
+        **(extra_env or {}),
+    }
+    return subprocess.run(
+        [str(LAUNCHAGENT_SCRIPT), *args],
+        cwd=REPO_ROOT,
+        env=env,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def run_status(fake_bin: Path, home: Path, *, schema_version: int, write_enabled: bool = False) -> str:
+    return run_script(fake_bin, home, ["status"], schema_version=schema_version, write_enabled=write_enabled).stdout
+
+
+def log_rotation_prelude(plist: Path) -> str:
+    """The rotation step the agent wrapper runs before it execs the service."""
+    command = plistlib.loads(plist.read_bytes())["ProgramArguments"][2]
+    prelude, separator, _ = command.partition(" export LOOPX_PYTHON=")
+    assert separator, command
+    return prelude
+
+
+def run_rotation_prelude(fake_bin: Path, prelude: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["zsh", "-c", prelude],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def check_log_rotation(fake_bin: Path, home: Path, plist: Path, basename: str, limit: int) -> None:
+    logs_dir = home / "Library" / "Logs" / "loopx"
+    prelude = log_rotation_prelude(plist)
+    for stream in ("out", "err"):
+        assert str(logs_dir / f"{basename}.{stream}.log") in prelude, prelude
+
+    # launchd opens StandardOutPath before the wrapper runs and keeps appending
+    # to that descriptor. Rotation must therefore truncate the live file rather
+    # than rename it, or the service's output follows the rotated copy and the
+    # live log stays empty until the next restart. Reproduce that descriptor.
+    live = logs_dir / f"{basename}.out.log"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_bytes(b"O" * (limit + 1))
+    descriptor = os.open(live, os.O_WRONLY | os.O_APPEND)
+    try:
+        run_rotation_prelude(fake_bin, prelude)
+        os.write(descriptor, b"after-rotation\n")
+    finally:
+        os.close(descriptor)
+    assert live.exists(), (
+        "rotation must truncate the live log in place: launchd's descriptor "
+        "follows a rename, which would strand the service's output in the "
+        "rotated copy and leave this path missing"
+    )
+    assert live.read_bytes() == b"after-rotation\n", live.read_bytes()[:80]
+    assert live.with_suffix(".log.1").read_bytes() == b"O" * (limit + 1)
+
+    # A log under the limit keeps its history; rotation is retention, not a
+    # reset on every service start.
+    small = logs_dir / f"{basename}.err.log"
+    small.write_bytes(b"kept")
+    run_rotation_prelude(fake_bin, prelude)
+    assert not small.with_suffix(".log.1").exists()
+    assert small.read_bytes() == b"kept"
+
+
+def check_retention_keeps_the_log_when_the_backup_fails(fake_bin: Path, home: Path, plist: Path, basename: str, limit: int) -> None:
+    """A failed backup must leave the live log alone.
+
+    Truncating on a failed copy would destroy the only record of the failure
+    the operator is trying to diagnose, so retention has to stand down and say
+    so instead.
+    """
+    logs_dir = home / "Library" / "Logs" / "loopx"
+    prelude = log_rotation_prelude(plist)
+    live = logs_dir / f"{basename}.out.log"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    original = b"E" * (limit + 1)
+    backup = live.with_suffix(".log.1")
+
+    def run_prelude() -> subprocess.CompletedProcess[str]:
+        result = run_rotation_prelude(fake_bin, prelude)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert live.read_bytes() == original, "a failed backup must not truncate the live log"
+        assert not backup.is_file(), "a failed backup must not leave a partial generation"
+        assert "skipped retention" in result.stderr, result.stderr
+        return result
+
+    # The previous generation is not replaceable: a directory at the backup path
+    # is a real copy failure, and cp would otherwise copy *into* it.
+    live.write_bytes(original)
+    if backup.is_file():
+        backup.unlink()
+    backup.mkdir()
+    try:
+        run_prelude()
+    finally:
+        shutil.rmtree(backup, ignore_errors=True)
+
+    # And a directory that cannot accept a new file fails the same way.
+    if os.geteuid() != 0:
+        backup.unlink(missing_ok=True)
+        live.write_bytes(original)
+        logs_dir.chmod(0o500)
+        try:
+            run_prelude()
+        finally:
+            logs_dir.chmod(0o755)
+
+
+def check_installed_retention_readback(
+    fake_bin: Path, home: Path, plist: Path, basename: str, limit: int
+) -> None:
+    """Status reports the installed policy, not the caller's environment."""
+    command = plistlib.loads(plist.read_bytes())["ProgramArguments"][2]
+    assert f"-gt {limit}" in command, command
+    installed = run_script(fake_bin, home, ["status"], schema_version=2).stdout
+    assert f"- retention: rotated to .1 at each agent start once a log exceeds {limit} bytes" in installed, installed
+    assert "not in effect" not in installed, installed
+    overridden = run_script(
+        fake_bin, home, ["status"], schema_version=2, extra_env={"LOOPX_LOG_MAX_BYTES": "4096"}
+    ).stdout
+    assert f"once a log exceeds {limit} bytes" in overridden, overridden
+    assert "LOOPX_LOG_MAX_BYTES=4096 is not in effect" in overridden, overridden
+
+
+def check_invalid_retention_is_rejected(fake_bin: Path, home: Path, plist: Path, limit: int) -> None:
+    """An unusable threshold fails before a wrapper is written."""
+    rejected = run_script(
+        fake_bin, home, ["install"], schema_version=2,
+        extra_env={"LOOPX_LOG_MAX_BYTES": "invalid"}, check=False,
+    )
+    assert rejected.returncode != 0, rejected.stdout
+    assert "LOOPX_LOG_MAX_BYTES must be a positive byte count, got: invalid" in rejected.stderr, rejected.stderr
+    # The rejected install left the previously installed wrapper in place.
+    command = plistlib.loads(plist.read_bytes())["ProgramArguments"][2]
+    assert f"-gt {limit}" in command, command
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory(prefix="loopx-launchagent-status-smoke-") as raw_tmp:
+        tmp = Path(raw_tmp)
+        fake_bin = tmp / "bin"
+        home = tmp / "home"
+        fake_bin.mkdir()
+        home.mkdir()
+
+        # This fixture models macOS commands on Linux CI. Keep the real BSD
+        # stat on macOS; emulate only its byte-count operation elsewhere.
+        if sys.platform != "darwin":
+            write_executable(
+                fake_bin / "stat",
+                f"#!{sys.executable}\n"
+                "import os, sys\n"
+                "if len(sys.argv) != 3 or sys.argv[1] != '-f%z':\n"
+                "    raise SystemExit(2)\n"
+                "print(os.stat(sys.argv[2]).st_size)\n",
+            )
+
+        write_executable(
+            fake_bin / "uname",
+            "#!/usr/bin/env bash\nprintf 'Darwin\\n'\n",
+        )
+        write_executable(
+            fake_bin / "launchctl",
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$1\" == \"print\" ]]; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [[ \"$1\" == \"bootout\" || \"$1\" == \"bootstrap\" || \"$1\" == \"kickstart\" ]]; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "echo \"unexpected launchctl args: $*\" >&2\n"
+            "exit 2\n",
+        )
+        write_executable(
+            fake_bin / "loopx",
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$*\" == *\"--format json doctor\"* ]]; then\n"
+            "  printf '%s\\n' '{\"release_manifest\":{\"manifest\":{\"release_id\":\"current-release\",\"package\":{\"version\":\"0.5.3\"},\"source\":{\"git_commit\":\"current-revision\"}}}}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "echo loopx \"$@\"\n",
+        )
+        write_executable(
+            fake_bin / "loopx-canary",
+            "#!/usr/bin/env bash\n"
+            "echo loopx-canary \"$@\"\n",
+        )
+        write_executable(
+            fake_bin / "curl",
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$*\" == *\"/api/chat/capabilities\"* ]]; then\n"
+            "  printf '%s\\n' '{\"ok\":true,\"schema_version\":\"loopx_chat_capabilities_v1\",\"runtime_identity\":{\"schema_version\":\"loopx_runtime_identity_v1\",\"package_version\":\"0.5.3\",\"release_id\":\"current-release\",\"source_revision\":\"current-revision\"}}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "version=\"${FAKE_STATUS_CONTRACT_SCHEMA_VERSION:-0}\"\n"
+            "write_enabled=\"${FAKE_CONTROL_PLANE_WRITE_ENABLED:-false}\"\n"
+            "cat <<EOF\n"
+            "{\"ok\":true,\"status_contract\":{\"schema_version\":${version},\"producer\":\"loopx status\"},\"local_dashboard_api\":{\"control_plane_write_enabled\":${write_enabled}}}\n"
+            "EOF\n",
+        )
+
+        old_output = run_status(fake_bin, home, schema_version=1)
+        assert "- com.loopx.status: loaded" in old_output, old_output
+        assert "- com.loopx.chat: loaded" in old_output, old_output
+        assert "- com.loopx.dashboard" not in old_output, old_output
+        assert "- status_contract: schema_version=1 producer=loopx status expected>=2" in old_output, old_output
+        assert "- control_plane_write_api: disabled" in old_output, old_output
+        assert "warning: status feed is using an old contract; run:" in old_output, old_output
+        assert "macos-dashboard-launchagent.sh restart" in old_output, old_output
+
+        current_output = run_status(fake_bin, home, schema_version=2, write_enabled=True)
+        assert "- status_contract: schema_version=2 producer=loopx status expected>=2" in current_output, current_output
+        assert "- control_plane_write_api: enabled" in current_output, current_output
+        assert "warning: control-plane registry writes are enabled" in current_output, current_output
+        assert "warning: status feed is using an old contract" not in current_output, current_output
+        assert "LaunchAgents:" in current_output, current_output
+        assert "URLs:" in current_output, current_output
+        assert "Logs:" in current_output, current_output
+
+        run_script(fake_bin, home, ["install"], schema_version=2)
+        status_plist = home / "Library" / "LaunchAgents" / "com.loopx.status.plist"
+        chat_plist = home / "Library" / "LaunchAgents" / "com.loopx.chat.plist"
+        default_plist = status_plist.read_text(encoding="utf-8")
+        default_chat_plist = chat_plist.read_text(encoding="utf-8")
+        assert "--enable-control-plane-write-api" not in default_plist, default_plist
+        assert " chat --global-registry " in default_chat_plist, default_chat_plist
+        assert "--port 8767" in default_chat_plist, default_chat_plist
+        assert "--replace-existing-loopx-chat" in default_chat_plist, default_chat_plist
+        assert "--no-open" in default_chat_plist, default_chat_plist
+        assert f"export CODEX_HOME={(home / '.codex').resolve()};" in default_chat_plist, default_chat_plist
+        assert "export LOOPX_PYTHON=" in default_plist, default_plist
+        assert "export LOOPX_PYTHON=" in default_chat_plist, default_chat_plist
+        assert "/loopx --registry" in default_plist, default_plist
+        assert "/loopx-canary" not in default_plist, default_plist
+        assert not (home / "Library" / "LaunchAgents" / "com.loopx.dashboard.plist").exists(), "retired dashboard LaunchAgent should not be installed"
+
+        # KeepAlive restarts never re-enter this installer, so each agent
+        # carries its own retention step for both of its streams.
+        rotation_limit = 1024
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"LOOPX_LOG_MAX_BYTES": str(rotation_limit)})
+        for plist, basename in ((status_plist, "status"), (chat_plist, "chat")):
+            check_log_rotation(fake_bin, home, plist, basename, rotation_limit)
+            check_retention_keeps_the_log_when_the_backup_fails(fake_bin, home, plist, basename, rotation_limit)
+            check_installed_retention_readback(fake_bin, home, plist, basename, rotation_limit)
+        check_invalid_retention_is_rejected(fake_bin, home, status_plist, rotation_limit)
+        assert f"- retention: rotated to .1 at each agent start once a log exceeds {rotation_limit} bytes" in run_script(
+            fake_bin, home, ["status"], schema_version=2,
+        ).stdout
+
+        run_script(
+            fake_bin,
+            home,
+            ["--enable-control-plane-write-api", "restart"],
+            schema_version=2,
+            extra_env={"LOOPX_CHAT_CODEX_HOME": str(home / "selected-codex-home")},
+        )
+        write_plist = status_plist.read_text(encoding="utf-8")
+        selected_chat_plist = chat_plist.read_text(encoding="utf-8")
+        assert "--enable-control-plane-write-api" in write_plist, write_plist
+        selected = (home / 'selected-codex-home').resolve()
+        assert f"export CODEX_HOME={selected};" in selected_chat_plist, selected_chat_plist
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"CODEX_HOME": str(home / "unrelated-upgrader")})
+        assert plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_CODEX_HOME"] == str(selected)
+
+        # Legacy generated plists used only a shell export. Preserve quoted
+        # paths across upgrades without ever executing their command contents.
+        legacy = plistlib.loads(chat_plist.read_bytes())
+        legacy.pop("EnvironmentVariables")
+        legacy_home = (home / "legacy home").resolve()
+        legacy["ProgramArguments"] = ["/bin/zsh", "-c", f"export CODEX_HOME='{legacy_home}'; exec loopx chat"]
+        chat_plist.write_bytes(plistlib.dumps(legacy))
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"CODEX_HOME": str(home / "unrelated-upgrader")})
+        assert plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_CODEX_HOME"] == str(legacy_home)
+
+        chat_plist.write_bytes(b"invalid plist")
+        try:
+            run_script(fake_bin, home, ["install"], schema_version=2)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            raise AssertionError("malformed existing binding must fail closed")
+        assert chat_plist.read_bytes() == b"invalid plist"
+
+    print("macos-dashboard-launchagent-status-smoke ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
