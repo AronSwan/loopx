@@ -16,6 +16,7 @@ import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
+import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
@@ -725,6 +726,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.goal_draft", (params) => ({draft: admitGoalDraft(params)})],
     ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["chat.turn.accept", planChatTurnAcceptance],
