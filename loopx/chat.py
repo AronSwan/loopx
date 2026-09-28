@@ -106,6 +106,10 @@ class VisibleResponseStreamFilter:
     """Stream safe operator text while withholding the structured review envelope."""
 
     _FLUSH_BOUNDARIES = {"\n", "。", "！", "？"}
+    # Latin sentence punctuation ends a sentence only before whitespace, so
+    # decimals, versions, file names and URLs never split. The split lands on
+    # whitespace, which the length fallback below already treats as safe.
+    _SPACED_SENTENCE_ENDINGS = {".", "!", "?"}
     _MAX_PENDING_CHARS = 160
 
     def __init__(self, *, protected_paths: Iterable[Path | str] = ()) -> None:
@@ -125,6 +129,11 @@ class VisibleResponseStreamFilter:
         for index, character in enumerate(self.visible_pending[:search_limit]):
             if character in self._FLUSH_BOUNDARIES:
                 boundary = index + 1
+            elif (
+                character in self._SPACED_SENTENCE_ENDINGS
+                and self.visible_pending[index + 1 : index + 2] in {" ", "\t"}
+            ):
+                boundary = index + 2
         if boundary < 0 and len(self.visible_pending) >= self._MAX_PENDING_CHARS:
             prefix = self.visible_pending[: self._MAX_PENDING_CHARS + 1]
             whitespace = max(prefix.rfind(" "), prefix.rfind("\t"))
