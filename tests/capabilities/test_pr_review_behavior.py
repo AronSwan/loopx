@@ -1,7 +1,7 @@
 """Small no-tools decision probes; oracles are not exposed to the model.
 
 These test review reasoning on supplied evidence, not repository investigation.
-Live execution is opt-in and uses the existing bounded provider transport.
+Live execution is release-only opt-in and uses the existing bounded provider transport.
 """
 
 from __future__ import annotations
@@ -265,6 +265,55 @@ CASES.extend([
         "APPROVE", "none",
     ),
 ])
+
+
+# Product acceptance supplies the oracle; passing the author's click script does not.
+# Synthetic paired cases, not claims that historical UI/backend tests ran here.
+FRONTEND_CASES = [
+    (
+        {"request": "Review conversational goal preparation in the existing App.",
+         "problem": "A complete draft should reach one scoped creation preview and explicit apply; optional editing must remain available.",
+         "proposal": "Every complete draft opens a mandatory form, then another confirmation, then the existing preview and apply. All fields already exist in the draft.",
+         "evidence": "The packaged click script follows that sequence and passes; screenshots are readable. Neither extra step supplies new facts, missing permissions or consent. No test compares the accepted direct-preview journey. Backend validation and duplicate-submit tests pass."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review conversational goal preparation in the existing App.",
+         "problem": "A complete draft should reach one scoped creation preview and explicit apply; optional editing must remain available.",
+         "proposal": "Complete drafts open the existing typed preview directly; edit is optional and incomplete drafts ask for the missing consequential input. Apply remains explicit.",
+         "evidence": "Packaged task walkthrough and real action readback show one preview/apply, no effect before apply, safe cancel, changed-input revalidation and reload without duplicate creation. Source identity is recorded. Tests cover complete and incomplete inputs rather than enforcing one fixed click script; all other evidence is verified."},
+        "APPROVE", "none",
+    ),
+    (
+        {"request": "Review a recent-completions panel.",
+         "problem": "Users should see the most recently completed items across projects, ordered by completion time.",
+         "proposal": "Concatenate project arrays and take the first three items. Show the result as recent completions.",
+         "evidence": "The browser fixture supplies project arrays already ordered with newest completions first; screenshot and click tests pass. With project A completed on March 1 before project B completed on March 3, the actual selector still shows A first. Refresh time is displayed as the completion time. The interface renders clearly but no real selector ordering/readback comparison passes."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review a recent-completions panel.",
+         "problem": "Users should see the most recently completed items across projects, ordered by completion time.",
+         "proposal": "The existing shared projection orders known completion times across projects, uses a stable tie break and labels unknown dates without inventing freshness. UI renders that projection.",
+         "evidence": "Disposable real backend records intentionally invert insertion, project and completion order; projection and packaged page agree before and after reload. Equal timestamps and unknown times preserve explicit semantics. Populated/narrow views show readable titles and dates. No frontend-only ordering owner is added and other required checks pass."},
+        "APPROVE", "none",
+    ),
+    (
+        {"request": "Review a settings catalog exposing machine and per-project options.",
+         "problem": "A user must understand which project is being changed and see options applicable to that target.",
+         "proposal": "Offer two similarly named capability tabs; both list all options. Selecting a machine-only option in a project shows a read-only warning. Preserve the previous preview when switching project.",
+         "evidence": "Components and screenshots pass on an empty single-project fixture. The populated two-project walkthrough shows the old target's preview after switching, and users must open each option to learn its scope. Backend rejects wrong-target writes, but the UI does not identify the actionable target before confirmation."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review a settings catalog exposing machine and per-project options.",
+         "problem": "A user must understand which project is being changed and see options applicable to that target.",
+         "proposal": "Reuse one catalog with an explicit target, visible effective source and purpose-based navigation. Filter by the existing scope contract; target changes clear draft/preview and fetch the selected state.",
+         "evidence": "The packaged two-project walkthrough verifies visible target, keyboard selection, narrow layout and an unavailable target. Real revision-checked preview/apply/readback affects only the selected target. Cancel and reload preserve saved settings, not an abandoned draft. Legitimate effect confirmation remains; other evidence is verified."},
+        "APPROVE", "none",
+    ),
+]
+CASES.extend(FRONTEND_CASES)
 
 
 def test_decision_procedure_is_in_the_real_packet_before_prose():
