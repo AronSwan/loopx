@@ -260,6 +260,31 @@ export const chatRecoveryScenario = {
         observations.push(`Refresh recovery failure: ${error.message}`);
       }
 
+      // The Chat service accepts one Turn per Session. After a reload the page
+      // only learns about a running Turn from the Session snapshot, so the
+      // composer must wait for it instead of sending into a 409.
+      const turnsBeforeRunningCheck = api.turnRequests.length;
+      await page.getByLabel("向 LoopX 发送消息").fill("刷新后验证中断控制：输入框应等待本轮。");
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      while (api.turnRequests.length === turnsBeforeRunningCheck) await page.waitForTimeout(50);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await page.locator(".personal-goal-link").first().click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮回答进行中" });
+      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
+      if (!await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
+        throw new Error("Composer stayed sendable while the recovered Turn was running");
+      }
+      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
+        throw new Error("Composer stayed blocked after the running Turn completed");
+      }
+      if (api.turnRequests.length !== turnsBeforeRunningCheck + 1) throw new Error("A message was sent while the Turn was running");
+      await page.getByLabel("向 LoopX 发送消息").fill("");
+      pass("composer-running-turn", "After a reload the composer waits for the running Turn and reopens when it completes");
+
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
       await context.close();
