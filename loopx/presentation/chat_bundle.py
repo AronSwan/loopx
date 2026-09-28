@@ -6,6 +6,9 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
+# Absolute by necessity: scripts/chat_bundle.py execs this module by file path, so
+# it has no package context for a relative import.
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 
 MANIFEST = "bundle-manifest.json"
 CHAT_BUNDLE_SCHEMA_VERSION = "loopx_chat_bundle_v1"
@@ -108,7 +111,7 @@ def validate_bundle(bundle: Path, *, source_root: Path | None = None) -> dict:
             if (
                 not safe_relative(name)
                 or not isinstance(expected, str)
-                or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or not BARE_SHA256_PATTERN.fullmatch(expected)
             ):
                 raise ValueError("invalid bundle witness")
             path = bundle / name

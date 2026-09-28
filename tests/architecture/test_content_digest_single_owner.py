@@ -1,19 +1,25 @@
 """One owner decides what a stored SHA-256 looks like, and this keeps it that way.
 
-Two halves, both required. The source scan catches a module that restates a
-whole-value digest shape as its own literal even when the verdict is identical,
-so an equal-by-accident copy still fails. The per-site cases catch a surface
-wired to the wrong envelope. Neither half implies the other.
+Three halves, none of which substitutes for the others:
 
-Only whole-value shapes are owned here. A hex digest embedded in a larger
-grammar (a ``cadence_…`` id, a journal filename, a ``40|64`` Git object id, a
-compound cursor) answers that grammar's question and stays with its surface, and
-producers that concatenate ``"sha256:"`` by hand are a separate decision.
+* a **scan** that fails when any module states a whole-value digest shape itself. It
+  unions two detectors, because `re.fullmatch(r"[0-9a-f]{64}", value)` states exactly
+  the same decision as `^...$` while carrying no anchors at all, and an anchored-text
+  search alone would be blind to it;
+* an **identity** check that every consumer holds the owner object rather than a copy;
+* **per-surface cases** that enter through each surface's own reader, which is the only
+  half that can notice a surface wired to the wrong envelope.
+
+Only whole-value shapes are owned. A hex digest inside a larger grammar (a `cadence_…`
+id, a journal filename, a `40|64` Git object id, a compound cursor) answers that
+grammar's question and stays with its surface, and producers that concatenate
+`"sha256:"` by hand are a separate decision.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from pathlib import Path
 from typing import Any
@@ -30,50 +36,15 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "loopx"
 OWNER_MODULE = "loopx/control_plane/content_digest.py"
 HEX_CLASSES = ("[0-9a-f]", "[a-f0-9]")
 
-# Restatements this branch records instead of absorbing, each with the reason the
-# reviewer needs. A new entry has to earn its place; an entry that stops being
-# true fails the test below rather than ageing quietly.
-DEFERRED_WHOLE_VALUE_SITES = {
-    "loopx/capabilities/content_ops/item_lifecycle.py": (
-        "open PR #3313 is editing this file; migrating it here would collide, so "
-        "the copy stays until that PR lands"
-    ),
+# Recorded instead of absorbed, each with a reason that stands on the field contract
+# rather than on which other pull request happens to be open. An entry that stops being
+# true fails the test below instead of ageing quietly.
+DEFERRED_WHOLE_VALUE_SITES: dict[str, str] = {
     "loopx/capabilities/manager_context/inspection.py": (
-        "the shape is a JSON-schema `pattern` string consumed by a schema "
-        "validator, not a compiled Python pattern; pinned equal to the owner below"
+        "published as a JSON-schema `pattern` string, so it is schema data handed to a "
+        "validator rather than a matcher this owner may replace; pinned verdict for "
+        "verdict to the owner instead"
     ),
-}
-
-# Every module that now reads the owner instead of deciding for itself.
-MIGRATED_SITE_MODULES: dict[str, tuple[str, ...]] = {
-    "loopx.capabilities.benchmark_toolkit.behavior_finding": ("BARE_SHA256_PATTERN",),
-    "loopx.capabilities.benchmark_toolkit.study_projection": ("BARE_SHA256_PATTERN",),
-    "loopx.capabilities.periodic_report.archive": ("ENVELOPED_SHA256_PATTERN",),
-    "loopx.capabilities.periodic_report.incremental": ("ENVELOPED_SHA256_PATTERN",),
-    "loopx.capabilities.periodic_report.machine_defaults": (
-        "ENVELOPED_SHA256_PATTERN",
-    ),
-    "loopx.capabilities.progress_review.receipt": ("BARE_SHA256_PATTERN",),
-    "loopx.chat_action_normalization": ("BARE_SHA256_PATTERN",),
-    "loopx.configuration_transaction": ("ENVELOPED_SHA256_PATTERN",),
-    "loopx.control_plane.coordination.local_authority_shadow_outbox": (
-        "ENVELOPED_SHA256_PATTERN",
-    ),
-    "loopx.control_plane.goals.activation_service": ("BARE_SHA256_PATTERN",),
-    "loopx.control_plane.goals.deletion_service": ("BARE_SHA256_PATTERN",),
-    "loopx.control_plane.goals.goal_amendment_proposal": ("ENVELOPED_SHA256_PATTERN",),
-    "loopx.control_plane.projects.registry_codec": ("ENVELOPED_SHA256_PATTERN",),
-    "loopx.control_plane.testing.release_commit_qualification": (
-        "ENVELOPED_SHA256_PATTERN",
-    ),
-    "loopx.control_plane.work_items.governed_transition_proposal": (
-        "ENVELOPED_SHA256_PATTERN",
-    ),
-    "loopx.control_plane.work_items.progress_review_policy": ("BARE_SHA256_PATTERN",),
-    "loopx.extensions.openviking_semantic_preference.history_export": (
-        "BARE_SHA256_PATTERN",
-    ),
-    "loopx.extensions.presentation": ("BARE_SHA256_PATTERN",),
 }
 
 HEX64 = "a" * 64
@@ -101,30 +72,25 @@ BARE_REJECTS = (
     f"x{HEX64}",
     f"{HEX64} ",
     "",
-    "sha256:" + HEX64[:-1],
+    f"sha256:{HEX64[:-1]}",
 )
 
 
-def _regex_literals(module_path: Path) -> list[tuple[int, str]]:
-    tree = ast.parse(module_path.read_text(encoding="utf-8"))
-    found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if _whole_value_digest_shape(node.value) is not None:
-                found.append((node.lineno, node.value))
-    return found
+def _whole_value_shape(text: Any) -> str | None:
+    """Classify a literal as a whole-value digest shape, ignoring how it is anchored.
 
-
-def _whole_value_digest_shape(text: str) -> str | None:
-    """Return the envelope for `^`[sha256:]<hex class>`{64}`$`, else None.
-
-    Exact on purpose: a literal with anything else in it is a different question
-    and belongs to the grammar that wrote it.
+    Anchoring is the call's business: `re.fullmatch` gives whole-string semantics to an
+    unanchored literal and `\\Z` is equivalent to `$`. Anything carrying extra grammar
+    - a prefix, an alternation, a suffix - answers a different question and is skipped.
     """
 
-    if not (text.startswith("^") and text.endswith("$") and text.endswith("{64}$")):
+    if not isinstance(text, str) or "{64}" not in text:
         return None
-    body = text[1:-1]
+    body = text[1:] if text.startswith("^") else text
+    for tail in ("$", "\\Z"):
+        if body.endswith(tail):
+            body = body[: -len(tail)]
+            break
     enveloped = body.startswith("sha256:")
     remainder = body[len("sha256:") :] if enveloped else body
     for hex_class in HEX_CLASSES:
@@ -133,53 +99,140 @@ def _whole_value_digest_shape(text: str) -> str | None:
     return None
 
 
-def _whole_value_sites() -> dict[str, list[tuple[int, str]]]:
-    sites: dict[str, list[tuple[int, str]]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        if "__pycache__" in path.parts:
+def _module_sites(path: Path) -> list[tuple[int, str, str]]:
+    """Every whole-value digest literal this module states, and how it became one."""
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: dict[int, tuple[str, str]] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
             continue
-        relative = f"loopx/{path.relative_to(PACKAGE_ROOT).as_posix()}"
-        literals = _regex_literals(path)
-        if literals:
-            sites[relative] = literals
-    return sites
+        attribute = getattr(node.func, "attr", None)
+        receiver = getattr(getattr(node.func, "value", None), "id", None)
+        first = node.args[0]
+        if attribute not in {"compile", "fullmatch"}:
+            continue
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            continue
+        shape = _whole_value_shape(first.value)
+        if shape is None:
+            continue
+        if attribute == "compile":
+            anchored = first.value.startswith("^") and first.value.endswith(("$", "\\Z"))
+            if anchored:
+                found[first.lineno] = (first.value, "compiled whole-value pattern")
+        elif receiver == "re":
+            found[first.lineno] = (first.value, "re.fullmatch literal")
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _whole_value_shape(node.value)
+            and node.value.startswith("^")
+            and node.value.endswith("$")
+        ):
+            found.setdefault(node.lineno, (node.value, "anchored literal"))
+
+    return sorted((line, literal, how) for line, (literal, how) in found.items())
+
+
+def _scan_modules() -> list[Path]:
+    return sorted(
+        path
+        for path in PACKAGE_ROOT.rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+
+
+def _relative(path: Path) -> str:
+    return f"loopx/{path.relative_to(PACKAGE_ROOT).as_posix()}"
+
+
+def _consumer_modules() -> list[str]:
+    """Module names of every file that imports the owner - derived, not listed."""
+
+    consumers = []
+    for path in _scan_modules():
+        source = path.read_text(encoding="utf-8")
+        if "content_digest import" not in source:
+            continue
+        parts = list(path.relative_to(PACKAGE_ROOT.parent).parts)
+        parts[-1] = parts[-1][: -len(".py")]
+        consumers.append(".".join(parts))
+    return sorted(consumers)
 
 
 def test_only_the_owner_module_states_a_whole_value_digest_shape():
-    unexpected = {
-        relative: literals
-        for relative, literals in _whole_value_sites().items()
-        if relative not in DEFERRED_WHOLE_VALUE_SITES and relative != OWNER_MODULE
-    }
-    assert not unexpected, f"second owner(s) of the digest shape: {unexpected}"
+    offenders = {}
+    for path in _scan_modules():
+        relative = _relative(path)
+        if relative in DEFERRED_WHOLE_VALUE_SITES or relative == OWNER_MODULE:
+            continue
+        sites = _module_sites(path)
+        if sites:
+            offenders[relative] = sites
+    assert not offenders, f"second owner(s) of the digest shape: {offenders}"
 
 
 def test_owner_module_defines_each_shape_exactly_once():
-    literals = _regex_literals(PACKAGE_ROOT / "control_plane" / "content_digest.py")
-    shapes = [_whole_value_digest_shape(text) for _, text in literals]
-    # Counted, not set-compared: a second literal of a shape already exported here
-    # would leave the set unchanged and this branch's whole point unsaid.
-    assert sorted(shapes) == ["bare", "enveloped"], literals
-    assert len(literals) == 2, literals
+    sites = _module_sites(PACKAGE_ROOT / "control_plane" / "content_digest.py")
+    shapes = [_whole_value_shape(literal) for _, literal, _ in sites]
+    # Counted, not set-compared: a second literal of an already-exported shape would
+    # leave the set unchanged and leave this branch's whole point unsaid.
+    assert sorted(shapes) == ["bare", "enveloped"], sites
+    assert len(sites) == 2, sites
+
+
+def test_the_scan_reads_usage_not_only_anchor_text(tmp_path: Path) -> None:
+    """A `re.fullmatch` copy with no anchors at all must still be a violation.
+
+    Without this case the scan cannot be told apart from a plain literal search, which
+    is precisely how several production sites were written before this branch.
+    """
+
+    sample = tmp_path / "loopx" / "restated.py"
+    sample.parent.mkdir(parents=True)
+    sample.write_text(
+        "import re\n\n\ndef check(value):\n"
+        '    return re.fullmatch(r"[0-9a-f]{64}", value)\n',
+        encoding="utf-8",
+    )
+    assert _module_sites(sample), "an unanchored whole-value restatement escaped the scan"
+
+    grammar = tmp_path / "loopx" / "grammar.py"
+    grammar.write_text(
+        "import re\n\n\nPATTERN = re.compile(r\"cadence_[0-9a-f]{64}\")\n",
+        encoding="utf-8",
+    )
+    assert not _module_sites(grammar), "a compound id must not be pulled into the owner"
 
 
 def test_deferred_sites_are_still_the_ones_this_branch_recorded():
     for relative, reason in DEFERRED_WHOLE_VALUE_SITES.items():
-        assert isinstance(reason, str) and reason, relative
-        path = Path(__file__).resolve().parents[2] / relative
+        assert reason, relative
+        path = PACKAGE_ROOT.parent / relative
         assert path.is_file(), f"{relative} moved or vanished; update the allowlist"
-        assert _regex_literals(path), f"{relative} no longer restates the shape"
+        assert _module_sites(path), f"{relative} no longer restates the shape"
 
 
-def test_migrated_modules_hold_the_owner_object_not_an_equal_copy():
-    import importlib
-
-    for module_name, owned in MIGRATED_SITE_MODULES.items():
+def test_every_consumer_holds_the_owner_object_not_an_equal_copy():
+    imported = 0
+    for module_name in _consumer_modules():
         module = importlib.import_module(module_name)
+        owned = [
+            name
+            for name in ("BARE_SHA256_PATTERN", "ENVELOPED_SHA256_PATTERN")
+            if name in vars(module)
+        ]
+        assert owned, f"{module_name} imports neither owner name"
         for attribute in owned:
             assert getattr(module, attribute) is getattr(content_digest, attribute), (
                 f"{module_name}.{attribute} is a second definition"
             )
+        imported += 1
+    assert imported >= 40, f"expected the migrated surfaces to be imported, saw {imported}"
 
 
 @pytest.mark.parametrize("value", ENVELOPED_ACCEPTS)
@@ -202,13 +255,15 @@ def test_bare_pattern_rejects_everything_else(value: object) -> None:
     assert BARE_SHA256_PATTERN.fullmatch(value) is None
 
 
-@pytest.mark.parametrize("value", [HEX64, MIXED_HEX64, "A" * 64, "a" * 63, "g" * 64])
+@pytest.mark.parametrize(
+    "value", [HEX64, MIXED_HEX64, "A" * 64, "a" * 63, "g" * 64, HEX64 + " "]
+)
 def test_the_two_retired_bare_spellings_could_never_disagree(value: str) -> None:
     """Merging `[a-f0-9]` into `[0-9a-f]` cannot change a verdict.
 
-    The character class lists the same six letters and digits in a different
-    order, so both copies accepted and rejected the same strings. This is the
-    evidence that collapsing them is not a behaviour change.
+    The character class lists the same six letters and ten digits in a different order,
+    so both copies accepted and rejected the same strings; this is the evidence that
+    collapsing them is not a behaviour change.
     """
 
     first = re.compile(r"^[a-f0-9]{64}$")
@@ -217,20 +272,23 @@ def test_the_two_retired_bare_spellings_could_never_disagree(value: str) -> None
     assert bool(second.fullmatch(value)) == bool(BARE_SHA256_PATTERN.fullmatch(value))
 
 
+@pytest.mark.parametrize("value", [HEX64, ENVELOPED, "A" * 64, HEX64 + "0"])
+def test_the_dropped_unicode_anchor_variant_agrees_with_the_owner(value: str) -> None:
+    r"""Sites written `...\Z` are collapsed into `$` without changing a verdict."""
+
+    with_backslash = re.compile(r"^[0-9a-f]{64}\Z")
+    assert bool(with_backslash.fullmatch(value)) is bool(
+        BARE_SHA256_PATTERN.fullmatch(value)
+    ), value
+
+
 def test_schema_string_site_is_the_same_question_as_the_owner_bare_shape() -> None:
-    """`inspection.py` carries the shape as a JSON-schema string, not a pattern.
-
-    It is deliberately not an f-string of the owner: the schema is data published
-    to callers. This asserts it still describes the bare hex64 envelope, so the
-    two cannot drift into different verdicts unnoticed.
-    """
-
     from loopx.capabilities.manager_context import inspection
 
-    literals = _regex_literals(Path(inspection.__file__))
-    assert literals, "the recorded schema site no longer states the shape"
-    for _, text in literals:
-        assert _whole_value_digest_shape(text) == "bare"
+    sites = _module_sites(Path(inspection.__file__))
+    assert sites, "the recorded schema site no longer states the shape"
+    for _, text, _ in sites:
+        assert _whole_value_shape(text) == "bare"
         declared = re.compile(text)
         for value in (*BARE_ACCEPTS, *BARE_REJECTS):
             assert bool(declared.fullmatch(value)) is bool(
@@ -238,7 +296,7 @@ def test_schema_string_site_is_the_same_question_as_the_owner_bare_shape() -> No
             ), value
 
 
-# --- per-site wiring: every migrated surface is entered through its own reader --
+# --- per-surface wiring: every case enters through that surface's own reader ------
 
 
 def test_periodic_report_archive_requires_the_envelope() -> None:
@@ -271,9 +329,9 @@ def test_presentation_extension_keeps_its_own_message_and_bare_shape() -> None:
     assert presentation._sha256(HEX64, context="artifact") == HEX64
     with pytest.raises(ValueError, match="must be a lowercase SHA-256"):
         presentation._sha256("z" * 64, context="artifact")
-    # This surface also caps the field at 64 characters, so an enveloped digest
-    # never reaches the shape check here. That limit is the surface's own policy
-    # and is left alone; it is why the rejected probe above is same-length.
+    # This surface also caps the field at 64 characters, so an enveloped digest never
+    # reaches the shape check here. That limit is the surface's own policy and is left
+    # alone; it is why the rejected probe above is same-length.
     with pytest.raises(ValueError, match="at most 64 characters"):
         presentation._sha256(ENVELOPED, context="artifact")
 
@@ -302,9 +360,7 @@ def test_progress_review_policy_keeps_clearing_and_null_as_distinct_values() -> 
 
     assert normalize_progress_review_contract_revision(None) is None
     assert normalize_progress_review_contract_revision("") == ""
-    assert (
-        normalize_progress_review_contract_revision(HEX64) == HEX64
-    )  # positive control
+    assert normalize_progress_review_contract_revision(HEX64) == HEX64  # positive control
     with pytest.raises(ValueError, match="must be a sha256 hex digest"):
         normalize_progress_review_contract_revision(ENVELOPED)
 
@@ -353,12 +409,6 @@ def test_periodic_report_delivery_authority_checks_its_effective_revision() -> N
 
 
 def test_governed_transition_receipt_checks_the_intent_basis_field_only() -> None:
-    """`proposal_digest` is not checked by this shape, so the probe names the field.
-
-    An earlier draft of this case passed a bare `proposal_digest` and concluded
-    nothing; the migrated pattern guards the optional `intent_basis`.
-    """
-
     from loopx.control_plane.work_items.governed_transition_proposal import (
         GOVERNED_TRANSITION_RECEIPT_SCHEMA_VERSION as RECEIPT_SCHEMA,
         validate_governed_transition_receipts,
@@ -412,3 +462,5 @@ def test_shadow_outbox_cursor_keeps_its_envelope_and_its_absent_option() -> None
     )  # an unbound cursor is legal on this surface
     with pytest.raises(OutboxError, match="cursor binding"):
         decode_cursor(cursor(HEX64), partition=partition)
+
+
