@@ -462,7 +462,10 @@ export type PersonalWorkspaceCallbacks = {
     agentId: string,
     goalId: string | null,
     attachments?: WorkspaceImageAttachment[],
-  ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
+  // One request is a decision the owner reviews now; a list is candidate cards
+  // (for example an Agent's Todo proposals) left in the conversation.
+  ) => void | WorkspaceActionPreviewRequest | WorkspaceActionPreviewRequest[]
+    | Promise<void | WorkspaceActionPreviewRequest | WorkspaceActionPreviewRequest[]>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;

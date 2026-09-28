@@ -1587,7 +1587,10 @@ export function PersonalWorkspacePage({
       if (!selectedGoalId) setManagerConversationReceiptVisible(true);
       else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
       const semanticPreview = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
-      if (semanticPreview) await createPreview(semanticPreview);
+      if (Array.isArray(semanticPreview)) {
+        const drafted = await Promise.allSettled(semanticPreview.map((request) => createPreview(request, { select: false })));
+        if (drafted.some((result) => result.status === "rejected")) setActionFeedback(t("feedback.proposalDraftFailed"));
+      } else if (semanticPreview) await createPreview(semanticPreview);
     } catch (error) {
       if (!messageOverride) {
         setComposer(message);
