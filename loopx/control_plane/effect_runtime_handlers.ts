@@ -1,4 +1,5 @@
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
+import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -858,6 +859,9 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+    ["explore.research.normalize", normalizeResearchObservation],
+    ["explore.research.validate_attribution", validateResearchAttribution],
+    ["explore.research.frontier", projectResearchFrontier],
   ["work_item.replan_history.project", projectReplanHistory],
   ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],
     [

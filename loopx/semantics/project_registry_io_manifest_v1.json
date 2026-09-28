@@ -631,7 +631,7 @@
     },
     {
       "site": "loopx/cli_commands/explore.py::<module>.handle_explore_command::codec_read:load_registry#1",
-      "line": 447,
+      "line": 466,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
