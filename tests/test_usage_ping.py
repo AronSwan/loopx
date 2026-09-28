@@ -204,6 +204,30 @@ def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isola
     assert str(isolated) not in json.dumps(received)
 
 
+def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, collector, monkeypatch):
+    endpoint, received, accepted, release = collector
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    release.set()
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    first = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert first.returncode == 0 and 'random installation ID' in first.stderr
+    assert received == []
+    second = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert second.returncode == 0 and json.loads(second.stdout) == json.loads(first.stdout)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not any(p['schema'] == 'loopx_usage_aggregate_v1' for p in received):
+        time.sleep(0.02)
+    aggregates = [p for p in received if p['schema'] == 'loopx_usage_aggregate_v1']
+    assert len(aggregates) == 1, 'one completed command must not depend on a next-day invocation'
+    assert set(aggregates[0]) == {'schema', 'counters'}
+    counters = aggregates[0]['counters']
+    assert len(counters) == 1 and counters[0]['feature'] == 'version'
+    assert counters[0]['outcome'] == 'ok' and counters[0]['count'] == 1
+    assert usage_ping.control('status')['aggregate_preview'] is None
+    usage_ping.control('disable')
+
+
 def test_business_failure_and_usage_failure_do_not_replace_original_result(isolated, monkeypatch):
     usage_ping.control('enable')
     import loopx.cli_runtime as cli
