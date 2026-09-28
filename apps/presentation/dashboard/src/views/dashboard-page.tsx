@@ -2267,6 +2267,8 @@ function PersonalGoalHome({
         sourceLabel: "LoopX Chat 本地后端",
         text: payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
+          : payloadError?.active_turn_id
+            ? t("composer.turnRunning")
           : error instanceof Error
             ? error.message
             : `${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话暂时不可用。`,
