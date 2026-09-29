@@ -20,6 +20,7 @@ Two halves, both needed:
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -92,7 +93,13 @@ def _run_uninstalled(
 ) -> subprocess.CompletedProcess:
     """Run a script with `site` disabled, so an installed LoopX cannot answer for the tree."""
 
-    environment = {"PATH": "/usr/bin:/bin"}
+    # `-I` ignores PYTHONPATH and user site, `-S` hides site-packages; together they are
+    # what stops an installed LoopX from rescuing a checkout-local loader. The environment
+    # is inherited minus PYTHONPATH, because on Windows a stripped environment loses
+    # SystemRoot and the interpreter then fails for a reason this test is not about.
+    environment = {
+        key: value for key, value in os.environ.items() if key != "PYTHONPATH"
+    }
     return subprocess.run(
         [sys.executable, "-I", "-S", str(script), *arguments],
         cwd=cwd,
