@@ -296,6 +296,42 @@ export const chatRecoveryScenario = {
       await page.getByLabel("向 LoopX 发送消息").fill("");
       pass("composer-running-turn", "After a reload, and after leaving and returning, the composer waits for the running Turn and reopens when it completes");
 
+      // Another page starts a Turn after this page's last snapshot, so the
+      // ordinary POST is the first to learn of it: the service answers 409
+      // with the running Turn. The page must adopt that Turn with its
+      // controls, keep the draft, and stay blocked until the Turn completes.
+      const busySessionId = api.turnRequests.at(-1).sessionId;
+      const foreignTurnId = `turn-foreign-${Date.now()}`;
+      page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
+      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: foreignTurnId, status: "busy" });
+      let rejectedPosts = 0;
+      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        rejectedPosts += 1;
+        await route.fulfill({ contentType: "application/json", status: 409,
+          json: { ok: false, error: "another turn is already running for this session", active_turn_id: foreignTurnId } });
+      });
+      const draft = "这条消息在另一回合运行时发出";
+      const composerInput = page.getByLabel("向 LoopX 发送消息");
+      const sendButton = page.getByRole("button", { name: "发送", exact: true });
+      await composerInput.fill(draft);
+      await sendButton.click();
+      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "调整本轮" }).waitFor({ state: "visible" });
+      if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept");
+      if (!(await sendButton.isDisabled())) throw new Error("Send stayed enabled after the service reported a running Turn");
+      await sendButton.click({ force: true });
+      if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
+        throw new Error("A message the service did not accept stayed in the conversation");
+      }
+      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
+      if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
+      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await composerInput.fill("");
+      pass("composer-running-turn-409", "A 409 running-Turn receipt is adopted with its controls, keeps the draft and blocks Send until completion");
+
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
       await context.close();

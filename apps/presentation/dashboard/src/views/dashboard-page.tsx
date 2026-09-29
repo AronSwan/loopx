@@ -1401,6 +1401,9 @@ function PersonalGoalHome({
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
+  // Bumped when the service reports a running Turn this page did not know
+  // about, so the Turn recovery effect re-reads the Session and adopts it.
+  const [turnRecoveryRequest, setTurnRecoveryRequest] = useState(0);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
   // undefined: not read yet; null: the session owner could not be read.
@@ -1819,7 +1822,7 @@ function PersonalGoalHome({
       cancelled = true;
       recoveryController?.abort();
     };
-  }, [contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents]);
+  }, [contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -2251,6 +2254,22 @@ function PersonalGoalHome({
         return;
       }
       const payloadError = error instanceof ChatApiError ? error.payload : null;
+      const runningTurnId = !route?.loopxMode && typeof payloadError?.active_turn_id === "string"
+        ? payloadError.active_turn_id
+        : "";
+      if (runningTurnId) {
+        // The Session already runs a Turn this page had not seen, so the
+        // message was not accepted. Withdraw it, let the recovery effect adopt
+        // the running Turn with its identity and controls, and reject the send
+        // so the composer keeps the draft.
+        setMessagesByContext((messages) => ({
+          ...messages,
+          [targetContextId]: (messages[targetContextId] ?? []).filter((message) =>
+            message.id !== userMessageId && message.id !== streamingMessageId),
+        }));
+        if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
+        throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});
+      }
       if (payloadError && sessionInvalidatedByPayload(payloadError)) {
         sessionIds.current.delete(sessionKey);
       }
@@ -2276,8 +2295,6 @@ function PersonalGoalHome({
         sourceLabel: "LoopX Chat 本地后端",
         text: payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
-          : payloadError?.active_turn_id
-            ? t("composer.turnRunning")
           : error instanceof Error
             ? error.message
             : `${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话暂时不可用。`,
