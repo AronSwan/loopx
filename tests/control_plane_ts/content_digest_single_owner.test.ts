@@ -36,6 +36,12 @@ type Matcher = {
   /** Null when the pattern expression could not be folded to a value. */
   pattern: string | null;
   envelope: Envelope | "unresolved-visible" | null;
+  /**
+   * Which rule produced the site: a regex literal, a recognised construction of the built-in
+   * `RegExp`, or a digest pattern handed to some other call (`Reflect.construct(RegExp, […])`,
+   * `RegExp.call(null, …)`). Only `constructor` sites can be unfoldable.
+   */
+  via: "literal" | "constructor" | "argument";
 };
 
 /** Sites that keep their own matcher, each with a reason a reviewer can check. */
@@ -319,6 +325,79 @@ function isImportSpecifier(node: ts.Node): boolean {
 }
 
 /** Every RegExp created in this source: literal, `new RegExp(...)` or `RegExp(...)`. */
+/** The receivers `RegExp` can legitimately be reached through. */
+const GLOBAL_RECEIVERS = new Set(["globalThis", "window", "global", "self"]);
+
+/** `Function.prototype` hops that keep the built-in as the constructor. */
+const FUNCTION_METHODS = new Set(["call", "apply", "bind"]);
+
+/**
+ * Does this callee denote the built-in `RegExp`? Identifier spelling, a global receiver
+ * (`globalThis.RegExp`, `globalThis["RegExp"]`), or a const alias bound to one of those. Bounded on
+ * purpose - no checker and no symbol graph - so a callee is only followed through the same const
+ * bindings the pattern fold uses. What a call *passes* is folded separately, which is what stops an
+ * unrecognised callee from becoming an exit.
+ */
+function calleeNamesRegExp(
+  callee: ts.Expression,
+  scope: Scope,
+  source: ts.SourceFile,
+  depth = 0,
+): boolean {
+  if (depth > 4) return false;
+  const expr = ts.isParenthesizedExpression(callee) ? callee.expression : callee;
+  if (ts.isIdentifier(expr)) {
+    if (expr.text === "RegExp") return true;
+    const found = binding(scope, expr.text);
+    return found !== null && found.init !== null && calleeNamesRegExp(found.init, found.at, source, depth + 1);
+  }
+  if (ts.isPropertyAccessExpression(expr)) {
+    if (ts.isIdentifier(expr.expression) && GLOBAL_RECEIVERS.has(expr.expression.text)) {
+      return expr.name.text === "RegExp";
+    }
+    // `RegExp.call(null, pattern)` and friends still construct with the built-in.
+    return FUNCTION_METHODS.has(expr.name.text) && calleeNamesRegExp(expr.expression, scope, source, depth + 1);
+  }
+  if (ts.isElementAccessExpression(expr)) {
+    const reached = calleeNamesRegExp(expr.expression, scope, source, depth + 1);
+    if (reached) return true;
+    return (
+      ts.isIdentifier(expr.expression) &&
+      GLOBAL_RECEIVERS.has(expr.expression.text) &&
+      foldStringExpression(expr.argumentExpression, scope, source) === "RegExp"
+    );
+  }
+  return false;
+}
+
+/** Does this expression statically denote the built-in `RegExp`, directly or through one alias? */
+function refersToRegExp(expr: ts.Expression, scope: Scope, source: ts.SourceFile): boolean {
+  return calleeNamesRegExp(expr, scope, source);
+}
+
+/**
+ * A digest pattern reaching a call that is not a recognised construction. `Reflect.construct`
+ * carries it inside an argument list, so a nested array literal is unfolded element-wise.
+ */
+function foldedDigestArguments(args: readonly ts.Expression[], scope: Scope, source: ts.SourceFile): string[] {
+  const values: string[] = [];
+  for (const arg of args) {
+    const direct = foldStringExpression(arg, scope, source);
+    if (direct !== null) {
+      if (digestEnvelope(direct) !== null) values.push(direct);
+      continue;
+    }
+    if (ts.isArrayLiteralExpression(arg)) {
+      for (const element of arg.elements) {
+        if (ts.isSpreadElement(element)) continue;
+        const nested = foldStringExpression(element, scope, source);
+        if (nested !== null && digestEnvelope(nested) !== null) values.push(nested);
+      }
+    }
+  }
+  return values;
+}
+
 function matchersInText(text: string, file: string): Matcher[] {
   const source = parse(text, file);
   const written = assignedNames(source);
@@ -333,7 +412,7 @@ function matchersInText(text: string, file: string): Matcher[] {
     if (defaultName !== undefined) declare(root, defaultName.text, null);
   }
 
-  (function walk(node: ts.Node, scope: Scope): void {
+  (function walk(node: ts.Node, scope: Scope, insideConstruction: boolean): void {
     const inner =
       node.kind === ts.SyntaxKind.SourceFile || !SCOPE_OPENERS.has(node.kind)
         ? scope
@@ -351,7 +430,7 @@ function matchersInText(text: string, file: string): Matcher[] {
       }
     }
 
-    const push = (pattern: string | null, flags: string | null): void => {
+    const push = (pattern: string | null, flags: string | null, via: Matcher["via"]): void => {
       const spelling = node.getText(source).replace(/\s+/g, " ");
       found.push({
         file,
@@ -360,31 +439,37 @@ function matchersInText(text: string, file: string): Matcher[] {
         flags,
         pattern,
         envelope: pattern !== null ? digestEnvelope(pattern) : VISIBLE_HEX64_CLASS.test(spelling) ? "unresolved-visible" : null,
+        via,
       });
     };
 
+    let recognised = false;
     if (ts.isRegularExpressionLiteral(node)) {
       const raw = node.getText(source);
       const close = raw.lastIndexOf("/");
-      push(raw.slice(1, close), raw.slice(close + 1));
-    } else if (
-      (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "RegExp"
-    ) {
+      push(raw.slice(1, close), raw.slice(close + 1), "literal");
+      recognised = true;
+    } else if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
       const args = node.arguments ?? [];
-      const patternArg = args[0];
-      if (patternArg !== undefined) {
-        const flagsArg = args[1];
-        push(
-          foldStringExpression(patternArg, inner, source),
-          flagsArg === undefined ? "" : foldStringExpression(flagsArg, inner, source),
-        );
+      if (args.length > 0 && calleeNamesRegExp(node.expression, inner, source)) {
+        const patternArg = args[0];
+        if (patternArg !== undefined) {
+          const flagsArg = args[1];
+          push(
+            foldStringExpression(patternArg, inner, source),
+            flagsArg === undefined ? "" : foldStringExpression(flagsArg, inner, source),
+            "constructor",
+          );
+          recognised = true;
+        }
+      } else if (!insideConstruction && args.some((arg) => refersToRegExp(arg, inner, source))) {
+        // The built-in is named as an argument, e.g. `Reflect.construct(RegExp, [pattern])`.
+        for (const value of foldedDigestArguments(args, inner, source)) push(value, null, "argument");
       }
     }
 
-    ts.forEachChild(node, (child) => walk(child, inner));
-  })(source, root);
+    ts.forEachChild(node, (child) => walk(child, inner, recognised));
+  })(source, root, false);
   return found;
 }
 
@@ -497,6 +582,23 @@ test("restating the shape is the same violation in every spelling", () => {
       'const SHAPE = "^unrelated$";\nif (true) {\n  const SHAPE = "^[0-9a-f]{64}$";\n  new RegExp(SHAPE);\n}\nnew RegExp(SHAPE);\n',
     ],
     [
+      // The fourth review round's bypass: the constructor is reached through `globalThis`, so the
+      // callee is a property access and an identifier-only check never enters the fold at all.
+      "global receiver construction",
+      'export function check(value: string): boolean {\n  return new globalThis.RegExp("^[0-9a-f]{64}$").test(value);\n}\n',
+    ],
+    ["global receiver without `new`", 'const CHECK = globalThis.RegExp("^[a-f0-9]{64}$");\n'],
+    ["computed global receiver", 'const CHECK = globalThis["RegExp"]("^sha256:[0-9a-f]{64}$");\n'],
+    ["another global spelling", 'const CHECK = new window.RegExp("^[0-9a-f]{64}$");\n'],
+    ["const alias of the built-in", 'const MAKE = RegExp;\nconst CHECK = new MAKE("^[0-9a-f]{64}$");\n'],
+    ["const alias of the global receiver", 'const MAKE = globalThis.RegExp;\nconst CHECK = new MAKE("^[a-f0-9]{64}$");\n'],
+    [
+      "split halves through the global receiver",
+      'const HEAD = "^[0-9";\nconst TAIL = "a-f]{64}$";\nconst CHECK = new globalThis.RegExp(HEAD + TAIL);\n',
+    ],
+    ["built-in named as an argument", 'const CHECK = Reflect.construct(RegExp, ["^[0-9a-f]{64}$"]);\n'],
+    ["Function.prototype hop", 'const CHECK = RegExp.call(null, "^[0-9a-f]{64}$");\n'],
+    [
       "method body with a same-named parameter",
       "class Holder {\n" +
         "  check(pattern: string): boolean {\n" +
@@ -550,6 +652,18 @@ test("a matcher that answers a different question is not a restatement", () => {
     ["unanchored search", "const SEARCH = /[0-9a-f]{64}/;\n"],
     ["accepts uppercase, so a different policy", "const UPPER = /^[0-9a-fA-F]{64}$/;\n"],
     ["shorter digest", "const ID = /^[0-9a-f]{32}$/;\n"],
+    [
+      "a digest-looking string in an unrelated call is not a matcher",
+      'throw new Error("expected ^[0-9a-f]{64}$");\n',
+    ],
+    [
+      "an unrelated constructor taking a string",
+      'const CACHE = new Store("^sha256:[0-9a-f]{64}$");\n',
+    ],
+    [
+      "constructor reached through a runtime value (out of the static model)",
+      'const MAKE = pick();\nconst CHECK = new MAKE("^[0-9a-f]{64}$");\n',
+    ],
   ];
   for (const [name, source] of outOfScope) {
     const caught = matchersInText(source, "synthetic.ts").filter((site) => site.envelope !== null);
@@ -569,7 +683,9 @@ test("the owner module states each envelope exactly once", () => {
 
 test("a recorded exception is still the reason it was recorded", () => {
   for (const file of Object.keys(RECORDED_EXCEPTIONS)) {
-    const sites = packageMatchers().filter((site) => site.file === file && site.envelope !== null);
+    const sites = packageMatchers().filter(
+      (site) => site.file === file && site.envelope !== null && site.via !== "argument",
+    );
     assert.ok(sites.length > 0, `${file} no longer restates the shape; drop the exception`);
     assert.ok(
       sites.every((site) => site.flags !== null && site.flags.length > 0),
@@ -623,7 +739,7 @@ test("an import of the owner can only name a canonical export", () => {
 test("every unfoldable construction is declared, and none of them hides a digest", () => {
   const derived = new Map<string, number>();
   for (const site of packageMatchers()) {
-    if (site.pattern !== null) continue;
+    if (site.pattern !== null || site.via !== "constructor") continue;
     derived.set(site.file, (derived.get(site.file) ?? 0) + 1);
     if (site.envelope === "unresolved-visible") {
       assert.fail(`${describe(site)} states a 64-hex class the scan can see; it is a restatement`);
