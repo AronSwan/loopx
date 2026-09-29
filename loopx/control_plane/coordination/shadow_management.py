@@ -17,9 +17,10 @@ from .coordination_state_contract_generated import (
     SHADOW_MANAGEMENT_MANIFEST_SCHEMA, SHADOW_MANAGEMENT_STATE_SCHEMA,
 )
 from .local_authority_shadow_projection import sha256_digest
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 
 SHADOW_CAPTURE_PROFILE = "file_outbox_v1"
-_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_DIGEST = ENVELOPED_SHA256_PATTERN
 _STATE_KEYS = {
     "schema_version", "goal_id", "source_root_digest", "status", "binding",
     "operation", "previous_operation_id", "result",
