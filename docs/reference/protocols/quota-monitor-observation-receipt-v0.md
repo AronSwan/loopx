@@ -47,6 +47,13 @@ advancement work remains active.
   exact or typed auxiliary binding the response fails closed from claiming the
   Turn settled.
 
+- Replaying `quota should-run` for an exact committed Monitor Turn must preserve
+  its settled phase after user notifications, scoped gate fallback and other
+  projections. Work-lane, execution obligation, interaction commands and
+  scheduler view agree: no new poll, delivery, replan, refresh or spend in that
+  Turn. Pending gates and independent work remain diagnostic facts; the next
+  Turn recomputes them. The automation stays active and quiet between Turns.
+
 ### Acceptance
 
 The CLI path must prove that multiple due monitors can each update their cadence
@@ -225,6 +232,11 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   推进仍须新 Turn。重放按当前已核验结算读回，不用历史 continuation 重开旧 Turn。
   既非精确匹配、也无 typed auxiliary binding 时，响应
   必须失败关闭，不能宣称 Turn 已结算。
+
+- `quota should-run` 重放精确已提交的 Monitor Turn 时，用户通知、scoped gate
+  fallback 和其他投影都必须保留其 settled 状态。work-lane、执行义务、interaction
+  命令和 scheduler 读回一致：本 Turn 不新增 poll、delivery、replan、refresh 或 spend。
+  未决 gate 和独立工作保留为诊断事实，由新 Turn 重新计算；自动化保持 active quiet。
 
 ### 验收
 

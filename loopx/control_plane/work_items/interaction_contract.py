@@ -151,6 +151,8 @@ def user_channel_notice_todo_actions(summary: Any, *, limit: int = 3) -> list[st
 
 
 def user_channel_action_required(payload: dict[str, Any]) -> bool:
+    if payload.get("effective_action") == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return False
     if payload.get("agent_work_mode") == "monitor_only":
         return False
     if _user_gate_scope_projection_repair_active(payload):
@@ -235,6 +237,8 @@ def projected_user_channel_actions(
     *,
     limit: int = 3,
 ) -> list[str]:
+    if payload.get("effective_action") == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return []
     if payload.get("agent_work_mode") == "monitor_only":
         return []
     if _user_gate_scope_projection_repair_active(payload):
@@ -454,6 +458,8 @@ def _interaction_mode(payload: dict[str, Any]) -> str:
     kind = str(execution_obligation.get("kind") or "")
     effective_action = str(payload.get("effective_action") or "")
     state = str(payload.get("state") or "")
+    if effective_action == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
+        return "heartbeat_settled_skip"
     if effective_action == EffectiveAction.GOVERNED_CAPABILITY_INTENT.value:
         return effective_action
     if effective_action == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
@@ -502,8 +508,6 @@ def _interaction_mode(payload: dict[str, Any]) -> str:
         return agent_scope_action.value
     if effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value:
         return "monitor_quiet_skip"
-    if effective_action == EffectiveAction.HEARTBEAT_SETTLED_SKIP.value:
-        return "heartbeat_settled_skip"
     if payload.get("recovery_delivery_allowed") or effective_action == EffectiveAction.OUTCOME_FLOOR_RECOVERY.value:
         return "outcome_floor_recovery"
     if effective_action == EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value:
