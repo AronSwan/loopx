@@ -131,6 +131,7 @@ from ..work_items.work_lane import (
 from .settlement_precedence import (
     deferred_receipt_bound_skip_fields,
     settled_replay_fields,
+    apply_settled_monitor_precedence,
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
 )
@@ -1478,6 +1479,7 @@ def _build_quota_should_run_payload(
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
         )
+    apply_settled_monitor_precedence(payload)
     cadence_root = _interaction_runtime_root(runtime_root, prepared.status_payload)
     if cadence_root:
         cadence = effect_runtime_result("quota.automation_cadence.manage", {
