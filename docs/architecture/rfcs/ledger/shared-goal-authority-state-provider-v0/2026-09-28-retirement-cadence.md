@@ -269,6 +269,17 @@ Three warm samples give File medians of 430→425 ms and SQLite 493→481 ms.
 The small latency difference is not cold-start or provider-default evidence.
 Actual agent and full-Goal CLI responses retain their size and semantics apart
 from observation time/age fields. The full-Goal response remains about 2 MB.
-Next coordinate full-Goal frontend summary/list/detail consumers and measure
-remaining cold-path preparation. Agent status already has bounded display;
-final JSON compaction alone does not remove full-source computation.
+A follow-up on `b9a34c3e7` isolates the shared read-model validator: it
+serialized the full Todo array twice solely to check record order, despite an
+already validated unique-id index. Compare that index's insertion order with
+its existing Unicode-sorted ids instead; retain the full content digest,
+record validation and provider reads. On a detached 1,117-Todo/36-lease current
+projection, ten warm Node samples per provider reduced validator medians from
+42–43 ms to 27 ms. This is a common TS cost, not evidence to rank providers or
+change the default. No cached authority, lease omission, response cap or
+frontend contract change is introduced. Unicode order, duplicates, malformed
+JSON, archived-record tampering and both record formats remain rejection tests.
+Next qualify reuse of the complete validated Todo/lease snapshot across
+ownership and status, then coordinate full-Goal frontend summary/list/detail
+consumers. Agent status already has bounded display; final JSON compaction
+alone does not remove full-source computation.
