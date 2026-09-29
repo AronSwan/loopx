@@ -1570,7 +1570,7 @@ def serve_chat(
     server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
     server.manager_return_service = start_return_service(server, runtime_root)
-    from .chat_delegation_wake import DelegationWakeService
+    from .chat_loopx_mode import DelegationWakeService
 
     def _wake_goal_context(session):
         registry = load_registry(server.registry_path)
