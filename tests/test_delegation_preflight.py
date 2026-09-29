@@ -125,6 +125,89 @@ def test_workspace_fault_cannot_hide_denied_caller_or_changed_binding(service, m
         runner.inspect("analysis")
 
 
+def test_workspace_removed_during_acceptance_is_typed_before_turn_preview(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_capture = delegation.delegation_validation.capture
+
+    def capture_then_remove(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        workspace.rename(root / "relocated-worker")
+        return result
+
+    def no_turn(*args, **kwargs):
+        raise AssertionError("a changed workspace must not reach Turn preview")
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_remove)
+    monkeypatch.setattr(runner, "_cli", no_turn)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "missing"
+    assert result["authority_ready"] is None
+    assert not any(result["effects"].values())
+    assert str(workspace) not in json.dumps(result)
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_workspace_changed_during_real_turn_preview_is_not_reported_ready(
+    service, monkeypatch, replacement
+):
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_cli = runner._cli
+
+    def preview_then_change(*args, **kwargs):
+        preview = original_cli(*args, **kwargs)
+        workspace.rename(root / "relocated-worker")
+        if replacement:
+            workspace.mkdir()
+        return preview
+
+    monkeypatch.setattr(runner, "_cli", preview_then_change)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == ("unavailable" if replacement else "missing")
+    assert result["workspace_next_action"] == "review_operator_workspace_binding"
+    assert result["authority_ready"] is None
+    assert not result["turn_eligible"] and not any(result["effects"].values())
+    assert str(workspace) not in json.dumps(result)
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+def test_workspace_removed_during_final_acceptance_recheck_is_typed(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_capture = delegation.delegation_validation.capture
+    calls = 0
+
+    def capture_then_remove(*args, **kwargs):
+        nonlocal calls
+        result = original_capture(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            workspace.rename(root / "relocated-worker")
+        return result
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_remove)
+    result = runner.inspect("analysis")
+    assert calls == 2
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "missing"
+    assert result["authority_ready"] is None
+    assert not any(result["effects"].values())
+    assert not (root / "host-started").exists()
+
+
 def test_mcp_workspace_fault_is_a_read_only_observation(service):
     root, runner = service
     config = json.loads(runner.config.read_text())
