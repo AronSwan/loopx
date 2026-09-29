@@ -311,13 +311,43 @@ export const chatRecoveryScenario = {
         await route.fulfill({ contentType: "application/json", status: 409,
           json: { ok: false, error: "another turn is already running for this session", active_turn_id: foreignTurnId } });
       });
+      // Hold the Session re-read that follows the 409, so the check covers
+      // the handoff before the recovery adopts the Turn, not only after.
+      const heldReads = [];
+      let holdReads = false;
+      await page.route("**/api/chat/sessions?*", async (route) => {
+        if (!holdReads || route.request().method() !== "GET") return route.fallback();
+        heldReads.push(route);
+      });
       const draft = "这条消息在另一回合运行时发出";
       const composerInput = page.getByLabel("向 LoopX 发送消息");
       const sendButton = page.getByRole("button", { name: "发送", exact: true });
       await composerInput.fill(draft);
+      holdReads = true;
       await sendButton.click();
+      for (let attempt = 0; attempt < 100 && (!rejectedPosts || !heldReads.length); attempt += 1) await page.waitForTimeout(50);
+      if (!heldReads.length) throw new Error("The 409 did not make the page re-read the Session");
+      for (let check = 0; check < 10; check += 1) {
+        if (!(await sendButton.isDisabled())) throw new Error("Send reopened before the recovery adopted the reported Turn");
+        await page.waitForTimeout(100);
+      }
+      await sendButton.click({ force: true });
+      await page.locator(".personal-composer-tools > summary").click();
+      // The schedule shortcut opens a draft instead of sending, so it stays usable.
+      const quickPrompts = page.locator(".personal-quick-prompts button[aria-label]:not([aria-label=\"配置定时检查\"])");
+      for (const prompt of await quickPrompts.all()) {
+        if (!(await prompt.isDisabled())) throw new Error(`Quick prompt "${await prompt.getAttribute("aria-label")}" stayed usable during the handoff`);
+      }
+      await page.locator(".personal-composer-tools > summary").click();
+      if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times before the recovery adopted the Turn`);
+      holdReads = false;
+      for (const route of heldReads.splice(0)) await route.fallback();
+      await page.unroute("**/api/chat/sessions?*");
       await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
+      if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
+        throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
+      }
       await page.getByRole("button", { name: "调整本轮" }).waitFor({ state: "visible" });
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept");
       if (!(await sendButton.isDisabled())) throw new Error("Send stayed enabled after the service reported a running Turn");
@@ -330,7 +360,7 @@ export const chatRecoveryScenario = {
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
       await composerInput.fill("");
-      pass("composer-running-turn-409", "A 409 running-Turn receipt is adopted with its controls, keeps the draft and blocks Send until completion");
+      pass("composer-running-turn-409", "A 409 running-Turn receipt keeps Send closed through the handoff, is adopted with its controls, keeps the draft and blocks Send until completion");
 
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {

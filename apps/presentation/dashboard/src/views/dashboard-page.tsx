@@ -1416,6 +1416,10 @@ function PersonalGoalHome({
   const streamControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Set<string>());
+  // A running Turn a 409 reported, keyed by context: its pending reply holds
+  // the composer closed until the recovery effect adopts it or finds no such
+  // Turn, so the handoff never leaves a sendable gap.
+  const turnHandoffs = useRef(new Map<string, { messageId: number; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1694,7 +1698,9 @@ function PersonalGoalHome({
         recoveryController = new AbortController();
         streamControllers.current.set(targetContextId, recoveryController);
         let streamedText = "";
-        const streamingMessageId = appendManagerAssistantMessage(targetContextId, {
+        const handoff = turnHandoffs.current.get(targetContextId);
+        if (handoff?.turnId === activeTurnId) turnHandoffs.current.delete(targetContextId);
+        const streamingMessageId = handoff?.turnId === activeTurnId ? handoff.messageId : appendManagerAssistantMessage(targetContextId, {
           activity: ["正在恢复进行中的 Agent 回合"],
           sourceTurnId: activeTurnId,
           sourceSessionId: created.session_id,
@@ -1815,6 +1821,17 @@ function PersonalGoalHome({
               status: "resume_failed",
             });
           }
+        }
+      } finally {
+        // A reported Turn this run did not adopt has ended (or belongs to
+        // another Session), so its reply no longer holds the composer.
+        const unadopted = turnHandoffs.current.get(targetContextId);
+        if (!cancelled && unadopted) {
+          turnHandoffs.current.delete(targetContextId);
+          setMessagesByContext((messages) => ({
+            ...messages,
+            [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== unadopted.messageId),
+          }));
         }
       }
     })();
@@ -2092,6 +2109,7 @@ function PersonalGoalHome({
     const sessionKey = `${targetContextId}:${selectedRoute.agentId}`;
     let streamingMessageId: number | null = null;
     let submittedTurnId: string | undefined;
+    let submittedSessionId: string | undefined;
     let streamedText = "";
     try {
       let sessionId = targetContextId === "manager" ? sessionIds.current.get(sessionKey) : await prepareGoalConversation(targetContextId, selectedRoute.agentId);
@@ -2118,6 +2136,7 @@ function PersonalGoalHome({
         });
         newSessionRequired.current.delete(sessionKey);
       }
+      submittedSessionId = sessionId;
       streamingMessageId = appendManagerAssistantMessage(targetContextId, {
         activity: [targetContextId === "manager" ? "正在连接管家" : "正在连接 Agent"],
         agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
@@ -2259,14 +2278,23 @@ function PersonalGoalHome({
         : "";
       if (runningTurnId) {
         // The Session already runs a Turn this page had not seen, so the
-        // message was not accepted. Withdraw it, let the recovery effect adopt
-        // the running Turn with its identity and controls, and reject the send
-        // so the composer keeps the draft.
+        // message was not accepted. Withdraw it and turn its reply into the
+        // running Turn's pending reply at once, so the composer stays closed
+        // while the recovery effect re-reads the Session and adopts that
+        // reply. Rejecting the send keeps the draft.
         setMessagesByContext((messages) => ({
           ...messages,
-          [targetContextId]: (messages[targetContextId] ?? []).filter((message) =>
-            message.id !== userMessageId && message.id !== streamingMessageId),
+          [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== userMessageId),
         }));
+        if (streamingMessageId !== null) {
+          updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+            activity: ["正在接管进行中的 Agent 回合"],
+            pending: true,
+            sourceSessionId: submittedSessionId,
+            sourceTurnId: runningTurnId,
+          });
+          turnHandoffs.current.set(targetContextId, { messageId: streamingMessageId, turnId: runningTurnId });
+        }
         if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
         throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});
       }
