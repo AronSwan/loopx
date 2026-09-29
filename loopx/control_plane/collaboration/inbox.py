@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
+from ..content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from .goal_instance_scope import CollaborationGoalScope
@@ -162,7 +163,7 @@ def pending(
     for path in paths:
         if path.suffix != ".json":
             continue
-        if not re.fullmatch(r"[a-f0-9]{64}", path.stem):
+        if not BARE_SHA256_PATTERN.fullmatch(path.stem):
             raise ValueError("invalid context request filename")
         if path.stem <= after:
             continue
@@ -248,7 +249,7 @@ def acknowledge(
                 reason,
                 scope=goal_scope,
             )
-    if not re.fullmatch(r"[a-f0-9]{64}", request_id):
+    if not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
     target = _record_identity(goal_id, agent_id, scope)
     entry = _entry(
@@ -288,7 +289,7 @@ def _now():
 
 
 def _entry(root, goal_id, agent_id, request_id, *, scope=None):
-    if not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id):
+    if not isinstance(request_id, str) or not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
     target = _target(goal_id, agent_id, scope)
     identity = _record_identity(goal_id, agent_id, scope)
