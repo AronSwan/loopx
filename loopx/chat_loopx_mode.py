@@ -71,7 +71,8 @@ GUIDANCE = (
     "Pause/block when tools, authorization or evidence are insufficient."
 )
 
-WAKE_OPERATIONS = {"configure", "start", "resume", "pause", "exit", "message"}
+# Owner operations; a host wake is admitted only through ``wake``.
+OWNER_OPERATIONS = {"configure", "start", "resume", "pause", "exit", "message"}
 
 
 def execution_guidance(turn: dict | None) -> str:
@@ -305,7 +306,7 @@ class ChatLoopXMode:
             "delivery_mode",
         }:
             raise ValueError("unknown LoopX mode input")
-        if body.get("operation") not in WAKE_OPERATIONS:
+        if body.get("operation") not in OWNER_OPERATIONS:
             raise ValueError("unknown LoopX mode operation")
         with self._lock(session_id):
             if body.get("operation") == "message":
@@ -446,13 +447,15 @@ class ChatLoopXMode:
                 raise
             return {**self.snapshot(session_id), "turn_id": turn["turn_id"]}
 
-    def wake(self, session_id, path, *, work_dir, objective):
+    def wake(self, session_id, path, *, goal_context):
         """Continue the lead once a delegated result is accepted; the owner does not poll.
 
-        ``path`` is the accepted operation record.  The session lock is taken
-        before the record lock, the same order the in-Turn tool uses, so an
-        in-Turn observation and a host wake never race.  The receipt written
-        beside the result is a fact distinct from the result itself.
+        ``path`` is the accepted operation record; ``goal_context`` returns the
+        Turn's project and objective and is read only after admission.  The
+        session lock is taken before the record lock, the same order the
+        in-Turn tool uses, so an in-Turn observation and a host wake never
+        race.  The receipt written beside the result is a fact distinct from
+        the result itself.
         """
         from .collaboration_mcp import record_wake
 
@@ -460,11 +463,13 @@ class ChatLoopXMode:
             return record_wake(
                 path,
                 lambda intent: self._wake_decision(
-                    session_id, intent, work_dir=work_dir, objective=objective
+                    session_id, intent, goal_context=goal_context
                 ),
             )
 
-    def _wake_decision(self, session_id, intent, *, work_dir, objective):
+    def _wake_decision(self, session_id, intent, *, goal_context):
+        from .collaboration_mcp import wake_receipt
+
         intent_id = intent.get("intent_id")
         if not isinstance(intent_id, str) or len(intent_id) < 32:
             raise ValueError("invalid wake intent")
@@ -474,12 +479,8 @@ class ChatLoopXMode:
         def settled(state, reason):
             if state == "pending" and intent.get("reason") == reason:
                 return None  # unchanged: no churn on the record
-            return {
-                **intent,
-                "state": state,
-                "reason": reason,
-                **({"refused_at": now} if state == "refused" else {"checked_at": now}),
-            }
+            at = "refused_at" if state == "refused" else "checked_at"
+            return wake_receipt(intent, state, reason=reason, **{at: now})
 
         try:
             session = self._session(session_id)
@@ -489,6 +490,14 @@ class ChatLoopXMode:
         # the exact client turn already exists, so it is recorded once.
         existing = self.store.turn_for_client(session_id, client_turn_id)
         if existing:
+            request = existing.get("loopx_request") or {}
+            if (
+                not existing.get("loopx_execution")
+                or request.get("operation") != "wake"
+                or (request.get("wake") or {}).get("intent_id") != intent_id
+            ):
+                # Another Turn owns this client id; claiming it would be a false receipt.
+                return settled("refused", "wake_identity_conflict")
             return self._woken(intent, session_id, existing["turn_id"], created=False, now=now)
         mode = session.get("loopx_mode") or {}
         settings = mode.get("settings") or {}
@@ -519,13 +528,14 @@ class ChatLoopXMode:
         )
         if decision["state"] != "admitted":
             return settled(decision["state"], decision["reason"])
+        context = goal_context()
         turn, created = self.controller.submit_turn(
             session_id=session_id,
             client_turn_id=client_turn_id,
             message=f"/goal resume --tokens {settings['token_budget']}",
             attachments=[],
-            work_dir=work_dir,
-            objective=objective,
+            work_dir=context["project"],
+            objective=str(context.get("objective") or context.get("title") or session["goal_id"]),
             loopx_execution=True,
             loopx_request={
                 "operation": "wake",
@@ -540,15 +550,12 @@ class ChatLoopXMode:
 
     @staticmethod
     def _woken(intent, session_id, turn_id, *, created, now):
-        receipt = {key: value for key, value in intent.items() if key not in {"reason", "checked_at"}}
-        return {
-            **receipt,
-            "state": "woken",
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "created": created,
-            "woken_at": now,
-        }
+        from .collaboration_mcp import wake_receipt
+
+        return wake_receipt(
+            intent, "woken", session_id=session_id, turn_id=turn_id,
+            created=created, woken_at=now,
+        )
 
     def recover(self, session_id, adapter):
         driver = CodexGoalDriver(adapter.session)
@@ -785,6 +792,8 @@ class ChatLoopXMode:
                 if set(arguments) != {"action", "operation_id", "consumer_operation_id"}:
                     raise ValueError("adopt requires source and consumer operation ids only")
                 result = service.adopt_result(operation_id, arguments["consumer_operation_id"])
+                # Adoption requires both results accepted: neither needs a wake now.
+                service.wake_observed_in_turn(arguments["consumer_operation_id"])
             elif action == "start":
                 result = service.start(
                     arguments.get("binding_id", ""),

@@ -305,6 +305,14 @@ def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: st
     return _root(root) / "executions" / _hash([goal_id, agent_id]) / (_hash(operation_id) + ".json")
 
 
+_WAKE_INTENT_KEYS = ("schema_version", "intent_id", "requester", "operation_id", "request_id")
+
+
+def wake_receipt(intent: dict, state: str, **facts) -> dict:
+    """One receipt shape: the typed intent plus only the current state's facts."""
+    return {**{key: intent[key] for key in _WAKE_INTENT_KEYS if key in intent}, "state": state, **facts}
+
+
 def record_wake(path: Path, decide) -> dict | None:
     """Settle a pending wake receipt under the same lock adopt_result uses.
 
@@ -700,10 +708,12 @@ class Delegations:
 
     def wake_observed_in_turn(self, operation_id: str) -> dict | None:
         """The requester read this accepted result inside its own Turn; no wake follows."""
+        path = self.path(require_operation_id(operation_id))
+        if not path.exists():
+            return None
         try:
-            return record_wake(self.path(require_operation_id(operation_id)), lambda wake: {
-                **wake, "state": "observed_in_turn", "observed_at": time.time(),
-            })
+            return record_wake(path, lambda wake: wake_receipt(
+                wake, "observed_in_turn", observed_at=time.time()))
         except LockAcquireTimeoutError:
             # The worker or another decision still holds the record; the pump
             # re-reads the current state and the observation remains readable.
