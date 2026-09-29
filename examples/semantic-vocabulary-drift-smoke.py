@@ -7,7 +7,9 @@ relate, and the budgets the repository ratchets down. The inventory is computed
 from the complete tracked tree on each run, never loaded from a report file.
 Vocabulary changes, forks and registry weakening remain checked; ordinary
 carrier edits require no generated snapshot commit. Only tracked sources are
-read, and no private data is printed.
+read, and no private data is printed. The project-registry I/O census is also
+checked through its own tracked-product source policy so moved or unclassified
+sites fail premerge.
 """
 
 from __future__ import annotations
@@ -42,6 +44,9 @@ from loopx.semantics.production import (  # noqa: E402
 from loopx.semantics.python_production import scan_python_production  # noqa: E402
 from loopx.semantics.field_use import (  # noqa: E402
     FACTS, ROLES, field_use_summary, lexical_module_count, render_field_uses, scan_field_uses,
+)
+from loopx.semantics.project_registry_io import (  # noqa: E402
+    PROJECT_REGISTRY_IO_MANIFEST, validate_project_registry_io_manifest,
 )
 from scripts.generate_semantic_bindings import build_artifacts  # noqa: E402
 from loopx.canary.maintainability_ratchet import evaluate_maintainability_findings  # noqa: E402
@@ -232,8 +237,8 @@ RETURN_PATH_ANCHOR = {
 TWIN_ROOT_ANCHOR = "loopx/control_plane"
 TWIN_BUDGET_ANCHOR = 43
 BUDGET_ANCHOR = {
-    "same_runtime_forks": 12,
-    "same_runtime_fork_definitions": 28,
+    "same_runtime_forks": 11,
+    "same_runtime_fork_definitions": 25,
     "conflicting_values": 16,
     "conflicting_definitions": 55,
     "schema_version_same_runtime_forks": 2,
@@ -241,7 +246,7 @@ BUDGET_ANCHOR = {
     "multi_value_forks": 2,
     "multi_value_forks_semantic": 1,
     "multi_value_fork_definitions": 6,
-    "same_runtime_forks_semantic": 10,
+    "same_runtime_forks_semantic": 9,
     "conflicting_values_semantic": 0,
 }
 # Budgets for the legacy should-run decision fields, anchored the same way so a
@@ -1121,6 +1126,15 @@ def main() -> int:
     registry = load_registry()
     coverage = check_coverage_floor(registry)
     sources = load_sources(REPO_ROOT)
+    registry_io_manifest = json.loads(
+        (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
+    )
+    registry_io_errors = validate_project_registry_io_manifest(
+        REPO_ROOT, registry_io_manifest,
+    )
+    require(not registry_io_errors, "; ".join(registry_io_errors)
+            + "; regenerate with uv run python scripts/generate_project_registry_io_manifest.py "
+            "and review any direct-I/O classifications")
     inventory, ratchets = check_inventory(registry, sources)
     check_owned_vocabularies(registry, inventory)
     for path, expected in build_artifacts().items():

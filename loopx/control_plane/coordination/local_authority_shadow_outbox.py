@@ -42,6 +42,7 @@ from .coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA,
 )
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from .shadow_management import (
     read_shadow_capture_binding,
     shadow_maintenance_lock_target,
@@ -260,7 +261,6 @@ def _index_entry_files(
 
 _WRITER_RUNTIMES = frozenset({WRITER_RUNTIME_PYTHON, WRITER_RUNTIME_TYPESCRIPT})
 _SOURCE_KINDS = frozenset({SOURCE_MARKDOWN, SOURCE_STATE_EVENT_LOG, SOURCE_TASK_LEASE})
-_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _load_prepared_record(
@@ -299,7 +299,7 @@ def _load_prepared_record(
         and bool(writer.get("write_class"))
         and source.get("kind") in _SOURCE_KINDS
         and isinstance(root_digest, str)
-        and _DIGEST_PATTERN.match(root_digest) is not None
+        and ENVELOPED_SHA256_PATTERN.match(root_digest) is not None
         and isinstance(lineage_id, str)
         and bool(lineage_id)
         and source_ref is not None
@@ -508,7 +508,8 @@ def decode_cursor(value: object, *, partition: str) -> dict[str, Any]:
         or (
             digest is not None
             and (
-                not isinstance(digest, str) or _DIGEST_PATTERN.fullmatch(digest) is None
+                not isinstance(digest, str)
+                or ENVELOPED_SHA256_PATTERN.fullmatch(digest) is None
             )
         )
         or any(
