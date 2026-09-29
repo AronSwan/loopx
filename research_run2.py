@@ -103,7 +103,7 @@ def deliverables_of(brief):
     return "按任务书'本次研究要回答'逐条回答,并给出老板可直接照做的交付物"
 
 
-# ---- 裁决收尾门禁(第9坑家族: 结构词全文命中曾3/8假阴性,回溯8份历史评审零误判) ----
+# ---- 裁决收尾门禁(第9坑家族: 结构词全文命中曾3/8假阴性;竣工检验甲席对抗加固) ----
 VERDICT_LABEL = re.compile(  # 标签式裁决行: 行首(允许#/列表/序号/粗体)即 裁决|判定|结论|Verdict + 冒号
     r"^\s{0,3}(?:#{1,6}\s*)?(?:[-*•]|\d{1,2}[.、)])?\s*"
     r"(?:[一二三四五六七八九十]{1,3}|\d{1,2})?[、.．]?\s*\**\s*"
@@ -111,22 +111,44 @@ VERDICT_LABEL = re.compile(  # 标签式裁决行: 行首(允许#/列表/序号/
 VERDICT_TAIL = re.compile(  # 三词收尾;尾部容粗体/全角标点;否定式(无需重做/不采纳)不算
     r"(?<!无需)(?<!不需)(?<!不再)(?<!不)(?<!无)(?<!勿)(?<!莫)"
     r"(修改后采纳|重做|采纳)[\s。.，！!？?…*)）)」』’”】\[\]]{0,8}$")
+# 竣工检验V1: lookbehind只查紧邻1字,"不宜/不建议/拒绝/无法/暂缓采纳"曾全放行 → 前置窗口否定
+VERDICT_NEG_NEAR = re.compile(r"[不宜勿莫拒难暂缓无未]")
+# 竣工检验V3: "有条件通过(等同修改后采纳)"借括号尾巴过验 → 收尾词前窗口出现"通过/pass"即拒
+VERDICT_BORROW = re.compile(r"通过|pass", re.I)
 
 
 def verdict_ok(txt):
-    """最后一条标签式裁决行必须以三词之一收尾;自创词(有条件通过/validated_progress)不放行。
-    容忍裁决行后置附录(历史4/5真裁决带附录,V1严格末段会误拦)。"""
-    lines = [ln for ln in txt.splitlines() if VERDICT_LABEL.match(ln)]
-    return bool(lines) and bool(VERDICT_TAIL.search(lines[-1]))
+    """最后一条标签式裁决行必须以三词之一收尾,且该行须位于全文后2/3(竣工检验V2:
+    引言里唯一的标签行恰以三词收尾曾顶替真裁决);自创词不放行,否定式不放行,
+    借尾巴不放行。容忍裁决行后置附录(历史4/5真裁决带附录,V1严格末段会误拦)。"""
+    all_lines = txt.splitlines()
+    hits = [(i, ln) for i, ln in enumerate(all_lines) if VERDICT_LABEL.match(ln)]
+    if not hits:
+        return False
+    i, last = hits[-1]
+    # 竣工检验V2: 引言区标签行曾顶替真裁决。仅对足够长的文档执行位置规则
+    # (短评审<6行无"引言+正文"结构可言;8份历史稿命中行全部在后2/3,零伤害)。
+    if len(all_lines) >= 6 and i < len(all_lines) // 3:
+        return False
+    m = VERDICT_TAIL.search(last)
+    if not m:
+        return False
+    prefix = last[:m.start()]
+    if VERDICT_NEG_NEAR.search(prefix[-4:]):
+        return False
+    if VERDICT_BORROW.search(prefix[-12:]):
+        return False
+    return True
 
 
 # ---- 引用双模式(课题自适应: 文献型课题的PMID/ISO源不再被URL规则误杀) ----
+# 竣工检验V7/V8加固: ISO须带部号(ISO 2859-1:1999)——无部号的"ISO 9001认证"营销提法不计数;
 _CITE_ID_PATTERNS = [
     re.compile(r"10\.\d{4,9}/\S+"),
     re.compile(r"PMID[:：]?\s?\d{5,9}", re.I),
     re.compile(r"arXiv:\d{4}\.\d{4,5}(v\d+)?", re.I),
-    re.compile(r"ISO\s?\d{3,5}(?:[:\-]\d+)?"),
-    re.compile(r"NIST SP \d{3,4}", re.I),
+    re.compile(r"ISO\s?\d{3,5}(?:[:\-]\d+)+"),
+    re.compile(r"NIST SP \d{3,4}(-\d+)?", re.I),
 ]
 
 
@@ -136,9 +158,12 @@ def citation_mode(brief_text):
 
 
 def cite_counts(txt):
-    n_url = len(re.findall(r"https?://", txt))
-    n_id = sum(len(pat.findall(txt)) for pat in _CITE_ID_PATTERNS)
-    return n_url, n_id
+    """URL按去重计数(同一URL重复N次算1个源);标识符在剥除URL后的文本上计数
+    (竣工检验V8: https://doi.org/... 曾被URL与DOI正则双重计数)。"""
+    urls = set(re.findall(r"https?://\S+", txt))
+    txt_no_url = re.sub(r"https?://\S+", "", txt)
+    n_id = sum(len(pat.findall(txt_no_url)) for pat in _CITE_ID_PATTERNS)
+    return len(urls), n_id
 
 
 def citations_ok(txt, mode):
@@ -269,8 +294,7 @@ def cli(root, *args, cwd=None):
 
 
 DEFAULT_REFERENCE = ("final-v5.md",
-                     Path(r"C:/Users/Administrator/ZCodeProject/电商客服研究-AI团队产出/4-终案v5.0-老板版.md"),
-                     "2025电商客服自建方案v5.0终案")
+                     Path(r"C:/Users/Administrator/ZCodeProject/电商客服研究-AI团队产出/4-终案v5.0-老板版.md"))
 
 
 def reference_section(refs):
@@ -293,19 +317,27 @@ def prepare(root, brief_text=None, references=None):
     (project / "inputs").mkdir(parents=True)
     (project / "reference").mkdir(parents=True)
     (project / ".gitignore").write_text(".local/\nACTIVE_GOAL_STATE.md\n__pycache__/\n")
-    # v5终案恒在(所有任务书的基线方案); --reference 追加(按目标名去重)
-    refs = [(DEFAULT_REFERENCE[0], DEFAULT_REFERENCE[1])]
-    for dest, src in (references or []):
-        if dest != DEFAULT_REFERENCE[0]:
-            refs.append((dest, src))
+    # v5终案恒在(所有任务书的基线方案); --reference 追加。
+    # 竣工检验加固: dest强制basename(拒路径穿越/绝对路径)、按dest去重(后到覆盖有记录)、
+    # 显式传final-v5.md=覆盖默认源、复制失败清干净半成品根再报错(否则重跑卡死)。
+    refs = {DEFAULT_REFERENCE[0]: DEFAULT_REFERENCE[1]}
+    for raw_dest, src in (references or []):
+        dest = Path(raw_dest).name
+        if dest != raw_dest:
+            print(f">>> --reference 目标名含路径段,已收敛为: {dest}")
+        refs[dest] = src
     staged = []
-    for dest, src in refs:
-        if Path(src).exists():
-            shutil.copy(src, project / "reference" / dest)
-            staged.append((dest, False))
-        else:
-            (project / "reference" / dest).write_text("(资料缺失)\n", encoding="utf-8")
-            staged.append((dest, True))
+    try:
+        for dest, src in refs.items():
+            if Path(src).exists():
+                shutil.copy(src, project / "reference" / dest)
+                staged.append((dest, False))
+            else:
+                (project / "reference" / dest).write_text("(资料缺失)\n", encoding="utf-8")
+                staged.append((dest, True))
+    except (OSError, shutil.SameFileError) as exc:
+        shutil.rmtree(root, ignore_errors=True)
+        raise SystemExit(f"--reference 复制失败({exc});半成品根已清理,修正参数后重跑: {root}")
     (project / "REQUIREMENTS.md").write_text(brief + reference_section(staged), encoding="utf-8")
     (project / "ACTIVE_GOAL_STATE.md").write_text(
         "---\nstatus: active\n---\n# " + (brief_title(brief) or "研究任务") + "\n\n## User Todo\n\n"
@@ -381,9 +413,6 @@ def stage_route(root, phase, subtopics=None):
     actor = phase_actor(phase)
     ws = root / "agents" / actor
     (ws / "inputs").mkdir(exist_ok=True)
-    routing = {}
-    for k in range(1, MAXN + 1):
-        routing[f"researcher-{k}"] = [("planner", "outputs/REQUIREMENTS.stub", None)]  # 占位,见下
     routing = {
         "architect": [(f"researcher-{k}", f"outputs/research-{k}.md", f"inputs/research-{k}.md")
                       for k in range(1, MAXN + 1)],
@@ -762,8 +791,9 @@ def main():
     p_prep = sub.add_parser("prepare", parents=[common])
     p_prep.add_argument("--brief-file", type=Path, default=None)
     p_prep.add_argument("--reference", action="append", nargs=2,
-                        metavar=("FILE", "备注"), default=[],
-                        help="额外背景资料: 文件 路径 备注(可重复); 默认只带v5终案")
+                        metavar=("DEST", "SRC"), default=[],
+                        help="额外背景资料: 目标名 源路径(可重复,如 snapshot-meta.md ../产出/final-plan.md); "
+                             "v5终案恒为基线,同名可覆盖")
     sub.add_parser("gate", parents=[common])
     sub.add_parser("auto", parents=[common])
     p_run = sub.add_parser("run", parents=[common])
@@ -777,7 +807,7 @@ def main():
     root = args.root.resolve()
     if args.cmd == "prepare":
         bt = args.brief_file.read_text(encoding="utf-8") if args.brief_file else None
-        refs = [(Path(f), Path(src)) for f, src in args.reference] or None
+        refs = [(dest, Path(src)) for dest, src in args.reference] or None
         prepare(root, bt, references=refs)
     elif args.cmd == "run":
         os.environ.setdefault("DSH_MODEL", args.model)

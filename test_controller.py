@@ -215,3 +215,59 @@ def test_citation_modes():
     assert r2.citations_ok("https://a 以及 PMID:6541615 和 arXiv:2609.26532", "lit")
     assert not r2.citations_ok("PMID:6541615 arXiv:2609.26532 10.1234/abc", "lit")
     assert not r2.citations_ok("https://a 某Gartner报告 ISO手册 JAMA论文", "lit")
+
+
+# ==== 竣工检验加固: 裁决对抗(V1非紧邻否定/V2引言标签/V3借尾巴) ====
+def test_verdict_ok_adversarial_hardening():
+    pad = "背景段落。\n" * 6  # 把裁决行垫到全文后2/3
+    bad = [
+        pad + "结论:不宜采纳\n",            # V1 非紧邻否定
+        pad + "裁决:不建议采纳\n",
+        pad + "判定:拒绝采纳\n",
+        pad + "裁决:暂缓采纳\n",
+        pad + "**判定:有条件通过(等同修改后采纳)**\n",   # V3 借尾巴
+        "结论:本文将论证是否采纳\n" + "正文。\n" * 5 + "判定为:有条件通过\n",  # V2 引言标签顶替
+    ]
+    for t in bad:
+        assert not r2.verdict_ok(t), t[:24]
+    ok = [
+        pad + "裁决:采纳\n",
+        pad + "结论:建议修改后采纳。\n",      # "建议"不在否定窗
+        pad + "五、判定:重做。\n附:复核记录\n",
+    ]
+    for t in ok:
+        assert r2.verdict_ok(t), t[:24]
+
+
+def test_citation_hardening_v7_v8():
+    # V7: 1 URL + 两个无部号ISO营销提法 不再凑数
+    assert not r2.citations_ok(
+        "https://example.com/a 我们是通过ISO 9001与ISO 27001认证的服务商", "lit")
+    # 带部号的ISO标准才算标识符
+    assert r2.citations_ok("https://a.example ISO 2859-1:1999 与 PMID:6541615", "lit")
+    # V8: doi.org链接不再双重计数(剥URL后无标识符) → lit不成立
+    n_url, n_id = r2.cite_counts("https://doi.org/10.1234/abc.def 另一条 https://doi.org/10.5555/xyz")
+    assert (n_url, n_id) == (2, 0)
+    # URL去重: 同一URL重复3次算1个源,strict不满足3
+    assert not r2.citations_ok("https://same.example/x " * 3, "strict")
+
+
+# ==== 竣工检验乙席: 变异盲区补测(M1/M3/M6) ====
+def test_verdict_last_label_line_wins():  # M1: 取第一条标签行会误放
+    t = "背景。\n" * 4 + "裁决:待复核\n" + "正文。\n" * 3 + "结论:采纳\n"
+    assert r2.verdict_ok(t)  # 最后一条标签行收尾
+    t2 = "背景。\n" * 4 + "结论:采纳\n" + "正文。\n" * 3 + "裁决:无需重做\n"
+    assert not r2.verdict_ok(t2)  # 首条收尾、末条否定 → 必须拒
+
+
+def test_failing_phases_knows_verdict_check():  # M3: "裁决收尾"失败项必须能定位
+    rep = {"checks": [{"check": "review-2.md 裁决收尾", "pass": False, "detail": ""}]}
+    assert r2._failing_phases(rep) == ["reviewer-2"]
+
+
+def test_gate_repair_bounded_call_count(tmp_path, monkeypatch):  # M6: 修复轮恰好max_rounds轮
+    root = make_root(tmp_path, bad=("research-2",))
+    called = []
+    monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: called.append(p) or {})
+    assert r2.gate_with_repair(root, include_final=True, max_rounds=2) is False
+    assert len(called) == 2
