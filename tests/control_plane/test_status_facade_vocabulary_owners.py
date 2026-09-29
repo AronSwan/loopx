@@ -22,6 +22,8 @@ import functools
 import inspect
 from pathlib import Path
 
+import pytest
+
 from loopx import diagnose, state_projection, status
 from loopx.control_plane.status import (
     active_state_projection,
@@ -202,6 +204,36 @@ def test_merging_the_copies_changed_no_value() -> None:
         assert getattr(OWNERSHIPS[name][0], name) == expected, name
     for name, expected in EXPECTED_PATTERNS.items():
         assert getattr(OWNERSHIPS[name][0], name).pattern == expected, name
+
+
+def test_monitor_project_asset_uses_the_projection_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor_signal = "changed_monitor_signal"
+    stop_condition = "stop for the changed monitor signal"
+    monkeypatch.setattr(
+        monitor_display_projection,
+        "MONITOR_SIGNAL_WAITING_ON",
+        monitor_signal,
+    )
+    monkeypatch.setattr(
+        monitor_display_projection,
+        "MONITOR_DISPLAY_STOP_CONDITION",
+        stop_condition,
+    )
+
+    item = goal_attention_projection.attention_item(
+        goal_id="goal-a",
+        status="waiting",
+        waiting_on=monitor_signal,
+        severity="info",
+        recommended_action="wait for monitor evidence",
+        source="monitor",
+        agent_command="loopx monitor poll",
+    )
+
+    assert item["project_asset"]["support_mode"] == "read_only_observer"
+    assert item["project_asset"]["stop_condition"] == stop_condition
 
 
 def test_the_lifecycle_priority_pair_is_left_in_place() -> None:
