@@ -1417,9 +1417,11 @@ function PersonalGoalHome({
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Set<string>());
   // A running Turn a 409 reported, keyed by context: its pending reply holds
-  // the composer closed until the recovery effect adopts it or finds no such
-  // Turn, so the handoff never leaves a sendable gap.
-  const turnHandoffs = useRef(new Map<string, { messageId: number; turnId: string }>());
+  // the composer closed until the recovery effect adopts it or an
+  // authoritative Session read finds no such Turn, so the handoff never leaves
+  // a sendable gap. A failed read is no such finding: it keeps the handoff and
+  // counts the attempt toward the next re-read's backoff.
+  const turnHandoffs = useRef(new Map<string, { failedReads: number; messageId: number; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1602,6 +1604,8 @@ function PersonalGoalHome({
     let cancelled = false;
     let recoveryController: AbortController | null = null;
     let latestDiscoveredSessionId: string | null = null;
+    let sessionReadFailed = false;
+    let handoffRetryTimer: number | undefined;
     void (async () => {
       try {
         const history = await fetchChatHistory({
@@ -1811,6 +1815,9 @@ function PersonalGoalHome({
         }
       } catch (error) {
         if (cancelled) return;
+        // The service refusing the resume is an answer about the Session; any
+        // other failure left this run without one.
+        sessionReadFailed = !(error instanceof ChatApiError && error.payload.error_code === "resume_failed");
         if (error instanceof ChatApiError && error.payload.error_code === "resume_failed") {
           newSessionRequired.current.add(sessionKey);
           if (latestDiscoveredSessionId) {
@@ -1823,10 +1830,22 @@ function PersonalGoalHome({
           }
         }
       } finally {
-        // A reported Turn this run did not adopt has ended (or belongs to
-        // another Session), so its reply no longer holds the composer.
+        // A reported Turn this run read the Session but did not adopt has
+        // ended (or belongs to another Session), so its reply no longer holds
+        // the composer. When the read itself failed the Turn may still run:
+        // keep the reply pending, with its Turn controls, and read again.
         const unadopted = turnHandoffs.current.get(targetContextId);
-        if (!cancelled && unadopted) {
+        if (!cancelled && unadopted && sessionReadFailed) {
+          const failedReads = unadopted.failedReads + 1;
+          turnHandoffs.current.set(targetContextId, { ...unadopted, failedReads });
+          updateManagerAssistantMessage(targetContextId, unadopted.messageId, {
+            activity: ["暂时无法读取会话状态，正在重试"],
+          });
+          handoffRetryTimer = window.setTimeout(
+            () => setTurnRecoveryRequest((current) => current + 1),
+            Math.min(1000 * 2 ** (failedReads - 1), 10_000),
+          );
+        } else if (!cancelled && unadopted) {
           turnHandoffs.current.delete(targetContextId);
           setMessagesByContext((messages) => ({
             ...messages,
@@ -1838,6 +1857,7 @@ function PersonalGoalHome({
     return () => {
       cancelled = true;
       recoveryController?.abort();
+      window.clearTimeout(handoffRetryTimer);
     };
   }, [contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
@@ -2293,7 +2313,7 @@ function PersonalGoalHome({
             sourceSessionId: submittedSessionId,
             sourceTurnId: runningTurnId,
           });
-          turnHandoffs.current.set(targetContextId, { messageId: streamingMessageId, turnId: runningTurnId });
+          turnHandoffs.current.set(targetContextId, { failedReads: 0, messageId: streamingMessageId, turnId: runningTurnId });
         }
         if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
         throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});

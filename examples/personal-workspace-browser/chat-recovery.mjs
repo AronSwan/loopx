@@ -362,6 +362,57 @@ export const chatRecoveryScenario = {
       await composerInput.fill("");
       pass("composer-running-turn-409", "A 409 running-Turn receipt keeps Send closed through the handoff, is adopted with its controls, keeps the draft and blocks Send until completion");
 
+      // A failed Session read after the 409 says nothing about the reported
+      // Turn, so the handoff must keep Send closed and read again rather than
+      // treat the failure as the Turn having ended.
+      const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
+      page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
+      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: retriedTurnId, status: "busy" });
+      let retryRejectedPosts = 0;
+      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        retryRejectedPosts += 1;
+        await route.fulfill({ contentType: "application/json", status: 409,
+          json: { ok: false, error: "another turn is already running for this session", active_turn_id: retriedTurnId } });
+      });
+      let failedReads = 0;
+      const heldRetryReads = [];
+      let failReads = false;
+      await page.route("**/api/chat/sessions?*", async (route) => {
+        if (!failReads || route.request().method() !== "GET") return route.fallback();
+        if (failedReads === 0) {
+          failedReads += 1;
+          return route.fulfill({ contentType: "application/json", status: 503, json: { ok: false, error: "chat store temporarily unavailable" } });
+        }
+        heldRetryReads.push(route);
+      });
+      await composerInput.fill(draft);
+      failReads = true;
+      await sendButton.click();
+      for (let attempt = 0; attempt < 200 && !heldRetryReads.length; attempt += 1) {
+        if (failedReads && !(await sendButton.isDisabled())) throw new Error("Send reopened after the Session read following the 409 failed");
+        await page.waitForTimeout(50);
+      }
+      if (!failedReads) throw new Error("The 409 did not make the page re-read the Session");
+      if (!heldRetryReads.length) throw new Error("A failed Session read was not retried while the reported Turn could still run");
+      if (!(await sendButton.isDisabled())) throw new Error("Send reopened while the retried Session read was pending");
+      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
+      if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times while the Session read was failing`);
+      failReads = false;
+      for (const route of heldRetryReads.splice(0)) await route.fallback();
+      await page.unroute("**/api/chat/sessions?*");
+      if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
+        throw new Error("The retried recovery added a second pending reply instead of adopting the handoff reply");
+      }
+      if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
+      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
+      if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
+      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await composerInput.fill("");
+      pass("composer-running-turn-409-read-failure", "A failed Session read after a 409 keeps Send closed with the Turn controls, is retried, adopts the Turn and reopens only once it completes");
+
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
       await context.close();
