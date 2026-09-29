@@ -178,3 +178,10 @@ def test_stage_route_stages_inputs_and_tasks(tmp_path, monkeypatch):
     assert "outputs/architecture.md" in op
     task = (root / "agents/architect/tasks/architect.md").read_text(encoding="utf-8")
     assert "{deliverables}" not in task and "{title}" not in task
+
+
+# ==== P2: reference 参数化 ====
+def test_reference_section_lists_and_declares():
+    s = r2.reference_section([("final-v5.md", False), ("snap.md", True)])
+    assert "- final-v5.md(来自前场调研)" in s and "- snap.md(缺失)" in s
+    assert "必须重新检索" in s  # 防污染声明在场

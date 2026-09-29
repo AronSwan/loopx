@@ -112,7 +112,7 @@ RESEARCHER_TASK = (
     "Other squad members cover the other scopes; do NOT stray into theirs. "
     "Use web_search and web_fetch (bounded: at most 10 searches, 6 fetches) for 2025-2026 primary "
     "sources (official regulator/vendor pages outrank blogs; the brief's domain decides which). "
-    "Read REQUIREMENTS.md and reference/final-v5.md for our real context first. "
+    "Read REQUIREMENTS.md and reference/ background materials (see the 背景资料清单 section of REQUIREMENTS.md) for our real context first. "
     "Write outputs/research-{k}.md IN CHINESE: findings each with source (official URL or article "
     "number), what it means for OUR operation as described in the brief, and a short 'if we do nothing' "
     "risk note. 1500-3000 chars. Cite every claim with at least 3 full URLs "
@@ -124,7 +124,7 @@ RESEARCHER_TASK = (
 TASKS = {
     "planner": (
         "You are the planning lead of an adaptive research squad. Read REQUIREMENTS.md and "
-        "reference/final-v5.md. Decide how many parallel researchers this task needs (1 to 4) by "
+        "reference/ background materials. Decide how many parallel researchers this task needs (1 to 4) by "
         "assessing: (a) breadth = how many genuinely disjoint subtopic blocks exist, (b) depth = "
         "whether each block needs independent multi-source digging. More researchers = narrower, "
         "faster, deeper per block, but the architect must read them all — do not exceed the natural "
@@ -135,7 +135,7 @@ TASKS = {
         "len(subtopics) must equal N. Then write both files and stop."
     ),
     "architect": (
-        "You are the solution architect. Read REQUIREMENTS.md, reference/final-v5.md, and EVERY "
+        "You are the solution architect. Read REQUIREMENTS.md, reference/ background materials, and EVERY "
         "inputs/research-*.md staged for you (they come from parallel researchers with disjoint "
         "scopes). Synthesize them into ONE coherent plan that answers the brief's numbered "
         "questions under 本次研究要回答; where two researchers conflict, resolve it and say so. "
@@ -221,7 +221,24 @@ def cli(root, *args, cwd=None):
     return json.loads(result.stdout)
 
 
-def prepare(root, brief_text=None):
+DEFAULT_REFERENCE = ("final-v5.md",
+                     Path(r"C:/Users/Administrator/ZCodeProject/电商客服研究-AI团队产出/4-终案v5.0-老板版.md"),
+                     "2025电商客服自建方案v5.0终案")
+
+
+def reference_section(refs):
+    """REQUIREMENTS.md 追加的背景资料清单(纯函数,可测)。
+    refs: [(dest名, 是否缺失)] —— 防污染: 声明数字须当期重核(借鉴issue_fix记忆的
+    advisory原则: 前场结论只作线索,影响决策须当期验证)。"""
+    lines = ["", "## 背景资料清单(reference/)", ""]
+    for name, missing in refs:
+        lines.append(f"- {name}" + ("(缺失)" if missing else "(来自前场调研)"))
+    lines += ["", "> **防污染声明**: 以上为背景与线索。其中所有数字(价格/额度/费率/法规版本)"
+              "本场必须重新检索并给当期来源,直接沿用=评审否决项。", ""]
+    return "\n".join(lines)
+
+
+def prepare(root, brief_text=None, references=None):
     brief = brief_text or BRIEF
     root.mkdir(parents=True, exist_ok=False)
     (root / ".gitignore").write_text("*\n")
@@ -229,12 +246,20 @@ def prepare(root, brief_text=None):
     (project / "inputs").mkdir(parents=True)
     (project / "reference").mkdir(parents=True)
     (project / ".gitignore").write_text(".local/\nACTIVE_GOAL_STATE.md\n__pycache__/\n")
-    (project / "REQUIREMENTS.md").write_text(brief, encoding="utf-8")
-    src = Path(r"C:/Users/Administrator/ZCodeProject/电商客服研究-AI团队产出/4-终案v5.0-老板版.md")
-    if src.exists():
-        shutil.copy(src, project / "reference" / "final-v5.md")
-    else:
-        (project / "reference" / "final-v5.md").write_text("(原始v5终案缺失)\n", encoding="utf-8")
+    # v5终案恒在(所有任务书的基线方案); --reference 追加(按目标名去重)
+    refs = [(DEFAULT_REFERENCE[0], DEFAULT_REFERENCE[1])]
+    for dest, src in (references or []):
+        if dest != DEFAULT_REFERENCE[0]:
+            refs.append((dest, src))
+    staged = []
+    for dest, src in refs:
+        if Path(src).exists():
+            shutil.copy(src, project / "reference" / dest)
+            staged.append((dest, False))
+        else:
+            (project / "reference" / dest).write_text("(资料缺失)\n", encoding="utf-8")
+            staged.append((dest, True))
+    (project / "REQUIREMENTS.md").write_text(brief + reference_section(staged), encoding="utf-8")
     (project / "ACTIVE_GOAL_STATE.md").write_text(
         "---\nstatus: active\n---\n# " + (brief_title(brief) or "研究任务") + "\n\n## User Todo\n\n"
         "## Agent Todo\n\n## Next Action\n\n- Run the assigned bounded research phase.\n",
@@ -679,6 +704,9 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_prep = sub.add_parser("prepare", parents=[common])
     p_prep.add_argument("--brief-file", type=Path, default=None)
+    p_prep.add_argument("--reference", action="append", nargs=2,
+                        metavar=("FILE", "备注"), default=[],
+                        help="额外背景资料: 文件 路径 备注(可重复); 默认只带v5终案")
     sub.add_parser("gate", parents=[common])
     sub.add_parser("auto", parents=[common])
     p_run = sub.add_parser("run", parents=[common])
@@ -692,7 +720,8 @@ def main():
     root = args.root.resolve()
     if args.cmd == "prepare":
         bt = args.brief_file.read_text(encoding="utf-8") if args.brief_file else None
-        prepare(root, bt)
+        refs = [(Path(f), Path(src)) for f, src in args.reference] or None
+        prepare(root, bt, references=refs)
     elif args.cmd == "run":
         os.environ.setdefault("DSH_MODEL", args.model)
         run_phase(root, args.phase)
