@@ -81,7 +81,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding;
 }
 
-type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
+type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";
 
 function boundedReason(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
@@ -277,8 +277,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   };
 }
 const transitions: Record<Observation, readonly Observation[]> = {
-  prepared: ["running", "rejected"], running: ["turn_returned", "rejected"],
-  turn_returned: ["accepted", "rejected"], accepted: [], rejected: [],
+  prepared: ["running", "rejected", "stopped"], running: ["turn_returned", "rejected", "stopped"],
+  turn_returned: ["accepted", "rejected", "stopped"], accepted: [], rejected: [], stopped: [],
 };
 
 /** Page only the caller's existing journal. A cursor is not a fleet snapshot. */
@@ -339,6 +339,39 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
   return {status: to};
+}
+
+type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
+const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
+
+/** Advance one stop request from host lock facts; a receipt is never inferred from time.
+ *
+ * ``settled`` needs the acknowledgement of a process that held the operation
+ * lock plus both the operation lock and the Turn lane lock free: only then is
+ * the worker, its Turn child and its lane provably gone. Free locks without an
+ * acknowledgement mean the holder vanished before recording what it observed,
+ * which is ``unknown`` rather than a fake settlement. A grace timeout on its
+ * own moves nothing: a worker that is still holding a lock is still running.
+ */
+export function decideDelegationStop(params: JsonObject): JsonObject {
+  const phase = params.phase as StopPhase;
+  requireThat(openStopPhases.includes(phase), "delegation stop decision requires an open stop phase");
+  requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
+  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.lane_lock_free === "boolean",
+    "delegation stop lock facts required");
+  requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
+    "delegation stop timeout fact must be boolean");
+  requireThat(phase !== "acknowledged" || params.acknowledged === true,
+    "an acknowledged stop cannot lose its acknowledgement");
+  const locksFree = params.operation_lock_free === true && params.lane_lock_free === true;
+  if (params.acknowledged === true) {
+    if (locksFree) return {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"};
+    return {phase: "acknowledged", terminal: false, reason: params.operation_lock_free === true
+      ? "turn_lane_still_held" : "operation_lock_still_held"};
+  }
+  if (locksFree) return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
+  return {phase: "requested", terminal: false, reason: params.timed_out === true
+    ? "holder_still_running_after_grace" : "awaiting_acknowledgement"};
 }
 
 /** Repair only a false terminal observation after the exact Turn validated.
