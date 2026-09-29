@@ -277,13 +277,24 @@ export const chatRecoveryScenario = {
       if (!await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Composer stayed sendable while the recovered Turn was running");
       }
+      // Leaving cancels the recovery and returning starts a new one for the
+      // same Turn. The cancelled recovery must not leave a pending reply that
+      // keeps the composer blocked after the Turn completes.
+      await page.locator(".personal-goal-link").nth(1).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.getByLabel("向 LoopX 发送消息").waitFor({ state: "visible" });
+      if (await turnRunningHint.count()) throw new Error("Another Goal's composer waited for this Goal's running Turn");
+      await page.locator(".personal-goal-link").first().click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
       await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Composer stayed blocked after the running Turn completed");
       }
       if (api.turnRequests.length !== turnsBeforeRunningCheck + 1) throw new Error("A message was sent while the Turn was running");
       await page.getByLabel("向 LoopX 发送消息").fill("");
-      pass("composer-running-turn", "After a reload the composer waits for the running Turn and reopens when it completes");
+      pass("composer-running-turn", "After a reload, and after leaving and returning, the composer waits for the running Turn and reopens when it completes");
 
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {

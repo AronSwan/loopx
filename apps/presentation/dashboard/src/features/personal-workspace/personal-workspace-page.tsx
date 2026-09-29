@@ -993,14 +993,15 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
-  // The Chat service accepts one Turn per Session. While this conversation shows
+  // The Chat service accepts one Turn per Session. While the current Session shows
   // a Turn in flight, a new message would only be rejected, so the composer
   // waits and points to the reply's own adjust/interrupt controls. LoopX mode
   // delivers into a running Turn through its own queue, so it stays open.
   const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
     && loopxMode?.enabled && loopxMode.active_turn_id);
-  const conversationTurnRunning = !loopxDeliveryOpen
-    && managerMessages.some((message) => message.pending && Boolean(message.sourceTurnId));
+  const conversationTurnRunning = !loopxDeliveryOpen && Boolean(conversationSessionId)
+    && managerMessages.some((message) => message.pending && Boolean(message.sourceTurnId)
+      && message.sourceSessionId === conversationSessionId);
   const composerBlocked = sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"

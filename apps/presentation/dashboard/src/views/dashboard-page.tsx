@@ -1774,6 +1774,15 @@ function PersonalGoalHome({
             text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
           });
         } finally {
+          // A cancelled recovery never settles its placeholder. Retire it, so
+          // it cannot stay pending beside the placeholder of the recovery that
+          // replaces it when the user returns to this conversation.
+          if (cancelled) {
+            setMessagesByContext((messages) => ({
+              ...messages,
+              [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== streamingMessageId),
+            }));
+          }
           recoveringTurnKeys.current.delete(recoveryKey);
           if (activeTurnIds.current.get(targetContextId) === activeTurnId) {
             activeTurnIds.current.delete(targetContextId);
