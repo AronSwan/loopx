@@ -259,6 +259,33 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         return consume_return(root, goal_id, agent_id, request_id)
 
 
+    @server.tool()
+    def file_sha256(paths: list[str]) -> dict:
+        """Compute exact SHA256 digests for workspace-relative files (host-side).
+
+        Use this for review-request input digests and any verification that needs
+        real hashes. Never invent or estimate a digest. Files outside the
+        workspace are rejected.
+        """
+        import hashlib
+
+        check_scope()
+        root_ws = workspace.resolve()
+        digests: dict[str, object] = {}
+        for ref in paths:
+            target = (workspace / ref).resolve()
+            try:
+                target.relative_to(root_ws)
+            except ValueError:
+                digests[ref] = {"error": "outside workspace"}
+                continue
+            try:
+                digests[ref] = hashlib.sha256(target.read_bytes()).hexdigest()
+            except OSError as exc:
+                digests[ref] = {"error": str(exc)}
+        return {"digests": digests}
+
+
 class Delegations:
     """Host IO for bound peer work; typed grants and observations stay in TS.
 
