@@ -221,3 +221,15 @@ Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9�
 测试通过。这些组件结果不能证明冷启动收益、持续运行验收或默认 provider 已达标。
 跨 RPC 的 ownership／status 读取及整 Goal 前端摘要／列表／详情仍未完成。Agent status
 已有有界展示，仅压缩最终 JSON 不会消除完整来源计算。
+
+### Succession 传输容量
+
+当前 5,000 条 Todo 的摘要复现了 B 阶段另一处边界：第一次整图 succession
+计算仍在预算内，但展示复核再次发送事实和评估时超过既有 2 MiB 请求限制。
+共同发布的内部 RPC 改用明确、严格核对的事实列和评估列，复用 summary adapter
+的列式传输模式；不丢弃记录、关系边、摘要哈希或 metadata，TS 整图与复核规则
+保持不变。旧内部线格式直接替换，不保留第二套解析；持久化 Todo 格式和公共
+响应不变。代表性复核请求从超过 2 MiB 降到约 0.96 MB，没有提高预算。
+真实 File/SQLite CLI 验证精确计数、跨远端记录的推断后继、metadata 保留与
+provider 状态不变。这只修复有界容量，不证明任意规模、稳定延迟、D2 验收，
+也不授予默认 provider 切换；整 Goal summary/list/detail 消费和持续观察仍待推进。

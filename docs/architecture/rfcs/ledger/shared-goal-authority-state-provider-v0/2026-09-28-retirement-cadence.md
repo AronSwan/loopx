@@ -294,3 +294,20 @@ acceptance or a provider-default decision. Cross-RPC ownership/status reads and
 full-Goal frontend summary/list/detail remain separate unfinished work. Agent
 status already has bounded display; final JSON compaction alone does not remove
 full-source computation.
+
+### Succession transport capacity
+
+A current 5,000-row summary reproduces a separate B boundary: the initial
+whole-graph succession evaluation fits, but resending its facts and evaluations
+for display verification exceeds the existing 2 MiB request limit. The
+co-deployed internal succession RPC now uses declared, strictly checked columns
+for both facts and evaluations, following the summary adapter's existing pattern.
+No rows, lineage edges, hashes or metadata are dropped; the TS graph and reuse
+validators are unchanged. The old internal wire shape is replaced, not retained
+as a second parser; persisted Todo formats and public responses do not change.
+The representative request falls from over 2 MiB to about 0.96 MB without raising
+budgets. Real File/SQLite CLI tests cover exact counts, distant inferred edges,
+metadata preservation and unchanged provider state. This is a bounded capacity
+repair, not unlimited graph capacity, stable latency evidence, D2 qualification
+or permission to change the default provider. Full-Goal summary/list/detail
+adoption and sustained observation remain separate work.
