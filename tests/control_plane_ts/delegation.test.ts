@@ -109,7 +109,7 @@ test("message receipt and model return do not imply accepted work", () => {
 test("only the first transition to accepted leaves a wake intent for the exact requester and result", () => {
   const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
   const intent = accepted.wake_intent as Record<string, unknown>;
-  assert.equal(intent.schema, "loopx_delegation_wake_intent_v0");
+  assert.equal(intent.schema_version, "loopx_delegation_wake_intent_v0");
   assert.match(String(intent.intent_id), /^[a-f0-9]{64}$/);
   assert.deepEqual(intent.requester, {goal_id: "research", agent_id: "coordinator", goal_ref: null});
   assert.equal(intent.operation_id, "analysis-1");
@@ -128,6 +128,8 @@ test("only the first transition to accepted leaves a wake intent for the exact r
     requester: {...acceptedRequester, artifacts: [{ref: "output.json", sha256: "short"}]}}), /artifact/);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
     requester: {...acceptedRequester, artifacts: []}}), /artifacts/);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, goal_ref: ["not", "a", "reference"]}}), /goal reference/);
   // Rejection is terminal and wakes nobody.
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "rejected"}), {status: "rejected"});
 });

@@ -349,7 +349,7 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
   const requester = requireJsonObject(params.requester, "wake requester");
   requireThat([requester.goal_id, requester.agent_id, requester.operation_id, requester.request_id].every(text),
     "wake intent requires the requester and result identity");
-  requireThat(requester.goal_ref === null || typeof requester.goal_ref === "object", "invalid requester goal reference");
+  const goalRef = requester.goal_ref == null ? null : requireJsonObject(requester.goal_ref, "requester goal reference");
   requireThat(Array.isArray(requester.artifacts) && requester.artifacts.length > 0, "wake intent requires accepted artifacts");
   const digests = requester.artifacts.map(value => {
     const artifact = requireJsonObject(value, "accepted artifact");
@@ -358,10 +358,10 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
     return {ref: artifact.ref, sha256: artifact.sha256};
   });
   return {
-    schema: "loopx_delegation_wake_intent_v0",
+    schema_version: "loopx_delegation_wake_intent_v0",
     intent_id: canonicalAuthoritySha256([requester.goal_id, requester.agent_id, requester.operation_id,
       requester.request_id, digests]),
-    requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: requester.goal_ref ?? null},
+    requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: goalRef},
     operation_id: requester.operation_id, request_id: requester.request_id,
   };
 }

@@ -57,8 +57,10 @@ const RESUMABLE_NATIVE = ["paused", "blocked", "usageLimited", "budgetLimited"];
  *
  * The same facts that admit an owner resume admit a host wake, plus mode
  * enabled and not paused.  A refusal is terminal for that intent; pending
- * keeps it for a later tick.  A wake never unpauses the lead, never starts a
- * native Goal and never raises the conversation allowance. */
+ * keeps it for a later tick.  A running Turn is checked before the native
+ * status: while a start is still activating, "absent" or a previous run's
+ * "complete" is not yet a stable fact.  A wake never unpauses the lead, never
+ * starts a native Goal and never raises the conversation allowance. */
 function planDelegationWake(input: JsonObject, session: JsonObject, settings: JsonObject, native: JsonObject): JsonObject {
   const mode = requireJsonObject(session.loopx_mode ?? {}, "mode");
   const outcome = (state: "pending" | "refused", reason: string) => ({operation: "wake", state, reason});
@@ -67,11 +69,12 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
   if (!(typeof settings.agent_id === "string" && Array.isArray(input.registered_agents)
     && input.registered_agents.includes(settings.agent_id))) return outcome("refused", "lead_unbound");
   if (input.execution_binding_valid !== true) return outcome("refused", "binding_revoked");
+  if (session.active_turn_id) return outcome("pending", "lead_turn_active");
   const status = String(native.status ?? "absent");
   if (status === "complete") return outcome("refused", "native_goal_complete");
   if (status === "absent") return outcome("refused", "native_goal_absent");
   if (mode.paused === true) return outcome("pending", "lead_paused");
-  if (session.active_turn_id || !RESUMABLE_NATIVE.includes(status)) return outcome("pending", "lead_turn_active");
+  if (!RESUMABLE_NATIVE.includes(status)) return outcome("pending", "lead_turn_active");
   if (!(Number.isSafeInteger(settings.token_budget) && Number(settings.token_budget) > 0
     && Number(settings.token_budget) <= 2147483647
     && Number(settings.token_budget) > Number(native.tokensUsed ?? 0))) return outcome("pending", "allowance_exhausted");
