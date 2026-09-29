@@ -153,6 +153,42 @@ def test_workspace_removed_during_acceptance_is_typed_before_turn_preview(
     assert not list(runner.path("inventory").parent.glob("*.json"))
 
 
+def test_workspace_symlink_retargeted_during_acceptance_is_typed(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    original_workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    replacement_workspace = root / "replacement-worker"
+    replacement_workspace.mkdir()
+    workspace_link = root / "bound-worker-link"
+    workspace_link.symlink_to(original_workspace, target_is_directory=True)
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(workspace_link)
+    runner.config.write_text(json.dumps(config))
+    original_capture = delegation.delegation_validation.capture
+
+    def capture_then_retarget(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        workspace_link.unlink()
+        workspace_link.symlink_to(replacement_workspace, target_is_directory=True)
+        return result
+
+    def no_turn(*args, **kwargs):
+        raise AssertionError("a retargeted workspace must not reach Turn preview")
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_retarget)
+    monkeypatch.setattr(runner, "_cli", no_turn)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "unavailable"
+    assert result["authority_ready"] is None
+    assert not result["turn_eligible"] and not any(result["effects"].values())
+    assert str(workspace_link) not in json.dumps(result)
+    assert str(replacement_workspace) not in json.dumps(result)
+
+
 @pytest.mark.parametrize("replacement", [False, True])
 def test_workspace_changed_during_real_turn_preview_is_not_reported_ready(
     service, monkeypatch, replacement
