@@ -736,6 +736,7 @@ export function PersonalWorkspacePage({
   managerRuntime,
   model,
   readOnly = false,
+  typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
@@ -750,6 +751,9 @@ export function PersonalWorkspacePage({
   model: WorkspaceModel;
   ownerLabel?: string;
   readOnly?: boolean;
+  // Bumped when typed previews were stored outside this page, so the page
+  // re-reads the store instead of waiting for the next mount.
+  typedActionsRevision?: number;
   selectedAgentId?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
@@ -1104,7 +1108,7 @@ export function PersonalWorkspacePage({
         // The workspace remains usable when the optional local proposal store is unavailable.
       });
     return () => { cancelled = true; };
-  }, [readOnly, selectedGoalId, t]);
+  }, [readOnly, selectedGoalId, t, typedActionsRevision]);
 
   async function createPreview(
     request: WorkspaceActionPreviewRequest,

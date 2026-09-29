@@ -1282,9 +1282,12 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (resumedEvents && request.method() === "GET") {
       const sessionId = resumedEvents[1];
       const turnId = resumedEvents[2];
-      const answer = "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
+      // A resumed Turn completes with the same scripted answer it was sent for.
+      const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(turnMessages.get(turnId) ?? "") : null;
+      const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
+        || "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
       await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(turnMessages.get(turnId) ?? "") ? 5000 : 1200));
-      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer), status: 200 });
+      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
       return;
     }
     if (url.pathname === "/api/chat/goals/contexts") {

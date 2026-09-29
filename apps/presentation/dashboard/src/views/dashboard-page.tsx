@@ -1378,6 +1378,7 @@ function PersonalGoalHome({
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
+  const [typedActionsRevision, setTypedActionsRevision] = useState(0);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
   // undefined: not read yet; null: the session owner could not be read.
@@ -1713,15 +1714,25 @@ function PersonalGoalHome({
               || `${answerIdentityLabel(targetContextId, selectedAgent.label)} 已完成分析。`,
           });
           // A recovered Turn cannot hand previews back to the composer, so its
-          // Todo proposals are stored directly and restored with the Goal's
-          // other pending previews. Only the Session's own Goal may own them.
+          // Todo proposals are stored directly and the page re-reads the store
+          // to show their cards. Only the Session's own Goal may own them.
           const recoveryGoalId = targetContextId !== "manager" ? activeSnapshot?.session.goal_id : undefined;
-          if (recoveryGoalId && model.goals.some((goal) => goal.goalId === recoveryGoalId)) {
-            for (const request of todoProposalPreviewRequests(recoveryGoalId, streamed.turnId, streamed.response.proposals)) {
-              void previewTypedAction(request).catch(() => {
-                // The answer stays readable; the owner can ask again for a draft.
-              });
-            }
+          const recoveryRequests = recoveryGoalId && model.goals.some((goal) => goal.goalId === recoveryGoalId)
+            ? todoProposalPreviewRequests(recoveryGoalId, streamed.turnId, streamed.response.proposals)
+            : [];
+          if (recoveryRequests.length) {
+            void Promise.allSettled(recoveryRequests.map((request) => previewTypedAction(request))).then((results) => {
+              if (results.some((result) => result.status === "fulfilled")) setTypedActionsRevision((current) => current + 1);
+              if (!results.some((result) => result.status === "rejected")) return;
+              // The answer stays readable; say its draft is missing so the
+              // owner knows to ask again.
+              setMessagesByContext((messages) => ({
+                ...messages,
+                [targetContextId]: (messages[targetContextId] ?? []).map((message) => message.id !== streamingMessageId
+                  ? message
+                  : { ...message, lines: [...message.lines, t("feedback.proposalDraftFailed")] }),
+              }));
+            });
           }
         } catch (error) {
           if (cancelled) return;
@@ -2531,6 +2542,7 @@ function PersonalGoalHome({
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       {executionDiscoveryError ? <p role="status" className="m-0 bg-amber-50 px-4 py-2 text-sm text-amber-900">{t(executionDiscoveryError === "partial" ? "runs.discoveryPartial" : "runs.discoveryOffline")}</p> : null}
       <PersonalWorkspacePage
+        typedActionsRevision={typedActionsRevision}
         agents={agentOptions.map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,

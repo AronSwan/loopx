@@ -6,6 +6,9 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 const GOAL_PROMPT = "请给出一个下一步任务建议。";
 const MANAGER_PROMPT = "请为全局给出一个任务建议。";
 const PROPOSAL_TEXT = "[P1] 核对发布清单并补齐缺失的验证记录";
+// The fixture keeps a "刷新恢复" Turn running long enough to reload into it.
+const RECOVERY_PROMPT = "刷新恢复：请再给出一个任务建议。";
+const RECOVERY_TEXT = "[P2] 复核恢复回合给出的下一步";
 const proposalAnswer = {
   message: "我找到一个可评审的步骤。",
   proposals: [{ kind: "todo", priority: "P1", rationale: "发布前需要可核对的证据。", text: PROPOSAL_TEXT }],
@@ -24,9 +27,12 @@ export const chatTodoProposalScenario = {
   async run({ browser, collectCoverage, url }) {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, page } = context;
-    api.answerForMessage = (message) => (message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer : null);
-    const todoPreviews = () => api.actionPreviews.filter((preview) => preview.action_kind === "todo.create"
-      && preview.normalized_parameters?.text === PROPOSAL_TEXT);
+    api.answerForMessage = (message) => (message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer
+      : message === RECOVERY_PROMPT ? { message: "恢复后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "恢复回合同样需要可确认的草稿。", text: RECOVERY_TEXT }] }
+      : null);
+    const previewsWithText = (text) => api.actionPreviews.filter((preview) => preview.action_kind === "todo.create"
+      && preview.normalized_parameters?.text === text);
+    const todoPreviews = () => previewsWithText(PROPOSAL_TEXT);
     const composer = page.getByLabel("向 LoopX 发送消息");
     try {
       // Manager channel: no target Goal, so the proposal cannot become a write.
@@ -63,12 +69,40 @@ export const chatTodoProposalScenario = {
       await card.click();
       await page.getByRole("dialog").getByRole("button", { name: "确认并应用", exact: true }).click();
       await waitFor(() => api.actionApplies.map(decodeURIComponent).includes(preview.proposalId), "Confirming the proposal did not apply its preview");
+
+      // A Turn recovered after a reload must offer its proposal card as soon
+      // as the recovery completes, not only after another reload.
+      const turnsBeforeRecovery = api.turnRequests.length;
+      await composer.fill(RECOVERY_PROMPT);
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await waitFor(() => api.turnRequests.length > turnsBeforeRecovery, "The recovery prompt was not sent");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await openGoalChat();
+      await page.locator(".personal-channel-timeline").getByText("恢复后给出一个步骤。", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+      const recoveredCard = page.locator(".personal-proposal-row", { hasText: RECOVERY_TEXT });
+      await recoveredCard.waitFor({ state: "visible", timeout: 5_000 });
+      await waitFor(() => new Set(previewsWithText(RECOVERY_TEXT).map((item) => item.idempotency_key)).size === 1,
+        "The recovered proposal did not map to exactly one Todo preview");
+      const [recoveredPreview] = previewsWithText(RECOVERY_TEXT);
+      if (recoveredPreview.normalized_parameters.goal_id !== "product-release") {
+        throw new Error(`Recovered Todo preview lost its Goal: ${JSON.stringify(recoveredPreview.normalized_parameters)}`);
+      }
+      await recoveredCard.click();
+      await page.getByRole("dialog").getByRole("button", { name: "确认并应用", exact: true }).click();
+      await waitFor(() => api.actionApplies.map(decodeURIComponent).includes(recoveredPreview.proposalId), "Confirming the recovered proposal did not apply its preview");
+      const appliesAfterRecovery = api.actionApplies.length;
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await openGoalChat();
+      await page.waitForTimeout(1_000);
+      if (api.actionApplies.length !== appliesAfterRecovery) throw new Error("Reloading after the recovered Turn applied a preview again");
     } finally {
       await context.close();
     }
     return {
       coverageEntries: context.coverageEntries,
-      note: "An Agent Todo proposal becomes a persisted typed preview in its Goal conversation, and none is created without a target Goal.",
+      note: "An Agent Todo proposal becomes a persisted typed preview in its Goal conversation, including one from a Turn recovered after a reload, and none is created without a target Goal.",
     };
   },
 };
