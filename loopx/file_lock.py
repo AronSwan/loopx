@@ -149,7 +149,7 @@ def _open_lock_descriptor(path: Path, *, flags: int) -> int:
 def lock_holder_path(path: Path) -> Path:
     lock_path = _lock_path(path)
     if os.name == "nt":
-        return lock_path.with_name(f"{lock_path.name}.holder.json")
+        return lock_path.with_name(f"{lock_path.name}.holder")
     return lock_path
 
 

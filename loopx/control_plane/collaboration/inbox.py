@@ -99,7 +99,7 @@ def pending(
         if path.suffix != ".json":
             continue
         if not re.fullmatch(r"[a-f0-9]{64}", path.stem):
-            raise ValueError("invalid context request filename")
+            continue  # lock/holder artifacts are not entries
         if path.stem <= after:
             continue
         decided = (_root(runtime_root) / "decisions" / path.name).exists()

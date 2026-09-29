@@ -175,7 +175,7 @@ def returns(root, goal_id, agent_id, *, mark_read=False):
         / "peer-operations"
         / _hash({"goal_id": goal_id, "agent_id": agent_id})
     )
-    for operation_path in sorted(folder.glob("*.json")):
+    for operation_path in sorted(p for p in folder.glob("*.json") if ".lock" not in p.name):
         operation = _read(operation_path)
         if (
             operation.get("goal_id") != goal_id
