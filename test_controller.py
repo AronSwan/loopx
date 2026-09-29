@@ -185,3 +185,33 @@ def test_reference_section_lists_and_declares():
     s = r2.reference_section([("final-v5.md", False), ("snap.md", True)])
     assert "- final-v5.md(来自前场调研)" in s and "- snap.md(缺失)" in s
     assert "必须重新检索" in s  # 防污染声明在场
+
+
+# ==== P3: 裁决收尾 + 引用双模式 ====
+def test_verdict_ok_synthetic_matrix():
+    ok = ["## 五、结论:**修改后采纳**\n\n附:独立复核记录\n来源A",
+          "**裁决:采纳**！",
+          "- 判定:重做。",
+          "Verdict:修改后采纳"]
+    bad = ["**Verdict:有条件通过(conditional pass)。**",
+           "**判定:validated_progress(有条件通过)**。",
+           "结论:无需重做",
+           "结论:不采纳该建议",
+           "正文提到修改。\n(无标签裁决行)"]
+    for t in ok:
+        assert r2.verdict_ok(t), t
+    for t in bad:
+        assert not r2.verdict_ok(t), t
+
+
+def test_citation_modes():
+    lit_brief = "引用规范: 本课题允许标准文献标识符(DOI/PMID/arXiv/ISO号)计入引用数"
+    assert r2.citation_mode(lit_brief) == "lit"
+    assert r2.citation_mode("普通任务书") == "strict"
+    # strict: 3 URL 过, 2 URL 挂
+    assert r2.citations_ok("https://a https://b https://c", "strict")
+    assert not r2.citations_ok("https://a https://b", "strict")
+    # lit: 1 URL + 2 良构标识符 过; 0 URL 挂(底线); 3裸提法不算标识符
+    assert r2.citations_ok("https://a 以及 PMID:6541615 和 arXiv:2609.26532", "lit")
+    assert not r2.citations_ok("PMID:6541615 arXiv:2609.26532 10.1234/abc", "lit")
+    assert not r2.citations_ok("https://a 某Gartner报告 ISO手册 JAMA论文", "lit")

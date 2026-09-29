@@ -103,6 +103,51 @@ def deliverables_of(brief):
     return "按任务书'本次研究要回答'逐条回答,并给出老板可直接照做的交付物"
 
 
+# ---- 裁决收尾门禁(第9坑家族: 结构词全文命中曾3/8假阴性,回溯8份历史评审零误判) ----
+VERDICT_LABEL = re.compile(  # 标签式裁决行: 行首(允许#/列表/序号/粗体)即 裁决|判定|结论|Verdict + 冒号
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:[-*•]|\d{1,2}[.、)])?\s*"
+    r"(?:[一二三四五六七八九十]{1,3}|\d{1,2})?[、.．]?\s*\**\s*"
+    r"(裁决|判定|结论|[Vv]erdict)\s*[:：]")
+VERDICT_TAIL = re.compile(  # 三词收尾;尾部容粗体/全角标点;否定式(无需重做/不采纳)不算
+    r"(?<!无需)(?<!不需)(?<!不再)(?<!不)(?<!无)(?<!勿)(?<!莫)"
+    r"(修改后采纳|重做|采纳)[\s。.，！!？?…*)）)」』’”】\[\]]{0,8}$")
+
+
+def verdict_ok(txt):
+    """最后一条标签式裁决行必须以三词之一收尾;自创词(有条件通过/validated_progress)不放行。
+    容忍裁决行后置附录(历史4/5真裁决带附录,V1严格末段会误拦)。"""
+    lines = [ln for ln in txt.splitlines() if VERDICT_LABEL.match(ln)]
+    return bool(lines) and bool(VERDICT_TAIL.search(lines[-1]))
+
+
+# ---- 引用双模式(课题自适应: 文献型课题的PMID/ISO源不再被URL规则误杀) ----
+_CITE_ID_PATTERNS = [
+    re.compile(r"10\.\d{4,9}/\S+"),
+    re.compile(r"PMID[:：]?\s?\d{5,9}", re.I),
+    re.compile(r"arXiv:\d{4}\.\d{4,5}(v\d+)?", re.I),
+    re.compile(r"ISO\s?\d{3,5}(?:[:\-]\d+)?"),
+    re.compile(r"NIST SP \d{3,4}", re.I),
+]
+
+
+def citation_mode(brief_text):
+    """任务书声明制(人授权,模型不能自授): 出现文献规范行→lit,否则strict。"""
+    return "lit" if "允许标准文献标识符" in brief_text else "strict"
+
+
+def cite_counts(txt):
+    n_url = len(re.findall(r"https?://", txt))
+    n_id = sum(len(pat.findall(txt)) for pat in _CITE_ID_PATTERNS)
+    return n_url, n_id
+
+
+def citations_ok(txt, mode):
+    n_url, n_id = cite_counts(txt)
+    if mode == "lit":
+        return n_url >= 1 and (n_url + n_id) >= 3
+    return n_url >= 3
+
+
 def read_brief(root):
     return (root / "project" / "REQUIREMENTS.md").read_text(encoding="utf-8")
 
@@ -115,9 +160,11 @@ RESEARCHER_TASK = (
     "Read REQUIREMENTS.md and reference/ background materials (see the 背景资料清单 section of REQUIREMENTS.md) for our real context first. "
     "Write outputs/research-{k}.md IN CHINESE: findings each with source (official URL or article "
     "number), what it means for OUR operation as described in the brief, and a short 'if we do nothing' "
-    "risk note. 1500-3000 chars. Cite every claim with at least 3 full URLs "
+    "risk note. 1500-3000 chars. Cite every claim: by default with at least 3 full URLs "
     "(complete addresses starting with https://, never bare domains or partial paths); "
-    "mark uncertain items as 待核实 explicitly. "
+    "IF the brief's 引用规范 line allows standard literature identifiers, then 1 full URL "
+    "plus well-formed identifiers (DOI/PMID/arXiv/ISO) totaling 3 is acceptable. "
+    "Mark uncertain items as 待核实 explicitly. "
     "Finish by writing the file; it is your only deliverable."
 )
 
@@ -150,7 +197,7 @@ TASKS = {
         "the key facts YOURSELF from the cited sources before judging. Write "
         "outputs/review-1.md IN CHINESE: (1) factual errors with evidence, (2) missing "
         "questions or angles the brief asked for, (3) over-engineering a small factory "
-        "does not need, (4) the three highest-value fixes, (5) verdict: 采纳 / 修改后采纳 / 重做. "
+        "does not need, (4) the three highest-value fixes, (5) a verdict line that ends with EXACTLY one of: 采纳 / 修改后采纳 / 重做. "
         "Judge against our real constraints, not generic best practice."
     ),
     "reviewer-2": (
@@ -460,8 +507,12 @@ def validate(root, phase):
     p = root / "agents" / actor / ref
     assert p.stat().st_size > 200, f"{ref} 太小或缺失"
     if phase.startswith("researcher"):
-        n_urls = len(re.findall(r"https?://", p.read_text(encoding="utf-8", errors="replace")))
-        assert n_urls >= 3, f"{ref} 引用源不足({n_urls}<3)"
+        txt = p.read_text(encoding="utf-8", errors="replace")
+        n_url, n_id = cite_counts(txt)
+        if citation_mode(read_brief(root)) == "lit":
+            assert n_url >= 1 and (n_url + n_id) >= 3,                 f"{ref} 引用源不足(lit模式: URL={n_url},URL+标识符={n_url + n_id})"
+        else:
+            assert n_url >= 3, f"{ref} 引用源不足({n_url}<3)"
     print(f"validated: {ref} ({p.stat().st_size} bytes)")
 
 
@@ -475,6 +526,7 @@ def read_plan(root):
 def gate(root, include_final=True):
     """穷举门禁: 全工件齐+引用足+双盲评在场+(可选)终稿结构词。中检不含终稿。"""
     plan = read_plan(root)
+    cite_mode = citation_mode(read_brief(root))
     checks = []
     ok = True
     def chk(name, cond, detail=""):
@@ -486,13 +538,13 @@ def gate(root, include_final=True):
         if p.exists():
             txt = p.read_text(encoding="utf-8", errors="replace")
             chk(f"research-{k} 非空", p.stat().st_size > 200, f"{p.stat().st_size}B")
-            chk(f"research-{k} 引用>=3", len(re.findall(r"https?://", txt)) >= 3)
+            chk(f"research-{k} 引用>=3", citations_ok(txt, cite_mode))
         else:
             chk(f"research-{k} 存在", False, "缺失")
     checks_pool = [
         ("agents/architect/outputs/architecture.md", 1500, None),
-        ("agents/reviewer-1/outputs/review-1.md", 400, ("采纳", "修改", "重做")),
-        ("agents/reviewer-2/outputs/review-2.md", 400, ("采纳", "修改", "重做")),
+        ("agents/reviewer-1/outputs/review-1.md", 400, "verdict"),
+        ("agents/reviewer-2/outputs/review-2.md", 400, "verdict"),
     ] + ([("agents/finalizer/outputs/final-plan.md", 2000, ("清单", "检查表"))]
          if include_final else [])
     for ref, min_size, kw in checks_pool:
@@ -500,7 +552,10 @@ def gate(root, include_final=True):
         if p.exists():
             txt = p.read_text(encoding="utf-8", errors="replace")
             chk(f"{ref.split('/')[-1]} 非空", p.stat().st_size > min_size, f"{p.stat().st_size}B")
-            if kw:
+            if kw == "verdict":
+                chk(f"{ref.split('/')[-1]} 裁决收尾", verdict_ok(txt),
+                    "结尾裁决须以 采纳/修改后采纳/重做 收尾(单独成行,附录之前)")
+            elif kw:
                 chk(f"{ref.split('/')[-1]} 结构词", any(w in txt for w in kw))
         else:
             chk(f"{ref.split('/')[-1]} 存在", False, "缺失")
@@ -604,7 +659,7 @@ def _failing_phases(report):
     for c in report["checks"]:
         if c["pass"]:
             continue
-        name = re.split(r" (非空|结构词|存在|引用|主题匹配)", c["check"])[0].strip()
+        name = re.split(r" (非空|结构词|裁决收尾|存在|引用|主题匹配)", c["check"])[0].strip()
         ph = name_to_phase.get(name) or name_to_phase.get(name + ".md")
         if ph and ph not in out:
             out.append(ph)
@@ -634,8 +689,10 @@ def gate_with_repair(root, include_final, max_rounds=2):
                 f"终验门禁失败项: {det}\n\n"
                 "针对性修复要求:\n"
                 "- 按原任务书(tasks/同名.md)重写完整交付物,逐项消除上述失败点;不要只补一句话。\n"
-                "- 若失败项是'结构词': 结尾裁决必须以 采纳 / 修改后采纳 / 重做 三者之一收尾,\n"
+                "- 若失败项是'裁决收尾': 以 裁决:/判定:/结论: 单独成行(置于附录之前)、以三词之一收尾,\n"
                 "  不得自创裁决词(英文状态词不算)。\n"
+                "- 若失败项是'引用': 默认须≥3个完整https://URL;若任务书'引用规范'行允许文献标识符,\n"
+                "  则保证≥1个完整URL且URL+良构标识符(DOI/PMID/arXiv/ISO号)合计≥3。\n"
                 "- 写完后重读全文,确认门禁失败点已消除再结束回合。\n",
                 encoding="utf-8")
             print(f">>> 门禁修复(round {rnd + 1}): 重跑 {ph}: {det[:100]}", flush=True)
