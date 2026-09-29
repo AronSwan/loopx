@@ -865,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         print_payload=print_payload,
         runtime_root=(
             effective_runtime_root(registry_path, args.runtime_root)
-            if registry_path.exists()
+            if args.command == "pr-review" and registry_path.exists()
             else None
         ),
     )
