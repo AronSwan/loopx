@@ -623,7 +623,10 @@ export async function recordProjectionExchange(options: {
   goalId?: string;
   question: string;
 }) {
-  return requestJson<{ ok: true; schema_version: "loopx_chat_projection_exchange_v1"; session_id: string }>(
+  return requestJson<{
+    ok: true; schema_version: "loopx_chat_projection_exchange_v1";
+    session_id: string; user_message_id: string; answer_message_id: string;
+  }>(
     "/api/chat/projection-messages",
     {
       method: "POST",
@@ -742,14 +745,15 @@ export type ChatSessionSnapshot = {
   active_turn: Record<string, unknown> | null;
 };
 
-export async function fetchChatSession(sessionId: string) {
-  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${sessionId}`);
+export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
+  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${sessionId}`, { signal });
 }
 
 export async function fetchChatSessions(options: {
   agentId?: string;
   channelId?: string;
   goalId?: string;
+  signal?: AbortSignal;
 }) {
   const query = new URLSearchParams();
   if (options.agentId) query.set("agent_id", options.agentId);
@@ -759,14 +763,14 @@ export async function fetchChatSessions(options: {
     ok: true;
     schema_version: "loopx_chat_session_list_v1";
     sessions: ChatSessionSummary[];
-  }>(`/api/chat/sessions?${query.toString()}`);
+  }>(`/api/chat/sessions?${query.toString()}`, { signal: options.signal });
 }
 
 export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
   const messages = new Map<string, ChatVisibleMessage>();
   for (const snapshot of snapshots) {
     for (const message of snapshot.messages) {
-      messages.set(message.message_id, { ...message, session_id: snapshot.session.session_id });
+      messages.set(`${snapshot.session.session_id}:${message.message_id}`, { ...message, session_id: snapshot.session.session_id });
     }
   }
   return [...messages.values()].sort((left, right) =>
@@ -775,6 +779,13 @@ export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
   );
 }
 
+export type ChatHistory = {
+  messages: ChatVisibleMessage[];
+  sessions: ChatSessionSummary[];
+  snapshots: ChatSessionSnapshot[];
+  unavailableSessionIds: string[];
+};
+
 export async function fetchChatHistory(options: {
   // An omitted ``agentId`` reads the whole channel transcript. The steward
   // channel is one conversation across whatever executor it currently
@@ -782,15 +793,22 @@ export async function fetchChatHistory(options: {
   agentId?: string;
   channelId: string;
   goalId?: string;
-}) {
-  const listed = await fetchChatSessions(options);
-  const snapshots = await Promise.all(
-    listed.sessions.map((session) => fetchChatSession(session.session_id)),
-  );
+}, previous?: ChatHistory): Promise<ChatHistory> {
+  const listed = previous ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
+  const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  // A failed historical read is not an empty transcript. Retrying only the
+  // missing snapshots keeps this recovery read-only and bounds repeated work.
+  const missing = listed.sessions.filter((session) => !known.has(session.session_id));
+  const results = await Promise.allSettled(missing.map((session) => fetchChatSession(session.session_id, AbortSignal.timeout(5000))));
+  for (const result of results) {
+    if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
+  }
+  const snapshots = listed.sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
   return {
     messages: mergeChatSessionMessages(snapshots),
     sessions: listed.sessions,
     snapshots,
+    unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
   };
 }
 
