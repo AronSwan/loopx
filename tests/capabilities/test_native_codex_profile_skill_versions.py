@@ -68,11 +68,14 @@ def test_equal_source_profiles_have_independent_runtime_shutdown(tmp_path):
         assert profiles[0].source_revision == profiles[1].source_revision
         for profile in profiles:
             assert doctor(profile, "--deep")["typescript_control_plane"]["ready"]
+            assert not (profile.home / ".codex/loopx/usage-ping.json").exists()
         stopped = doctor(profiles[0], "--restart-runtime")["effect_runtime_restart"]
         assert stopped["status"] == "stopped"
         assert Path(stopped["info_path"]).is_relative_to(profiles[0].home)
         other = doctor(profiles[1])["typescript_control_plane"]
         assert other["runtime_lifecycle"]["state"] == "running"
+        for profile in profiles:
+            assert not (profile.home / ".codex/loopx/usage-ping.json").exists()
     finally:
         for profile in profiles:
             assert doctor(profile, "--restart-runtime")["effect_runtime_restart"][

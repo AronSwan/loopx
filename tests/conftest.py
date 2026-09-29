@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Suppress collection before imports and in inherited test subprocesses.
+# Telemetry transport tests explicitly opt in against disposable collectors.
+os.environ["LOOPX_USAGE_PING"] = "0"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

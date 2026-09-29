@@ -239,8 +239,47 @@ this does not qualify the remaining whole-command payload boundary.
 
 The next B work remains history artifact lookup and remaining public payload/
 cold-path costs, preserving file-change freshness, full decision inputs and
-corruption rejection. Contract checks and attention still read canonical state
-separately; this repair adds no cross-request cache and claims no command-wide
-consistent snapshot. Recheck installed consumers after integration; A/C and D2
+corruption rejection. Contract checks and attention now share one request-local, validated canonical
+Todo snapshot per runtime/Goal. Standalone checks and subsequent requests read
+afresh; lease and projection-writeback reads do not participate. Consumer edits
+cannot mutate retained input, and a failed first read cannot recover midway
+through the request. This is not an atomic snapshot across registry, Markdown,
+history or multiple Goals. Recheck installed consumers after integration; A/C and D2
 retain their own open acceptance. Retire each writer only after its last
 supported caller and recovery acceptance are qualified.
+
+
+A matched isolated current projection with 1,117 retained Todos reduces full
+status assembly from two complete Todo reads to one. Three warm in-process
+samples had medians of 496→430 ms for File and 583→488 ms for SQLite. Base/head
+payload differences were confined to observation timestamps and age fields;
+full metadata and public response schemas are retained. Tracemalloc measured
+Python peak allocations of about 13.5→16.5 MB on both providers: retaining
+consumer-isolated input trades roughly 3 MB peak memory for the avoided read;
+retained allocations after return remain about 2.1 MB. This is current-state
+read-cost evidence, not historical replay, CLI cold-start, D2 qualification or
+a provider-default comparison. Python owns the request's transport-input
+lifetime; TS still owns validation, resume, succession, acceptance and selection.
+Resume input preparation now runs only for groups that contain a wait condition;
+succession still receives complete lineage, and waits still see archived and
+cross-role dependencies. On the same 1,117-Todo isolated current projection,
+against the baseline that already shares snapshots, structured-item calls fall
+from 2,687 to 1,570; native reads remain one and TS effect calls remain 16.
+Three warm samples give File medians of 430→425 ms and SQLite 493→481 ms.
+The small latency difference is not cold-start or provider-default evidence.
+Actual agent and full-Goal CLI responses retain their size and semantics apart
+from observation time/age fields. The full-Goal response remains about 2 MB.
+A follow-up on `b9a34c3e7` isolates the shared read-model validator: it
+serialized the full Todo array twice solely to check record order, despite an
+already validated unique-id index. Compare that index's insertion order with
+its existing Unicode-sorted ids instead; retain the full content digest,
+record validation and provider reads. On a detached 1,117-Todo/36-lease current
+projection, ten warm Node samples per provider reduced validator medians from
+42–43 ms to 27 ms. This is a common TS cost, not evidence to rank providers or
+change the default. No cached authority, lease omission, response cap or
+frontend contract change is introduced. Unicode order, duplicates, malformed
+JSON, archived-record tampering and both record formats remain rejection tests.
+Next qualify reuse of the complete validated Todo/lease snapshot across
+ownership and status, then coordinate full-Goal frontend summary/list/detail
+consumers. Agent status already has bounded display; final JSON compaction
+alone does not remove full-source computation.

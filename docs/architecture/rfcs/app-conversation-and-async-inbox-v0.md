@@ -160,6 +160,24 @@ inputs, independently challenge a period/unit error, adopt the revision and
 return a checked synthesis. A second cycle changes the consumed input basis.
 This is GQ05/GQ11–13, not a new milestone or queue.
 
+The deterministic integration in `tests/test_chat_delegation_journey.py` connects
+the production Chat controller, scoped handoff, receiver inbox and result return
+through a disposable file store for both steward and Goal Chat. It checks ingress
+replay, a separately adopted correction, and Markdown return to the original
+conversation after session replacement and store reload. Model responses and
+receiver work are scripted: this does **not** qualify owner selection, native
+execution, live steering/stop, the packaged App or G1. Release qualification must
+exercise those remaining boundaries with the selected real executor; ordinary
+test runs require no model credentials or paid calls.
+
+App snapshot readback resolves a delegated request using the Goal instance in
+its original receipt and the existing typed history-inspection decision. This
+keeps receiver disposition visible after alias recreation, so the existing App
+return watcher can retain the original session. A mismatched route/receipt never
+substitutes another instance; unavailable readback preserves the saved message.
+Production HTTP tests cover steward and Goal Chat with real disposable stores.
+This is readback qualification, not native executor or model-routing acceptance.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional
