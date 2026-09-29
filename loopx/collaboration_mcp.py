@@ -1525,6 +1525,18 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
         """Reconnect an interrupted original execution; never launch a replacement Turn."""
         return delegations.resume(operation_id)
 
+    @server.tool()
+    async def stop_delegation(operation_id: str) -> dict:
+        """Stop one original operation and return what was proven, not what was hoped.
+
+        settled: the worker acknowledged and its operation and Turn lane locks are
+        free. acknowledged/requested: still winding down; call again. unknown: the
+        holder vanished before acknowledging; inspect its Turn before reusing the
+        task. noop: already accepted/rejected/stopped. Stopped work is not resumed;
+        a new scope needs a new operation id. Elapsed time is never a receipt.
+        """
+        return await asyncio.to_thread(delegations.stop, operation_id, execute=True)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

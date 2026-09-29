@@ -24,8 +24,8 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
         try:
             entries = directory.iterdir()
             for path in entries:
-                if path.suffix != ".json":
-                    continue
+                if path.suffix != ".json" or path.name.endswith(".stop.json"):
+                    continue  # stop receipts sit beside their execution record
                 if not BARE_SHA256_PATTERN.fullmatch(path.stem):
                     raise ValueError("unexpected delegation record address; reconcile inventory storage")
                 if query["cursor"] is None or path.stem > query["cursor"]:
