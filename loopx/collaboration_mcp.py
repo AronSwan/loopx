@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -26,7 +27,10 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
-from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
+from .file_lock import (
+    exclusive_file_lock, lock_holder_host_label, read_lock_holder, try_exclusive_file_lock,
+    LockAcquisitionPolicy, LockAcquireTimeoutError,
+)
 from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
@@ -38,6 +42,8 @@ from .control_plane.turn_driver.journal_store import (
     turn_journal_path,
 )
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
+from .control_plane.turn_driver.lane_fence import turn_lane_target
+from .control_plane.work_items.task_lease import release_task_lease
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.peers import return_result
 from .control_plane.collaboration.inbox import acknowledge, _entry, normalize_request
@@ -300,6 +306,65 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
 
+DELEGATION_STOP_SCHEMA_VERSION = "loopx_delegation_stop_v0"
+# Observations that no worker may reopen; a stop against one is a no-op receipt.
+DELEGATION_TERMINAL_STATUSES = frozenset({"accepted", "rejected", "stopped"})
+DELEGATION_STOP_OPEN_PHASES = frozenset({"requested", "acknowledged"})
+# How long a signalled same-host worker may take to acknowledge before SIGKILL.
+DELEGATION_STOP_GRACE_SECONDS = 10.0
+DELEGATION_STOPPED_MESSAGE = "delegation operation was stopped; start a new operation id"
+
+
+class DelegationStopRequested(Exception):
+    """A stop reached the worker that owns this operation; it must acknowledge, not finish."""
+
+    def __init__(self, source: str) -> None:
+        super().__init__(source)
+        self.source = source
+
+
+class DelegationFenced(DelegationStopRequested):
+    """A stop this process never acknowledged fences its execution-record write.
+
+    The write is refused before it happens: a late-returning or other-host
+    worker records no Turn result, completes no Todo and publishes nothing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("fenced")
+
+
+class _WorkerStopSignal:
+    """Turn the first SIGTERM into a stop request; absorb later ones during the acknowledgement."""
+
+    def __init__(self) -> None:
+        self.armed = True
+
+    def __call__(self, signum: int, frame: object) -> None:
+        if not self.armed:
+            return
+        self.armed = False
+        raise DelegationStopRequested("SIGTERM")
+
+    def disarm(self) -> None:
+        self.armed = False
+
+
+def install_worker_stop_signal() -> _WorkerStopSignal | None:
+    """Install the detached worker's SIGTERM handler; ``None`` where signals are unsupported."""
+
+    if not hasattr(signal, "SIGTERM"):
+        return None
+    handler = _WorkerStopSignal()
+    try:
+        signal.signal(signal.SIGTERM, handler)
+    except (ValueError, OSError):
+        # Not the main thread, or a platform without handler support: the
+        # worker still honours stop files at every checkpoint and fenced write.
+        return None
+    return handler
+
+
 class Delegations:
     """Host IO for bound peer work; typed grants and observations stay in TS.
 
@@ -311,6 +376,7 @@ class Delegations:
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
         self._goal_ref_lock = Lock()
+        self._stop_signal: _WorkerStopSignal | None = None
         try:
             self.goal_ref = capture_collaboration_goal_ref(
                 self.registry,
@@ -351,6 +417,22 @@ class Delegations:
 
     def path(self, operation_id: str) -> Path:
         return _root(self.root) / "executions" / _hash([self.goal_id, self.agent_id]) / (_hash(operation_id) + ".json")
+
+    @staticmethod
+    def _stop_path(path: Path) -> Path:
+        """The stop receipt sits beside its execution record and is never merged into it."""
+        return path.with_name(path.stem + ".stop.json")
+
+    @staticmethod
+    def _dispatch_lock(path: Path) -> Path:
+        return path.with_suffix(".dispatch")
+
+    @staticmethod
+    def _read_stop(path: Path) -> dict | None:
+        stop_path = Delegations._stop_path(path)
+        if not stop_path.exists():
+            return None
+        return _read(stop_path)
 
     def operations(self, *, limit: int = 20, cursor: str | None = None) -> dict:
         from .control_plane.collaboration.delegation_inventory import read_delegation_inventory
@@ -499,15 +581,19 @@ class Delegations:
 
     def resume(self, operation_id: str) -> dict:
         path = self.path(operation_id)
+        if self._read_stop(path) is not None:
+            raise ValueError(DELEGATION_STOPPED_MESSAGE)
         try:
             with exclusive_file_lock(
                 path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT
             ):
                 row = _read(path)
                 binding = self._bound(row)
+                if row["status"] == "stopped":
+                    raise ValueError(DELEGATION_STOPPED_MESSAGE)
                 if row["status"] == "rejected":
                     self._recover_validated_settlement(path, row, binding)
-                should_spawn = row["status"] not in {"accepted", "rejected"}
+                should_spawn = row["status"] not in DELEGATION_TERMINAL_STATUSES
                 if should_spawn:
                     self.binding(
                         row["identity"]["binding"]["id"], require_active=True
@@ -524,7 +610,7 @@ class Delegations:
         """Observe for at most 15 seconds; waiting neither starts nor resumes work."""
         for _ in range(5):
             result = self.read(operation_id)
-            if result["status"] in {"accepted", "rejected"} or result["recovery_required"]:
+            if result["status"] in DELEGATION_TERMINAL_STATUSES or result["recovery_required"]:
                 return result
             time.sleep(3)
         return self.read(operation_id)
@@ -611,7 +697,7 @@ class Delegations:
             "error": None,
         }
         row.pop("error", None)
-        _write(path, row)
+        self._fenced_write(path, row)
         return True
 
     def adopt_result(self, operation_id: str, consumer_operation_id: str) -> dict:
@@ -637,8 +723,11 @@ class Delegations:
         result = {"operation_id": operation_id, "request_id": row["identity"]["request_id"],
                   "agent_id": binding["agent_id"], "todo_id": binding["todo_id"],
                   "status": row["status"], "worker_active": active,
-                  "recovery_required": not active and row["status"] not in {"accepted", "rejected"}
+                  "recovery_required": not active and row["status"] not in DELEGATION_TERMINAL_STATUSES
                   and time.time() - row.get("created_at", 0) > 15}
+        stop = self._read_stop(path)
+        if stop is not None:
+            result["stop"] = {"stop_id": stop["stop_id"], "phase": stop["phase"]}
         if row["status"] == "accepted":
             # A saved receipt cannot hide an amended task, verifier or output.
             artifacts = self._accepted(binding)
@@ -654,7 +743,261 @@ class Delegations:
             "from": row["status"], "to": status, **facts,
         })
         row.update(status=decision["status"])
-        _write(path, row)
+        self._fenced_write(path, row)
+
+    def _fenced_write(self, path: Path, row: dict) -> None:
+        """Write the execution record only while no unacknowledged stop fences this process.
+
+        The stop receipt is re-read under the dispatch lock on every write, so a
+        worker that returns after a stop it never saw writes nothing at all.
+        """
+
+        with exclusive_file_lock(self._dispatch_lock(path)):
+            stop = self._read_stop(path)
+            if stop is not None and not self._acknowledged_here(stop):
+                raise DelegationFenced()
+            _write(path, row)
+
+    @staticmethod
+    def _acknowledged_here(stop: dict) -> bool:
+        ack = stop.get("ack")
+        return (isinstance(ack, dict) and ack.get("pid") == os.getpid()
+                and ack.get("host") == lock_holder_host_label())
+
+    def _raise_if_stop_requested(self, path: Path) -> None:
+        """Worker checkpoint: leave before the next host launch or Todo effect."""
+        if self._read_stop(path) is not None:
+            raise DelegationStopRequested("stop_file")
+
+    @staticmethod
+    def _worker_identity() -> dict:
+        return {
+            "pid": os.getpid(),
+            "pgid": os.getpgid(0) if hasattr(os, "getpgid") else None,
+            "host": lock_holder_host_label(),
+        }
+
+    def _lane_target(self, binding: dict) -> Path:
+        return turn_lane_target(runtime_root=self.root, goal_id=self.goal_id,
+                                plan={"turn_envelope": {"agent_id": binding["agent_id"]}})
+
+    def _operation_lock_free(self, path: Path) -> bool:
+        try:
+            with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+                return True
+        except LockAcquireTimeoutError:
+            return False
+
+    def _lane_lock_free(self, binding: dict) -> bool:
+        # The kernel lock is the only proof; the holder record is advisory. The
+        # probe holds the lane for an instant, which is the same observation a
+        # status read makes on the operation lock.
+        with try_exclusive_file_lock(self._lane_target(binding), agent_id=self.agent_id,
+                                     operation="loopx_delegation_stop_probe") as held:
+            return held is not None
+
+    def _turn_journal_status(self, row: dict, binding: dict) -> str | None:
+        turn_key = row.get("turn_key") or self._matching_turn_key(row, binding)
+        if not turn_key:
+            return None
+        journal = load_turn_journal(turn_journal_path(self.root, goal_id=self.goal_id, turn_key=turn_key))
+        status = journal.get("status") if isinstance(journal, dict) else None
+        return str(status) if status else None
+
+    def _new_stop_record(self, row: dict, *, requested_by: str, worker: dict | None) -> dict:
+        requested_at = time.time()
+        return {
+            "schema_version": DELEGATION_STOP_SCHEMA_VERSION,
+            "stop_id": _hash([row["identity"]["operation_id"], requested_by, requested_at])[:32],
+            "operation_id": row["identity"]["operation_id"],
+            "request_id": row["identity"]["request_id"],
+            "phase": "requested",
+            "reason": "awaiting_acknowledgement",
+            "requested_by": requested_by,
+            "requested_at": requested_at,
+            "requested_status": row["status"],
+            "worker": worker,
+            "ack": None,
+            "lease": None,
+            "settled": None,
+        }
+
+    def _stop_receipt(self, row: dict, binding: dict, stop: dict | None) -> dict:
+        receipt = {
+            "operation_id": row["identity"]["operation_id"],
+            "request_id": row["identity"]["request_id"],
+            "agent_id": binding["agent_id"], "todo_id": binding["todo_id"],
+            "status": row["status"],
+        }
+        if stop is None:
+            # Nothing was written: a terminal observation cannot be stopped, and
+            # repeating the request returns exactly this receipt again.
+            receipt.update(phase="noop", reason="delegation already " + row["status"], stop=None)
+        else:
+            receipt.update(phase=stop["phase"], reason=stop.get("reason"), stop=stop)
+        return receipt
+
+    def stop(self, operation_id: str, *, execute: bool) -> dict:
+        """Stop one bounded member and return a receipt that says what was proven.
+
+        ``requested`` is written beside the execution record, never into it.
+        When no worker holds the operation, this caller takes the lock, marks
+        the record stopped and releases the hard lease itself. A same-host
+        holder is signalled by process group and given a bounded grace to
+        acknowledge; another host's holder is left to find the request at its
+        next checkpoint or fenced write. ``settled`` and ``unknown`` come from
+        the typed decision over lock facts; elapsed time proves nothing.
+        """
+
+        require_operation_id(operation_id)
+        if not execute:
+            raise ValueError("delegation stop requires execute")
+        path = self.path(operation_id)
+        if not path.exists():
+            raise ValueError("unknown delegation operation; start_delegation returns the operation_id to stop")
+        with exclusive_file_lock(self._dispatch_lock(path)):
+            row = _read(path)
+            binding = self._bound(row)
+            stop = self._read_stop(path)
+            if stop is None:
+                if row["status"] in DELEGATION_TERMINAL_STATUSES:
+                    return self._stop_receipt(row, binding, None)
+                stop = self._new_stop_record(row, requested_by=self.agent_id,
+                                             worker=self._lock_holder_worker(path, row))
+                _write(self._stop_path(path), stop)
+        if stop["phase"] in DELEGATION_STOP_OPEN_PHASES and stop.get("ack") is None:
+            try:
+                with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+                    row = _read(path)
+                    self._acknowledge_stop(path, row, binding, source="requester")
+            except LockAcquireTimeoutError:
+                self._signal_worker(path, stop)
+        return self._settle_stop(path)
+
+    def _lock_holder_worker(self, path: Path, row: dict) -> dict | None:
+        """Name the live operation-lock holder, else ``None``; a released record is not a worker."""
+
+        if self._operation_lock_free(path):
+            return None
+        holder = read_lock_holder(path)
+        if "released_at" in holder or not isinstance(holder.get("pid"), int):
+            return None
+        recorded = row.get("worker") if isinstance(row.get("worker"), dict) else {}
+        same = recorded.get("pid") == holder["pid"] and recorded.get("host") == holder.get("host")
+        pgid = recorded.get("pgid") if same and isinstance(recorded.get("pgid"), int) else holder["pid"]
+        return {"pid": holder["pid"], "pgid": pgid, "host": holder.get("host")}
+
+    def _signal_worker(self, path: Path, stop: dict) -> None:
+        """Terminate a same-host holder's process group; never signal across hosts."""
+
+        worker = stop.get("worker")
+        if (not isinstance(worker, dict) or worker.get("host") != lock_holder_host_label()
+                or not hasattr(os, "killpg") or not isinstance(worker.get("pid"), int)):
+            return
+        pid, pgid = worker["pid"], worker.get("pgid") or worker["pid"]
+        if pgid == os.getpgid(0):
+            raise ValueError("delegation stop refuses to signal its own process group")
+        try:
+            if os.getpgid(pid) != pgid:
+                return  # the pid was reused by an unrelated process
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + DELEGATION_STOP_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if self._operation_lock_free(path):
+                return
+            time.sleep(0.2)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not self._operation_lock_free(path):
+            time.sleep(0.1)
+
+    def _acknowledge_stop(self, path: Path, row: dict, binding: dict, *, source: str) -> None:
+        """Acknowledge from under the operation lock: mark stopped, then release the hard lease.
+
+        Only the lock holder may acknowledge. A stop that another process already
+        acknowledged, or that already settled, is left untouched.
+        """
+
+        if self._stop_signal is not None:
+            self._stop_signal.disarm()
+        with exclusive_file_lock(self._dispatch_lock(path)):
+            stop = self._read_stop(path)
+            if stop is None:
+                stop = self._new_stop_record(row, requested_by="signal:" + source,
+                                             worker=self._worker_identity())
+            if stop.get("ack") is not None or stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
+                return
+            observed = row["status"]
+            decision = effect_runtime_result("collaboration.delegation.observe", {
+                "from": observed, "to": "stopped",
+            })
+            row.update(status=decision["status"])
+            _write(path, row)
+            stop.update(phase="acknowledged", reason="awaiting_lock_release", ack={
+                "pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
+                "source": source, "observed_status": observed,
+                "turn_key": row.get("turn_key") or self._matching_turn_key(row, binding),
+            })
+            _write(self._stop_path(path), stop)
+        try:
+            self._clear_delegation_bootstrap(row, binding)
+        except (OSError, ValueError):
+            pass  # the bootstrap is host input; its state never blocks the receipt
+        lease = self._release_delegation_lease(row, binding)
+        with exclusive_file_lock(self._dispatch_lock(path)):
+            stop = self._read_stop(path) or stop
+            stop["lease"] = lease
+            _write(self._stop_path(path), stop)
+
+    def _release_delegation_lease(self, row: dict, binding: dict) -> dict:
+        lease = row.get("task_lease")
+        if not isinstance(lease, dict) or lease.get("required") is not True:
+            return {"required": False, "released": None}
+        try:
+            result = release_task_lease(
+                runtime_root=self.root, goal_id=self.goal_id, todo_id=binding["todo_id"],
+                owner=binding["agent_id"], idempotency_key=str(lease["idempotency_key"]),
+                expected_version=lease.get("version"), registry_path=self.registry,
+            )
+        except (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError) as exc:
+            return {"required": True, "released": False, "error": str(exc)[:180]}
+        return {"required": True, "released": result.get("released") is True,
+                "missing": result.get("missing") is True}
+
+    def _settle_stop(self, path: Path) -> dict:
+        with exclusive_file_lock(self._dispatch_lock(path)):
+            row = _read(path)
+            binding = self._bound(row)
+            stop = self._read_stop(path)
+            if stop is None:
+                return self._stop_receipt(row, binding, None)
+            if stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
+                return self._stop_receipt(row, binding, stop)
+            facts = {
+                "operation_lock_free": self._operation_lock_free(path),
+                "lane_lock_free": self._lane_lock_free(binding),
+            }
+            decision = effect_runtime_result("collaboration.delegation.stop", {
+                "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
+                "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
+                **facts,
+            })
+            if decision["phase"] != stop["phase"] or decision.get("reason") != stop.get("reason"):
+                stop.update(phase=decision["phase"], reason=decision.get("reason"))
+                if decision["phase"] in {"settled", "unknown"}:
+                    lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
+                    stop["settled"] = {
+                        "at": time.time(), **facts,
+                        "lease_released": lease.get("released"),
+                        "turn_journal_status": self._turn_journal_status(row, binding),
+                    }
+                _write(self._stop_path(path), stop)
+            return self._stop_receipt(row, binding, stop)
 
     def _cli(self, binding: dict, *args: str, timeout: int = 60) -> dict:
         completed = subprocess.run([*_python_module_command("loopx.cli"),
@@ -711,21 +1054,34 @@ class Delegations:
         # The existing bounded mutation policy still excludes concurrent workers.
         with exclusive_file_lock(path):
             row = _read(path)
-            if row["status"] in {"accepted", "rejected"}:
+            if row["status"] in DELEGATION_TERMINAL_STATUSES:
                 return
-            binding = self._bound(row, require_active=True)
-            row.pop("error", None)
-            _write(path, row)
-            # Different request ids cannot run the same assigned task concurrently.
-            task_lock = _root(self.root) / "execution-slots" / _hash([self.goal_id, binding["todo_id"]])
-            with exclusive_file_lock(task_lock, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
-                try:
-                    self._execute(path, row, binding)
-                except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
-                    row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
-                    _write(path, row)
-                    if row["status"] == "prepared":
-                        self._observe(path, row, "rejected")
+            binding = self._bound(row)
+            if self._read_stop(path) is not None:
+                # The stop arrived before any worker owned the operation: this
+                # holder acknowledges it from under the lock and launches nothing.
+                self._acknowledge_stop(path, row, binding, source="worker_entry")
+                return
+            try:
+                binding = self._bound(row, require_active=True)
+                row.pop("error", None)
+                row["worker"] = self._worker_identity()
+                self._fenced_write(path, row)
+                # Different request ids cannot run the same assigned task concurrently.
+                task_lock = _root(self.root) / "execution-slots" / _hash([self.goal_id, binding["todo_id"]])
+                with exclusive_file_lock(task_lock, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+                    try:
+                        self._execute(path, row, binding)
+                    except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
+                        row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
+                        self._fenced_write(path, row)
+                        if row["status"] == "prepared":
+                            self._observe(path, row, "rejected")
+            except DelegationStopRequested as stop:
+                # SIGTERM, a checkpoint or a fenced write: the host child is already
+                # gone (its run-once exits with this process's exception), the
+                # bootstrap was cleared, and only the acknowledgement remains.
+                self._acknowledge_stop(path, row, binding, source=stop.source)
 
     def _execution_arguments(self, binding: dict, operation_id: str) -> list[str]:
         """Exactly the same profile, workspace and validation arguments for preview/run."""
@@ -790,7 +1146,7 @@ class Delegations:
         if publish:
             self._observe(path, row, "turn_returned")
         else:
-            _write(path, row)
+            self._fenced_write(path, row)
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
@@ -892,7 +1248,7 @@ class Delegations:
             goal_id=self.goal_id,
         ):
             row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
-            _write(path, row)
+            self._fenced_write(path, row)
             return row["task_lease"]
         handoff_mode = show_goal_handoff_mode(
             registry_path=self.registry,
@@ -904,7 +1260,7 @@ class Delegations:
                 "required": False,
                 "handoff_mode": handoff_mode,
             }
-            _write(path, row)
+            self._fenced_write(path, row)
             return row["task_lease"]
         lease_key = self._turn_instance_id(row)
         result = self._cli(
@@ -946,7 +1302,7 @@ class Delegations:
             "idempotency_key": lease_key,
             "version": lease["version"],
         }
-        _write(path, row)
+        self._fenced_write(path, row)
         return row["task_lease"]
 
     def _complete_delegated_todo(self, row: dict, binding: dict) -> None:
@@ -991,6 +1347,7 @@ class Delegations:
         common = ["--goal-id", self.goal_id, "--agent-id", binding["agent_id"]]
         execution = self._execution_arguments(binding, row["identity"]["operation_id"])
         try:
+            self._raise_if_stop_requested(path)
             if row["status"] == "prepared":
                 acceptance = delegation_validation.capture(self, binding)
                 if acceptance["plan"]["state"] != "ready" or not acceptance["files_current"]:
@@ -1000,6 +1357,7 @@ class Delegations:
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
             if row["status"] == "running":
+                self._raise_if_stop_requested(path)
                 turn_key = self._matching_turn_key(row, binding)
                 selector = (
                     ["--resume-turn-key", turn_key]
@@ -1042,8 +1400,10 @@ class Delegations:
                 )
                 if not isinstance(row.get("task_lease"), dict):
                     self._acquire_delegation_lease(path, row, binding)
+                self._raise_if_stop_requested(path)
                 self._complete_delegated_todo(row, binding)
                 todo_completed_for_settlement = True
+                self._raise_if_stop_requested(path)
                 result = self._cli(
                     binding,
                     "turn",
@@ -1071,6 +1431,7 @@ class Delegations:
             self._bound(row, require_active=True)  # revocation or rebinding while the model ran
             delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
             if not todo_completed_for_settlement:
+                self._raise_if_stop_requested(path)
                 self._complete_delegated_todo(row, binding)
             row["artifacts"] = self._accepted(binding)
             if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
@@ -1097,7 +1458,7 @@ class Delegations:
             # Retain uncertain execution for explicit same-operation recovery.
             # No fresh Turn is ever created because its client timed out.
             row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
-            _write(path, row)
+            self._fenced_write(path, row)
 
 
 def register_delegation_tools(server, delegations: Delegations) -> None:
@@ -1185,10 +1546,13 @@ def main():
         if args.delegation_action == "validate":
             service._validate(service._bound(_read(service.path(args.operation_id))))
         else:
+            service._stop_signal = install_worker_stop_signal()
             try:
                 service.execute(args.operation_id)
             except LockAcquireTimeoutError:
                 pass  # Another worker still owns the operation after the bounded wait.
+            except DelegationStopRequested:
+                pass  # Stopped before owning the operation; the holder acknowledges.
         return
     if args.workspace is None:
         parser.error("--workspace is required when serving MCP")
