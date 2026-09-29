@@ -119,6 +119,7 @@ def build_sdk_config(
         "model": model,
         "cwd": str(workspace),
         "dsh_home": str(dsh_home),
+        "initialize_timeout_seconds": 180.0,
     }
     if reasoning_effort is not None:
         config["reasoning_effort"] = reasoning_effort
