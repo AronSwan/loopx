@@ -688,6 +688,9 @@ class ChatLoopXMode:
             else:
                 raise ValueError("unsupported collaboration action")
             if "status" in result:
+                if result["status"] == "accepted":
+                    # Seen inside this Turn: the pending wake would be redundant.
+                    result["wake"] = service.wake_observed_in_turn(operation_id) or result.get("wake")
                 summary = {
                     key: result.get(key)
                     for key in ("operation_id", "agent_id", "todo_id", "status")

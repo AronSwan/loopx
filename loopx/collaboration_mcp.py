@@ -300,6 +300,31 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
 
+def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: str) -> Path:
+    """The requester-scoped durable operation record; readable without a service."""
+    return _root(root) / "executions" / _hash([goal_id, agent_id]) / (_hash(operation_id) + ".json")
+
+
+def record_wake(path: Path, decide) -> dict | None:
+    """Settle a pending wake receipt under the same lock adopt_result uses.
+
+    ``decide`` receives the pending intent and returns the replacement receipt,
+    or None to leave it unchanged.  Only an accepted result with a pending
+    intent is decidable; any other terminal state wakes nobody.
+    """
+    with exclusive_file_lock(path):
+        row = _read(path)
+        wake = row.get("wake")
+        if not isinstance(wake, dict) or wake.get("state") != "pending" or row.get("status") != "accepted":
+            return None
+        updated = decide(wake)
+        if updated is None:
+            return None
+        row["wake"] = updated
+        _write(path, row)
+    return updated
+
+
 class Delegations:
     """Host IO for bound peer work; typed grants and observations stay in TS.
 
@@ -350,7 +375,7 @@ class Delegations:
                              for row in bindings]}
 
     def path(self, operation_id: str) -> Path:
-        return _root(self.root) / "executions" / _hash([self.goal_id, self.agent_id]) / (_hash(operation_id) + ".json")
+        return execution_row_path(self.root, self.goal_id, self.agent_id, operation_id)
 
     def operations(self, *, limit: int = 20, cursor: str | None = None) -> dict:
         from .control_plane.collaboration.delegation_inventory import read_delegation_inventory
@@ -620,6 +645,10 @@ class Delegations:
     def read(self, operation_id: str) -> dict:
         result = self._read_current(operation_id)
         result.update(delegation_results.result_relationships(self, operation_id))
+        wake = _read(self.path(operation_id)).get("wake")
+        if isinstance(wake, dict):
+            # Distinct from the result itself: whether the requester was continued.
+            result["wake"] = wake
         return result
 
     def _read_current(self, operation_id: str) -> dict:
@@ -654,7 +683,31 @@ class Delegations:
             "from": row["status"], "to": status, **facts,
         })
         row.update(status=decision["status"])
+        if isinstance(decision.get("wake_intent"), dict):
+            row["wake"] = {**decision["wake_intent"], "state": "pending"}
         _write(path, row)
+
+    def _wake_requester(self, row: dict) -> dict:
+        """Requester and exact result identity for the typed wake intent."""
+        return {
+            "goal_id": self.goal_id,
+            "agent_id": self.agent_id,
+            "goal_ref": self._caller_goal_ref(),
+            "operation_id": row["identity"]["operation_id"],
+            "request_id": row["identity"]["request_id"],
+            "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]],
+        }
+
+    def wake_observed_in_turn(self, operation_id: str) -> dict | None:
+        """The requester read this accepted result inside its own Turn; no wake follows."""
+        try:
+            return record_wake(self.path(require_operation_id(operation_id)), lambda wake: {
+                **wake, "state": "observed_in_turn", "observed_at": time.time(),
+            })
+        except LockAcquireTimeoutError:
+            # The worker or another decision still holds the record; the pump
+            # re-reads the current state and the observation remains readable.
+            return None
 
     def _cli(self, binding: dict, *args: str, timeout: int = 60) -> dict:
         completed = subprocess.run([*_python_module_command("loopx.cli"),
@@ -1092,7 +1145,8 @@ class Delegations:
                     registry=self.registry,
                     caller_goal_ref=self._caller_goal_ref(),
                 )
-            self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True, artifacts_current=True)
+            self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True,
+                          artifacts_current=True, requester=self._wake_requester(row))
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.
             # No fresh Turn is ever created because its client timed out.
