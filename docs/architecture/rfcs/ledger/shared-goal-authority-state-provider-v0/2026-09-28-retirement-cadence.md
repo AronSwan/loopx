@@ -311,3 +311,23 @@ metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
 or permission to change the default provider. Full-Goal summary/list/detail
 adoption and sustained observation remain separate work.
+
+### Packaged-source fingerprint cost
+
+The next B-lane increment overlaps source-byte reads through the existing bounded
+ordered file reader. It preserves every relative name and raw byte in the digest,
+metadata invalidation, request-scoped reuse, and failure/retry behavior; the
+Python adapter gains no state-policy owner or persistent cache. On macOS arm64,
+Python 3.13.13 and Node 24.21.0, alternating nine fresh CLI processes per arm
+(after startup warm-up) against detached File/SQLite copies measured status
+medians of 1.985→1.874 s and 2.106→1.937 s. The same source directory contained
+246 TS/JSON files (3,003,024 bytes); fingerprint-stage medians were 249.7→51.7 ms
+and 228.3→55.8 ms. Effect processes and data were isolated; OS caches were not
+flushed. Complete responses differed only at enumerated observation-time paths.
+
+This is a bounded caller-cost improvement, not provider throughput or D2/default
+qualification. A repeated same-process microbenchmark with fingerprint memoization
+explicitly cleared regressed from 9.3 to 17.7 ms; normal unchanged requests retain
+memoization. Do not extrapolate either workload to every platform or an installed
+fleet. Whole-Goal payload/consumer work and sustained operation remain open; this
+increment authorizes no legacy-writer deletion or UI data truncation.
