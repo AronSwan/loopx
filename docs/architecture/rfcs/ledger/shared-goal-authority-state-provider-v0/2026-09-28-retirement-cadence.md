@@ -279,7 +279,18 @@ projection, ten warm Node samples per provider reduced validator medians from
 change the default. No cached authority, lease omission, response cap or
 frontend contract change is introduced. Unicode order, duplicates, malformed
 JSON, archived-record tampering and both record formats remain rejection tests.
-Next qualify reuse of the complete validated Todo/lease snapshot across
-ownership and status, then coordinate full-Goal frontend summary/list/detail
-consumers. Agent status already has bounded display; final JSON compaction
-alone does not remove full-source computation.
+The next bounded step, based on `c57454e40`, reuses one validated Todo identity
+index within each synchronous collection or ownership consumer. It removes
+repeated record copies while preserving each consumer's validation order and
+Todo-only independence from lease integrity. It does not share a provider load
+between RPCs. On the same detached projection, ten alternating warm samples per
+arm give full Todo/lease collection medians of 32.4→27.5 ms (File-loaded input)
+and 32.9→28.0 ms (SQLite-loaded input). Ownership, including its provider load,
+changes 43.2→39.8 ms and 62.9→61.4 ms respectively; the latter has an outlier.
+Full CLI status retains all records and metadata, differing only in observation
+timestamps and read ages. Real File, SQLite and PostgreSQL suites pass. These
+component results do not establish a cold-start gain, sustained-operation
+acceptance or a provider-default decision. Cross-RPC ownership/status reads and
+full-Goal frontend summary/list/detail remain separate unfinished work. Agent
+status already has bounded display; final JSON compaction alone does not remove
+full-source computation.

@@ -212,5 +212,12 @@ Resume 输入现在仅在分组含等待条件时准备；succession 仍读取�
 这是共有 TS 成本，不能据此给 provider 排名或改变默认值；没有增加权威缓存、遗漏租约、
 限制响应条数或改变前端合同。Unicode 顺序、重复 ID、非法 JSON、归档记录篡改及两种
 记录格式的拒绝规则均有回归覆盖。
-下一步验证 ownership 与 status 复用完整、已校验的 Todo／租约快照，再协同改造整 Goal
-前端摘要／列表／详情。Agent status 已有有界展示，仅压缩最终 JSON 不会消除完整来源计算。
+下一步以 `c57454e40` 为基线，在每次同步集合或 ownership 读取内部复用一份已校验的 Todo
+身份索引，去掉重复记录复制，保留各消费者的校验顺序及 Todo-only 对租约完整性的独立性。
+这尚未合并不同 RPC 的 provider 读取。在同一隔离投影上，每组交替取十个热样本，完整
+Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9→28.0 ms；包含 provider
+读取的 ownership 分别为 43.2→39.8 ms、62.9→61.4 ms，后者存在离群样本。完整 CLI status
+的记录和 metadata 保持不变，仅观测时间与读取时效不同；真实 File、SQLite、PostgreSQL
+测试通过。这些组件结果不能证明冷启动收益、持续运行验收或默认 provider 已达标。
+跨 RPC 的 ownership／status 读取及整 Goal 前端摘要／列表／详情仍未完成。Agent status
+已有有界展示，仅压缩最终 JSON 不会消除完整来源计算。
