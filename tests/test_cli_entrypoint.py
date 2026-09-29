@@ -198,6 +198,8 @@ assert "loopx.cli" not in sys.modules
 @pytest.mark.parametrize(
 	("argv", "registration_module", "handler_module"),
 	[
+		(["commands", "--help"], "loopx.help_surface", "loopx.help_surface"),
+		(["doctor", "--help"], "loopx.cli_commands.doctor", "loopx.cli_commands.doctor"),
 		(["check", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["status", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["diagnose", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
@@ -261,6 +263,14 @@ assert "loopx.capabilities.content_ops.cli" not in sys.modules
 
 def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases = [
+		["commands", "--help"],
+		["commands", "--format", "json"],
+		["commands", "--format", "markdown"],
+		["doctor", "--help"],
+		["doctor", "--installation-only", "--agent-type", "codex-app"],
+		["doctor", "--agent-type", "unknown-host"],
+		["doctor", "--unknown-option"],
+		["commands", "--unknown-option"],
 		["check", "--help"],
 		["status", "--help"],
 		["diagnose", "--help"],
@@ -282,6 +292,36 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("healthy", [True, False])
+def test_doctor_dispatch_preserves_owner_flags_and_failure(
+    module: str, healthy: bool,
+) -> None:
+    script = f"""
+import contextlib
+import io
+import json
+
+import loopx.cli_commands.doctor as owner
+from {module} import main
+
+observed = []
+def collect(**kwargs):
+    observed.append(kwargs)
+    return {{"ok": {healthy!r}, "scope": "installation_only"}}
+owner.collect_doctor = collect
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    code = main(["--format", "markdown", "doctor", "--format", "json",
+                 "--deep", "--installation-only"])
+assert code == {0 if healthy else 1}
+assert observed == [{{"deep": True, "agent_type": None, "installation_only": True}}]
+assert json.loads(output.getvalue()) == {{"ok": {healthy!r}, "scope": "installation_only"}}
+"""
+    completed = run_isolated_script(script)
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_selected_todo_execution_matches_full_cli(tmp_path: Path) -> None:

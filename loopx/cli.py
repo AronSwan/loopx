@@ -99,7 +99,6 @@ from .cli_commands import (
     handle_coordination_shadow_command,
     handle_authority_archive_command,
     handle_capability_command,
-    handle_doctor_command,
     handle_dreaming_command,
     handle_evidence_log_command,
     handle_extension_command,
@@ -207,8 +206,7 @@ from .extensions.lark.periodic_report_cli import (
     register_lark_periodic_report_commands,
 )
 from .help_surface import (
-    build_command_reference_payload,
-    render_command_reference_markdown,
+    register_command_reference,
     render_concise_help,
     top_level_help_requested,
 )
@@ -271,11 +269,7 @@ def build_parser() -> LoopXArgumentParser:
 
     register_version_command(sub, add_subcommand_format)
 
-    commands_parser = sub.add_parser(
-        "commands",
-        help="Show grouped LoopX command reference for operators and contributors.",
-    )
-    add_subcommand_format(commands_parser)
+    register_command_reference(sub)
 
     register_bootstrap_connect_command(sub)
 
@@ -424,14 +418,6 @@ def main(argv: list[str] | None = None) -> int:
     if version_result is not None:
         return version_result
 
-    if args.command == "commands":
-        print_payload(
-            build_command_reference_payload(),
-            output_format(args),
-            render_command_reference_markdown,
-        )
-        return 0
-
     bootstrap_connect_result = handle_bootstrap_connect_command(
         args,
         registry_path=registry_path,
@@ -443,9 +429,6 @@ def main(argv: list[str] | None = None) -> int:
     starter_result = handle_starter_command(args, print_payload)
     if starter_result is not None:
         return starter_result
-
-    if args.command == "doctor":
-        return handle_doctor_command(args, print_payload)
 
     workflow_skills_result = handle_workflow_skills_command(
         args,
