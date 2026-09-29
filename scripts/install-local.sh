@@ -263,6 +263,33 @@ copy_path() {
   fi
 }
 
+copy_apps() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -d "$src" || -L "$src" ]]; then
+    copy_path "$src" "$dst"
+    return
+  fi
+  # Application dependencies and build outputs never belong to a release.
+  # Exclude them before copying so staging does not pay to copy and delete them.
+  "${LOOPX_PYTHON:-python3}" - "$src" "$dst" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+excluded = {"node_modules", ".next", "dist", "build", "coverage"}
+
+def ignore(directory, names):
+    root = Path(directory)
+    return [
+        name for name in names
+        if name in excluded and ((root / name).is_dir() or (root / name).is_symlink())
+    ]
+
+shutil.copytree(sys.argv[1], sys.argv[2], symlinks=True, ignore=ignore)
+PY
+}
+
 append_legacy_line() {
   local message="$1"
   if [[ -z "$legacy_line" ]]; then
@@ -749,7 +776,7 @@ copy_path "$repo_root/skills" "$release_tmp/skills"
 copy_path "$repo_root/docs" "$release_tmp/docs"
 copy_path "$repo_root/man" "$release_tmp/man"
 copy_path "$repo_root/examples" "$release_tmp/examples"
-copy_path "$repo_root/apps" "$release_tmp/apps"
+copy_apps "$repo_root/apps" "$release_tmp/apps"
 copy_path "$repo_root/.github" "$release_tmp/.github"
 copy_path "$repo_root/README.md" "$release_tmp/README.md"
 copy_path "$repo_root/LICENSE" "$release_tmp/LICENSE"
@@ -759,11 +786,6 @@ copy_path "$repo_root/MANIFEST.in" "$release_tmp/MANIFEST.in"
 printf '%s\n' "$LOOPX_PYTHON" >"$release_tmp/.loopx-python"
 find "$release_tmp" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$release_tmp" -name '*.pyc' -type f -delete
-if [[ -d "$release_tmp/apps" ]]; then
-  find "$release_tmp/apps" \
-    \( -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage \) \
-    \( -type d -o -type l \) -prune -exec rm -rf {} +
-fi
 PYTHONPATH="$release_tmp" "${LOOPX_PYTHON:-python3}" \
   "$release_tmp/scripts/render-manpage.py" \
   --output "$release_tmp/man/loopx.1"
