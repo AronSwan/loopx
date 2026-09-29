@@ -9,6 +9,9 @@ const PROPOSAL_TEXT = "[P1] 核对发布清单并补齐缺失的验证记录";
 // The fixture keeps a "刷新恢复" Turn running long enough to reload into it.
 const RECOVERY_PROMPT = "刷新恢复：请再给出一个任务建议。";
 const RECOVERY_TEXT = "[P2] 复核恢复回合给出的下一步";
+// The fixture answers this exact message with a protected merge action.
+const COMBINED_PROMPT = "请合并 PR #123";
+const COMBINED_TEXT = "[P1] 合并前补齐 PR #123 的发布说明";
 const proposalAnswer = {
   message: "我找到一个可评审的步骤。",
   proposals: [{ kind: "todo", priority: "P1", rationale: "发布前需要可核对的证据。", text: PROPOSAL_TEXT }],
@@ -28,6 +31,7 @@ export const chatTodoProposalScenario = {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, page } = context;
     api.answerForMessage = (message) => (message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer
+      : message === COMBINED_PROMPT ? { message: "我识别到一个明确的合并请求，并建议先补齐发布说明。", proposals: [{ kind: "todo", priority: "P1", rationale: "合并前需要可核对的说明。", text: COMBINED_TEXT }] }
       : message === RECOVERY_PROMPT ? { message: "恢复后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "恢复回合同样需要可确认的草稿。", text: RECOVERY_TEXT }] }
       : null);
     const previewsWithText = (text) => api.actionPreviews.filter((preview) => preview.action_kind === "todo.create"
@@ -97,6 +101,19 @@ export const chatTodoProposalScenario = {
       await openGoalChat();
       await page.waitForTimeout(1_000);
       if (api.actionApplies.length !== appliesAfterRecovery) throw new Error("Reloading after the recovered Turn applied a preview again");
+
+      // One answer may carry a protected action and Todo proposals together:
+      // the protected decision keeps the drawer and the Todo still becomes a card.
+      await composer.fill(COMBINED_PROMPT);
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.getByText("确认执行").waitFor({ state: "visible", timeout: 10_000 });
+      await waitFor(() => api.actionPreviews.some((item) => item.action_kind === "goal.update" && item.summary.includes("PR #123")),
+        "The combined answer lost its protected preview");
+      await waitFor(() => previewsWithText(COMBINED_TEXT).length === 1, "The combined answer dropped its Todo proposal");
+      // The newest pending draft (the protected decision) leads; the Todo waits
+      // one step behind it in the backlog, as for any other older draft.
+      await page.locator(".personal-proposal-backlog > summary").click();
+      await page.locator(".personal-proposal-row", { hasText: COMBINED_TEXT }).waitFor({ state: "visible", timeout: 10_000 });
     } finally {
       await context.close();
     }
