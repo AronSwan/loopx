@@ -260,7 +260,15 @@ retained allocations after return remain about 2.1 MB. This is current-state
 read-cost evidence, not historical replay, CLI cold-start, D2 qualification or
 a provider-default comparison. Python owns the request's transport-input
 lifetime; TS still owns validation, resume, succession, acceptance and selection.
-Next reduce repeated preparation at the existing typed projection owner, then
-coordinate full-Goal frontend summary/list/detail consumers. Agent status
-already has bounded display; final JSON compaction alone does not remove
-full-source computation.
+Resume input preparation now runs only for groups that contain a wait condition;
+succession still receives complete lineage, and waits still see archived and
+cross-role dependencies. On the same 1,117-Todo isolated current projection,
+against the baseline that already shares snapshots, structured-item calls fall
+from 2,687 to 1,570; native reads remain one and TS effect calls remain 16.
+Three warm samples give File medians of 430→425 ms and SQLite 493→481 ms.
+The small latency difference is not cold-start or provider-default evidence.
+Actual agent and full-Goal CLI responses retain their size and semantics apart
+from observation time/age fields. The full-Goal response remains about 2 MB.
+Next coordinate full-Goal frontend summary/list/detail consumers and measure
+remaining cold-path preparation. Agent status already has bounded display;
+final JSON compaction alone does not remove full-source computation.
