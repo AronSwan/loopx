@@ -38,10 +38,10 @@ from .lifecycle_projection import (
     operator_gate_attention_fields,
     readiness_attention_fields,
 )
+from .monitor_display_projection import MONITOR_SIGNAL_WAITING_ON
 from .run_projection import latest_run
 
 
-MONITOR_SIGNAL_WAITING_ON = "monitor_signal"
 PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION = (
     "先在 LoopX 完成 operator 判断；同意后项目 Agent 只执行 read-only map dry-run"
 )
