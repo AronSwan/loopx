@@ -360,17 +360,6 @@ def lock_holder_liveness(path: Path) -> tuple[str, dict[str, object]]:
     return (LOCK_HOLDER_LIVE if process_is_alive(pid) else LOCK_HOLDER_DEAD), record
 
 
-def read_lock_holder(path: Path) -> dict[str, object]:
-    """Read the advisory holder record behind ``path``'s lock; ``{}`` when absent.
-
-    The record names the last process that held the lock and carries
-    ``released_at`` after a clean release. It is advisory readback for signals
-    and operator inspection; the kernel lock stays the only proof of holding.
-    """
-
-    return _read_holder_record(lock_holder_path(path))
-
-
 def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str, object]:
     return {
         "required": True,

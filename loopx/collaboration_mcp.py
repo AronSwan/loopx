@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import (
-    exclusive_file_lock, lock_holder_host_label, read_lock_holder, try_exclusive_file_lock,
-    LockAcquisitionPolicy, LockAcquireTimeoutError,
+    exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
+    LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
 from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
@@ -42,7 +42,10 @@ from .control_plane.turn_driver.journal_store import (
     turn_journal_path,
 )
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
-from .control_plane.turn_driver.lane_fence import turn_lane_target
+from .control_plane.turn_driver.lane_fence import (
+    TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
+    turn_lane_liveness, turn_lane_target,
+)
 from .control_plane.work_items.task_lease import release_task_lease
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.peers import return_result
@@ -310,13 +313,18 @@ DELEGATION_STOP_SCHEMA_VERSION = "loopx_delegation_stop_v0"
 # Observations that no worker may reopen; a stop against one is a no-op receipt.
 DELEGATION_TERMINAL_STATUSES = frozenset({"accepted", "rejected", "stopped"})
 DELEGATION_STOP_OPEN_PHASES = frozenset({"requested", "acknowledged"})
+DELEGATION_STOP_TERMINAL_PHASES = frozenset({"settled", "unknown"})
 # How long a signalled same-host worker may take to acknowledge before SIGKILL.
 DELEGATION_STOP_GRACE_SECONDS = 10.0
 DELEGATION_STOPPED_MESSAGE = "delegation operation was stopped; start a new operation id"
 
 
-class DelegationStopRequested(Exception):
-    """A stop reached the worker that owns this operation; it must acknowledge, not finish."""
+class DelegationStopRequested(BaseException):
+    """A stop reached the worker that owns this operation; it must acknowledge, not finish.
+
+    A ``BaseException`` like ``KeyboardInterrupt``: a termination request must
+    not be swallowed by an ``except Exception`` and turned into further work.
+    """
 
     def __init__(self, source: str) -> None:
         super().__init__(source)
@@ -335,13 +343,27 @@ class DelegationFenced(DelegationStopRequested):
 
 
 class _WorkerStopSignal:
-    """Turn the first SIGTERM into a stop request; absorb later ones during the acknowledgement."""
+    """Turn SIGTERM into a stop request only when a stop was written for this operation.
 
-    def __init__(self) -> None:
+    Without a stop receipt the signal keeps its default meaning, so a shutdown
+    still leaves the operation recoverable by ``resume`` instead of stopping it.
+    Later signals are absorbed while the acknowledgement is written.
+    """
+
+    def __init__(self, stop_path: Path) -> None:
+        self.stop_path = stop_path
         self.armed = True
 
     def __call__(self, signum: int, frame: object) -> None:
         if not self.armed:
+            return
+        try:
+            requested = self.stop_path.exists()
+        except OSError:
+            requested = False
+        if not requested:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
             return
         self.armed = False
         raise DelegationStopRequested("SIGTERM")
@@ -350,12 +372,12 @@ class _WorkerStopSignal:
         self.armed = False
 
 
-def install_worker_stop_signal() -> _WorkerStopSignal | None:
+def install_worker_stop_signal(stop_path: Path) -> _WorkerStopSignal | None:
     """Install the detached worker's SIGTERM handler; ``None`` where signals are unsupported."""
 
     if not hasattr(signal, "SIGTERM"):
         return None
-    handler = _WorkerStopSignal()
+    handler = _WorkerStopSignal(stop_path)
     try:
         signal.signal(signal.SIGTERM, handler)
     except (ValueError, OSError):
@@ -592,7 +614,10 @@ class Delegations:
                 if row["status"] == "stopped":
                     raise ValueError(DELEGATION_STOPPED_MESSAGE)
                 if row["status"] == "rejected":
-                    self._recover_validated_settlement(path, row, binding)
+                    try:
+                        self._recover_validated_settlement(path, row, binding)
+                    except DelegationFenced:
+                        raise ValueError(DELEGATION_STOPPED_MESSAGE) from None
                 should_spawn = row["status"] not in DELEGATION_TERMINAL_STATUSES
                 if should_spawn:
                     self.binding(
@@ -610,7 +635,8 @@ class Delegations:
         """Observe for at most 15 seconds; waiting neither starts nor resumes work."""
         for _ in range(5):
             result = self.read(operation_id)
-            if result["status"] in DELEGATION_TERMINAL_STATUSES or result["recovery_required"]:
+            if (result["status"] in DELEGATION_TERMINAL_STATUSES or result["recovery_required"]
+                    or result.get("stop", {}).get("phase") in DELEGATION_STOP_TERMINAL_PHASES):
                 return result
             time.sleep(3)
         return self.read(operation_id)
@@ -720,12 +746,13 @@ class Delegations:
                 active = False
         except LockAcquireTimeoutError:
             active = True
+        # Resume refuses an operation with a stop receipt, so it never needs recovery.
+        stop = self._read_stop(path)
         result = {"operation_id": operation_id, "request_id": row["identity"]["request_id"],
                   "agent_id": binding["agent_id"], "todo_id": binding["todo_id"],
                   "status": row["status"], "worker_active": active,
                   "recovery_required": not active and row["status"] not in DELEGATION_TERMINAL_STATUSES
-                  and time.time() - row.get("created_at", 0) > 15}
-        stop = self._read_stop(path)
+                  and stop is None and time.time() - row.get("created_at", 0) > 15}
         if stop is not None:
             result["stop"] = {"stop_id": stop["stop_id"], "phase": stop["phase"]}
         if row["status"] == "accepted":
@@ -782,19 +809,59 @@ class Delegations:
                                 plan={"turn_envelope": {"agent_id": binding["agent_id"]}})
 
     def _operation_lock_free(self, path: Path) -> bool:
+        """Probe this operation's own kernel lock; only ever called once its stop receipt exists.
+
+        Unlike the Turn lane, this lock admits nothing but this operation, and a
+        probe holding it for an instant refuses no legitimate acquisition once
+        the receipt is written: ``resume``, its only single-flight acquirer,
+        refuses a stopped operation before it touches the lock; ``execute``,
+        adoption and the requester acknowledgement wait through brief holders
+        with the mutation policy; and a status read already makes this same
+        instant observation. Before the receipt exists a ``resume`` is still
+        legitimate, so the holder is then read from its record instead.
+        """
+
         try:
             with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
                 return True
         except LockAcquireTimeoutError:
             return False
 
-    def _lane_lock_free(self, binding: dict) -> bool:
-        # The kernel lock is the only proof; the holder record is advisory. The
-        # probe holds the lane for an instant, which is the same observation a
-        # status read makes on the operation lock.
-        with try_exclusive_file_lock(self._lane_target(binding), agent_id=self.agent_id,
-                                     operation="loopx_delegation_stop_probe") as held:
-            return held is not None
+    @staticmethod
+    def _recorded_worker(row: dict, stop: dict) -> dict | None:
+        worker = row.get("worker")
+        if not isinstance(worker, dict):
+            worker = stop.get("worker")
+        return worker if isinstance(worker, dict) else None
+
+    def _worker_lane_released(self, row: dict, stop: dict, binding: dict) -> tuple[bool, str]:
+        """Say whether the stopped worker's Turn has let go of the member's lane, read-only.
+
+        This never takes the lane lock: a probe holding it for an instant would
+        refuse a legitimate Turn of the same member racing that instant with
+        ``turn_lane_in_flight``. The lane's last holder record decides instead.
+        Released, dead or absent is released. A live holder on this machine is
+        released only when it sits outside the recorded worker's process group,
+        because the worker's run-once child runs in that group; a holder that
+        cannot be attributed, another host's holder and an unreadable record
+        prove nothing, so the typed decision keeps the stop open.
+        """
+
+        lane = turn_lane_liveness(self._lane_target(binding))
+        state = lane["state"]
+        if state in {TURN_LANE_RELEASED, TURN_LANE_DEAD, TURN_LANE_ABSENT}:
+            return True, state
+        worker = self._recorded_worker(row, stop)
+        if (state != TURN_LANE_LIVE or worker is None or not hasattr(os, "getpgid")
+                or worker.get("host") != lock_holder_host_label()
+                or not isinstance(worker.get("pgid"), int)):
+            return False, state
+        try:
+            return os.getpgid(lane["holder"]["pid"]) != worker["pgid"], state
+        except ProcessLookupError:
+            return True, TURN_LANE_DEAD  # the holder exited between the two reads
+        except OSError:
+            return False, state
 
     def _turn_journal_status(self, row: dict, binding: dict) -> str | None:
         turn_key = row.get("turn_key") or self._matching_turn_key(row, binding)
@@ -866,26 +933,38 @@ class Delegations:
                                              worker=self._lock_holder_worker(path, row))
                 _write(self._stop_path(path), stop)
         if stop["phase"] in DELEGATION_STOP_OPEN_PHASES and stop.get("ack") is None:
-            try:
-                with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
-                    row = _read(path)
-                    self._acknowledge_stop(path, row, binding, source="requester")
-            except LockAcquireTimeoutError:
+            if stop.get("worker") is None:
+                # No worker was named when the request was written, so whoever owns
+                # the operation acknowledges it: this caller once the lock is free.
+                # The wait rides out a status read's instant hold, which must not
+                # be mistaken for a holder that vanished.
+                try:
+                    with exclusive_file_lock(path):
+                        self._acknowledge_stop(path, _read(path), binding, source="requester")
+                except LockAcquireTimeoutError:
+                    pass  # an unnamed holder meets the request at its next checkpoint or write
+            else:
+                # Only the named worker acknowledges. If it vanishes first, the typed
+                # decision reports unknown instead of a requester settlement.
                 self._signal_worker(path, stop)
         return self._settle_stop(path)
 
     def _lock_holder_worker(self, path: Path, row: dict) -> dict | None:
-        """Name the live operation-lock holder, else ``None``; a released record is not a worker."""
+        """Name the recorded worker while it is the operation lock's unreleased holder.
 
-        if self._operation_lock_free(path):
+        Read from the holder record, never the kernel lock: this runs before the
+        stop receipt exists, when a probe could refuse a legitimate ``resume``.
+        Only the worker identity the execution record names can become a signal
+        target, so a status reader's instant holder record is never taken for it.
+        """
+
+        state, holder = lock_holder_liveness(path)
+        recorded = row.get("worker")
+        if state not in {LOCK_HOLDER_LIVE, LOCK_HOLDER_FOREIGN_HOST} or not isinstance(recorded, dict):
             return None
-        holder = read_lock_holder(path)
-        if "released_at" in holder or not isinstance(holder.get("pid"), int):
+        if holder.get("pid") != recorded.get("pid") or holder.get("host") != recorded.get("host"):
             return None
-        recorded = row.get("worker") if isinstance(row.get("worker"), dict) else {}
-        same = recorded.get("pid") == holder["pid"] and recorded.get("host") == holder.get("host")
-        pgid = recorded.get("pgid") if same and isinstance(recorded.get("pgid"), int) else holder["pid"]
-        return {"pid": holder["pid"], "pgid": pgid, "host": holder.get("host")}
+        return {key: recorded.get(key) for key in ("pid", "pgid", "host")}
 
     def _signal_worker(self, path: Path, stop: dict) -> None:
         """Terminate a same-host holder's process group; never signal across hosts."""
@@ -919,29 +998,38 @@ class Delegations:
     def _acknowledge_stop(self, path: Path, row: dict, binding: dict, *, source: str) -> None:
         """Acknowledge from under the operation lock: mark stopped, then release the hard lease.
 
-        Only the lock holder may acknowledge. A stop that another process already
-        acknowledged, or that already settled, is left untouched.
+        Only the operation-lock holder calls this. The record is transitioned as
+        it is on disk, so state that a fenced write refused stays unwritten; the
+        lease is released from what this process acquired, which may be newer
+        than the record. A missing stop, one already acknowledged or finished,
+        and a record that already reached a terminal observation stay untouched.
         """
 
         if self._stop_signal is not None:
             self._stop_signal.disarm()
         with exclusive_file_lock(self._dispatch_lock(path)):
             stop = self._read_stop(path)
-            if stop is None:
-                stop = self._new_stop_record(row, requested_by="signal:" + source,
-                                             worker=self._worker_identity())
-            if stop.get("ack") is not None or stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
+            current = _read(path)
+            if (stop is None or stop.get("ack") is not None
+                    or stop["phase"] not in DELEGATION_STOP_OPEN_PHASES
+                    or current["status"] in DELEGATION_TERMINAL_STATUSES):
                 return
-            observed = row["status"]
-            decision = effect_runtime_result("collaboration.delegation.observe", {
+            observed = current["status"]
+            transition = effect_runtime_result("collaboration.delegation.observe", {
                 "from": observed, "to": "stopped",
             })
-            row.update(status=decision["status"])
-            _write(path, row)
-            stop.update(phase="acknowledged", reason="awaiting_lock_release", ack={
+            # This process holds the operation lock and its lane read comes later.
+            phase = effect_runtime_result("collaboration.delegation.stop", {
+                "phase": stop["phase"], "acknowledged": True,
+                "operation_lock_free": False, "worker_lane_released": False,
+            })
+            current["status"] = transition["status"]
+            _write(path, current)
+            stop.update(phase=phase["phase"], reason=phase["reason"], ack={
                 "pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
                 "source": source, "observed_status": observed,
-                "turn_key": row.get("turn_key") or self._matching_turn_key(row, binding),
+                "turn_key": (current.get("turn_key") or row.get("turn_key")
+                             or self._matching_turn_key(current, binding)),
             })
             _write(self._stop_path(path), stop)
         try:
@@ -978,10 +1066,8 @@ class Delegations:
                 return self._stop_receipt(row, binding, None)
             if stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
                 return self._stop_receipt(row, binding, stop)
-            facts = {
-                "operation_lock_free": self._operation_lock_free(path),
-                "lane_lock_free": self._lane_lock_free(binding),
-            }
+            facts = {"operation_lock_free": self._operation_lock_free(path)}
+            facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
             decision = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
                 "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
@@ -989,10 +1075,10 @@ class Delegations:
             })
             if decision["phase"] != stop["phase"] or decision.get("reason") != stop.get("reason"):
                 stop.update(phase=decision["phase"], reason=decision.get("reason"))
-                if decision["phase"] in {"settled", "unknown"}:
+                if decision["phase"] in DELEGATION_STOP_TERMINAL_PHASES:
                     lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
                     stop["settled"] = {
-                        "at": time.time(), **facts,
+                        "at": time.time(), **facts, "lane_state": lane_state,
                         "lease_released": lease.get("released"),
                         "turn_journal_status": self._turn_journal_status(row, binding),
                     }
@@ -1529,11 +1615,12 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
     async def stop_delegation(operation_id: str) -> dict:
         """Stop one original operation and return what was proven, not what was hoped.
 
-        settled: the worker acknowledged and its operation and Turn lane locks are
-        free. acknowledged/requested: still winding down; call again. unknown: the
-        holder vanished before acknowledging; inspect its Turn before reusing the
-        task. noop: already accepted/rejected/stopped. Stopped work is not resumed;
-        a new scope needs a new operation id. Elapsed time is never a receipt.
+        settled: the worker acknowledged, released the operation and let go of its
+        Turn lane. acknowledged/requested: still winding down; call again. unknown:
+        the named worker vanished before acknowledging; inspect its Turn and task
+        lease before reusing the task. noop: already accepted/rejected/stopped.
+        Stopped work is not resumed; a new scope needs a new operation id. Elapsed
+        time is never a receipt.
         """
         return await asyncio.to_thread(delegations.stop, operation_id, execute=True)
 
@@ -1558,7 +1645,8 @@ def main():
         if args.delegation_action == "validate":
             service._validate(service._bound(_read(service.path(args.operation_id))))
         else:
-            service._stop_signal = install_worker_stop_signal()
+            service._stop_signal = install_worker_stop_signal(
+                service._stop_path(service.path(args.operation_id)))
             try:
                 service.execute(args.operation_id)
             except LockAcquireTimeoutError:

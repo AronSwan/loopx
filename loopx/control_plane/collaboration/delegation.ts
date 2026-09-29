@@ -344,34 +344,37 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
 type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
 const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
 
-/** Advance one stop request from host lock facts; a receipt is never inferred from time.
+/** Advance one stop request from host release facts; a receipt is never inferred from time.
  *
  * ``settled`` needs the acknowledgement of a process that held the operation
- * lock plus both the operation lock and the Turn lane lock free: only then is
- * the worker, its Turn child and its lane provably gone. Free locks without an
- * acknowledgement mean the holder vanished before recording what it observed,
- * which is ``unknown`` rather than a fake settlement. A grace timeout on its
- * own moves nothing: a worker that is still holding a lock is still running.
+ * lock, that lock free again, and the member's Turn lane released by the
+ * stopped worker's process group. The host reads the lane from its holder
+ * record and never takes it, so a legitimate Turn is not refused, and a holder
+ * it cannot attribute is not released. Both released without an
+ * acknowledgement means the named holder vanished before recording what it
+ * observed, which is ``unknown`` rather than a fake settlement. A grace
+ * timeout on its own moves nothing: a worker still holding a lock still runs.
  */
 export function decideDelegationStop(params: JsonObject): JsonObject {
   const phase = params.phase as StopPhase;
   requireThat(openStopPhases.includes(phase), "delegation stop decision requires an open stop phase");
   requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
-  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.lane_lock_free === "boolean",
-    "delegation stop lock facts required");
+  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.worker_lane_released === "boolean",
+    "delegation stop release facts required");
   requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
     "delegation stop timeout fact must be boolean");
   requireThat(phase !== "acknowledged" || params.acknowledged === true,
     "an acknowledged stop cannot lose its acknowledgement");
-  const locksFree = params.operation_lock_free === true && params.lane_lock_free === true;
+  const operationFree = params.operation_lock_free === true;
+  const released = operationFree && params.worker_lane_released === true;
   if (params.acknowledged === true) {
-    if (locksFree) return {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"};
-    return {phase: "acknowledged", terminal: false, reason: params.operation_lock_free === true
-      ? "turn_lane_still_held" : "operation_lock_still_held"};
+    if (released) return {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"};
+    return {phase: "acknowledged", terminal: false,
+      reason: operationFree ? "worker_lane_release_unproven" : "operation_lock_still_held"};
   }
-  if (locksFree) return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
-  return {phase: "requested", terminal: false, reason: params.timed_out === true
-    ? "holder_still_running_after_grace" : "awaiting_acknowledgement"};
+  if (released) return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
+  return {phase: "requested", terminal: false, reason: operationFree ? "worker_lane_release_unproven"
+    : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement"};
 }
 
 /** Repair only a false terminal observation after the exact Turn validated.

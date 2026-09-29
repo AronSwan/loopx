@@ -116,26 +116,32 @@ test("stopped is terminal and reachable only from open observations", () => {
     observation}).status, "stopped");
 });
 
-test("a stop settles only on an acknowledgement plus free locks; time alone proves nothing", () => {
-  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, lane_lock_free: false};
+test("a stop settles only on an acknowledgement plus released holders; time alone proves nothing", () => {
+  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, worker_lane_released: false};
   assert.deepEqual(decideDelegationStop(open), {phase: "requested", terminal: false, reason: "awaiting_acknowledgement"});
   assert.deepEqual(decideDelegationStop({...open, timed_out: true}),
     {phase: "requested", terminal: false, reason: "holder_still_running_after_grace"});
-  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, timed_out: true}),
+  // A lane release without a free operation lock is not a vanished holder.
+  assert.deepEqual(decideDelegationStop({...open, worker_lane_released: true, timed_out: true}),
     {phase: "requested", terminal: false, reason: "holder_still_running_after_grace"});
-  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, lane_lock_free: true}),
+  // A free operation lock with an unattributed lane holder proves nothing yet.
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, timed_out: true}),
+    {phase: "requested", terminal: false, reason: "worker_lane_release_unproven"});
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, worker_lane_released: true}),
     {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"});
-  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, lane_lock_free: false};
+  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, worker_lane_released: false};
   assert.deepEqual(decideDelegationStop(acked), {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
+  assert.deepEqual(decideDelegationStop({...acked, worker_lane_released: true}),
+    {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
   assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true}),
-    {phase: "acknowledged", terminal: false, reason: "turn_lane_still_held"});
-  assert.deepEqual(decideDelegationStop({...acked, phase: "requested", operation_lock_free: true, lane_lock_free: true}),
-    {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"});
-  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true, lane_lock_free: true, timed_out: true}),
-    {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"});
+    {phase: "acknowledged", terminal: false, reason: "worker_lane_release_unproven"});
+  assert.deepEqual(decideDelegationStop({...acked, phase: "requested", operation_lock_free: true, worker_lane_released: true}),
+    {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"});
+  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true, worker_lane_released: true, timed_out: true}),
+    {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"});
   for (const patch of [{phase: "settled"}, {phase: "unknown"}, {phase: "noop"}, {acknowledged: "yes"},
-    {operation_lock_free: 1}, {lane_lock_free: undefined}, {timed_out: "later"},
-    {phase: "acknowledged", acknowledged: false}])
+    {operation_lock_free: 1}, {worker_lane_released: undefined}, {lane_lock_free: true, worker_lane_released: undefined},
+    {timed_out: "later"}, {phase: "acknowledged", acknowledged: false}])
     assert.throws(() => decideDelegationStop({...open, ...patch}));
 });
 

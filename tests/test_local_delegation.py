@@ -20,6 +20,7 @@ from test_managed_research_scenario import fixture  # noqa: E402
 from loopx.collaboration_mcp import DelegationFenced, Delegations  # noqa: E402
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
+from loopx.control_plane.turn_driver.lane_fence import turn_lane_liveness, turn_lane_singleflight  # noqa: E402
 from loopx.file_lock import exclusive_file_lock, try_exclusive_file_lock  # noqa: E402
 
 
@@ -312,6 +313,12 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     path = runner.path("analysis-stop")
     before = _read(path)
     assert before["status"] == "running" and before["worker"]["pid"] == before["worker"]["pgid"]
+    # The real run-once child holds the member's lane from inside the worker's group,
+    # which is what lets settlement attribute the lane without ever taking it.
+    binding = runner.binding("analysis")
+    lane = turn_lane_liveness(runner._lane_target(binding))
+    assert lane["state"] == "live" and lane["holder"]["pid"] != before["worker"]["pid"]
+    assert os.getpgid(lane["holder"]["pid"]) == before["worker"]["pgid"]
     receipt = runner.stop("analysis-stop", execute=True)
     assert receipt["phase"] == "settled" and receipt["status"] == "stopped", receipt
     stop = receipt["stop"]
@@ -319,7 +326,8 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     assert stop["worker"]["pid"] == before["worker"]["pid"]
     assert stop["ack"]["pid"] == before["worker"]["pid"] and stop["ack"]["source"] == "SIGTERM"
     assert stop["ack"]["observed_status"] == "running" and stop["ack"]["turn_key"]
-    assert stop["settled"]["operation_lock_free"] and stop["settled"]["lane_lock_free"]
+    assert stop["settled"]["operation_lock_free"] and stop["settled"]["worker_lane_released"]
+    assert stop["settled"]["lane_state"] in {"dead", "released"}
     assert stop["settled"]["turn_journal_status"] == "in_progress"
     assert stop["lease"] == {"required": False, "released": None}
     # The acknowledged record is final: nobody writes it again, the Todo stays open,
@@ -327,7 +335,6 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     frozen = path.read_bytes()
     assert until(lambda: process_gone(host_pid), timeout=20)
     assert until(lambda: process_gone(before["worker"]["pid"]), timeout=20)
-    binding = runner.binding("analysis")
     with try_exclusive_file_lock(runner._lane_target(binding)) as held:
         assert held is not None
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
@@ -356,6 +363,7 @@ def test_stop_without_a_holder_is_acknowledged_by_the_requester(service, monkeyp
     assert receipt["stop"]["worker"] is None and receipt["stop"]["requested_status"] == "prepared"
     assert receipt["stop"]["ack"]["pid"] == os.getpid() and receipt["stop"]["ack"]["source"] == "requester"
     assert receipt["stop"]["settled"]["turn_journal_status"] is None
+    assert receipt["stop"]["settled"]["lane_state"] in {"absent", "released"}
     frozen = runner.path("analysis-idle").read_bytes()
     with pytest.raises(ValueError, match="start a new operation id"):
         runner.resume("analysis-idle")
@@ -370,30 +378,125 @@ def test_stop_without_a_holder_is_acknowledged_by_the_requester(service, monkeyp
 
 
 def test_worker_killed_before_acknowledging_is_unknown_not_settled(service, monkeypatch):
-    """A vanished holder never becomes a settlement; the stop still fences resume."""
+    """A vanished named holder never becomes a settlement; the stop still fences resume."""
     import signal
 
     root, runner = service
     host_pid = start_held_worker(service)
     path = runner.path("analysis-stop")
     worker = _read(path)["worker"]
+    killed = []
 
     def kill_without_grace(target, stop):
-        assert stop["worker"]["pgid"] == worker["pgid"] != os.getpgid(0)
+        if killed:
+            return  # later calls find nothing left to signal
+        killed.append(stop["worker"])
+        assert stop["worker"] == worker and worker["pgid"] != os.getpgid(0)
         os.killpg(worker["pgid"], signal.SIGKILL)
         assert until(lambda: runner._operation_lock_free(target), timeout=20)
 
     monkeypatch.setattr(runner, "_signal_worker", kill_without_grace)
+    first = runner.stop("analysis-stop", execute=True)
+    assert first["stop"]["ack"] is None and first["phase"] in {"requested", "unknown"}, first
+    # The operation lock is free now, yet the requester never acknowledges for a
+    # named worker: the outcome converges on unknown once its Turn child is reaped.
+    assert until(lambda: runner.stop("analysis-stop", execute=True)["phase"] == "unknown", timeout=20)
     receipt = runner.stop("analysis-stop", execute=True)
-    assert receipt["phase"] == "unknown" and receipt["status"] == "running", receipt
-    assert receipt["stop"]["ack"] is None and receipt["stop"]["settled"]["operation_lock_free"]
+    assert receipt["status"] == "running" and receipt["stop"]["ack"] is None, receipt
+    assert receipt["stop"]["settled"]["operation_lock_free"] and receipt["stop"]["settled"]["worker_lane_released"]
     assert receipt["stop"]["settled"]["turn_journal_status"] == "in_progress"
+    assert receipt["stop"]["lease"] is None and len(killed) == 1
     assert until(lambda: process_gone(host_pid), timeout=20)
     assert runner.stop("analysis-stop", execute=True) == receipt
     with pytest.raises(ValueError, match="start a new operation id"):
         runner.resume("analysis-stop")
-    assert runner.read("analysis-stop")["stop"]["phase"] == "unknown"
+    observed = runner.read("analysis-stop")
+    assert observed["stop"]["phase"] == "unknown" and not observed["recovery_required"]
+    assert runner.wait("analysis-stop")["stop"]["phase"] == "unknown"
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+
+
+def test_sigterm_without_a_stop_keeps_the_operation_recoverable(service, monkeypatch):
+    """A shutdown signal is not a stop: the worker dies as before and resume stays available."""
+    import signal
+
+    root, runner = service
+    start_held_worker(service, "analysis-term")
+    path = runner.path("analysis-term")
+    worker = _read(path)["worker"]
+    target = runner._lane_target(runner.binding("analysis"))
+    turn_child = turn_lane_liveness(target)["holder"]["pid"]
+    try:
+        os.kill(worker["pid"], signal.SIGTERM)
+        assert until(lambda: runner._operation_lock_free(path), timeout=20)
+        # Default termination, exactly as before: only the worker died, and its
+        # orphaned Turn child still holds the member's lane.
+        lane = turn_lane_liveness(target)
+        assert lane["state"] == "live" and lane["holder"]["pid"] == turn_child
+        assert not runner._stop_path(path).exists()
+        assert _read(path)["status"] == "running" and "stop" not in runner.read("analysis-term")
+        spawned = []
+        monkeypatch.setattr(runner, "_spawn", spawned.append)
+        runner.resume("analysis-term")
+        assert spawned == ["analysis-term"]
+    finally:
+        try:
+            os.killpg(worker["pgid"], signal.SIGKILL)  # the orphaned Turn child
+        except ProcessLookupError:
+            pass
+
+
+def test_stop_settlement_never_refuses_a_concurrent_turn_on_the_member_lane(service, monkeypatch):
+    """Settling reads the lane holder record; a real Turn racing it is always admitted."""
+    import threading
+    from loopx import file_lock
+
+    _, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-race", brief())
+    path = runner.path("analysis-race")
+    binding = runner.binding("analysis")
+    target = runner._lane_target(binding)
+    lane_lock = target.with_name(target.name + ".lock")
+    opened = []
+    real_open = file_lock._open_lock_descriptor
+
+    def recording_open(lock_path, **kwargs):
+        opened.append((threading.get_ident(), Path(lock_path)))
+        return real_open(lock_path, **kwargs)
+
+    monkeypatch.setattr(file_lock, "_open_lock_descriptor", recording_open)
+    lane = {"runtime_root": runner.root, "goal_id": runner.goal_id,
+            "plan": {"turn_envelope": {"agent_id": binding["agent_id"]}}}
+    admitted, refused, phases, settlers = [], [], [], []
+    done = Event()
+
+    def settle_continuously():
+        settlers.append(threading.get_ident())
+        while not done.is_set():
+            phases.append(runner.stop("analysis-race", execute=True)["phase"])
+
+    # An unnamed holder keeps the operation open, so every stop call settles again
+    # and reads the member's lane while other Turns of that member take it.
+    with exclusive_file_lock(path), ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(settle_continuously)
+        try:
+            assert until(lambda: len(phases) >= 2, timeout=30)
+            for _ in range(200):
+                with turn_lane_singleflight(**lane) as held:
+                    (admitted if held is not None else refused).append(held)
+            assert until(lambda: len(phases) >= 4, timeout=30)
+        finally:
+            done.set()
+        future.result(timeout=30)
+    assert refused == [] and len(admitted) == 200
+    assert set(phases) == {"requested"}
+    assert [lock for ident, lock in opened if ident in settlers and lock == lane_lock] == []
+    # Once the holder is gone the requester acknowledges; settling still never takes the lane.
+    opened.clear()
+    receipt = runner.stop("analysis-race", execute=True)
+    assert receipt["phase"] == "settled" and receipt["stop"]["settled"]["lane_state"] == "released"
+    assert lane_lock not in {lock for _, lock in opened}
 
 
 def test_fenced_write_after_another_process_stop_writes_nothing(service, monkeypatch):
