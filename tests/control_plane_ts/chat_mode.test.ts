@@ -81,8 +81,9 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
   for (const [changes, reason] of pending) {
     assert.deepEqual(planChatMode({...wake, ...changes}), {operation: "wake", state: "pending", reason}, reason);
   }
-  // The host origin is only for wake; owner operations keep the web origin.
+  // The host origin is only for wake, and wake only for the host: an owner cannot request one.
   assert.throws(() => planChatMode({...input, origin: "host"}), /local managed/);
+  assert.throws(() => planChatMode({...wake, origin: "web"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "external"}), /local managed/);
   assert.throws(() => planChatMode({...wake, session: {...enabled, channel_id: "manager"}}));
 });

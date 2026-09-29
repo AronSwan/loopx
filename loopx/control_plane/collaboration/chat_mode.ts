@@ -14,7 +14,7 @@ export function planChatMode(input: JsonObject): JsonObject {
   const operation = input.operation;
   requireThat(["configure", "start", "resume", "pause", "exit", "message", "wake"].includes(String(operation)), "unsupported conversation operation");
   requireThat(resolveConversationScope(session).kind === "owner_goal"
-    && (input.origin === "web" || (operation === "wake" && input.origin === "host"))
+    && input.origin === (operation === "wake" ? "host" : "web")
     && session.session_mode !== "attached_host"
     && session.agent_id === "codex", "LoopX mode requires a local managed Codex Goal conversation");
   const settings = requireJsonObject(input.settings, "conversation settings");
