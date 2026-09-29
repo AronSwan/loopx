@@ -333,10 +333,14 @@ const FUNCTION_METHODS = new Set(["call", "apply", "bind"]);
 
 /**
  * Does this callee denote the built-in `RegExp`? Identifier spelling, a global receiver
- * (`globalThis.RegExp`, `globalThis["RegExp"]`), or a const alias bound to one of those. Bounded on
- * purpose - no checker and no symbol graph - so a callee is only followed through the same const
- * bindings the pattern fold uses. What a call *passes* is folded separately, which is what stops an
- * unrecognised callee from becoming an exit.
+ * (`globalThis.RegExp`, `globalThis["RegExp"]`), a `Function.prototype` hop (`RegExp.call(null, …)`)
+ * or a const alias bound to one of those. Bounded on purpose - no checker, no symbol graph - so a
+ * callee is followed only through the same const bindings the pattern fold uses. A call whose callee
+ * does not denote the built-in is still scanned when one of its *arguments* denotes it
+ * (`Reflect.construct(RegExp, [pattern])`); a digest-shaped string reaching an unrelated call is not
+ * treated as a matcher, so error text cannot trip this gate. A constructor reached only at runtime
+ * (`const MAKE = pick(); new MAKE(pattern)`) is outside the static model and is pinned as such in
+ * the out-of-scope matrix below.
  */
 function calleeNamesRegExp(
   callee: ts.Expression,
