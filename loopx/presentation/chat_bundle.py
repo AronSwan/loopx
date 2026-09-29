@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
-# Absolute by necessity: scripts/chat_bundle.py execs this module by file path, so
-# it has no package context for a relative import.
+# Absolute by necessity: setup.py and the two build scripts exec this module by file
+# path, so there is no package context for a relative import. Each of those loaders puts
+# the checkout root on sys.path before exec'ing it, which is what keeps a source build
+# working when LoopX is not installed.
 from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 
 MANIFEST = "bundle-manifest.json"
