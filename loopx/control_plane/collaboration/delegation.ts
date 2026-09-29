@@ -338,7 +338,32 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
+  if (to === "accepted" && from !== "accepted") return {status: to, wake_intent: delegationWakeIntent(params)};
   return {status: to};
+}
+
+/** The first transition to ``accepted`` is the one durable moment a requester
+ * can be continued without polling.  The intent names the requester and the
+ * exact accepted result; it grants no Turn and is not a second settlement. */
+function delegationWakeIntent(params: JsonObject): JsonObject {
+  const requester = requireJsonObject(params.requester, "wake requester");
+  requireThat([requester.goal_id, requester.agent_id, requester.operation_id, requester.request_id].every(text),
+    "wake intent requires the requester and result identity");
+  requireThat(requester.goal_ref === null || typeof requester.goal_ref === "object", "invalid requester goal reference");
+  requireThat(Array.isArray(requester.artifacts) && requester.artifacts.length > 0, "wake intent requires accepted artifacts");
+  const digests = requester.artifacts.map(value => {
+    const artifact = requireJsonObject(value, "accepted artifact");
+    requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
+      && /^[a-f0-9]{64}$/.test(artifact.sha256), "invalid accepted artifact reference");
+    return {ref: artifact.ref, sha256: artifact.sha256};
+  });
+  return {
+    schema: "loopx_delegation_wake_intent_v0",
+    intent_id: canonicalAuthoritySha256([requester.goal_id, requester.agent_id, requester.operation_id,
+      requester.request_id, digests]),
+    requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: requester.goal_ref ?? null},
+    operation_id: requester.operation_id, request_id: requester.request_id,
+  };
 }
 
 /** Repair only a false terminal observation after the exact Turn validated.

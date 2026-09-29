@@ -94,12 +94,42 @@ test("malformed operator binding fails before launch", () => {
   }
 });
 
+const acceptedRequester = {goal_id: "research", agent_id: "coordinator", goal_ref: null,
+  operation_id: "analysis-1", request_id: "req-1", artifacts: [{ref: "output.json", sha256: "a".repeat(64)}]};
+const acceptedFacts = {canonical_done: true, acceptance_ready: true, artifacts_current: true, requester: acceptedRequester};
+
 test("message receipt and model return do not imply accepted work", () => {
   assert.throws(() => transitionDelegationObservation({from: "prepared", to: "accepted"}), /transition/);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted"}), /canonical/);
   assert.throws(() => transitionDelegationObservation({from: "rejected", to: "running"}), /transition/);
-  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted",
-    canonical_done: true, acceptance_ready: true, artifacts_current: true}), {status: "accepted"});
+  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+  assert.equal(accepted.status, "accepted");
+});
+
+test("only the first transition to accepted leaves a wake intent for the exact requester and result", () => {
+  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+  const intent = accepted.wake_intent as Record<string, unknown>;
+  assert.equal(intent.schema, "loopx_delegation_wake_intent_v0");
+  assert.match(String(intent.intent_id), /^[a-f0-9]{64}$/);
+  assert.deepEqual(intent.requester, {goal_id: "research", agent_id: "coordinator", goal_ref: null});
+  assert.equal(intent.operation_id, "analysis-1");
+  assert.equal(intent.request_id, "req-1");
+  // Same requester and result: same intent, so a replayed transition cannot mint a second wake.
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts}), accepted);
+  const changed = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, artifacts: [{ref: "output.json", sha256: "b".repeat(64)}]}});
+  assert.notEqual((changed.wake_intent as Record<string, unknown>).intent_id, intent.intent_id);
+  // accepted -> accepted is an idempotent readback, never a new wake.
+  assert.deepEqual(transitionDelegationObservation({from: "accepted", to: "accepted", ...acceptedFacts}), {status: "accepted"});
+  // A transition to accepted without the requester identity, or with a forged digest, has no wake to record.
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted",
+    canonical_done: true, acceptance_ready: true, artifacts_current: true}), /wake requester/);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, artifacts: [{ref: "output.json", sha256: "short"}]}}), /artifact/);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, artifacts: []}}), /artifacts/);
+  // Rejection is terminal and wakes nobody.
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "rejected"}), {status: "rejected"});
 });
 
 test("a false rejection can reopen only for exact validated settlement recovery", () => {
