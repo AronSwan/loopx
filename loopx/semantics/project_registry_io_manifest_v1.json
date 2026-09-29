@@ -1847,7 +1847,7 @@
     },
     {
       "site": "loopx/operator_gate.py::<module>.record_operator_gate::codec_read:load_registry#1",
-      "line": 315,
+      "line": 316,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1959,7 +1959,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 903,
+      "line": 900,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
