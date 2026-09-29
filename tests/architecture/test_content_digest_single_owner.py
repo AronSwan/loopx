@@ -1261,6 +1261,51 @@ def test_the_owner_is_a_leaf_and_exports_only_the_two_shapes() -> None:
     assert patterns == set(CANONICAL_EXPORTS), patterns
 
 
+def test_periodic_report_generation_receipt_checks_both_digest_fields() -> None:
+    """The site a reviewer named: two digest fields, checked by one reader.
+
+    Both are the enveloped shape, and swapping either for the bare one has to be visible
+    here rather than only in the text of the module, because an envelope swap leaves the
+    owner object in place and therefore no trace for the value scan.
+    """
+
+    from loopx.capabilities.periodic_report import bindings
+
+    def artifact(content: str, document: str) -> dict[str, str]:
+        return {
+            "artifact_id": "art-1",
+            "renderer_id": "renderer-1",
+            "renderer_kind": "markdown",
+            "artifact_ref": "report://document/1",
+            "content_digest": content,
+            "document_digest": document,
+        }
+
+    def receipt(document: str, content: str | None = None) -> dict[str, Any]:
+        normalized = artifact(content or document, document)
+        return {
+            "schema_version": bindings.GENERATION_RECEIPT_SCHEMA,
+            "status": "succeeded",
+            "generation_id": bindings._identity(
+                {"document_digest": document, "artifacts": [normalized]},
+                prefix="report_generation",
+            ),
+            "document_digest": document,
+            "artifact_receipts": [normalized],
+            "artifact_count": 1,
+            "provider_required": False,
+            "external_writes_performed": False,
+        }
+
+    assert (
+        bindings._generation_receipt(receipt(ENVELOPED))["document_digest"] == ENVELOPED
+    )
+    with pytest.raises(ValueError, match="document_digest must use sha256"):
+        bindings._generation_receipt(receipt(HEX64))
+    with pytest.raises(ValueError, match="content_digest must use sha256"):
+        bindings._generation_receipt(receipt(ENVELOPED, HEX64))
+
+
 def test_schema_string_site_is_the_same_question_as_the_owner_bare_shape() -> None:
     statements = _module_of("loopx.capabilities.manager_context.inspection")[
         "statements"
