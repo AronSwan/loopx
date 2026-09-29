@@ -396,6 +396,8 @@ def run(root, phase, model, execute, attempt):
         model,
         "--dsh-reasoning-effort",
         "high",
+        "--dsh-max-tokens",
+        "32768",
         "--validation-command-json",
         json.dumps(validator),
         "--validation-failure-kind",
