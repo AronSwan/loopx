@@ -413,6 +413,67 @@ export const chatRecoveryScenario = {
       await composerInput.fill("");
       pass("composer-running-turn-409-read-failure", "A failed Session read after a 409 keeps Send closed with the Turn controls, is retried, adopts the Turn and reopens only once it completes");
 
+      // The pending reply shows Adjust/Interrupt from the 409 on, so before any
+      // Session read returns, both must act on the exact reported Turn.
+      const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
+      page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
+      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
+      let controlRejectedPosts = 0;
+      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        controlRejectedPosts += 1;
+        await route.fulfill({ contentType: "application/json", status: 409,
+          json: { ok: false, error: "another turn is already running for this session", active_turn_id: controlledTurnId } });
+      });
+      const heldControlReads = [];
+      await page.route("**/api/chat/sessions?*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        heldControlReads.push(route);
+      });
+      const steers = [];
+      await page.route("**/steer", async (route) => {
+        const body = route.request().postDataJSON();
+        const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
+        steers.push({ sessionId, turnId });
+        await route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered" } });
+      });
+      const interruptsBefore = api.interrupts.length;
+      await composerInput.fill(draft);
+      await sendButton.click();
+      for (let attempt = 0; attempt < 100 && (!controlRejectedPosts || !heldControlReads.length); attempt += 1) await page.waitForTimeout(50);
+      if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
+      const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
+      await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
+      await handoffReply.getByLabel("追加给本轮的指令").fill("交接期间先核对依赖。");
+      await handoffReply.getByRole("button", { name: "发送调整", exact: true }).click();
+      await handoffReply.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor({ timeout: 5_000 });
+      if (steers.length !== 1 || steers[0].sessionId !== busySessionId || steers[0].turnId !== controlledTurnId) {
+        throw new Error(`Adjust during the handoff did not reach the reported Turn: ${JSON.stringify(steers)}`);
+      }
+      if (!(await sendButton.isDisabled())) throw new Error("Send reopened after adjusting the handed-off Turn");
+      await handoffReply.getByRole("button", { name: "中断本轮", exact: true }).click();
+      for (let attempt = 0; attempt < 100 && api.interrupts.length === interruptsBefore; attempt += 1) await page.waitForTimeout(50);
+      const interrupted = api.interrupts.slice(interruptsBefore);
+      if (interrupted.length !== 1 || interrupted[0].sessionId !== busySessionId || interrupted[0].turnId !== controlledTurnId) {
+        throw new Error(`Interrupt during the handoff did not reach the reported Turn: ${JSON.stringify(interrupted)}`);
+      }
+      await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
+      await turnRunningHint.waitFor({ state: "hidden", timeout: 5_000 });
+      if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the handed-off Turn was interrupted");
+      if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept through the handoff controls");
+      for (const route of heldControlReads.splice(0)) await route.fallback();
+      await page.unroute("**/api/chat/sessions?*");
+      await page.waitForTimeout(500);
+      if (await page.getByRole("button", { name: "中断本轮", exact: true }).count()) {
+        throw new Error("A late Session read revived the interrupted handoff Turn");
+      }
+      if (await sendButton.isDisabled()) throw new Error("A late Session read closed Send after the interrupt");
+      if (controlRejectedPosts !== 1) throw new Error(`The composer posted ${controlRejectedPosts} times during the handoff`);
+      await page.unroute("**/steer");
+      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await composerInput.fill("");
+      pass("composer-running-turn-409-controls", "Before any Session read returns, Adjust and Interrupt on the 409 handoff reply reach the exact reported Session and Turn, and the interrupt settles the reply and reopens Send");
+
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
       await context.close();

@@ -1420,8 +1420,10 @@ function PersonalGoalHome({
   // the composer closed until the recovery effect adopts it or an
   // authoritative Session read finds no such Turn, so the handoff never leaves
   // a sendable gap. A failed read is no such finding: it keeps the handoff and
-  // counts the attempt toward the next re-read's backoff.
-  const turnHandoffs = useRef(new Map<string, { failedReads: number; messageId: number; turnId: string }>());
+  // counts the attempt toward the next re-read's backoff. From the 409 on, the
+  // reported Session and Turn also own the context's Turn controls, so the
+  // Adjust/Interrupt the pending reply shows act on that exact Turn.
+  const turnHandoffs = useRef(new Map<string, { agentId: string; failedReads: number; messageId: number; sessionId: string; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1847,6 +1849,15 @@ function PersonalGoalHome({
           );
         } else if (!cancelled && unadopted) {
           turnHandoffs.current.delete(targetContextId);
+          if (activeTurnIds.current.get(targetContextId) === unadopted.turnId) {
+            activeTurnIds.current.delete(targetContextId);
+            recordRuntimeBinding(targetContextId, {
+              agentId: unadopted.agentId,
+              resumable: true,
+              sessionId: unadopted.sessionId,
+              status: "ready",
+            });
+          }
           setMessagesByContext((messages) => ({
             ...messages,
             [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== unadopted.messageId),
@@ -2130,6 +2141,7 @@ function PersonalGoalHome({
     let streamingMessageId: number | null = null;
     let submittedTurnId: string | undefined;
     let submittedSessionId: string | undefined;
+    let handedOff = false;
     let streamedText = "";
     try {
       let sessionId = targetContextId === "manager" ? sessionIds.current.get(sessionKey) : await prepareGoalConversation(targetContextId, selectedRoute.agentId);
@@ -2306,14 +2318,29 @@ function PersonalGoalHome({
           ...messages,
           [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== userMessageId),
         }));
-        if (streamingMessageId !== null) {
+        if (streamingMessageId !== null && submittedSessionId) {
           updateManagerAssistantMessage(targetContextId, streamingMessageId, {
             activity: ["正在接管进行中的 Agent 回合"],
             pending: true,
             sourceSessionId: submittedSessionId,
             sourceTurnId: runningTurnId,
           });
-          turnHandoffs.current.set(targetContextId, { failedReads: 0, messageId: streamingMessageId, turnId: runningTurnId });
+          turnHandoffs.current.set(targetContextId, {
+            agentId: selectedRoute.agentId,
+            failedReads: 0,
+            messageId: streamingMessageId,
+            sessionId: submittedSessionId,
+            turnId: runningTurnId,
+          });
+          activeTurnIds.current.set(targetContextId, runningTurnId);
+          recordRuntimeBinding(targetContextId, {
+            agentId: selectedRoute.agentId,
+            resumable: true,
+            sessionId: submittedSessionId,
+            status: "running",
+            turnId: runningTurnId,
+          });
+          handedOff = true;
         }
         if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
         throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});
@@ -2353,10 +2380,12 @@ function PersonalGoalHome({
         updateManagerAssistantMessage(targetContextId, streamingMessageId, failureMessage);
       }
     } finally {
-      activeTurnIds.current.delete(targetContextId);
+      // A handed-off Turn is still running: its ownership stays for the
+      // recovery that adopts it or the read that finds it ended.
+      if (!handedOff) activeTurnIds.current.delete(targetContextId);
       streamControllers.current.delete(targetContextId);
       const boundSessionId = sessionIds.current.get(sessionKey);
-      if (boundSessionId) {
+      if (boundSessionId && !handedOff) {
         recordRuntimeBinding(targetContextId, {
           agentId: selectedRoute.agentId,
           resumable: true,
@@ -2392,6 +2421,17 @@ function PersonalGoalHome({
         sessionId,
         status: "ready",
       });
+      // No stream settles a Turn still in its 409 handoff, so the receipt
+      // settles its pending reply.
+      const handoff = turnHandoffs.current.get(targetContextId);
+      if (handoff?.turnId === turnId) {
+        turnHandoffs.current.delete(targetContextId);
+        updateManagerAssistantMessage(targetContextId, handoff.messageId, {
+          lines: [],
+          pending: false,
+          text: "已中断。你可以在当前会话继续发送消息。",
+        });
+      }
       setSendingContextId((current) => current === targetContextId ? null : current);
     }
   }
