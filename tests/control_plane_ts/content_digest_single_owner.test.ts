@@ -185,12 +185,12 @@ function digestEnvelope(pattern: string): Envelope | null {
 }
 
 /**
- * One lexical scope. A name maps to the declarations seen for it *before the current point in
- * document order*; a `null` init is a blocker - a parameter, an import, `let`/`var`, a second
- * declaration of the same name - and a blocker stops the search instead of falling through to an
- * outer binding, so shadowing cannot silently substitute a different value. `ctor` marks a name that
- * denotes the built-in `RegExp` itself rather than a foldable string, which is how a name bound by
- * destructuring (`const { RegExp: MAKE } = globalThis`) still resolves.
+ * One lexical scope. A name maps to every declaration in that scope, independent of traversal
+ * order; a `null` init is a blocker - a parameter, an import, `let`/`var`, a second declaration of
+ * the same name - and a blocker stops the search instead of falling through to an outer binding, so
+ * shadowing cannot silently substitute a different value. `ctor` marks a name that denotes the
+ * built-in `RegExp` itself rather than a foldable string, which is how a name bound by destructuring
+ * (`const { RegExp: MAKE } = globalThis`) still resolves.
  */
 type Binding = { init: ts.Expression | null; at: Scope; ctor: boolean };
 type Scope = { parent: Scope | null; vars: Map<string, Binding[]> };
@@ -286,7 +286,9 @@ function foldStringExpression(
     return foldStringExpression(expr.expression, scope, source, depth + 1);
   }
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-    return expr.getText(source).slice(1, -1);
+    // The AST value is cooked. Source slicing would leave `\\x30` as four characters and let an
+    // ordinary escaped spelling of `[0-9a-f]` bypass the value-based ownership rule.
+    return expr.text;
   }
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
     const left = foldStringExpression(expr.left, scope, source, depth + 1);
@@ -425,23 +427,38 @@ function refersToRegExp(expr: ts.Expression, scope: Scope, source: ts.SourceFile
 
 /**
  * A digest pattern reaching a call that is not a recognised construction. `Reflect.construct`
- * carries it inside an argument list, so a nested array literal is unfolded element-wise.
+ * carries it inside an argument list, so an inline or const-bound array is unfolded element-wise.
  */
+function foldedDigestArgument(
+  arg: ts.Expression,
+  scope: Scope,
+  source: ts.SourceFile,
+  depth = 0,
+): string[] {
+  if (depth > 8) return [];
+  if (ts.isParenthesizedExpression(arg)) {
+    return foldedDigestArgument(arg.expression, scope, source, depth + 1);
+  }
+  const direct = foldStringExpression(arg, scope, source);
+  if (direct !== null) return digestEnvelope(direct) === null ? [] : [direct];
+  if (ts.isIdentifier(arg)) {
+    const found = binding(scope, arg.text);
+    if (found !== null && found.init !== null) {
+      return foldedDigestArgument(found.init, found.at, source, depth + 1);
+    }
+    return [];
+  }
+  if (ts.isArrayLiteralExpression(arg)) {
+    return arg.elements.flatMap((element) =>
+      ts.isSpreadElement(element) ? [] : foldedDigestArgument(element, scope, source, depth + 1));
+  }
+  return [];
+}
+
 function foldedDigestArguments(args: readonly ts.Expression[], scope: Scope, source: ts.SourceFile): string[] {
   const values: string[] = [];
   for (const arg of args) {
-    const direct = foldStringExpression(arg, scope, source);
-    if (direct !== null) {
-      if (digestEnvelope(direct) !== null) values.push(direct);
-      continue;
-    }
-    if (ts.isArrayLiteralExpression(arg)) {
-      for (const element of arg.elements) {
-        if (ts.isSpreadElement(element)) continue;
-        const nested = foldStringExpression(element, scope, source);
-        if (nested !== null && digestEnvelope(nested) !== null) values.push(nested);
-      }
-    }
+    values.push(...foldedDigestArgument(arg, scope, source));
   }
   return values;
 }
@@ -450,6 +467,7 @@ function matchersInText(text: string, file: string): Matcher[] {
   const source = parse(text, file);
   const written = assignedNames(source);
   const root: Scope = { parent: null, vars: new Map() };
+  const scopes = new Map<ts.Node, Scope>();
   const found: Matcher[] = [];
 
   // Imports bind names whose value lives in another module, so they are blockers at file scope.
@@ -460,16 +478,19 @@ function matchersInText(text: string, file: string): Matcher[] {
     if (defaultName !== undefined) declare(root, defaultName.text, null);
   }
 
-  (function walk(node: ts.Node, scope: Scope, insideConstruction: boolean): void {
+  // Build scopes and their bindings before inspecting any use site. Lexical bindings do not depend
+  // on source traversal order: a function may legitimately read a module `const` declared later,
+  // after module initialization has completed. The former one-pass walk silently missed that alias.
+  (function collect(node: ts.Node, scope: Scope): void {
     const inner =
       node.kind === ts.SyntaxKind.SourceFile || !SCOPE_OPENERS.has(node.kind)
         ? scope
         : { parent: scope, vars: new Map<string, Binding[]>() };
+    scopes.set(node, inner);
 
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const foldable = isConstDeclaration(node) && node.initializer !== undefined && !written.has(node.name.text);
-      const ctor = foldable && calleeNamesRegExp(node.initializer, inner, source);
-      declare(inner, node.name.text, foldable ? node.initializer : null, ctor);
+      declare(inner, node.name.text, foldable ? node.initializer : null);
     } else if (ts.isVariableDeclaration(node)) {
       declarePatternBindings(inner, node, source);
     }
@@ -478,6 +499,11 @@ function matchersInText(text: string, file: string): Matcher[] {
         for (const name of boundNames(parameter.name)) declare(inner, name, null);
       }
     }
+    ts.forEachChild(node, (child) => collect(child, inner));
+  })(source, root);
+
+  (function walk(node: ts.Node, scope: Scope, insideConstruction: boolean): void {
+    const inner = scopes.get(node) ?? scope;
 
     const push = (pattern: string | null, flags: string | null, via: Matcher["via"]): void => {
       const spelling = node.getText(source).replace(/\s+/g, " ");
@@ -579,6 +605,11 @@ test("restating the shape is the same violation in every form the constructor is
     ],
     ["single-quoted construction", "const CHECK = new RegExp('^[a-f0-9]{64}$');\n"],
     ["template construction", "const CHECK = new RegExp(`^sha256:[0-9a-f]{64}$`);\n"],
+    ["cooked hex escapes", 'const CHECK = new RegExp("^[\\x30-\\x39a-f]{64}$");\n'],
+    [
+      "cooked escapes split across constants",
+      'const HEAD = "^[\\x30-";\nconst TAIL = "\\x39a-f]{64}$";\nconst CHECK = new RegExp(HEAD + TAIL);\n',
+    ],
     [
       "two constant halves",
       'const HEAD = "^[0-9";\nconst TAIL = "a-f]{64}$";\nconst CHECK = new RegExp(HEAD + TAIL);\n',
@@ -646,10 +677,18 @@ test("restating the shape is the same violation in every form the constructor is
       'const HEAD = "^[0-9";\nconst TAIL = "a-f]{64}$";\nconst CHECK = new globalThis.RegExp(HEAD + TAIL);\n',
     ],
     ["built-in named as an argument", 'const CHECK = Reflect.construct(RegExp, ["^[0-9a-f]{64}$"]);\n'],
+    [
+      "built-in with a const-bound argument array",
+      'const ARGS = ["^[0-9a-f]{64}$"];\nconst CHECK = Reflect.construct(RegExp, ARGS);\n',
+    ],
     ["Function.prototype hop", 'const CHECK = RegExp.call(null, "^[0-9a-f]{64}$");\n'],
     [
       "alias of an alias of the built-in",
       "const A = RegExp;\nconst B = A;\nconst CHECK = new B(\"^[0-9a-f]{64}$\");\n",
+    ],
+    [
+      "function reads a later module const alias",
+      'function check(value: string): boolean {\n  return new LATE("^[0-9a-f]{64}$").test(value);\n}\nconst LATE = RegExp;\n',
     ],
     [
       "alias taken through RegExp.bind",
@@ -680,6 +719,35 @@ test("restating the shape is the same violation in every form the constructor is
   for (const [name, source] of bypasses) {
     const caught = matchersInText(source, "synthetic.ts").filter((site) => site.envelope !== null);
     assert.equal(caught.length, 1, `${name} escaped the scan: ${JSON.stringify(source)}`);
+  }
+});
+
+test("real delegation consumer mutations cannot restore a private bare matcher", () => {
+  const file = "control_plane/collaboration/delegation.ts";
+  const original = readFileSync(join(PACKAGE_ROOT, file), "utf8");
+  const call = "BARE_SHA256_PATTERN.test(cursor)";
+  assert.ok(original.includes(call), "delegation cursor no longer uses the canonical bare matcher");
+  const mutations: [string, string, string][] = [
+    [
+      "cooked escape",
+      'new RegExp("^[\\x30-\\x39a-f]{64}$").test(cursor)',
+      "",
+    ],
+    [
+      "const-bound Reflect.construct arguments",
+      "Reflect.construct(RegExp, reviewOnlyMatcherArgs).test(cursor)",
+      '\nconst reviewOnlyMatcherArgs = ["^[0-9a-f]{64}$"];\n',
+    ],
+    [
+      "later module const constructor alias",
+      'new LATE_DIGEST_MATCHER("^[0-9a-f]{64}$").test(cursor)',
+      "\nconst LATE_DIGEST_MATCHER = RegExp;\n",
+    ],
+  ];
+  for (const [name, replacement, suffix] of mutations) {
+    const source = original.replace(call, replacement) + suffix;
+    const offenders = matchersInText(source, file).filter((site) => site.envelope === "bare");
+    assert.equal(offenders.length, 1, `${name} escaped the real consumer scan: ${JSON.stringify(offenders)}`);
   }
 });
 
