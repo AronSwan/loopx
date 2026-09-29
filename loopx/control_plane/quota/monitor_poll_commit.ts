@@ -136,6 +136,7 @@ interface MonitorRequest {
 interface MonitorProviderPlan extends JsonObject {
   schema_version: typeof MONITOR_TODO_PROVIDER_PLAN_SCHEMA | typeof LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA;
   lease_proof?: TaskLeaseProof;
+  gate_scope_guard?: boolean;
   monitor_effect_id: string;
   goal_id: string;
   generated_at: string;
@@ -881,7 +882,9 @@ function requestDigest(request: MonitorRequest): string {
   }));
 }
 
-function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
+function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
+  request.observation.settlement_todo_id && request.observation.settlement_todo_id !== request.observation.todo_id
+)): MonitorProviderPlan {
   const resultHash = request.observation.result_hash;
   if (!resultHash) {
     throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");
@@ -889,6 +892,7 @@ function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
   return {
     schema_version: request.observation.lease_proof ? LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA : MONITOR_TODO_PROVIDER_PLAN_SCHEMA,
     ...(request.observation.lease_proof ? {lease_proof: request.observation.lease_proof} : {}),
+    ...(gateGuard ? {gate_scope_guard: true} : {}),
     monitor_effect_id: request.effect_id,
     goal_id: request.goal_id,
     generated_at: request.generated_at,
@@ -913,6 +917,14 @@ function providerPlanFor(request: MonitorRequest): MonitorProviderPlan {
   };
 }
 
+/** Upgrade uncommitted historical auxiliary dispatch without rewriting its WAL.
+ * Existing business receipts replay the same intended-effect identity first. */
+function providerDispatchPlan(request: MonitorRequest, plan: MonitorProviderPlan): MonitorProviderPlan {
+  return request.observation.settlement_todo_id &&
+    request.observation.settlement_todo_id !== request.observation.todo_id
+    ? {...plan, gate_scope_guard: true} : plan;
+}
+
 function providerPlanObject(value: unknown): MonitorProviderPlan {
   const plan = requiredObject(value, "receipt.provider_plan");
   if (plan.schema_version !== MONITOR_TODO_PROVIDER_PLAN_SCHEMA &&
@@ -926,6 +938,7 @@ function providerPlanObject(value: unknown): MonitorProviderPlan {
   return {
     schema_version: plan.schema_version,
     ...(proof ? {lease_proof: proof} : {}),
+    ...(plan.gate_scope_guard == null ? {} : {gate_scope_guard: requireBoolean(plan.gate_scope_guard, "provider_plan.gate_scope_guard")}),
     monitor_effect_id: requiredString(
       plan.monitor_effect_id,
       "provider_plan.monitor_effect_id",
@@ -2237,7 +2250,7 @@ export async function evaluateQuotaMonitorPollCommit(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      });
+      }, plan.gate_scope_guard === true);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",
@@ -2266,7 +2279,7 @@ export async function evaluateQuotaMonitorPollCommit(
         { ok: true, dry_run: false, provider_required: true },
         "quota monitor-poll Todo provider is required",
         currentDigest,
-        plan,
+        providerDispatchPlan(request, plan),
       );
     }
 
@@ -2288,7 +2301,7 @@ export async function evaluateQuotaMonitorPollCommit(
       const expectedPlan = providerPlanFor({
         ...request,
         generated_at: plan.generated_at,
-      });
+      }, plan.gate_scope_guard === true);
       if (pythonJson(plan) !== pythonJson(expectedPlan)) {
         throw new EffectRuntimeRequestError(
           "quota monitor-poll provider plan conflicts with its transaction receipt",

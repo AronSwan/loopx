@@ -675,6 +675,7 @@ def _provider_writeback(
         agent_id=plan.get("agent_id"),
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
+        gate_scope_guard=plan.get("gate_scope_guard") is True,
     )
     if not isinstance(result, dict):
         raise TypeError("monitor Todo provider returned no writeback receipt")
