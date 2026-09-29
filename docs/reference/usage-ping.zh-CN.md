@@ -87,6 +87,12 @@ App 不再要求首次点击启用。环境变量覆盖和 `consent_required` �
 - `DO_NOT_TRACK` 非空且不是 `0`
 - `CI` 非空且不是 `0|false`
 
+项目 Python CI 和公共 smoke 工作流显式设置 `LOOPX_USAGE_PING=0`；pytest 与
+canary smoke 执行器也在本地验证时关闭采集。Native Codex 评测 profile 的安装、
+运行和 Agent 工具 shell 都强制关闭，即使最小环境丢掉了 `CI` 或父进程要求开启，
+也不会恢复采集。发布资格验证同样关闭。这些合成运行不能计作真实使用安装。
+遥测专项测试只能针对可丢弃的本地收集器显式开启。
+
 `LOOPX_USAGE_POLICY=consent_required` 要求明确开启，单纯显示告知不够。
 默认策略为 `opt_out`，未知值拒绝发送。发行方必须按实际适用要求选择策略；
 该配置不自动判断法律合规，不按 IP 猜测地区，也不能替代必要的同意。

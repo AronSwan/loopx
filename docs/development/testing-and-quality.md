@@ -73,6 +73,24 @@ golden 来让测试通过。
 
 ## Pull-Request Baseline / PR 基线
 
+### Synthetic Runs Must Not Report Adoption / 合成运行不计入使用遥测
+
+CI, pytest and canary smoke subprocesses disable usage collection with
+`LOOPX_USAGE_PING=0`. A synthetic installer, benchmark profile or release
+qualification that reconstructs its environment must set that opt-out itself,
+including in Agent tool shells; filtering out `CI` must never restore collection.
+Do not infer test provenance from OS, install channel or random installation IDs.
+Telemetry transport tests may explicitly opt in only with isolated state and a
+disposable local collector. Validate the actual child CLI and typed sender, and
+assert zero HTTP requests for disabled profiles rather than only inspecting a
+parent environment dictionary.
+
+CI、pytest 和 canary smoke 子进程通过 `LOOPX_USAGE_PING=0` 关闭遥测。合成安装、
+评测 profile 或发布资格验证重建环境时，必须自行设置关闭开关，并覆盖 Agent 工具
+shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠道或随机 ID 推断测试
+来源。遥测传输专项测试只允许使用隔离状态和可丢弃的本地收集器显式开启。验证实际
+子进程 CLI 和类型化发送端，并断言关闭状态下 HTTP 请求为零，而非只检查父环境。
+
 ### Required Merge Check / 必需合并检查
 
 `python-tests.yml` publishes `merge-gate` for every pull request. Code,

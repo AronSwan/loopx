@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import shlex
+import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -268,6 +269,7 @@ def _run_check(
         completed = subprocess.run(
             normalized["argv"],
             cwd=REPO_ROOT,
+            env={**os.environ, "LOOPX_USAGE_PING": "0"},
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

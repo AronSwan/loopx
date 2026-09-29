@@ -30,6 +30,9 @@ concurrency:
   group: python-tests-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LOOPX_USAGE_PING: "0"
+
 jobs:
   changes:
     runs-on: ubuntu-latest

@@ -31,6 +31,7 @@ def host_environment(root: Path, launcher: Path) -> dict[str, str]:
         "PATH": str(launcher.parent) + os.pathsep + os.environ.get("PATH", os.defpath),
         "HOME": str(home), "TMPDIR": str(temporary), "SHELL": "/bin/sh",
         "LANG": "C.UTF-8", "PYTHONPATH": str(REPO),
+        "LOOPX_USAGE_PING": "0",
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_CACHE_HOME": str(home / ".cache"),
     }
