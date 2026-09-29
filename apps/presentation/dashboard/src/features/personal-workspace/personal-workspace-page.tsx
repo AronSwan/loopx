@@ -1590,11 +1590,13 @@ export function PersonalWorkspacePage({
     try {
       if (!selectedGoalId) setManagerConversationReceiptVisible(true);
       else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
-      const semanticPreview = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
-      if (Array.isArray(semanticPreview)) {
-        const drafted = await Promise.allSettled(semanticPreview.map((request) => createPreview(request, { select: false })));
+      const previews = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
+      if (previews?.candidates?.length) {
+        const drafted = await Promise.allSettled(previews.candidates.map((request) => createPreview(request, { select: false })));
         if (drafted.some((result) => result.status === "rejected")) setActionFeedback(t("feedback.proposalDraftFailed"));
-      } else if (semanticPreview) await createPreview(semanticPreview);
+      }
+      // The decision is created last so it keeps the drawer selection.
+      if (previews?.decision) await createPreview(previews.decision);
     } catch (error) {
       if (!messageOverride) {
         setComposer(message);

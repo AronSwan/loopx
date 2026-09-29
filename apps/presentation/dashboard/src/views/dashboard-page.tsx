@@ -2157,17 +2157,13 @@ function PersonalGoalHome({
           lines: ["请进入要修改的 Goal，预览并确认具体变更。"],
         });
       }
-      if (targetContextId !== "manager" && response.protected_action) {
-        const protectedPreview = semanticProtectedActionPreview(
-          targetContextId,
-          question,
-          response.protected_action,
-        );
-        if (protectedPreview) return protectedPreview;
-      }
-      if (targetGoal && todoProposals.length > 0) {
-        return todoProposalPreviewRequests(targetGoal.goalId, streamed.turnId, response.proposals);
-      }
+      const decision = targetContextId !== "manager" && response.protected_action
+        ? semanticProtectedActionPreview(targetContextId, question, response.protected_action) ?? undefined
+        : undefined;
+      const candidates = targetGoal
+        ? todoProposalPreviewRequests(targetGoal.goalId, streamed.turnId, response.proposals)
+        : [];
+      if (decision || candidates.length > 0) return { candidates, decision };
     } catch (error) {
       const userInterrupted = (submittedTurnId && interruptedTurnIds.current.delete(submittedTurnId))
         || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");

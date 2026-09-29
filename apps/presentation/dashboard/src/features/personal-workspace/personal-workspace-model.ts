@@ -462,10 +462,7 @@ export type PersonalWorkspaceCallbacks = {
     agentId: string,
     goalId: string | null,
     attachments?: WorkspaceImageAttachment[],
-  // One request is a decision the owner reviews now; a list is candidate cards
-  // (for example an Agent's Todo proposals) left in the conversation.
-  ) => void | WorkspaceActionPreviewRequest | WorkspaceActionPreviewRequest[]
-    | Promise<void | WorkspaceActionPreviewRequest | WorkspaceActionPreviewRequest[]>;
+  ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
@@ -476,6 +473,14 @@ export type PersonalWorkspaceCallbacks = {
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
   onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+};
+
+// What one send hands back for review: at most one decision the owner reviews
+// now (it opens the drawer) plus candidate cards left in the conversation, such
+// as an Agent's Todo proposals. One answer may carry both.
+export type WorkspaceSendPreviews = {
+  candidates?: WorkspaceActionPreviewRequest[];
+  decision?: WorkspaceActionPreviewRequest;
 };
 
 export type WorkspaceActionPreviewRequest = {
