@@ -323,12 +323,74 @@ def test_claude_install_routes_global_risks_to_focused_cli(tmp_path: Path) -> No
         "boundary warnings, failing checks, and whether a formally evidenced "
         "rollback candidate source is available, without mutating state."
     )
-    for name_skill in ("loopx-global-risks", "loop-global-risks"):
-        skill = claude_home / "skills" / name_skill / "SKILL.md"
-        skill_text = skill.read_text(encoding="utf-8")
-        assert expected in skill_text
-        assert "This command is read-only" in skill_text
-        assert "global-summary" not in skill_text
+    skill = claude_home / "skills" / "loopx-global-risks" / "SKILL.md"
+    skill_text = skill.read_text(encoding="utf-8")
+    assert expected in skill_text
+    assert "This command is read-only" in skill_text
+    assert "global-summary" not in skill_text
+    # One canonical facade per outcome: the deprecated alias skill file is never
+    # reinstalled into a host root, so a host import cannot copy it elsewhere.
+    assert not (claude_home / "skills" / "loop-global-risks").exists()
+
+
+def test_install_retires_managed_alias_facades_on_every_host_root(
+    tmp_path: Path,
+) -> None:
+    """A managed /loop-global-* file is retired; a user-owned same-name skill is
+    preserved. The deprecated facade used to be republished to Claude Code and
+    OpenCode, then imported into ~/.agents/skills as a second copy of an
+    outcome whose canonical facade already exists."""
+
+    marker = "<!-- loopx-managed-slash-command:v1 command=/loop-global-summary surface=claude-skills -->\n"
+    claude_home = tmp_path / "claude"
+    opencode_home = tmp_path / "opencode"
+    managed = claude_home / "skills" / "loop-global-summary" / "SKILL.md"
+    managed.parent.mkdir(parents=True)
+    managed.write_text(marker + "\n# LoopX /loop-global-summary\nold\n", encoding="utf-8")
+    user_owned = opencode_home / "skills" / "loop-global-summary" / "SKILL.md"
+    user_owned.parent.mkdir(parents=True)
+    user_owned.write_text("user-owned skill body\n", encoding="utf-8")
+
+    payload = install_slash_commands(
+        execute=True,
+        surfaces=["claude-code", "opencode"],
+        claude_home=str(claude_home),
+        opencode_home=str(opencode_home),
+    )
+
+    rows = {
+        (item["surface"], item["command"]): item
+        for item in payload["installed"]
+        if item["command"] == "/loop-global-summary"
+        and str(item["mechanism"]).startswith("retired_")
+    }
+    assert not managed.exists()
+    assert rows[("claude-code", "/loop-global-summary")]["mechanism"] == (
+        "retired_claude_code_legacy_alias"
+    )
+    assert rows[("claude-code", "/loop-global-summary")]["status"] == "retired_managed_file"
+    assert user_owned.read_text(encoding="utf-8") == "user-owned skill body\n"
+    assert rows[("opencode", "/loop-global-summary")]["status"] == "skipped_user_file"
+    assert (claude_home / "skills" / "loopx-global-summary" / "SKILL.md").is_file()
+    assert (opencode_home / "skills" / "loopx-global-summary" / "SKILL.md").is_file()
+
+
+def test_legacy_alias_retirement_keeps_native_slash_commands(
+    tmp_path: Path,
+) -> None:
+    """OpenCode keeps the alias as a typed command; only the skill file that a
+    host import could copy into a shared root is retired."""
+
+    opencode_home = tmp_path / "opencode"
+    install_slash_commands(
+        execute=True,
+        surfaces=["opencode"],
+        opencode_home=str(opencode_home),
+    )
+
+    assert (opencode_home / "commands" / "loop-global-summary.md").is_file()
+    assert not (opencode_home / "skills" / "loop-global-summary").exists()
+    assert (opencode_home / "skills" / "loopx-global-summary" / "SKILL.md").is_file()
 
 
 def test_opencode_static_uninstall_preserves_installed_bridge(tmp_path: Path) -> None:
