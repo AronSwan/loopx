@@ -54,7 +54,7 @@ test("midnight and high call volume cannot bypass 15-minute spacing; each batch 
   assert.equal(batches.length, 3, "no empty periodic requests");
 });
 
-test("upgrade flushes retained legacy counts; expired counts are dropped before a new result", async t => {
+test("current-notice legacy buffer shape remains readable; expired counts are dropped before a new result", async t => {
   for (const [bufferDay, count] of [["2026-09-27", 8], ["2026-09-20", 1]] as const) {
     const { path, ctx, state, generation, batches, post } = await fixture(t);
     await writeFile(path, JSON.stringify({ ...await state(), day: bufferDay, counters: [{ ...row, count: 7 }], last_attempt_day: "2026-09-28" }));
@@ -130,4 +130,61 @@ test("a malformed legacy buffer cannot bypass outgoing aggregate validation", as
   await writeFile(path, JSON.stringify({ ...await state(), day: "2026-09-27", counters: [row, row] }));
   await observe(path, ctx, generation, null, post);
   assert.deepEqual(batches, [], "duplicate counter keys are not a valid wire payload");
+});
+
+test("v3 upgrade waits for renewed notice, preserves pre-ack state and fences old observations", async t => {
+  for (const consent of ["default", "enabled"] as const) {
+    const { path, ctx, state, generation, batches, post } = await fixture(t);
+    await writeFile(path, JSON.stringify({ ...await state(), consent,
+      notice: { version: 3, endpoint: ctx.env.LOOPX_USAGE_PING_ENDPOINT, policy: "opt_out" },
+      day: "2026-09-28", counters: [{ ...row, count: 7 }] }));
+    const before = await readFile(path, "utf8");
+    const status = await inspect(path, ctx);
+    assert.equal(status.notice.version, 4);
+    assert.equal(status.blocked_by, "notice_required");
+    assert.equal(status.automatic_notice_required, true);
+    let attempts = 0;
+    for (const counter of [null, row]) {
+      await observe(path, ctx, generation, counter, async () => { attempts++; return 204; });
+    }
+    assert.equal(attempts, 0, "neither heartbeat nor aggregate can start before renewed notice");
+    assert.equal(await readFile(path, "utf8"), before, "unacknowledged buffers remain untouched");
+    await assert.rejects(configure(path, ctx, "acknowledge", { ...status.notice, version: 3 }), /usage_notice_changed/);
+    await configure(path, ctx, "acknowledge", status.notice);
+    const renewed = await state();
+    assert.notEqual(renewed.generation, generation);
+    assert.deepEqual(renewed.counters, [], "existing notice migration discards old-scope counts");
+    await observe(path, ctx, generation, row, post);
+    assert.deepEqual(batches, [], "queued old-generation work cannot send after acknowledgment");
+    await observe(path, ctx, renewed.generation, row, post);
+    assert.deepEqual(batches, [{ schema: AGGREGATE_SCHEMA, counters: [row] }]);
+  }
+});
+
+test("v3 renewal cannot undo disable or replace explicit consent", async t => {
+  for (const [consent, policy, reason] of [
+    ["disabled", "opt_out", "disabled"],
+    ["default", "consent_required", "consent_required"],
+  ] as const) {
+    const { path, ctx, state, generation } = await fixture(t);
+    const restricted = { ...ctx, env: { ...ctx.env, LOOPX_USAGE_POLICY: policy } };
+    await writeFile(path, JSON.stringify({ ...await state(), consent,
+      notice: { version: 3, endpoint: ctx.env.LOOPX_USAGE_PING_ENDPOINT, policy },
+      day: "2026-09-28", counters: [{ ...row, count: 7 }] }));
+    const before = await readFile(path, "utf8");
+    const status = await inspect(path, restricted);
+    assert.equal(status.blocked_by, reason);
+    assert.equal(status.automatic_notice_required, false);
+    await configure(path, restricted, "acknowledge", status.notice);
+    let attempts = 0;
+    await observe(path, restricted, generation, row, async () => { attempts++; return 204; });
+    assert.equal(attempts, 0);
+    assert.equal(await readFile(path, "utf8"), before);
+    assert.equal((await inspect(path, restricted)).sending, false);
+    if (policy === "consent_required") {
+      await configure(path, restricted, "enable");
+      await observe(path, restricted, (await state()).generation, row, async () => { attempts++; return 204; });
+      assert.ok(attempts > 0, "only explicit enable authorizes consent-required collection");
+    }
+  }
 });

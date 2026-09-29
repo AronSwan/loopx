@@ -75,8 +75,9 @@ Additional payload fields and invalid enum combinations are rejected.
 
 Interactive CLI, unattended scripts/agents and the App use the same
 **first disclosure → automatic activation → subsequent measurement** policy.
-The first ordinary CLI command prints the recipient, fields, purpose and
-both disable mechanisms to stderr, records the disclosure, and sends nothing.
+The first ordinary CLI command prints the recipient, fields, purpose, CLI delivery
+cadence, network timing correlation boundary and both disable mechanisms to
+stderr, records the disclosure, and sends nothing.
 This also applies to captured stderr in scripts and Agent tool calls; JSON
 stdout is unaffected. Discarded stderr (the null device) or a failed write
 cannot acknowledge a notice. Background `chat`/`serve-status` services defer
@@ -139,7 +140,12 @@ interactive and unattended CLI lanes; Goal-duration snapshots remain daily.
 
 Counts are capped at 128 distinct rows and 10,000 per row. Buffered counts expire
 after seven UTC days measured from the oldest buffered day. Existing daily
-buffers remain readable on upgrade. Each batch is removed and its attempt time
+buffer shapes remain readable. Notice revision 4 renews disclosure before the
+faster cadence takes effect: old notice state cannot send or consume buffers.
+Acknowledging the renewed notice discards old-scope counters and fences queued
+observations with a new generation; only subsequent measurements can send.
+Explicit disable remains disabled, and acknowledgment cannot replace explicit
+enable under `consent_required`. Each batch is removed and its attempt time
 persisted before the request starts under the same short lock; network waiting
 happens after release. Attempts are spaced even on failure or clock rollback.
 There are no immediate retries, background timers or durable network queues.
