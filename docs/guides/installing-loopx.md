@@ -140,10 +140,14 @@ one. Host integration changes command discovery only. It does not grant LoopX
 permission to write a repository, contact external systems, or bypass a user
 gate.
 
-Codex installs expose only canonical `loopx-*` skills. Older managed
-`loop-global-*` skill aliases are retired; their catalog entries and native
-slash-host compatibility remain available. This changes the Codex picker,
-not goal execution or write authority.
+Every host skill root exposes only canonical `loopx-*` skills. On any surface
+(Codex, Claude Code, OpenCode, and the opt-in hosts) an older managed
+`loop-global-*` skill file is retired during install and uninstall, while its
+catalog entry and the host's native slash-command compatibility remain
+available. A host that imports skills into a shared root such as
+`~/.agents/skills` can otherwise copy a deprecated facade next to the canonical
+one and make the same outcome resolve twice. This changes host command
+discovery, not goal execution or write authority.
 
 Both workflow and command installation reconcile managed duplicates between
 `CODEX_HOME/skills` (default `~/.codex/skills`) and `~/.agents/skills`.

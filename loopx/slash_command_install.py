@@ -802,6 +802,50 @@ def _merge_managed_mcp_json(
     return "written"
 
 
+def _retire_legacy_alias_skills(
+    *,
+    alias_specs: list[dict[str, Any]],
+    installed: list[dict[str, Any]],
+    skills_dir: Path,
+    surface: str,
+    host_surfaces: list[str],
+    execute: bool,
+    flat: bool = False,
+) -> None:
+    """Retire managed legacy ``/loop-global-*`` skill facades in one host root.
+
+    Every host skill root exposes one canonical facade per outcome. The alias
+    entries keep working from the command catalog and from a host's own native
+    slash-command registry, but a managed alias *skill file* is retired: a host
+    that later imports skills into a shared root (``~/.agents/skills``) would
+    otherwise copy a deprecated facade next to the canonical one, and the same
+    outcome would resolve twice. Only files carrying the LoopX managed marker
+    are touched, so a user-owned same-name skill is preserved.
+    """
+
+    for spec in alias_specs:
+        path = (
+            skills_dir / f"{spec['name']}.md"
+            if flat
+            else skills_dir / str(spec["name"]) / "SKILL.md"
+        )
+        status = _retire_managed_file(path, execute=execute)
+        # ``skipped_user_file`` is reported too, so a user-owned same-name
+        # alias stays visible instead of silently surviving the install.
+        if status:
+            installed.append(
+                {
+                    "surface": surface,
+                    "host_surfaces": list(host_surfaces),
+                    "mechanism": f"retired_{surface.replace('-', '_')}_legacy_alias",
+                    "command": spec["command"],
+                    "path": str(path),
+                    "status": status,
+                    "invoke_as": [],
+                }
+            )
+
+
 def install_slash_commands(
     *,
     execute: bool,
@@ -824,6 +868,15 @@ def install_slash_commands(
     pi_user_home: str | None = None,
 ) -> dict[str, Any]:
     specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=include_legacy_aliases)
+    # Host skill roots install one canonical facade per outcome; the legacy
+    # /loop-global-* aliases stay in the catalog (and in a host's native slash
+    # registry), but their managed skill files are retired below.
+    canonical_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=False)
+    legacy_alias_specs = [
+        spec
+        for spec in _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
+        if str(spec["name"]).startswith("loop-global-")
+    ]
     effective_surfaces = _normalize_surfaces(surfaces)
     codex_root = _codex_home(codex_home)
     claude_root = _claude_home(claude_home)
@@ -860,9 +913,8 @@ def install_slash_commands(
     if "codex" in effective_surfaces:
         # Keep aliases in the catalog and native slash hosts, but expose one
         # canonical skill per outcome in Codex's skill picker.
-        codex_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=False)
-        legacy_specs = [s for s in _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
-                        if str(s["name"]).startswith("loop-global-")]
+        codex_specs = canonical_specs
+        legacy_specs = legacy_alias_specs
         for spec in legacy_specs:
             for path in (codex_root / "skills" / spec["name"] / "SKILL.md",
                          codex_root / "skills" / spec["name"] / "agents" / "openai.yaml",
@@ -1013,7 +1065,7 @@ def install_slash_commands(
 
     if "claude-code" in effective_surfaces:
         skills_dir = claude_root / "skills"
-        for spec in specs:
+        for spec in canonical_specs:
             path = skills_dir / str(spec["name"]) / "SKILL.md"
             if uninstall:
                 status = _retire_status(path, execute=execute)
@@ -1048,6 +1100,14 @@ def install_slash_commands(
                     "invoke_as": [str(spec["command"])],
                 }
             )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=skills_dir,
+            surface="claude-code",
+            host_surfaces=["claude-code"],
+            execute=execute,
+        )
 
     if "gemini" in effective_surfaces:
         # Gemini CLI discovers user skills from GEMINI_HOME/skills. Files are
@@ -1057,7 +1117,7 @@ def install_slash_commands(
         # status and the dry run that every other surface reports — and it would
         # need the `gemini` binary on PATH to install a file it already has.
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=gemini_root / "skills",
             surface="gemini",
@@ -1065,6 +1125,14 @@ def install_slash_commands(
             mechanism="gemini_cli_skills",
             execute=execute,
             uninstall=uninstall,
+        )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=gemini_root / "skills",
+            surface="gemini",
+            host_surfaces=["gemini-cli"],
+            execute=execute,
         )
 
     if "agy" in effective_surfaces:
@@ -1075,7 +1143,7 @@ def install_slash_commands(
         # and the root belongs to agy alone (Gemini CLI reads ~/.gemini/skills),
         # so the managed skill surfaces never collide across different hosts.
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=agy_root / "skills",
             surface="agy",
@@ -1083,6 +1151,15 @@ def install_slash_commands(
             mechanism="agy_cli_skills",
             execute=execute,
             uninstall=uninstall,
+            flat=True,
+        )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=agy_root / "skills",
+            surface="agy",
+            host_surfaces=["agy"],
+            execute=execute,
             flat=True,
         )
 
@@ -1096,7 +1173,7 @@ def install_slash_commands(
         # .kiro/prompts wins over a skill by Kiro's own resolution order; the
         # installer never touches the prompt directories.
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=kiro_root / "skills",
             surface="kiro-cli",
@@ -1105,6 +1182,14 @@ def install_slash_commands(
             execute=execute,
             uninstall=uninstall,
             invoke_prefix="/",
+        )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=kiro_root / "skills",
+            surface="kiro-cli",
+            host_surfaces=["kiro-cli"],
+            execute=execute,
         )
         # Kiro's default agent loads KIRO_HOME/settings/mcp.json, so the same
         # session that runs `/loopx` gets the typed should_run/claim/complete
@@ -1135,7 +1220,7 @@ def install_slash_commands(
         # include .claude/skills and .codex/skills, but relying on another
         # host's directory would break the moment that host is uninstalled).
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=cursor_root / "skills",
             surface="cursor",
@@ -1143,6 +1228,14 @@ def install_slash_commands(
             mechanism="cursor_skills",
             execute=execute,
             uninstall=uninstall,
+        )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=cursor_root / "skills",
+            surface="cursor",
+            host_surfaces=["cursor-agent"],
+            execute=execute,
         )
         # `cursor-agent mcp` can list and enable servers but not add them, so
         # the entry is merged into CURSOR_HOME/mcp.json. Only our own `loopx`
@@ -1171,7 +1264,7 @@ def install_slash_commands(
     if "zcode" in effective_surfaces:
         # ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills).
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=zcode_root / "skills",
             surface="zcode",
@@ -1181,13 +1274,21 @@ def install_slash_commands(
             uninstall=uninstall,
             invoke_prefix="$",
         )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=zcode_root / "skills",
+            surface="zcode",
+            host_surfaces=["zcode"],
+            execute=execute,
+        )
 
     if "opencode" in effective_surfaces:
         # OpenCode reads global skills from OPENCODE_CONFIG_DIR/skills. The
         # static command facade below stays as it is — a command is something
         # the user types, a skill is something the model can reach for itself.
         _install_skill_facade(
-            specs=specs,
+            specs=canonical_specs,
             installed=installed,
             skills_dir=opencode_root / "skills",
             surface="opencode",
@@ -1195,6 +1296,14 @@ def install_slash_commands(
             mechanism="opencode_skills",
             execute=execute,
             uninstall=uninstall,
+        )
+        _retire_legacy_alias_skills(
+            alias_specs=legacy_alias_specs,
+            installed=installed,
+            skills_dir=opencode_root / "skills",
+            surface="opencode",
+            host_surfaces=["opencode"],
+            execute=execute,
         )
         commands_dir = opencode_root / "commands"
         plugin_path = opencode_root / "plugins" / "loopx-goal.js"
@@ -1506,6 +1615,7 @@ def install_slash_commands(
         "codex_skill_reconciliation": codex_reconciliation,
         "notes": [
             "Codex does not currently support user-defined native top-level slash commands; use explicit skill invocation through `$loopx` or `/skills`.",
+            "Every host skill root installs one canonical facade per outcome. Managed legacy /loop-global-* skill files are retired on install and uninstall while their catalog entries and native slash-command files stay available, so a host import cannot copy a deprecated facade into a shared skill root.",
             "Explicit LoopX command-facade skills use agents/openai.yaml policy allow_implicit_invocation=false and remain distinct from richer workflow skills such as loopx-project.",
             "Claude Code discovers user skills from CLAUDE_HOME/skills and exposes each skill name as a slash command.",
             "Gemini CLI discovers user skills from GEMINI_HOME/skills with the same SKILL.md front matter; files are written directly because `gemini skills install` copies from a git URL or an existing local path and hands the copy to the host, which would lose the managed marker, per-file status and dry-run reporting every other surface has.",
