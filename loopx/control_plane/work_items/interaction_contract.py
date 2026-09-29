@@ -205,6 +205,7 @@ def finalize_user_gate_notification_cooldown(
     ) = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> None:
     scheduler_hint = payload.get("scheduler_hint")
     cooldown = (
@@ -226,6 +227,7 @@ def finalize_user_gate_notification_cooldown(
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        registry_path=registry_path,
     )
     attach_user_action_compat_fields(payload)
 
@@ -1276,6 +1278,7 @@ def _build_interaction_cli_channel(
     capability_reentry: dict[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> dict[str, Any]:
     if unadmitted_action_selection(payload):
         return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
@@ -1336,7 +1339,7 @@ def _build_interaction_cli_channel(
             auxiliary_scheduler_args = ""
         if selected_monitor_id:
             command_prefix = selection.render_cli_command_prefix(
-                runtime_root=runtime_root
+                runtime_root=runtime_root, registry_path=registry_path,
             )
             agent_identity = (
                 payload.get("agent_identity")
@@ -1388,14 +1391,23 @@ def _build_interaction_cli_channel(
                         "reason_code": "auxiliary_monitor_turn_instance_id_missing",
                     }
                 )
+            elif (payload.get("requires_user_action") is True and
+                  (not isinstance(auxiliary_monitor.get("gate_scope"), Mapping) or
+                   auxiliary_monitor["gate_scope"].get("state") != "independent")):
+                auxiliary_projection.update(availability="gate_scope_blocked",
+                    reason_code="auxiliary_monitor_gate_scope_unqualified")
             else:
+                monitor = next((row for row in auxiliary_monitor.get("monitor_due_items", [])
+                    if isinstance(row, Mapping) and row.get("todo_id") == selected_monitor_id), {})
+                target_args = (f" --target-key {shlex.quote(str(monitor['target_key']))}"
+                    if monitor.get("target_key") else "")
                 command = (
                     f"{command_prefix} quota monitor-poll --goal-id "
                     f"{shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
                     f"{_scoped_cli_args(agent_identity, available_capabilities=available_capabilities)}"
                     f"{auxiliary_scheduler_args} --turn-instance-id "
                     f"{shlex.quote(safe_turn_instance_id)} --todo-id "
-                    f"{shlex.quote(selected_monitor_id)} --use-current-task-lease --result-hash "
+                    f"{shlex.quote(selected_monitor_id)}{target_args} --use-current-task-lease --result-hash "
                     f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
                 )
                 auxiliary_projection.update(
@@ -1561,6 +1573,7 @@ def build_interaction_contract(
     ) = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> InteractionContractPacket:
     execution_obligation = (
         payload.get("execution_obligation")
@@ -1643,6 +1656,7 @@ def build_interaction_contract(
             capability_reentry=capability_reentry,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         ),
     }
     response_plan = _build_interaction_response_plan(

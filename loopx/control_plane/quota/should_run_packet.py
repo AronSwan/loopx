@@ -1494,6 +1494,7 @@ def _build_quota_should_run_payload(
         scheduler_execution_context=prepared.resolved_scheduler_context,
         turn_instance_id=turn_instance_id,
         runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload),
+        registry_path=prepared.status_payload.get("registry"),
     )
     payload["scheduler_hint"] = _scheduler_hint(
         payload,
@@ -1522,6 +1523,7 @@ def _build_quota_should_run_payload(
         scheduler_execution_context=prepared.resolved_scheduler_context,
         turn_instance_id=turn_instance_id,
         runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload),
+        registry_path=prepared.status_payload.get("registry"),
     )
     payload["long_task_cadence_hint"] = reconcile_long_task_cadence_hint(
         payload.get("long_task_cadence_hint"),

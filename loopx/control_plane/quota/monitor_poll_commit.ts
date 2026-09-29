@@ -91,6 +91,7 @@ interface MonitorDecision extends JsonObject {
   due_monitor_candidates: JsonObject[];
   registry_due_monitor: JsonObject;
   auxiliary_settlement_todo: JsonObject | null;
+  auxiliary_gate_scope: JsonObject | null;
 }
 
 interface MonitorObservation extends JsonObject {
@@ -313,6 +314,8 @@ function decisionObject(value: unknown): MonitorDecision {
       decision.registry_due_monitor,
       "decision.registry_due_monitor",
     ),
+    auxiliary_gate_scope: decision.auxiliary_gate_scope == null ? null :
+      requiredObject(decision.auxiliary_gate_scope, "decision.auxiliary_gate_scope"),
     auxiliary_settlement_todo: decision.auxiliary_settlement_todo == null ? null :
       requiredObject(decision.auxiliary_settlement_todo, "decision.auxiliary_settlement_todo"),
   };
@@ -589,7 +592,13 @@ async function auxiliaryMonitorAllowed(
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;
   // lifecycle lookup must not become a second should-run bypass.
-  return !decision.requires_user_action && dueMonitorAllowed(decision, observation) &&
+  const gateScope = decision.auxiliary_gate_scope;
+  const independentGate = decision.safe_bypass_allowed &&
+    decision.safe_bypass_kind === "scoped_user_gate_fallback" &&
+    gateScope?.schema_version === "todo_gate_scope_projection_v0" &&
+    gateScope.agent_id === decision.agent_id && gateScope.todo_id === monitor.todo_id &&
+    gateScope.state === "independent" && typeof gateScope.gate_count === "number" && Number.isInteger(gateScope.gate_count) && gateScope.gate_count > 0;
+  return (!decision.requires_user_action || independentGate) && dueMonitorAllowed(decision, observation) &&
     monitor.due === true && candidateMatches(monitor, observation) &&
     (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
 }
