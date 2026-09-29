@@ -188,9 +188,11 @@ function digestEnvelope(pattern: string): Envelope | null {
  * One lexical scope. A name maps to the declarations seen for it *before the current point in
  * document order*; a `null` init is a blocker - a parameter, an import, `let`/`var`, a second
  * declaration of the same name - and a blocker stops the search instead of falling through to an
- * outer binding, so shadowing cannot silently substitute a different value.
+ * outer binding, so shadowing cannot silently substitute a different value. `ctor` marks a name that
+ * denotes the built-in `RegExp` itself rather than a foldable string, which is how a name bound by
+ * destructuring (`const { RegExp: MAKE } = globalThis`) still resolves.
  */
-type Binding = { init: ts.Expression | null; at: Scope };
+type Binding = { init: ts.Expression | null; at: Scope; ctor: boolean };
 type Scope = { parent: Scope | null; vars: Map<string, Binding[]> };
 
 const SCOPE_OPENERS = new Set<ts.SyntaxKind>([
@@ -211,10 +213,10 @@ const SCOPE_OPENERS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.SetAccessor,
 ]);
 
-function declare(scope: Scope, name: string, init: ts.Expression | null): void {
+function declare(scope: Scope, name: string, init: ts.Expression | null, ctor = false): void {
   const seen = scope.vars.get(name);
-  if (seen === undefined) scope.vars.set(name, [{ init, at: scope }]);
-  else seen.push({ init, at: scope });
+  if (seen === undefined) scope.vars.set(name, [{ init, at: scope, ctor }]);
+  else seen.push({ init, at: scope, ctor });
 }
 
 /** The innermost binding for a name, or null when it is absent, blocked or ambiguous. */
@@ -324,12 +326,43 @@ function isImportSpecifier(node: ts.Node): boolean {
   return false;
 }
 
-/** Every RegExp created in this source: literal, `new RegExp(...)` or `RegExp(...)`. */
+/**
+ * Every matcher this source can be shown to create: a regex literal, or a construction of the
+ * built-in `RegExp` reached by name, by a global receiver, by a `bind` hop, or by a const or
+ * destructured alias of those - plus a call that names the built-in in its arguments. A pattern
+ * assembled only at runtime is reported as unfoldable when the construction itself is recognised,
+ * and is outside the model when the constructor is (both pinned in the matrices below).
+ */
 /** The receivers `RegExp` can legitimately be reached through. */
 const GLOBAL_RECEIVERS = new Set(["globalThis", "window", "global", "self"]);
 
 /** `Function.prototype` hops that keep the built-in as the constructor. */
 const FUNCTION_METHODS = new Set(["call", "apply", "bind"]);
+
+/**
+ * A destructured name holds no foldable string, so it is a blocker - except for the one shape that
+ * still denotes the built-in: `const { RegExp: MAKE } = globalThis` / `const { RegExp } = globalThis`.
+ */
+function declarePatternBindings(scope: Scope, node: ts.VariableDeclaration, source: ts.SourceFile): void {
+  const fromGlobalObject =
+    node.initializer !== undefined &&
+    ts.isIdentifier(node.initializer) &&
+    GLOBAL_RECEIVERS.has(node.initializer.text);
+  if (!ts.isObjectBindingPattern(node.name)) {
+    for (const name of boundNames(node.name)) declare(scope, name, null);
+    return;
+  }
+  for (const element of node.name.elements) {
+    if (!ts.isBindingElement(element)) continue;
+    const key = element.propertyName;
+    const imported = key === undefined
+      ? (ts.isIdentifier(element.name) ? element.name.text : "")
+      : key.getText(source).replace(/^["']|["']$/g, "");
+    for (const local of boundNames(element.name)) {
+      declare(scope, local, null, fromGlobalObject && imported === "RegExp");
+    }
+  }
+}
 
 /**
  * Does this callee denote the built-in `RegExp`? Identifier spelling, a global receiver
@@ -353,7 +386,18 @@ function calleeNamesRegExp(
   if (ts.isIdentifier(expr)) {
     if (expr.text === "RegExp") return true;
     const found = binding(scope, expr.text);
-    return found !== null && found.init !== null && calleeNamesRegExp(found.init, found.at, source, depth + 1);
+    if (found === null) return false;
+    if (found.ctor) return true;
+    return found.init !== null && calleeNamesRegExp(found.init, found.at, source, depth + 1);
+  }
+  if (ts.isCallExpression(expr)) {
+    // `RegExp.bind(null)` hands back a function that still constructs with the built-in, so an alias
+    // taken through `bind` is the same owner. `call`/`apply` return a match result, so they are not.
+    return (
+      ts.isPropertyAccessExpression(expr.expression) &&
+      expr.expression.name.text === "bind" &&
+      calleeNamesRegExp(expr.expression, scope, source, depth + 1)
+    );
   }
   if (ts.isPropertyAccessExpression(expr)) {
     if (ts.isIdentifier(expr.expression) && GLOBAL_RECEIVERS.has(expr.expression.text)) {
@@ -424,9 +468,10 @@ function matchersInText(text: string, file: string): Matcher[] {
 
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const foldable = isConstDeclaration(node) && node.initializer !== undefined && !written.has(node.name.text);
-      declare(inner, node.name.text, foldable ? node.initializer : null);
+      const ctor = foldable && calleeNamesRegExp(node.initializer, inner, source);
+      declare(inner, node.name.text, foldable ? node.initializer : null, ctor);
     } else if (ts.isVariableDeclaration(node)) {
-      for (const name of boundNames(node.name)) declare(inner, name, null);
+      declarePatternBindings(inner, node, source);
     }
     if (ts.isFunctionLike(node)) {
       for (const parameter of node.parameters) {
@@ -511,7 +556,7 @@ function describe(site: Matcher): string {
   return `${site.file}:${site.line} ${site.spelling.slice(0, 60)}`;
 }
 
-test("the whole-value digest shape is stated once, outside recorded exceptions", () => {
+test("no second whole-value digest matcher is reachable in the static model, outside recorded exceptions", () => {
   const offenders = packageMatchers().filter(
     (site) =>
       site.envelope !== null &&
@@ -521,7 +566,7 @@ test("the whole-value digest shape is stated once, outside recorded exceptions",
   assert.deepEqual(offenders.map(describe), []);
 });
 
-test("restating the shape is the same violation in every spelling", () => {
+test("restating the shape is the same violation in every form the constructor is reached by", () => {
   // The bypass that made the first two versions of this guard unable to keep their
   // promise: a consumer re-derives the shape without writing it as one literal, so
   // behaviour is unchanged and a source-text scan sees nothing. The model here is the
@@ -603,6 +648,26 @@ test("restating the shape is the same violation in every spelling", () => {
     ["built-in named as an argument", 'const CHECK = Reflect.construct(RegExp, ["^[0-9a-f]{64}$"]);\n'],
     ["Function.prototype hop", 'const CHECK = RegExp.call(null, "^[0-9a-f]{64}$");\n'],
     [
+      "alias of an alias of the built-in",
+      "const A = RegExp;\nconst B = A;\nconst CHECK = new B(\"^[0-9a-f]{64}$\");\n",
+    ],
+    [
+      "alias taken through RegExp.bind",
+      "const MAKE = RegExp.bind(null);\nconst CHECK = new MAKE(\"^[0-9a-f]{64}$\");\n",
+    ],
+    [
+      "renamed destructure from the global object",
+      "const { RegExp: MAKE } = globalThis;\nconst CHECK = new MAKE(\"^[0-9a-f]{64}$\");\n",
+    ],
+    [
+      "shorthand destructure from the global object",
+      "const { RegExp } = globalThis;\nconst CHECK = new RegExp(\"^[0-9a-f]{64}$\");\n",
+    ],
+    [
+      "Function.prototype hop on the built-in",
+      "const CHECK = RegExp.apply(null, [\"^[0-9a-f]{64}$\"]);\n",
+    ],
+    [
       "method body with a same-named parameter",
       "class Holder {\n" +
         "  check(pattern: string): boolean {\n" +
@@ -637,6 +702,8 @@ test("a binding that cannot be trusted fails closed instead of folding to a neig
       'const DIGEST = "^[0-9a-f]{64}$";\nconst DIGEST = "^unrelated$";\nconst CHECK = new RegExp(DIGEST);\n',
     ],
     ["name bound to another module", 'import { DIGEST } from "./elsewhere.ts";\nconst CHECK = new RegExp(DIGEST);\n'],
+    ["pattern reached through an array element", 'const PARTS = ["^[0-9a-f]{64}$"];\nconst CHECK = new RegExp(PARTS[0]);\n'],
+    ["pattern reached through an object property", 'const SPEC = { p: "^[0-9a-f]{64}$" };\nconst CHECK = new RegExp(SPEC.p);\n'],
   ];
   for (const [name, source] of ambiguous) {
     const sites = matchersInText(source, "synthetic.ts").filter((site) => site.spelling.startsWith("new RegExp"));
@@ -663,6 +730,10 @@ test("a matcher that answers a different question is not a restatement", () => {
     [
       "an unrelated constructor taking a string",
       'const CACHE = new Store("^sha256:[0-9a-f]{64}$");\n',
+    ],
+    [
+      "constructor assembled from a code string (out of the static model)",
+      "const MAKE = Function(\"return new RegExp('^[0-9a-f]{64}$')\");\nMAKE();\n",
     ],
     [
       "constructor reached through a runtime value (out of the static model)",
@@ -740,7 +811,7 @@ test("an import of the owner can only name a canonical export", () => {
   }
 });
 
-test("every unfoldable construction is declared, and none of them hides a digest", () => {
+test("every recognised construction whose value cannot be folded is declared, and none hides a digest", () => {
   const derived = new Map<string, number>();
   for (const site of packageMatchers()) {
     if (site.pattern !== null || site.via !== "constructor") continue;
