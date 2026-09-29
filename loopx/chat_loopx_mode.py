@@ -71,6 +71,23 @@ GUIDANCE = (
     "Pause/block when tools, authorization or evidence are insufficient."
 )
 
+WAKE_OPERATIONS = {"configure", "start", "resume", "pause", "exit", "message"}
+
+
+def execution_guidance(turn: dict | None) -> str:
+    """GUIDANCE plus the exact reason a host-initiated Turn started."""
+    request = (turn or {}).get("loopx_request") or {}
+    wake = request.get("wake") if request.get("operation") == "wake" else None
+    if not isinstance(wake, dict) or not wake.get("operation_id"):
+        return GUIDANCE
+    return (
+        GUIDANCE
+        + "\nThis Turn started because delegated operation "
+        + str(wake["operation_id"])
+        + " returned an accepted result. Read it with action=read before continuing;"
+        " member acceptance is not Goal completion."
+    )
+
 
 class ChatLoopXMode:
     def __init__(self, controller):
@@ -288,6 +305,8 @@ class ChatLoopXMode:
             "delivery_mode",
         }:
             raise ValueError("unknown LoopX mode input")
+        if body.get("operation") not in WAKE_OPERATIONS:
+            raise ValueError("unknown LoopX mode operation")
         with self._lock(session_id):
             if body.get("operation") == "message":
                 return self.message(session_id, body)
@@ -426,6 +445,110 @@ class ChatLoopXMode:
                 self.store.update_session(session_id, loopx_mode=mode)
                 raise
             return {**self.snapshot(session_id), "turn_id": turn["turn_id"]}
+
+    def wake(self, session_id, path, *, work_dir, objective):
+        """Continue the lead once a delegated result is accepted; the owner does not poll.
+
+        ``path`` is the accepted operation record.  The session lock is taken
+        before the record lock, the same order the in-Turn tool uses, so an
+        in-Turn observation and a host wake never race.  The receipt written
+        beside the result is a fact distinct from the result itself.
+        """
+        from .collaboration_mcp import record_wake
+
+        with self._lock(session_id):
+            return record_wake(
+                path,
+                lambda intent: self._wake_decision(
+                    session_id, intent, work_dir=work_dir, objective=objective
+                ),
+            )
+
+    def _wake_decision(self, session_id, intent, *, work_dir, objective):
+        intent_id = intent.get("intent_id")
+        if not isinstance(intent_id, str) or len(intent_id) < 32:
+            raise ValueError("invalid wake intent")
+        client_turn_id = "wake-" + intent_id[:32]
+        now = time.time()
+
+        def settled(state, reason):
+            if state == "pending" and intent.get("reason") == reason:
+                return None  # unchanged: no churn on the record
+            return {
+                **intent,
+                "state": state,
+                "reason": reason,
+                **({"refused_at": now} if state == "refused" else {"checked_at": now}),
+            }
+
+        try:
+            session = self._session(session_id)
+        except ValueError:
+            return settled("refused", "no_wake_owner")
+        # A crash after submit but before the receipt write recovers here:
+        # the exact client turn already exists, so it is recorded once.
+        existing = self.store.turn_for_client(session_id, client_turn_id)
+        if existing:
+            return self._woken(intent, session_id, existing["turn_id"], created=False, now=now)
+        mode = session.get("loopx_mode") or {}
+        settings = mode.get("settings") or {}
+        try:
+            goal = self._goal(session)
+        except ValueError:
+            goal = None
+        binding_valid = False
+        if goal is not None and settings.get("agent_id"):
+            try:
+                self._execution(session, settings)
+                binding_valid = True
+            except (ValueError, KeyError, OSError):
+                binding_valid = False
+        decision = effect_runtime_result(
+            "collaboration.chat_mode",
+            {
+                "session": session,
+                "origin": "host",
+                "operation": "wake",
+                "settings": settings,
+                "native": session.get("native_goal") or {},
+                "registered_agents": registered_agent_ids_for_goal(goal) if goal else [],
+                "goal_active": goal is not None
+                and goal.get("status") not in {"stopped", "archived"},
+                "execution_binding_valid": binding_valid,
+            },
+        )
+        if decision["state"] != "admitted":
+            return settled(decision["state"], decision["reason"])
+        turn, created = self.controller.submit_turn(
+            session_id=session_id,
+            client_turn_id=client_turn_id,
+            message=f"/goal resume --tokens {settings['token_budget']}",
+            attachments=[],
+            work_dir=work_dir,
+            objective=objective,
+            loopx_execution=True,
+            loopx_request={
+                "operation": "wake",
+                "settings": settings,
+                "wake": {
+                    key: intent.get(key)
+                    for key in ("intent_id", "operation_id", "request_id")
+                },
+            },
+        )
+        return self._woken(intent, session_id, turn["turn_id"], created=created, now=now)
+
+    @staticmethod
+    def _woken(intent, session_id, turn_id, *, created, now):
+        receipt = {key: value for key, value in intent.items() if key not in {"reason", "checked_at"}}
+        return {
+            **receipt,
+            "state": "woken",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "created": created,
+            "woken_at": now,
+        }
 
     def recover(self, session_id, adapter):
         driver = CodexGoalDriver(adapter.session)

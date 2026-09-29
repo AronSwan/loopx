@@ -951,11 +951,10 @@ class ChatRuntimeController:
                     message=message,
                     attachments=attachments,
                     display_message=(
-                        (
-                            "开启 LoopX 模式，持续推进当前 Goal。"
-                            if (loopx_request or {}).get("operation") == "start"
-                            else "恢复 LoopX 模式。"
-                        )
+                        {
+                            "start": "开启 LoopX 模式，持续推进当前 Goal。",
+                            "wake": "成员结果已验收，继续推进 LoopX 模式。",
+                        }.get(str((loopx_request or {}).get("operation")), "恢复 LoopX 模式。")
                         if loopx_execution
                         else None
                     ),
@@ -1463,9 +1462,9 @@ class ChatRuntimeController:
                         return
                     execution_context = None
                     if loopx_execution:
-                        from .chat_loopx_mode import GUIDANCE
+                        from .chat_loopx_mode import execution_guidance
                         execution_lock = self.loopx_mode.prepare(session_id, turn_id, adapter, adapter.session.read_tool_handler, event_sink)
-                        execution_context = GUIDANCE + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
+                        execution_context = execution_guidance(self.store.load_turn(session_id, turn_id)) + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
                     response = adapter.goal_driver.run(native_command, event_sink, execution_context=execution_context)
                 finally:
                     if execution_lock is not None:
