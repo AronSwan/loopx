@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -100,6 +100,43 @@ test("message receipt and model return do not imply accepted work", () => {
   assert.throws(() => transitionDelegationObservation({from: "rejected", to: "running"}), /transition/);
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted",
     canonical_done: true, acceptance_ready: true, artifacts_current: true}), {status: "accepted"});
+});
+
+test("stopped is terminal and reachable only from open observations", () => {
+  for (const from of ["prepared", "running", "turn_returned"])
+    assert.deepEqual(transitionDelegationObservation({from, to: "stopped"}), {status: "stopped"});
+  assert.deepEqual(transitionDelegationObservation({from: "stopped", to: "stopped"}), {status: "stopped"});
+  for (const from of ["accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from, to: "stopped"}), /transition/);
+  for (const to of ["running", "turn_returned", "accepted", "rejected"])
+    assert.throws(() => transitionDelegationObservation({from: "stopped", to}), /transition/);
+  const observation = {operation_id: "op-1", request_id: "req", agent_id: "reviewer", todo_id: "todo_review",
+    status: "stopped", worker_active: false, recovery_required: false};
+  assert.equal(delegationInventoryItem({record: {record_id: "a".repeat(64), operation_id: "op-1"},
+    observation}).status, "stopped");
+});
+
+test("a stop settles only on an acknowledgement plus free locks; time alone proves nothing", () => {
+  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, lane_lock_free: false};
+  assert.deepEqual(decideDelegationStop(open), {phase: "requested", terminal: false, reason: "awaiting_acknowledgement"});
+  assert.deepEqual(decideDelegationStop({...open, timed_out: true}),
+    {phase: "requested", terminal: false, reason: "holder_still_running_after_grace"});
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, timed_out: true}),
+    {phase: "requested", terminal: false, reason: "holder_still_running_after_grace"});
+  assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, lane_lock_free: true}),
+    {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"});
+  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, lane_lock_free: false};
+  assert.deepEqual(decideDelegationStop(acked), {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
+  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true}),
+    {phase: "acknowledged", terminal: false, reason: "turn_lane_still_held"});
+  assert.deepEqual(decideDelegationStop({...acked, phase: "requested", operation_lock_free: true, lane_lock_free: true}),
+    {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"});
+  assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true, lane_lock_free: true, timed_out: true}),
+    {phase: "settled", terminal: true, reason: "acknowledged_and_locks_released"});
+  for (const patch of [{phase: "settled"}, {phase: "unknown"}, {phase: "noop"}, {acknowledged: "yes"},
+    {operation_lock_free: 1}, {lane_lock_free: undefined}, {timed_out: "later"},
+    {phase: "acknowledged", acknowledged: false}])
+    assert.throws(() => decideDelegationStop({...open, ...patch}));
 });
 
 test("a false rejection can reopen only for exact validated settlement recovery", () => {

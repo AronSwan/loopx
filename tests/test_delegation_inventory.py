@@ -56,6 +56,13 @@ def test_corruption_and_stopped_worker_do_not_hide_healthy_sibling(service, monk
     assert by_id["stopped"]["recovery_required"]
     assert len(page["items"]) == 4 and not page["page_readback_complete"]
     assert sum(row["status"] == "unavailable" for row in page["items"]) == 2
+    # A stop receipt beside its record is not another record and reads back as stopped.
+    assert runner.stop("healthy", execute=True)["phase"] == "settled"
+    assert runner._stop_path(runner.path("healthy")).exists()
+    page = runner.operations()
+    by_id = {row["operation_id"]: row for row in page["items"] if row["operation_id"]}
+    assert len(page["items"]) == 4 and by_id["healthy"]["status"] == "stopped"
+    assert not by_id["healthy"]["recovery_required"]
 
 
 def test_unknown_requester_and_unreadable_source_are_not_empty_inventory(service, monkeypatch):

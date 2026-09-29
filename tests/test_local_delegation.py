@@ -1,6 +1,7 @@
 """Production delegation/Turn/TS completion with an explicit fixture model host."""
 import json
 import asyncio
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,13 +17,13 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "managed-research-team"))
 import research_team as demo  # noqa: E402
 from test_managed_research_scenario import fixture  # noqa: E402
-from loopx.collaboration_mcp import Delegations  # noqa: E402
+from loopx.collaboration_mcp import DelegationFenced, Delegations  # noqa: E402
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
-from loopx.file_lock import exclusive_file_lock  # noqa: E402
+from loopx.file_lock import exclusive_file_lock, try_exclusive_file_lock  # noqa: E402
 
 
-HOST = '''import json, sys, time
+HOST = '''import json, os, sys, time
 from pathlib import Path
 from loopx.control_plane.turn_driver.host_candidate import build_result
 from loopx.control_plane.collaboration.inbox import acknowledge
@@ -35,6 +36,7 @@ actor = envelope['agent_id']
 counter = workspace / 'host-invocations'
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
 if (root / 'hold').exists():
+    (root / 'host-pid').write_text(str(os.getpid()))
     (root / 'host-started').touch()
     while not (root / 'release').exists(): time.sleep(0.1)
 delegation = json.loads((workspace / 'DELEGATION.json').read_text())
@@ -169,6 +171,7 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 assert not (root / "host-started").exists()
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
+                assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
                 assert not result.isError
@@ -197,6 +200,13 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     assert len(returned) == 1
     assert returned[0]["decision"] == "adopt"
     assert wait(reconnected)["artifacts"] == result["artifacts"]
+    # Accepted work cannot be stopped: nothing is written and the receipt repeats exactly.
+    noop = reconnected.stop("analysis-1", execute=True)
+    assert noop["phase"] == "noop" and noop["status"] == "accepted" and noop["stop"] is None
+    assert reconnected.stop("analysis-1", execute=True) == noop
+    assert not reconnected._stop_path(reconnected.path("analysis-1")).exists()
+    assert wait(reconnected)["artifacts"] == result["artifacts"]
+    assert "stop" not in reconnected.read("analysis-1")
     changed_brief = {**brief(), "purpose": "Changed instruction"}
     with pytest.raises(ValueError, match="identity conflict"):
         reconnected.start("analysis", "analysis-1", changed_brief)
@@ -265,3 +275,159 @@ def test_rejected_operation_publishes_reason_with_terminal_state(service, monkey
     assert len(terminal_reads) == 1
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
     assert returns(runner.root, runner.goal_id, "lead")["items"] == []
+
+
+def until(predicate, timeout=45):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
+
+
+def process_gone(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        return "State:\tZ" in Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        return True
+
+
+def start_held_worker(service, operation="analysis-stop"):
+    root, runner = service
+    (root / "hold").touch()
+    runner.start("analysis", operation, brief())
+    assert until(lambda: (root / "host-started").exists()), _read(runner.path(operation))
+    return int((root / "host-pid").read_text())
+
+
+def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service, monkeypatch):
+    """The detached worker acknowledges SIGTERM under its own lock; time proves nothing."""
+    root, runner = service
+    host_pid = start_held_worker(service)
+    path = runner.path("analysis-stop")
+    before = _read(path)
+    assert before["status"] == "running" and before["worker"]["pid"] == before["worker"]["pgid"]
+    receipt = runner.stop("analysis-stop", execute=True)
+    assert receipt["phase"] == "settled" and receipt["status"] == "stopped", receipt
+    stop = receipt["stop"]
+    assert stop["requested_by"] == "lead" and stop["requested_status"] == "running"
+    assert stop["worker"]["pid"] == before["worker"]["pid"]
+    assert stop["ack"]["pid"] == before["worker"]["pid"] and stop["ack"]["source"] == "SIGTERM"
+    assert stop["ack"]["observed_status"] == "running" and stop["ack"]["turn_key"]
+    assert stop["settled"]["operation_lock_free"] and stop["settled"]["lane_lock_free"]
+    assert stop["settled"]["turn_journal_status"] == "in_progress"
+    assert stop["lease"] == {"required": False, "released": None}
+    # The acknowledged record is final: nobody writes it again, the Todo stays open,
+    # the host process group is gone and the member's Turn lane can be taken.
+    frozen = path.read_bytes()
+    assert until(lambda: process_gone(host_pid), timeout=20)
+    assert until(lambda: process_gone(before["worker"]["pid"]), timeout=20)
+    binding = runner.binding("analysis")
+    with try_exclusive_file_lock(runner._lane_target(binding)) as held:
+        assert held is not None
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+    assert not (root / "analyst" / "initial" / "DELEGATION.json").exists()
+    assert path.read_bytes() == frozen
+    assert runner.stop("analysis-stop", execute=True) == receipt
+    observed = runner.read("analysis-stop")
+    assert observed["status"] == "stopped" and not observed["recovery_required"]
+    assert observed["stop"] == {"stop_id": stop["stop_id"], "phase": "settled"}
+    assert runner.wait("analysis-stop")["status"] == "stopped"
+    monkeypatch.setattr(runner, "_spawn", lambda _: pytest.fail("stopped work must not respawn"))
+    with pytest.raises(ValueError, match="start a new operation id"):
+        runner.resume("analysis-stop")
+    assert path.read_bytes() == frozen
+    page = runner.operations()
+    assert page["page_readback_complete"] and page["items"][0]["status"] == "stopped"
+    assert returns(runner.root, runner.goal_id, "lead")["items"] == []
+
+
+def test_stop_without_a_holder_is_acknowledged_by_the_requester(service, monkeypatch):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-idle", brief())
+    receipt = runner.stop("analysis-idle", execute=True)
+    assert receipt["phase"] == "settled" and receipt["status"] == "stopped"
+    assert receipt["stop"]["worker"] is None and receipt["stop"]["requested_status"] == "prepared"
+    assert receipt["stop"]["ack"]["pid"] == os.getpid() and receipt["stop"]["ack"]["source"] == "requester"
+    assert receipt["stop"]["settled"]["turn_journal_status"] is None
+    frozen = runner.path("analysis-idle").read_bytes()
+    with pytest.raises(ValueError, match="start a new operation id"):
+        runner.resume("analysis-idle")
+    runner.execute("analysis-idle")  # a late worker finds terminal work and launches nothing
+    assert runner.path("analysis-idle").read_bytes() == frozen
+    assert not (root / "host-started").exists()
+    assert runner.stop("analysis-idle", execute=True) == receipt
+    with pytest.raises(ValueError, match="requires execute"):
+        runner.stop("analysis-idle", execute=False)
+    with pytest.raises(ValueError, match="unknown delegation operation"):
+        runner.stop("never-started", execute=True)
+
+
+def test_worker_killed_before_acknowledging_is_unknown_not_settled(service, monkeypatch):
+    """A vanished holder never becomes a settlement; the stop still fences resume."""
+    import signal
+
+    root, runner = service
+    host_pid = start_held_worker(service)
+    path = runner.path("analysis-stop")
+    worker = _read(path)["worker"]
+
+    def kill_without_grace(target, stop):
+        assert stop["worker"]["pgid"] == worker["pgid"] != os.getpgid(0)
+        os.killpg(worker["pgid"], signal.SIGKILL)
+        assert until(lambda: runner._operation_lock_free(target), timeout=20)
+
+    monkeypatch.setattr(runner, "_signal_worker", kill_without_grace)
+    receipt = runner.stop("analysis-stop", execute=True)
+    assert receipt["phase"] == "unknown" and receipt["status"] == "running", receipt
+    assert receipt["stop"]["ack"] is None and receipt["stop"]["settled"]["operation_lock_free"]
+    assert receipt["stop"]["settled"]["turn_journal_status"] == "in_progress"
+    assert until(lambda: process_gone(host_pid), timeout=20)
+    assert runner.stop("analysis-stop", execute=True) == receipt
+    with pytest.raises(ValueError, match="start a new operation id"):
+        runner.resume("analysis-stop")
+    assert runner.read("analysis-stop")["stop"]["phase"] == "unknown"
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+
+
+def test_fenced_write_after_another_process_stop_writes_nothing(service, monkeypatch):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-fenced", brief())
+    path = runner.path("analysis-fenced")
+    row = _read(path)
+    foreign = runner._new_stop_record(row, requested_by="other-host-lead", worker=None)
+    foreign.update(phase="acknowledged", ack={"pid": 1, "host": "elsewhere", "at": 0.0,
+                                              "source": "requester", "observed_status": "running",
+                                              "turn_key": None})
+    from loopx.control_plane.collaboration.inbox import _write
+
+    _write(runner._stop_path(path), foreign)
+    frozen = path.read_bytes()
+    with pytest.raises(DelegationFenced):
+        runner._fenced_write(path, {**row, "status": "running"})
+    with pytest.raises(DelegationFenced):
+        runner._observe(path, dict(row), "running")
+    with pytest.raises(DelegationFenced):
+        runner._record_turn_result(path, {**row, "status": "running"},
+                                   {"status": "committed", "result_kind": "validated_progress"})
+    runner.execute("analysis-fenced")  # the foreign acknowledgement stands; nothing is rewritten
+    assert path.read_bytes() == frozen
+    assert _read(runner._stop_path(path)) == foreign
+    assert not (root / "host-started").exists()
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+    # A stop this process may acknowledge is taken from under the lock at entry.
+    runner.start("analysis", "analysis-entry", brief())
+    entry = runner.path("analysis-entry")
+    _write(runner._stop_path(entry), runner._new_stop_record(_read(entry), requested_by="lead", worker=None))
+    runner.execute("analysis-entry")
+    assert _read(entry)["status"] == "stopped"
+    acknowledged = _read(runner._stop_path(entry))
+    assert acknowledged["phase"] == "acknowledged" and acknowledged["ack"]["source"] == "worker_entry"
+    assert runner.stop("analysis-entry", execute=True)["phase"] == "settled"
