@@ -9,13 +9,19 @@ asset-retention manifests when resolving an older PR.
 ## Task-first delivery / 从用户任务开始
 
 Use the existing task/PR delivery brief, not a second checklist or approval form.
+Production-bound interactions require packaged task and state readback. For a
+prototype or documentation example, compare the proposed journey but label its
+simulated boundary instead of claiming that the interaction is installed.
 Before implementation, name one ordinary request, its current failure, the
 observable result, affected entrypoints and existing state/effect owner. Derive
-acceptance from that request, a demonstrated failure and the relevant
-[Golden Query](../product/use-cases/steward/golden-queries.md), before designing
-components or copying the current click sequence into tests. Inspect current
-main and related work first. A passing implementation-shaped test is not an
-independent experience oracle.
+acceptance from that request, a demonstrated failure and the nearest accepted
+product contract, before designing components or copying the current click
+sequence into tests. Reuse a relevant, accepted
+[Golden Query](../product/use-cases/steward/golden-queries.md) when one covers the
+task; proposed or unrelated queries can inform exploration but are not a
+mandatory acceptance source. If none applies, the task, failure and owning
+contract still define acceptance. Inspect current main and related work first.
+A passing implementation-shaped test is not an independent experience oracle.
 
 Carry the same task through these steps:
 

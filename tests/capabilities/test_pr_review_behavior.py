@@ -300,20 +300,35 @@ FRONTEND_CASES = [
     ),
     (
         {"request": "Review a settings catalog exposing machine and per-project options.",
-         "problem": "A user must understand which project is being changed and see options applicable to that target.",
+         "problem": "The accepted settings scope contract requires users to know which project is being changed and see only options applicable to that target. No steward Golden Query covers this task.",
          "proposal": "Offer two similarly named capability tabs; both list all options. Selecting a machine-only option in a project shows a read-only warning. Preserve the previous preview when switching project.",
          "evidence": "Components and screenshots pass on an empty single-project fixture. The populated two-project walkthrough shows the old target's preview after switching, and users must open each option to learn its scope. Backend rejects wrong-target writes, but the UI does not identify the actionable target before confirmation."},
         "REQUEST_CHANGES", "architecture",
     ),
     (
         {"request": "Review a settings catalog exposing machine and per-project options.",
-         "problem": "A user must understand which project is being changed and see options applicable to that target.",
+         "problem": "The accepted settings scope contract requires users to know which project is being changed and see only options applicable to that target. No steward Golden Query covers this task.",
          "proposal": "Reuse one catalog with an explicit target, visible effective source and purpose-based navigation. Filter by the existing scope contract; target changes clear draft/preview and fetch the selected state.",
          "evidence": "The packaged two-project walkthrough verifies visible target, keyboard selection, narrow layout and an unavailable target. Real revision-checked preview/apply/readback affects only the selected target. Cancel and reload preserve saved settings, not an abandoned draft. Legitimate effect confirmation remains; other evidence is verified."},
         "APPROVE", "none",
     ),
 ]
 CASES.extend(FRONTEND_CASES)
+
+
+def test_non_steward_settings_acceptance_does_not_require_a_golden_query():
+    guide = (Path(__file__).parents[2] / "docs/development/frontend-delivery.md").read_text()
+    task_first = " ".join(guide.split("## Task-first delivery", 1)[1]
+                          .split("## Source development", 1)[0].split())
+    assert "nearest accepted product contract" in task_first
+    assert "when one covers the task" in task_first
+    assert "not a mandatory acceptance source" in task_first
+    settings = [(scenario, verdict) for scenario, verdict, _ in FRONTEND_CASES
+                if scenario["request"] == "Review a settings catalog exposing machine and per-project options."]
+    assert [verdict for _, verdict in settings] == ["REQUEST_CHANGES", "APPROVE"]
+    assert all("No steward Golden Query covers this task" in scenario["problem"]
+               and "accepted settings scope contract" in scenario["problem"]
+               for scenario, _ in settings)
 
 
 def test_decision_procedure_is_in_the_real_packet_before_prose():
