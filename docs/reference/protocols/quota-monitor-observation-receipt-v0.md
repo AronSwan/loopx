@@ -24,7 +24,19 @@ advancement work remains active.
   of that exact Monitor. Overlapping, global, conflicting or unknown scopes
   fail closed. The CLI projection and effect admission use the same rule; the
   effect rechecks the current complete Todo snapshot, so a cached command cannot
-  bypass a newly blocking gate. This dependency result grants no approval or lease.
+  bypass a newly blocking gate. New auxiliary provider plans also require a
+  commit-head dependency guard: canonical providers evaluate the same typed rule
+  on the head used by the existing projection revision CAS; legacy observations
+  evaluate it inside the existing Todo mutation lock. A blocking gate committed
+  first prevents observation writeback, including changes after preflight.
+  This dependency result grants no approval or lease. Exact committed receipts
+  remain historical replay. Frozen plans predating the guard retain their
+  intended-effect identity, while any still-uncommitted auxiliary provider
+  dispatch is upgraded to the current guard without rewriting its WAL. A receipt
+  proves a historical outcome, never permission for a new mutation. Guarded canonical
+  requests use `loopx_coordination_monitor_poll_request_v3`: an older receiver
+  rejects that schema instead of silently omitting the required gate check.
+  Unguarded callers retain their existing request and receipt identities.
 - The offered auxiliary command includes its registry/runtime route, exact
   Monitor target and original Agent/Turn identity. It can be executed as shown
   from either the source or global registry without reconstructing a route.
@@ -223,7 +235,15 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
 - 存在 scoped User gate 时，仅当既有 typed 依赖 owner 证明所有面向该 Agent
   的有效 gate 都与该精确 Monitor 独立，才允许辅助观察。重叠、全局、冲突或未知
   scope 均失败关闭。CLI 投影与 effect 准入复用同一规则；effect 按当前完整 Todo
-  快照重新核验，旧命令不能绕过新出现的阻塞 gate。依赖结论不授予批准或租约。
+  快照重新核验，旧命令不能绕过新出现的阻塞 gate。新的辅助 provider plan 还
+  强制提交时的依赖 guard：canonical provider 在既有 projection revision CAS
+  所使用的同一个 head 上执行 typed 规则；legacy 观察在既有 Todo 写锁内核验。
+  阻塞 gate 先提交时，包括 preflight 后的变更，不得写入观察。依赖结论不授予
+  批准或租约。已提交回执仍按历史结果精确重放；引入 guard 前的冻结 plan 保留
+  原 effect 身份，仍未提交的辅助 provider dispatch 则升级到当前 guard，不改写
+  其 WAL。回执证明历史结果，不授权新 mutation。带 guard 的 canonical 请求使用
+  `loopx_coordination_monitor_poll_request_v3`；旧 receiver 拒绝该 schema，不能静默
+  忽略必要的 gate 校验。不带 guard 的既有 caller 保持原请求与回执身份。
 - 提供的辅助命令包含 registry／runtime 路由、精确 Monitor target 及原
   Agent／Turn 身份，从 source 或 global registry 均可直接执行，无须重建路由。
 - 监控回执同时记录 `settlement_todo_id` 与被观察的 monitor `todo_id`。
