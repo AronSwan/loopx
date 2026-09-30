@@ -4,7 +4,7 @@
 connector token -- a capability id, an inbox id, an effect id or an app id -- and
 on the base revision three extension modules compiled it themselves:
 ``external_connector_runtime.py``, ``external_connector_provider.py`` (which
-already imports eight other names from the runtime module) and
+already imports eleven other names from the runtime module) and
 ``lark/document_comment_provider.py``.
 
 The runtime module is the owner because the provider already asks it for the
