@@ -74,8 +74,13 @@ Transfer the hierarchy, not the artwork or untested claims:
   routine activity; preserve missing authority, stale information and failures.
   Decision notices use the request body, object and evidence rather than a short
   scheduling label. Keep distinct request identities and label bounded previews;
-  users inspect the current request before deciding. App detail drawers retain
-  the request separately from the compact card label. Provider notices use the
+  users inspect the current request before deciding. Steward and Goal details
+  share one readable request brief: full body, reason/recommendation and linked
+  evidence first; identifiers and declared scope remain in a keyboard-accessible
+  disclosure. The compact list label is not repeated as another detail card.
+  A summary-only source is labelled as such rather than presented as a complete
+  request. Existing fresh-preview, read-only and lifecycle fences still govern
+  actions; Markdown presentation cannot infer authority. Provider notices use the
   same content distinction: missing request bodies are explicitly unavailable,
   never reconstructed from legacy action labels or free-form gate prompts.
   Retire obsolete presentation branches rather than preserving old data shapes
@@ -94,6 +99,14 @@ unavailable desktop/narrow views. Retain keyboard access, reading position and
 return context. First-screen changes still require the repository's preview gate.
 No external screenshot, private incident transcript or proprietary asset is
 redistributed by this proposal.
+
+The decision-detail slice qualifies the packaged renderer with synthetic
+desktop Chinese, narrow English and read-only sources: readable Markdown,
+retained full text, evidence links, disclosure/return focus, one correctly
+scoped preview, failed/missing/replaced source fences and inert source HTML.
+This is a proposed App presentation improvement, not installed readback or
+full GQ10 prioritization. Cross-project selection, at most two recommended
+priorities and actual scoped adoption remain in the existing P1 attention work.
 
 ### Waiting is part of the conversation
 
@@ -355,6 +368,24 @@ polish, materials and attention summaries follow; promotional film and scale
 follow product evidence. Reuse pending acceptance-recovery and GoalRef work
 rather than implement a competing session or inbox lifecycle. Generic TS inbox
 extraction remains incremental within those journeys, not their prerequisite.
+
+The direct-group companion retains typed non-admission causes through the
+provider and App. Feedback describes the last observed event and current trigger
+separately: enabling direct messages does not prove an old message ran, and does
+not scan and dispatch captured history. Consecutive concise requests and a
+correction must retain their own object, constraints and return lineage. Transport
+fixtures do not qualify receiver adoption or actual repair and merge.
+
+The shared conversation intake resolves intent and verifies decision-relevant
+facts before delegation. A currently satisfied outcome returns its evidence
+without duplicate work or another protected-action proposal; a historical record
+or unavailable read is not current proof. Direct analysis, existing-work reuse
+and bounded peer verification are valid outcomes. This is general reasoning
+guidance for every domain, not another classifier or authority owner. Core's
+typed grants/effects remain authoritative; normal authorized host tools resolve
+external facts, and restricted audiences retain explicit gaps. GQ03/GQ07 include
+both already-satisfied and genuinely unfinished requests, alongside the equivalent
+report cases. Actual lookup and model quality remain release qualification.
 
 ### Entry behavior compatibility
 

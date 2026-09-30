@@ -1274,6 +1274,7 @@ function PersonalGoalHome({
   const [goalSubagentConfigurationEnabled, setGoalSubagentConfigurationEnabled] = useState(false);
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeSessionReadback | null>(null);
   const [managerChannelBinding, setManagerChannelBinding] = useState<ManagerChannelBinding | null>(null);
+  const [capabilityRevision, setCapabilityRevision] = useState(0);
   const model = useMemo(() => {
     const base = buildPersonalHomeModel(payload, rows, t, goalSubagentConfigurationEnabled);
     if (!progress) return base;
@@ -1556,7 +1557,7 @@ function PersonalGoalHome({
     return () => {
       cancelled = true;
     };
-  }, [readOnly]);
+  }, [readOnly, capabilityRevision]);
 
   useEffect(() => {
     try {
@@ -2236,6 +2237,7 @@ function PersonalGoalHome({
       updateManagerAssistantMessage(targetContextId, streamingMessageId, failureMessage);
     } finally {
       activeTurnIds.current.delete(targetContextId);
+      if (targetContextId === "manager") setCapabilityRevision((revision) => revision + 1);
       preparationControllers.current.delete(targetContextId);
       streamControllers.current.delete(targetContextId);
       const boundSessionId = sessionIds.current.get(sessionKey);
@@ -2788,7 +2790,10 @@ function PersonalGoalHome({
             anchor.click();
             URL.revokeObjectURL(url);
           },
-          onRefresh,
+          onRefresh: async () => {
+            await onRefresh();
+            setCapabilityRevision((revision) => revision + 1);
+          },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
           onSelectGoal: (goalId) => goalId ? openGoalChat(goalId) : openManagerChat(),
