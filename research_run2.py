@@ -141,6 +141,28 @@ def verdict_ok(txt):
     return True
 
 
+def verdict_diagnose(txt):
+    """三段式诊断(P1,2026-10-01智囊团;VeriHarness: 位置+实际值+改法把修复成功率28%→72%):
+    告诉失败者"实际是什么"而非只重复规则——与verdict_ok子规则一一对应,供门禁detail。"""
+    lines = txt.splitlines()
+    hits = [(i, ln.strip()) for i, ln in enumerate(lines) if VERDICT_LABEL.match(ln)]
+    if not hits:
+        return "实际状态: 全文没有 裁决:/判定:/结论: 开头的标签行(扫描了全文所有行)"
+    i, last = hits[-1]
+    where = f"最后一条标签行在第{i + 1}行(全文{len(lines)}行)"
+    if len(lines) >= 6 and i < len(lines) // 3:
+        return f"实际状态: {where},落在全文前1/3(引言区标签行顶替真裁决的位置规则): {last[:40]}"
+    m = VERDICT_TAIL.search(last)
+    if not m:
+        return f"实际状态: {where},行尾不是三词之一: {last[:60]}"
+    prefix = last[:m.start()]
+    if VERDICT_NEG_NEAR.search(prefix[-4:]):
+        return f"实际状态: {where},收尾词前4字含否定字'{prefix[-4:]}'(否定式裁决不放行): {last[:60]}"
+    if VERDICT_BORROW.search(prefix[-12:]):
+        return f"实际状态: {where},收尾词前12字含'通过/pass'借词'{prefix[-12:]}'(借尾巴不放行): {last[:60]}"
+    return f"实际状态: {where}: {last[:60]}"
+
+
 # ---- 引用双模式(课题自适应: 文献型课题的PMID/ISO源不再被URL规则误杀) ----
 # 竣工检验V7/V8加固: ISO须带部号(ISO 2859-1:1999)——无部号的"ISO 9001认证"营销提法不计数;
 _CITE_ID_PATTERNS = [
@@ -171,6 +193,49 @@ def citations_ok(txt, mode):
     if mode == "lit":
         return n_url >= 1 and (n_url + n_id) >= 3
     return n_url >= 3
+
+
+# ---- 同质化防御(P3,2026-10-01智囊团;趋势席依据Anthropic蜂群实验:45 agent里18/30用
+# 同一分支名=从众病,并行调研员引同一批源、给同质结论是未设防的失效面) ----
+_URL_TAIL_PUNCT = ".,;:、。)】」』\"'"
+
+def url_set(txt):
+    """URL集合归一: 去尾部标点+小写+去末斜杠,让 [x](url) 与 url。 归并为同一源。"""
+    return {u.rstrip(_URL_TAIL_PUNCT).lower().rstrip("/")
+            for u in re.findall(r"https?://\S+", txt)}
+
+
+def homog_report(root, n):
+    """调研员来源集两两Jaccard,降序。只度量不拦截——官方监管页被多调研员同引是
+    正常现象,真质量权威是评审+穷举门禁;这里给的是架构师须知的偏见放大风险信号。"""
+    sets = []
+    for k in range(1, n + 1):
+        p = root / "agents" / f"researcher-{k}" / f"outputs/research-{k}.md"
+        if p.exists():
+            sets.append((k, url_set(p.read_text(encoding="utf-8", errors="replace"))))
+    pairs = []
+    for a in range(len(sets)):
+        for b in range(a + 1, len(sets)):
+            (ka, sa), (kb, sb) = sets[a], sets[b]
+            union = sa | sb
+            j = round(len(sa & sb) / len(union), 3) if union else 0.0
+            pairs.append({"pair": [ka, kb], "jaccard": j, "shared": len(sa & sb)})
+    pairs.sort(key=lambda x: (-x["jaccard"], x["pair"]))
+    return pairs
+
+
+def homog_warning(root, n, threshold=0.7):
+    """超阈值→写给架构师任务书的告警段;未超→空串(不注入)。"""
+    hot = [p for p in homog_report(root, n) if p["jaccard"] > threshold]
+    if not hot:
+        return ""
+    desc = "; ".join(f"research-{p['pair'][0]}×research-{p['pair'][1]} "
+                     f"J={p['jaccard']}(共享{p['shared']}个URL)" for p in hot)
+    return ("同质化告警(来源重叠检测): " + desc + "。\n"
+            "多份调研的来源集高度重叠,汇总时须警惕同质结论与单一信源的偏见放大:\n"
+            "1. 各调研员对同一来源的结论若雷同,须用独立来源交叉验证后再写入汇总;\n"
+            "2. 互相矛盾的发现优先保留并标注分歧,不得为表面一致性抹平;\n"
+            "3. 汇总文档中说明哪些关键结论仅依赖单一来源。")
 
 
 def read_brief(root):
@@ -428,6 +493,11 @@ def stage_route(root, phase, subtopics=None):
         plan = json.loads((root / "agents/planner/outputs/plan.json").read_text(encoding="utf-8"))
         routing["architect"] = [(f"researcher-{k}", f"outputs/research-{k}.md", f"inputs/research-{k}.md")
                                 for k in range(1, plan["N"] + 1)]
+        # P3同质化防御: 汇总者进场前先量来源重叠,超阈值把告警写进任务书
+        warn = homog_warning(root, plan["N"])
+        if warn:
+            task += "\n\n" + warn
+            print(f">>> 同质化告警已注入architect任务书: {warn.splitlines()[0][12:60]}", flush=True)
         plan_md = (root / "agents/planner/outputs/plan.md")
         if plan_md.exists():
             routing["architect"].append(("planner", "outputs/plan.md", "inputs/plan.md"))
@@ -567,7 +637,12 @@ def gate(root, include_final=True):
         if p.exists():
             txt = p.read_text(encoding="utf-8", errors="replace")
             chk(f"research-{k} 非空", p.stat().st_size > 200, f"{p.stat().st_size}B")
-            chk(f"research-{k} 引用>=3", citations_ok(txt, cite_mode))
+            n_url, n_id = cite_counts(txt)
+            if cite_mode == "lit":
+                need = f"实际URL={n_url},标识符={n_id};要求URL≥1且合计≥3,还差{max(0, 3 - n_url - n_id)}条"
+            else:
+                need = f"实际完整URL={n_url};要求≥3,还差{max(0, 3 - n_url)}条"
+            chk(f"research-{k} 引用>=3", citations_ok(txt, cite_mode), need)
         else:
             chk(f"research-{k} 存在", False, "缺失")
     checks_pool = [
@@ -583,9 +658,11 @@ def gate(root, include_final=True):
             chk(f"{ref.split('/')[-1]} 非空", p.stat().st_size > min_size, f"{p.stat().st_size}B")
             if kw == "verdict":
                 chk(f"{ref.split('/')[-1]} 裁决收尾", verdict_ok(txt),
-                    "结尾裁决须以 采纳/修改后采纳/重做 收尾(单独成行,附录之前)")
+                    verdict_diagnose(txt))
             elif kw:
-                chk(f"{ref.split('/')[-1]} 结构词", any(w in txt for w in kw))
+                hit_words = [w for w in kw if w in txt]
+                chk(f"{ref.split('/')[-1]} 结构词", bool(hit_words),
+                    f"实际命中{hit_words or '无'};要求含任一: {list(kw)}")
         else:
             chk(f"{ref.split('/')[-1]} 存在", False, "缺失")
     # 主题匹配(第8缺陷防线): 只当"灾难性错题绊线"用——拦整体课题替换(旧骨架任务书
@@ -613,10 +690,15 @@ def gate(root, include_final=True):
         leaked = list((root / "agents" / a / "inputs").glob(f"review-{b[-1]}.md"))
         chk(f"盲评隔离({a}不见{b})", not leaked)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
+              "homogenization": homog_report(root, plan["N"]),
               "digests": {str(pp.relative_to(root)): hashlib.sha256(pp.read_bytes()).hexdigest()
                           for pp in set(root.glob("agents/*/outputs/*.md"))
                           | set(root.glob("agents/planner/outputs/plan.json"))}}
     write(root / "gate-report.json", report)
+    top = next((p for p in report["homogenization"] if p["jaccard"] > 0.7), None)
+    if top:
+        print(f"!! 同质化信号(非拦截): research-{top['pair'][0]}×research-{top['pair'][1]} "
+              f"J={top['jaccard']}(共享{top['shared']}个URL) > 0.7", flush=True)
     print(json.dumps({"ok": ok, "failed": [c["check"] for c in checks if not c["pass"]]},
                      ensure_ascii=False))
     return ok
@@ -715,13 +797,14 @@ def gate_with_repair(root, include_final, max_rounds=2):
             fb.parent.mkdir(parents=True, exist_ok=True)
             fb.write_text(
                 f"# Gate repair feedback for {ph}\n\n"
-                f"终验门禁失败项: {det}\n\n"
+                f"终验门禁失败项(含实际状态与差距): {det}\n\n"
                 "针对性修复要求:\n"
                 "- 按原任务书(tasks/同名.md)重写完整交付物,逐项消除上述失败点;不要只补一句话。\n"
                 "- 若失败项是'裁决收尾': 以 裁决:/判定:/结论: 单独成行(置于附录之前)、以三词之一收尾,\n"
-                "  不得自创裁决词(英文状态词不算)。\n"
-                "- 若失败项是'引用': 默认须≥3个完整https://URL;若任务书'引用规范'行允许文献标识符,\n"
-                "  则保证≥1个完整URL且URL+良构标识符(DOI/PMID/arXiv/ISO号)合计≥3。\n"
+                "  不得自创裁决词(英文状态词不算)。对照上面'实际状态'里指认的那一行改。\n"
+                "- 若失败项是'引用': 从你调研时实际使用的来源中,把完整 https:// 地址以 [标题](https://…)\n"
+                "  或行内 https:// 形式插入对应结论处;默认须≥3个完整URL。若任务书'引用规范'行允许\n"
+                "  文献标识符,则保证≥1个完整URL且URL+良构标识符(DOI/PMID/arXiv/ISO号)合计≥3。\n"
                 "- 写完后重读全文,确认门禁失败点已消除再结束回合。\n",
                 encoding="utf-8")
             print(f">>> 门禁修复(round {rnd + 1}): 重跑 {ph}: {det[:100]}", flush=True)

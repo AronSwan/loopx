@@ -285,3 +285,91 @@ def test_gate_repair_survives_cli_failure(tmp_path, monkeypatch):
         assert ok is False  # 正常耗尽返回False,不抛
     except SystemExit:
         pytest.fail("修复轮异常直穿控制器(第五场事故回归)")
+
+
+# ==== P1批次(2026-10-01智囊团): 三段式报错——位置+实际值+改法 ====
+def test_verdict_diagnose_names_actual_state():
+    """诊断必须说'实际是什么'而非复述规则: 无标签行/错收尾词/好文档三种。"""
+    no_label = FILLER + "\n" + GOOD_URLS  # 无裁决标签行
+    assert "没有" in r2.verdict_diagnose(no_label)
+    wrong_tail = FILLER + "\n裁决:基本合格\n"  # 标签行在,但不以三词收尾
+    d = r2.verdict_diagnose(wrong_tail)
+    assert "行尾不是三词之一" in d and "裁决:基本合格" in d
+    good = FILLER * 2 + "\n裁决:采纳\n"
+    assert r2.verdict_ok(good)  # 诊断只服务失败路径,但同输入verdict_ok必须真过
+
+
+def test_gate_report_carries_citation_gap_detail(tmp_path):
+    """引用失败项的detail必须带'实际X条/还差Y条',不再空串。"""
+    root = make_root(tmp_path, n=2)
+    # 做坏research-1的引用: 保留体积但URL清零
+    p = root / "agents/researcher-1/outputs/research-1.md"
+    p.write_text("# 测试课题研究1\n" + FILLER + "\n", encoding="utf-8")
+    ok = r2.gate(root, include_final=True)
+    assert not ok
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    cite = next(c for c in rep["checks"] if c["check"] == "research-1 引用>=3")
+    assert not cite["pass"] and "实际完整URL=0" in cite["detail"] and "还差3条" in cite["detail"]
+
+
+def test_structure_word_check_keeps_any_of_semantics(tmp_path):
+    """结构词检查维持'任一命中即过'(曾险改成全命中);detail带实际命中的词。"""
+    root = make_root(tmp_path)  # final-plan含'清单'不含'检查表'
+    ok = r2.gate(root, include_final=True)
+    assert ok  # 只含'清单'也必须过
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    sw = next(c for c in rep["checks"] if c["check"] == "final-plan.md 结构词")
+    assert sw["pass"] and "清单" in sw["detail"]
+
+
+# ==== P3批次(2026-10-01智囊团): 同质化防御——来源重叠度量+架构师告警注入 ====
+def test_url_set_normalizes_tail_punctuation():
+    s = r2.url_set("见 https://a.example/x/。 与 [t](https://A.example/x) 及 http://b.io/y,")
+    assert s == {"https://a.example/x", "http://b.io/y"}
+
+
+def test_homog_report_orders_and_warns_only_above_threshold(tmp_path):
+    root = make_root(tmp_path, n=2)
+    # 两个调研员给完全相同的来源集 → J=1.0 触发告警
+    same = "# x\n" + FILLER + GOOD_URLS * 3 + "\n"
+    for k in (1, 2):
+        (root / "agents" / f"researcher-{k}" / "outputs" / f"research-{k}.md").write_text(
+            same, encoding="utf-8")
+    pairs = r2.homog_report(root, 2)
+    assert pairs[0]["jaccard"] == 1.0 and pairs[0]["shared"] == 3
+    w = r2.homog_warning(root, 2)
+    assert "同质化告警" in w and "research-1×research-2" in w
+
+
+def test_homog_warning_silent_when_distinct(tmp_path):
+    root = make_root(tmp_path, n=2)  # make_root两调研员URL本就相同…
+    # 改成不相交来源集 → 无告警
+    (root / "agents/researcher-1/outputs/research-1.md").write_text(
+        "# x\n" + FILLER + " https://r1.only/a https://r1.only/b https://r1.only/c\n", encoding="utf-8")
+    (root / "agents/researcher-2/outputs/research-2.md").write_text(
+        "# y\n" + FILLER + " https://r2.only/a https://r2.only/b https://r2.only/c\n", encoding="utf-8")
+    assert r2.homog_warning(root, 2) == ""
+
+
+def test_gate_report_records_homogenization_ledger(tmp_path):
+    root = make_root(tmp_path, n=2)
+    r2.gate(root, include_final=True)
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep["homogenization"] and rep["homogenization"][0]["pair"] == [1, 2]
+
+
+def test_architect_task_injects_homog_warning(tmp_path, monkeypatch):
+    """来源重叠超阈值时,architect任务书必须带告警段(汇总者是唯一的化解位置)。"""
+    root = make_root(tmp_path, n=2)  # make_root两调研员同一批GOOD_URLS=高重叠
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []})
+    import loopx.control_plane.collaboration.peers as peers_mod
+    monkeypatch.setattr(peers_mod, "request", lambda *a, **k: None)
+    r2.stage_route(root, "architect")
+    task = (root / "agents/architect/tasks/architect.md").read_text(encoding="utf-8")
+    assert "同质化告警" in task and "research-1×research-2" in task
+    # 来源不相交时不注入(告警是信号不是仪式)
+    (root / "agents/researcher-2/outputs/research-2.md").write_text(
+        "# y\n" + FILLER + " https://r2.only/a https://r2.only/b https://r2.only/c\n", encoding="utf-8")
+    r2.stage_route(root, "architect")
+    task2 = (root / "agents/architect/tasks/architect.md").read_text(encoding="utf-8")
+    assert "同质化告警" not in task2
