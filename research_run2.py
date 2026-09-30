@@ -266,6 +266,8 @@ RESEARCHER_TASK = (
     "number), what it means for OUR operation as described in the brief, and a short 'if we do nothing' "
     "risk note. 1500-3000 chars. Cite every claim: by default with at least 3 full URLs "
     "(complete addresses starting with https://, never bare domains or partial paths); "
+    "cite the SPECIFIC page that contains the fact (the statute section, the case, the pricing "
+    "page), never a portal/search/index/homepage page (P2抽查实测: 门户页引用=核查必盲); "
     "IF the brief's 引用规范 line allows standard literature identifiers, then 1 full URL "
     "plus well-formed identifiers (DOI/PMID/arXiv/ISO) totaling 3 is acceptable. "
     "Mark uncertain items as 待核实 explicitly. "
