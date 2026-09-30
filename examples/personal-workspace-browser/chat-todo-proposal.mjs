@@ -12,6 +12,9 @@ const RECOVERY_TEXT = "[P2] 复核恢复回合给出的下一步";
 // The fixture answers this exact message with a protected merge action.
 const COMBINED_PROMPT = "请合并 PR #123";
 const COMBINED_TEXT = "[P1] 合并前补齐 PR #123 的发布说明";
+// The owner leaves this Goal conversation before the answer arrives.
+const DEPARTED_PROMPT = "请给出一个任务建议，我先去看看别处。";
+const DEPARTED_TEXT = "[P2] 补充发布回滚预案";
 const proposalAnswer = {
   message: "我找到一个可评审的步骤。",
   proposals: [{ kind: "todo", priority: "P1", rationale: "发布前需要可核对的证据。", text: PROPOSAL_TEXT }],
@@ -31,6 +34,7 @@ export const chatTodoProposalScenario = {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, page } = context;
     api.answerForMessage = (message) => (message === GOAL_PROMPT || message === MANAGER_PROMPT ? proposalAnswer
+      : message === DEPARTED_PROMPT ? { message: "离开后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "离开对话不改变建议归属。", text: DEPARTED_TEXT }] }
       : message === COMBINED_PROMPT ? { message: "我识别到一个明确的合并请求，并建议先补齐发布说明。", proposals: [{ kind: "todo", priority: "P1", rationale: "合并前需要可核对的说明。", text: COMBINED_TEXT }] }
       : message === RECOVERY_PROMPT ? { message: "恢复后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "恢复回合同样需要可确认的草稿。", text: RECOVERY_TEXT }] }
       : null);
@@ -50,6 +54,12 @@ export const chatTodoProposalScenario = {
         await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
         await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       };
+      const openManagerChat = async () => {
+        await page.locator(".personal-manager-link").first().click();
+        const managerChatTab = page.getByRole("navigation", { name: /Manager|管家/ }).getByRole("button", { name: /^(Chat|对话)$/ });
+        await managerChatTab.click();
+        if (await managerChatTab.getAttribute("aria-current") !== "page") throw new Error("Manager Chat did not open");
+      };
       await openGoalChat();
       await composer.fill(GOAL_PROMPT);
       await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -65,9 +75,37 @@ export const chatTodoProposalScenario = {
       }
       if (await page.getByRole("dialog").count()) throw new Error("A proposal card opened the drawer without the owner asking");
 
+      // The card belongs to the Goal conversation that offered it: switching
+      // to Manager Chat or to another Goal on the same page must not show it,
+      // and returning to its Goal still does.
+      await openManagerChat();
+      await page.getByText("我找到一个可评审的步骤。", { exact: true }).first().waitFor({ state: "visible", timeout: 10_000 });
+      if (await card.count()) throw new Error("A Goal Todo proposal leaked into Manager Chat");
+      await page.locator(".personal-goal-link", { hasText: "Research Monitor" }).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.waitForTimeout(300);
+      if (await card.count()) throw new Error("A Goal Todo proposal leaked into another Goal's conversation");
+      await openGoalChat();
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+
+      // An answer that lands after the owner left for Manager Chat still
+      // belongs to the Goal conversation that asked for it.
+      await composer.fill(DEPARTED_PROMPT);
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await openManagerChat();
+      if (previewsWithText(DEPARTED_TEXT).length) throw new Error("The departed answer arrived before the owner left its Goal");
+      await waitFor(() => previewsWithText(DEPARTED_TEXT).length === 1, "The departed Goal answer did not create its Todo preview");
+      await page.waitForTimeout(300);
+      const departedCard = page.locator(".personal-proposal-row", { hasText: DEPARTED_TEXT });
+      if (await departedCard.count()) throw new Error("A Goal answer that arrived after leaving showed its Todo in Manager Chat");
+      await openGoalChat();
+      await departedCard.waitFor({ state: "visible", timeout: 10_000 });
+
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await openGoalChat();
+      // The newer departed card leads; the first one waits in the backlog.
+      await page.locator(".personal-proposal-backlog > summary").click();
       await card.waitFor({ state: "visible", timeout: 10_000 });
 
       await card.click();
@@ -119,7 +157,7 @@ export const chatTodoProposalScenario = {
     }
     return {
       coverageEntries: context.coverageEntries,
-      note: "An Agent Todo proposal becomes a persisted typed preview in its Goal conversation, including one from a Turn recovered after a reload, and none is created without a target Goal.",
+      note: "An Agent Todo proposal becomes a persisted typed preview in its Goal conversation, including one from a Turn recovered after a reload; it stays out of Manager Chat and other Goals, and none is created without a target Goal.",
     };
   },
 };

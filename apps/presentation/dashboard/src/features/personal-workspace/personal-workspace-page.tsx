@@ -793,6 +793,9 @@ export function PersonalWorkspacePage({
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
+  // Cards this page created from the Manager channel. A card created from a
+  // Goal conversation stays in that Goal's timeline and never joins Manager Chat.
+  const [managerSessionProposalIds, setManagerSessionProposalIds] = useState<string[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
@@ -999,9 +1002,9 @@ export function PersonalWorkspacePage({
   }, [goalMessages, selectedGoal, selectedGoalTab]);
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
-      || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
+      || (item.kind === "proposal" && (managerSessionProposalIds.includes(item.proposal.previewId)
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
-    [items, sessionProposalIds, managerChannelProposalIds],
+    [items, managerSessionProposalIds, managerChannelProposalIds],
   );
   const lastChatItem = managerChatItems[managerChatItems.length - 1];
   const latestMessageTextLength = lastChatItem?.kind === "message" ? lastChatItem.message.text.length : 0;
@@ -1110,10 +1113,20 @@ export function PersonalWorkspacePage({
     return () => { cancelled = true; };
   }, [readOnly, selectedGoalId, t, typedActionsRevision]);
 
+  function rememberSessionProposal(previewId: string, channelGoalId: string | null) {
+    setSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    if (channelGoalId === null) {
+      setManagerSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    }
+  }
+
   async function createPreview(
     request: WorkspaceActionPreviewRequest,
     options: { select?: boolean } = {},
   ) {
+    // The card belongs to the conversation on screen when the request started
+    // (this render's selectedGoalId), even if its answer lands after the owner
+    // moved elsewhere.
     if (readOnly) throw new Error(t("source.readOnlyWriteError"));
     let local: WorkspaceActionPreview;
     try {
@@ -1151,7 +1164,7 @@ export function PersonalWorkspacePage({
         workspaceCandidates,
       };
     }
-    setSessionProposalIds((current) => current.includes(local.previewId) ? current : [...current, local.previewId]);
+    rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
     if (options.select !== false) setSelection({ item: local, kind: "proposal" });
     return local;
@@ -1483,7 +1496,9 @@ export function PersonalWorkspacePage({
     },
     onTransitionProposal: async (proposal, transition) => {
       const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition), t);
-      setSessionProposalIds((current) => current.includes(transitioned.previewId) ? current : [...current, transitioned.previewId]);
+      const managerOwned = managerSessionProposalIds.includes(proposal.previewId)
+        || managerChannelProposalIds.includes(proposal.previewId);
+      rememberSessionProposal(transitioned.previewId, managerOwned ? null : proposal.goalId ?? selectedGoalId);
       setProposals((current) => {
         const next = { ...current };
         if (transition === "regenerate") delete next[proposal.previewId];
