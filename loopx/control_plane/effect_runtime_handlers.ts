@@ -135,6 +135,10 @@ import {
   decideGoalRecreation,
   decideProjectSessionBind,
   decideProjectSessionUnbind,
+  decideSourceTurnEffectAbsentResolution,
+  decideSourceTurnEffectAdmission,
+  decideSourceTurnEffectGate,
+  decideSourceTurnEffectRelease,
 } from "./goals/source_session_lifetime.ts";
 import { decideFirstPartyHostRuntime } from "./goals/first_party_host_runtime.ts";
 import { decideChatSessionLifecycle } from "./goals/chat_session_lifecycle.ts";
@@ -554,6 +558,13 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.bind.decide", decideProjectSessionBind],
     ["goal.source_session.unbind.decide", decideProjectSessionUnbind],
     ["goal.source_session.recreate.decide", decideGoalRecreation],
+    ["goal.source_session.turn_effect.admit", decideSourceTurnEffectAdmission],
+    [
+      "goal.source_session.turn_effect.resolve_absent",
+      decideSourceTurnEffectAbsentResolution,
+    ],
+    ["goal.source_session.turn_effect.release", decideSourceTurnEffectRelease],
+    ["goal.source_session.turn_effect.gate", decideSourceTurnEffectGate],
     ["goal.first_party_host_runtime.decide", decideFirstPartyHostRuntime],
     ["goal.chat_session.lifecycle.decide", decideChatSessionLifecycle],
     ["goal.acceptance.inspect", inspectLocalGoalAcceptance],
