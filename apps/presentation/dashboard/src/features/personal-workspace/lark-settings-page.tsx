@@ -153,6 +153,14 @@ function larkGroupHistoryPermissionUrl(connection: LarkGoalConnection): string |
   return connection.history_permission_guidance?.api_document_url ?? null;
 }
 
+// lark-cli is resolved once when the Chat service starts, so these codes stay
+// true until the operator installs it and restarts LoopX.
+const larkCliUnavailableCodes = new Set(["lark_cli_not_installed", "lark_cli_not_executable"]);
+
+function larkCliUnavailable(cause: unknown): boolean {
+  return cause instanceof ChatApiError && larkCliUnavailableCodes.has(String(cause.payload.error_code ?? ""));
+}
+
 function larkErrorMessage(cause: unknown, fallback: string, t: WorkspaceTranslate): string {
   if (cause instanceof ChatApiError) {
     const code = String(cause.payload.error_code ?? "");
@@ -219,6 +227,7 @@ export function LarkSettingsPage({
   const [setupBrand, setSetupBrand] = useState<"feishu" | "lark">("feishu");
   const [setupSnapshot, setSetupSnapshot] = useState<LarkAppSetup | null>(null);
   const [setupStarting, setSetupStarting] = useState(false);
+  const [cliUnavailable, setCliUnavailable] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const setupPopup = useRef<Window | null>(null);
   const openedSetupUrl = useRef<string | null>(null);
@@ -234,8 +243,10 @@ export function LarkSettingsPage({
       ]);
       setApps(nextApps);
       setConnections(nextConnections);
+      setCliUnavailable(false);
       setAppRef((current) => current || nextApps.find((app) => app.reply_ready)?.app_ref || nextApps.find((app) => app.ready)?.app_ref || nextApps[0]?.app_ref || "");
     } catch (cause) {
+      setCliUnavailable(larkCliUnavailable(cause));
       setError(larkErrorMessage(cause, t("lark.error.configuration"), t));
     } finally {
       setLoading(false);
@@ -405,6 +416,9 @@ export function LarkSettingsPage({
   }
 
   function openSetup() {
+    // Every setup entry (toolbar, connection dialog) meets the same fact:
+    // without lark-cli the setup can only fail until LoopX restarts.
+    if (cliUnavailable) return;
     setSetupSnapshot(null);
     setSetupError(null);
     openedSetupUrl.current = null;
@@ -517,7 +531,7 @@ export function LarkSettingsPage({
 
       {!loading && tab === "apps" ? (
         <div className="personal-lark-apps">
-          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><button className="personal-primary-action" onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div>
+          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><button className="personal-primary-action" disabled={cliUnavailable} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div>
           <div className="personal-lark-app-grid">
             {apps.map((app) => (
               <article className="personal-lark-app-card" key={app.app_ref}>
@@ -583,7 +597,7 @@ export function LarkSettingsPage({
               <label><span>{t("lark.bindGoal")}</span><div>{editingConnection.goal_title}</div></label>
               <small>{t("lark.editPreservesIdentity")}</small>
             </> : <>
-            <label><span>{t("lark.appProfile")}</span><select aria-label={t("lark.appProfile")} disabled={loading} onChange={(event) => { if (event.target.value === "__register__") openSetup(); else { setAppRef(event.target.value); setAgentAppRefs({}); } }} value={appRef}>{loading ? <option value="">{t("lark.appLoading")}</option> : <>{apps.map((app) => <option disabled={!app.ready} key={app.app_ref} value={app.app_ref}>{app.label}{app.reply_ready ? "" : app.ready ? ` · ${t("lark.needsMessagePermissions")}` : ` · ${t("lark.needsSetup")}`}</option>)}<option value="__register__">{t("lark.registerAnother")}</option></>}</select><small>{t("lark.defaultAgentAppDescription")}</small></label>
+            <label><span>{t("lark.appProfile")}</span><select aria-label={t("lark.appProfile")} disabled={loading} onChange={(event) => { if (event.target.value === "__register__") openSetup(); else { setAppRef(event.target.value); setAgentAppRefs({}); } }} value={appRef}>{loading ? <option value="">{t("lark.appLoading")}</option> : <>{apps.map((app) => <option disabled={!app.ready} key={app.app_ref} value={app.app_ref}>{app.label}{app.reply_ready ? "" : app.ready ? ` · ${t("lark.needsMessagePermissions")}` : ` · ${t("lark.needsSetup")}`}</option>)}<option disabled={cliUnavailable} value="__register__">{t("lark.registerAnother")}</option></>}</select><small>{t("lark.defaultAgentAppDescription")}</small></label>
             {selectedApp?.ready && !selectedApp.reply_ready ? <div className="personal-lark-group-state is-error" role="alert">{t("lark.appPermissions")}</div> : null}
             <label>
               <span>{t("lark.groupChat")}</span>

@@ -11,11 +11,19 @@ from loopx import usage_goal, usage_ping
 def test_telemetry_failure_cannot_replace_host_exception(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", tmp_path)
     usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "enabled"}))
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setattr(usage_ping, "_detach", lambda _: (_ for _ in ()).throw(OSError("fixture failure")))
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING"):
+        monkeypatch.delenv(name, raising=False)
+    attempts = []
+
+    def fail_transport(request):
+        attempts.append(request)
+        raise OSError("fixture failure")
+
+    monkeypatch.setattr(usage_ping, "_detach", fail_transport)
     with pytest.raises(ValueError, match="host failure"):
         with usage_goal.observe_goal_execution(tmp_path, "fixture-goal"):
             raise ValueError("host failure")
+    assert attempts, "the test must exercise transport failure, not an environment opt-out"
 
 
 def test_disabled_observer_starts_no_worker_or_process(tmp_path, monkeypatch):

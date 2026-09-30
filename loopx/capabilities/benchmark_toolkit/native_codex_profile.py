@@ -210,6 +210,9 @@ def _formal_install_environment(
             "LOOPX_PYTHON": python_executable,
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_INSTALL_CANARY": "0",
+            # Synthetic profiles must not become adoption samples, even when
+            # rebuilding the environment drops the supervisor's CI/opt-out flags.
+            "LOOPX_USAGE_PING": "0",
             "LOOPX_BIN_DIR": str(paths["bin_dir"]),
             "LOOPX_RELEASES_DIR": str(paths["release_root"].parent),
             "LOOPX_RELEASE_ID": release_id,
@@ -249,6 +252,7 @@ def native_codex_profile_environment(
             "TMP": str(profile.home),
             "TEMP": str(profile.home),
             "CODEX_HOME": str(profile.codex_home),
+            "LOOPX_USAGE_PING": "0",
             "PATH": f"{profile.bin_dir}{os.pathsep}{inherited_path}",
         }
     )
@@ -284,6 +288,8 @@ def native_codex_app_server_shell_policy_args(
         f"shell_environment_policy.include_only={json.dumps(_AGENT_SHELL_ENV_INCLUDE_ONLY)}",
         "-c",
         f"shell_environment_policy.exclude={json.dumps(normalized)}",
+        "-c",
+        'shell_environment_policy.set.LOOPX_USAGE_PING="0"',
     )
 
 
