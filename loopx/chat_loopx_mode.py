@@ -485,23 +485,23 @@ class ChatLoopXMode:
             at = "refused_at" if state == "refused" else "checked_at"
             return wake_receipt(intent, state, reason=reason, **{at: now})
 
-        try:
-            session = self._session(session_id)
-        except ValueError:
+        session = self.store.load_session(session_id)
+        if not session:
             return settled("refused", "no_wake_owner")
-        # A crash after submit but before the receipt write recovers here:
-        # the exact client turn already exists, so it is recorded once.
+        # The Turn this intent's client id already owns in the pinned
+        # conversation: a crash or lost receipt after acceptance recovers it.
         existing = self.store.turn_for_client(session_id, client_turn_id)
+        wake_turn = None
         if existing:
             request = existing.get("loopx_request") or {}
-            if (
-                not existing.get("loopx_execution")
-                or request.get("operation") != "wake"
-                or (request.get("wake") or {}).get("intent_id") != intent_id
-            ):
-                # Another Turn owns this client id; claiming it would be a false receipt.
-                return settled("refused", "wake_identity_conflict")
-            return self._woken(intent, session_id, existing["turn_id"], created=False, now=now)
+            wake_turn = {
+                "turn_id": existing.get("turn_id"),
+                "status": existing.get("status"),
+                "started": existing.get("started_at") is not None,
+                "loopx_execution": existing.get("loopx_execution") is True,
+                "operation": request.get("operation"),
+                "intent_id": (request.get("wake") or {}).get("intent_id"),
+            }
         mode = session.get("loopx_mode") or {}
         settings = mode.get("settings") or {}
         try:
@@ -521,6 +521,8 @@ class ChatLoopXMode:
                 "session": session,
                 "origin": "host",
                 "operation": "wake",
+                "intent": intent,
+                "wake_turn": wake_turn,
                 "settings": settings,
                 "native": session.get("native_goal") or {},
                 "registered_agents": registered_agent_ids_for_goal(goal) if goal else [],
@@ -529,25 +531,40 @@ class ChatLoopXMode:
                 "execution_binding_valid": binding_valid,
             },
         )
+        if decision["state"] == "woken":
+            # The exact Turn already started; dispatch is not repeated. The
+            # session itself is an ordinary Goal Chat conversation (not an
+            # attached host, not another Goal), the same rule ``start`` uses.
+            validate_goal_chat(session, [])
+            return self._woken(intent, session_id, existing["turn_id"], created=False, now=now)
         if decision["state"] != "admitted":
             return settled(decision["state"], decision["reason"])
+        validate_goal_chat(session, [])
         context = goal_context()
-        turn, created = self.controller.submit_turn(
-            session_id=session_id,
-            client_turn_id=client_turn_id,
-            message=f"/goal resume --tokens {settings['token_budget']}",
-            attachments=[],
-            work_dir=context["project"],
-            objective=str(context.get("objective") or context.get("title") or session["goal_id"]),
-            loopx_execution=True,
-            loopx_request={
+        if decision["dispatch"] == "replay":
+            # Not yet started: the native acceptance owner repairs or replays
+            # the original request and dispatches that same Turn.
+            message = existing["message"]
+            loopx_request = existing["loopx_request"]
+        else:
+            message = f"/goal resume --tokens {settings['token_budget']}"
+            loopx_request = {
                 "operation": "wake",
                 "settings": settings,
                 "wake": {
                     key: intent.get(key)
                     for key in ("intent_id", "operation_id", "request_id")
                 },
-            },
+            }
+        turn, created = self.controller.submit_turn(
+            session_id=session_id,
+            client_turn_id=client_turn_id,
+            message=message,
+            attachments=[],
+            work_dir=context["project"],
+            objective=str(context.get("objective") or context.get("title") or session["goal_id"]),
+            loopx_execution=True,
+            loopx_request=loopx_request,
         )
         return self._woken(intent, session_id, turn["turn_id"], created=created, now=now)
 
@@ -802,6 +819,7 @@ class ChatLoopXMode:
                     arguments.get("binding_id", ""),
                     operation_id,
                     arguments.get("brief", {}),
+                    conversation={"session_id": session_id, "turn_id": turn_id},
                 )
             elif action in {"read", "wait", "resume"}:
                 result = (
@@ -883,15 +901,15 @@ def handle_loopx_request(handler, session_id: str, *, apply: bool = False) -> No
 # Continue a Chat LoopX lead once a delegated result is accepted.
 #
 # The accepted transition leaves a pending wake intent beside the result.  Each
-# tick scans this runtime's operation records for pending intents and resolves
-# the owner from the intent's requester: a Chat LoopX conversation configured
-# with that coordinator identity, preferring one that can still continue and,
-# among those, the one that observed the operation.  The existing Chat LoopX
-# owner decides and records the receipt.  A requester without such a
-# conversation is refused with ``no_wake_owner``; the scheduler deadline recheck
-# remains its continuation.  The pump never unpauses a lead, never starts a
-# native Goal and never settles canonical work.  Stopping it leaves intents
-# pending, which is its rollback.
+# tick scans this runtime's operation records for pending intents.  An intent
+# names the conversation whose Turn started the operation; only that
+# conversation is woken, and the existing Chat LoopX owner decides and records
+# the receipt.  Another conversation of the same Goal and coordinator is never
+# selected instead: an intent without a conversation, or whose conversation is
+# gone, closed or out of the mode, is refused with ``no_wake_owner`` and the
+# scheduler deadline recheck remains its continuation.  The pump never
+# unpauses a lead, never starts a native Goal and never settles canonical
+# work.  Stopping it leaves intents pending, which is its rollback.
 
 WAKE_INTERVAL_SECONDS = 3.0
 _LOG = logging.getLogger(__name__)
@@ -908,34 +926,8 @@ def default_goal_context(controller, session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _owners(store) -> dict[tuple[str, str], list[dict[str, Any]]]:
-    """Chat conversations by their configured coordinator (requester) identity."""
-    owners: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for path in sorted(store.sessions_root.glob("*/session.json")):
-        session = store.load_session(path.parent.name)
-        settings = ((session or {}).get("loopx_mode") or {}).get("settings") or {}
-        agent_id = settings.get("agent_id")
-        if session and isinstance(agent_id, str) and agent_id:
-            owners.setdefault((str(session.get("goal_id") or ""), agent_id), []).append(session)
-    return owners
-
-
-def _select_owner(sessions: list[dict[str, Any]], operation_id: str) -> dict[str, Any]:
-    def rank(session):
-        usable = session.get("status") != "closed" and (
-            (session.get("loopx_mode") or {}).get("enabled") is True
-        )
-        observed = any(
-            row.get("operation_id") == operation_id
-            for row in session.get("loopx_deliveries") or []
-        )
-        return (usable, observed, str(session.get("updated_at") or ""))
-
-    return max(sessions, key=rank)
-
-
-def _pending_identity(record: Path) -> tuple[str, str, str] | None:
-    """Requester and operation of a pending intent; an unlocked pre-check only."""
+def _pending_identity(record: Path) -> tuple[str, str, str, str | None] | None:
+    """Requester, operation and pinned conversation of a pending intent; an unlocked pre-check only."""
     row = _read(record)
     wake = row.get("wake")
     if row.get("status") != "accepted" or not isinstance(wake, dict) or wake.get("state") != "pending":
@@ -944,7 +936,8 @@ def _pending_identity(record: Path) -> tuple[str, str, str] | None:
     identity = (requester.get("goal_id"), requester.get("agent_id"), wake.get("operation_id"))
     if not all(isinstance(value, str) and value for value in identity):
         return None
-    return identity  # type: ignore[return-value]
+    session_id = (wake.get("conversation") or {}).get("session_id")
+    return (*identity, session_id if isinstance(session_id, str) and session_id else None)  # type: ignore[return-value]
 
 
 def pump_delegation_wakes(
@@ -963,7 +956,6 @@ def pump_delegation_wakes(
     store = controller.store
     root = store.root.parent
     context_for = goal_context or (lambda session: default_goal_context(controller, session))
-    owners = _owners(store)
     changed: list[dict[str, Any]] = []
     for record in sorted((_root(root) / "executions").glob("*/*.json")):
         if cancelled() or len(changed) >= limit:
@@ -972,19 +964,19 @@ def pump_delegation_wakes(
             identity = _pending_identity(record)
             if identity is None:
                 continue
-            goal_id, agent_id, operation_id = identity
+            goal_id, agent_id, operation_id, session_id = identity
             if execution_row_path(root, goal_id, agent_id, operation_id) != record:
                 continue  # an intent must name the requester that owns its storage address
-            sessions = owners.get((goal_id, agent_id))
-            if not sessions:
+            if session_id is None:
                 receipt = record_wake(record, lambda wake: wake_receipt(
                     wake, "refused", reason="no_wake_owner", refused_at=time.time()))
             else:
-                session = _select_owner(sessions, operation_id)
                 receipt = controller.loopx_mode.wake(
-                    session["session_id"],
+                    session_id,
                     record,
-                    goal_context=lambda session=session: context_for(session),
+                    goal_context=lambda session_id=session_id: context_for(
+                        store.load_session(session_id)
+                    ),
                 )
         except LockAcquireTimeoutError:
             continue  # a worker or decision holds the record; retry next tick
