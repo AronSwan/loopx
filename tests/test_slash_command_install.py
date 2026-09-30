@@ -393,6 +393,78 @@ def test_legacy_alias_retirement_keeps_native_slash_commands(
     assert (opencode_home / "skills" / "loopx-global-summary" / "SKILL.md").is_file()
 
 
+@pytest.mark.parametrize("surface,home_option,flat", [
+    ("codex", "codex_home", False),
+    ("claude-code", "claude_home", False),
+    ("gemini", "gemini_home", False),
+    ("agy", "agy_home", True),
+    ("kiro-cli", "kiro_home", False),
+    ("cursor", "cursor_home", False),
+    ("zcode", "zcode_home", False),
+    ("opencode", "opencode_home", False),
+])
+@pytest.mark.parametrize("uninstall", [False, True])
+def test_alias_retirement_is_owned_and_repeatable_across_hosts(
+    tmp_path, monkeypatch, surface, home_option, flat, uninstall,
+):
+    monkeypatch.setattr(slash_command_install, "_provisioned_mcp_interpreter", lambda: None)
+    root = tmp_path / surface
+    skills = root / "skills"
+    managed = (skills / "loop-global-summary.md" if flat else
+               skills / "loop-global-summary" / "SKILL.md")
+    user = (skills / "loop-global-risks.md" if flat else
+            skills / "loop-global-risks" / "SKILL.md")
+    managed.parent.mkdir(parents=True)
+    user.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_text(MANAGED_SKILL + "old alias\n")
+    user.write_text("user-owned skill\n")
+    options = {home_option: str(root)}
+    preview = install_slash_commands(
+        execute=False, surfaces=[surface], uninstall=uninstall,
+        include_legacy_aliases=False, **options,
+    )
+    assert managed.read_text() == MANAGED_SKILL + "old alias\n"
+    assert user.read_text() == "user-owned skill\n"
+    assert next(r for r in preview["installed"] if r["path"] == str(managed))["status"] == "would_retire_managed_file"
+    for _ in range(2):
+        actual = install_slash_commands(
+            execute=True, surfaces=[surface], uninstall=uninstall,
+            include_legacy_aliases=False, **options,
+        )
+        assert not managed.exists()
+        assert user.read_text() == "user-owned skill\n"
+        assert next(r for r in actual["installed"] if r["path"] == str(user))["status"] == "skipped_user_file"
+    if not uninstall:
+        canonical = (skills / "loopx-global-summary.md" if flat else
+                     skills / "loopx-global-summary" / "SKILL.md")
+        assert canonical.is_file()
+        assert not any(r["command"] == "/loop-global-summary" and r["invoke_as"]
+                       for r in actual["installed"])
+
+
+def test_facade_alias_role_comes_from_catalog_not_name_prefix(tmp_path, monkeypatch):
+    build_catalog = slash_command_install.build_slash_command_catalog
+
+    def renamed_alias(**options):
+        catalog = build_catalog(**options)
+        for row in catalog["commands"]:
+            if row["command"] == "/loopx-global-summary":
+                row["legacy_aliases"] = ["/old-summary"]
+        return catalog
+
+    monkeypatch.setattr(slash_command_install, "build_slash_command_catalog", renamed_alias)
+    specs = slash_command_install._command_prompt_specs(cli_bin="loopx", include_legacy_aliases=True)
+    alias = next(spec for spec in specs if spec["name"] == "old-summary")
+    assert alias["alias_for"] == "/loopx-global-summary"
+    root = tmp_path / "claude"
+    old = root / "skills" / "old-summary" / "SKILL.md"
+    old.parent.mkdir(parents=True)
+    old.write_text(MANAGED_SKILL + "old alias\n")
+    install_slash_commands(execute=True, surfaces=["claude-code"], claude_home=str(root))
+    assert not old.exists()
+    assert (root / "skills" / "loopx-global-summary" / "SKILL.md").is_file()
+
+
 def test_opencode_static_uninstall_preserves_installed_bridge(tmp_path: Path) -> None:
     opencode_home = tmp_path / "opencode"
     install_slash_commands(

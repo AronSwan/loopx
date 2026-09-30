@@ -140,14 +140,20 @@ one. Host integration changes command discovery only. It does not grant LoopX
 permission to write a repository, contact external systems, or bypass a user
 gate.
 
-Every host skill root exposes only canonical `loopx-*` skills. On any surface
-(Codex, Claude Code, OpenCode, and the opt-in hosts) an older managed
-`loop-global-*` skill file is retired during install and uninstall, while its
-catalog entry and the host's native slash-command compatibility remain
-available. A host that imports skills into a shared root such as
-`~/.agents/skills` can otherwise copy a deprecated facade next to the canonical
-one and make the same outcome resolve twice. This changes host command
-discovery, not goal execution or write authority.
+Every host skill root exposes only canonical `loopx-*` skills. Install and
+uninstall retire older LoopX-managed `loop-global-*` skill files; unmarked
+user-owned files are preserved and reported. This prevents cross-host imports
+from republishing a deprecated facade beside its canonical outcome.
+
+**Invocation migration:** on Claude Code and Kiro, the skill is also the slash
+command, so use `/loopx-global-summary`, `/loopx-global-gates`,
+`/loopx-global-todos` and `/loopx-global-risks` instead of `/loop-global-*`.
+Other skill-backed hosts likewise expose only the canonical names. OpenCode
+alone retains independently installed `commands/loop-global-*.md` when legacy
+aliases are enabled. `--no-legacy-aliases` omits those command files from new
+installs; it does not retire existing native command files. The command catalog
+still describes aliases, but a catalog row does not install a host invocation.
+Goal execution and write authority are unchanged.
 
 Both workflow and command installation reconcile managed duplicates between
 `CODEX_HOME/skills` (default `~/.codex/skills`) and `~/.agents/skills`.
