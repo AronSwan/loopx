@@ -20,7 +20,7 @@ process.stdin.on("data", (chunk: Buffer) => {
   accepted = true;
   const line = pending.subarray(0, newline).toString("utf8"); pending = Buffer.alloc(0);
   void (async () => {
-    try { await emit(await runHostProcess(decodeHostProcessRequest(JSON.parse(line)), emit, owner.signal)); }
+    try { await emit(await runHostProcess(decodeHostProcessRequest(JSON.parse(line)), emit, owner.signal, emit)); }
     catch { process.exitCode = 1; }
     finally { process.stdin.destroy(); }
   })();

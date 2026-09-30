@@ -343,17 +343,25 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
 
 type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
 const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
+/** What the host read back about the native Host process the operation launched. */
+type HostProcessDrain = "not_launched" | "drained" | "draining" | "unattributable";
+const hostProcessDrains: readonly HostProcessDrain[] = ["not_launched", "drained", "draining", "unattributable"];
 
 /** Advance one stop request from host release facts; a receipt is never inferred from time.
  *
  * ``settled`` needs the acknowledgement of a process that held the operation
- * lock, that lock free again, and the member's Turn lane released by the
- * stopped worker's process group. The host reads the lane from its holder
- * record and never takes it, so a legitimate Turn is not refused, and a holder
- * it cannot attribute is not released. Both released without an
- * acknowledgement means the named holder vanished before recording what it
- * observed, which is ``unknown`` rather than a fake settlement. A grace
- * timeout on its own moves nothing: a worker still holding a lock still runs.
+ * lock, that lock free again, the member's Turn lane released by the stopped
+ * worker's process group, and the native Host the operation launched drained
+ * together with its process group. A worker and its lane can let go while the
+ * Host supervisor is still terminating the Host, so their release proves
+ * nothing about the Host. The host reads the lane from its holder record and
+ * never takes it, so a legitimate Turn is not refused, and a holder it cannot
+ * attribute is not released. A Host drain that cannot be attributed keeps an
+ * acknowledged stop open so a later read with the same identity can still
+ * settle it. Everything released without an acknowledgement means the named
+ * holder vanished before recording what it observed, which is ``unknown``
+ * rather than a fake settlement. A grace timeout on its own moves nothing: a
+ * worker still holding a lock still runs.
  */
 export function decideDelegationStop(params: JsonObject): JsonObject {
   const phase = params.phase as StopPhase;
@@ -361,19 +369,29 @@ export function decideDelegationStop(params: JsonObject): JsonObject {
   requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
   requireThat(typeof params.operation_lock_free === "boolean" && typeof params.worker_lane_released === "boolean",
     "delegation stop release facts required");
+  requireThat(hostProcessDrains.includes(params.host_process as HostProcessDrain),
+    "delegation stop host process drain fact required");
   requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
     "delegation stop timeout fact must be boolean");
   requireThat(phase !== "acknowledged" || params.acknowledged === true,
     "an acknowledged stop cannot lose its acknowledgement");
   const operationFree = params.operation_lock_free === true;
-  const released = operationFree && params.worker_lane_released === true;
+  const workerReleased = operationFree && params.worker_lane_released === true;
+  const host = params.host_process as HostProcessDrain;
+  const hostDrained = host === "drained" || host === "not_launched";
+  const pending = !operationFree ? "operation_lock_still_held"
+    : params.worker_lane_released !== true ? "worker_lane_release_unproven"
+    : host === "draining" ? "host_process_still_running" : "host_process_drain_unproven";
   if (params.acknowledged === true) {
-    if (released) return {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"};
-    return {phase: "acknowledged", terminal: false,
-      reason: operationFree ? "worker_lane_release_unproven" : "operation_lock_still_held"};
+    if (workerReleased && hostDrained) {
+      return {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"};
+    }
+    return {phase: "acknowledged", terminal: false, reason: pending};
   }
-  if (released) return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
-  return {phase: "requested", terminal: false, reason: operationFree ? "worker_lane_release_unproven"
+  if (workerReleased && host !== "draining") {
+    return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
+  }
+  return {phase: "requested", terminal: false, reason: operationFree ? pending
     : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement"};
 }
 

@@ -3,17 +3,86 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
 
 # Keep Python's Windows executable/batch launcher compatibility. No timeout,
 # buffering or lifecycle decision lives in this transport-only child.
 _WINDOWS_COMMAND_RELAY = "import subprocess,sys;sys.exit(subprocess.call(sys.argv[1:]))"
+
+
+# A launching owner that must later prove its Host drained names a record path
+# here. The transport consumes it: the Host never inherits it, so a nested
+# LoopX run inside the Host cannot overwrite its parent's record.
+HOST_PROCESS_RECORD_ENV = "LOOPX_HOST_PROCESS_RECORD"
+HOST_PROCESS_RECORD_SCHEMA_VERSION = "loopx_host_process_record_v0"
+# Drain facts read back from a record; the caller's typed decision interprets them.
+HOST_PROCESS_NOT_LAUNCHED = "not_launched"
+HOST_PROCESS_DRAINED = "drained"
+HOST_PROCESS_DRAINING = "draining"
+HOST_PROCESS_UNATTRIBUTABLE = "unattributable"
+
+
+def _write_host_process_record(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, separators=(",", ":"))
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _process_group_present(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # it exists; it is simply not ours to signal
+    return True
+
+
+def host_process_drain(record_path: Path) -> str:
+    """Read whether the Host a record names, and its process group, have exited.
+
+    Read-only: nothing is signalled, and the TS-owned supervisor keeps cleanup.
+    No record means no Host was launched under it. ``draining`` while the
+    supervising bridge or the Host's group still has a member. A record from
+    another machine, one without a reported group whose supervisor is gone,
+    or a platform without process groups proves nothing: ``unattributable``.
+    """
+
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return HOST_PROCESS_NOT_LAUNCHED
+    except (OSError, ValueError):
+        return HOST_PROCESS_UNATTRIBUTABLE
+    if (not isinstance(record, dict) or record.get("schema_version") != HOST_PROCESS_RECORD_SCHEMA_VERSION
+            or record.get("host") != lock_holder_host_label() or not hasattr(os, "killpg")):
+        return HOST_PROCESS_UNATTRIBUTABLE
+    bridge, group = record.get("bridge_pid"), record.get("process_group")
+    if record.get("phase") != "finished":
+        if not isinstance(bridge, int) or bridge <= 1:
+            return HOST_PROCESS_UNATTRIBUTABLE
+        if _process_group_present(bridge):  # the bridge leads its own session
+            return HOST_PROCESS_DRAINING
+    if group is None:
+        # The supervisor left before reporting a group it may already have spawned.
+        return HOST_PROCESS_UNATTRIBUTABLE if record.get("phase") == "launching" else HOST_PROCESS_DRAINED
+    if not isinstance(group, int) or group <= 1:
+        return HOST_PROCESS_UNATTRIBUTABLE
+    return HOST_PROCESS_DRAINING if _process_group_present(group) else HOST_PROCESS_DRAINED
 
 
 class HostOutputLines:
@@ -76,6 +145,9 @@ def run_host_process(
         "stdout_limit_bytes": stdout_limit_bytes,
     }
     bridge = Path(__file__).with_name("host_process_bridge.ts")
+    environment = os.environ.copy()
+    record_value = environment.pop(HOST_PROCESS_RECORD_ENV, "")
+    record_path = Path(record_value) if record_value else None
     with subprocess.Popen(
         [
             _node_executable(),
@@ -90,10 +162,19 @@ def run_host_process(
         encoding="utf-8",
         errors="strict",
         start_new_session=True,
+        env=environment,
     ) as proc:
         assert proc.stdin is not None and proc.stdout is not None
         result = None
+        record = None
         try:
+            if record_path is not None:
+                # Written before the request, so no Host exists that the record
+                # does not name; a record that cannot be written launches nothing.
+                record = {"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                          "host": lock_holder_host_label(), "owner_pid": os.getpid(),
+                          "bridge_pid": proc.pid, "phase": "launching", "process_group": None}
+                _write_host_process_record(record_path, record)
             proc.stdin.write(
                 json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
             )
@@ -101,7 +182,13 @@ def run_host_process(
             for line in proc.stdout:
                 event = json.loads(line)
                 kind = event.get("kind")
-                if kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
+                if kind == "spawned" and isinstance(event.get("pid"), int):
+                    if record is not None:
+                        group = event.get("process_group")
+                        record.update(phase="spawned", host_pid=event["pid"],
+                                      process_group=group if isinstance(group, int) else None)
+                        _write_host_process_record(record_path, record)
+                elif kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
                     consume = on_stdout if kind == "stdout" else on_stderr
                     if consume is not None:
                         consume(event["text"])
@@ -124,6 +211,10 @@ def run_host_process(
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+        if record is not None and result is not None and proc.returncode == 0:
+            # The supervisor returned only after cleaning its group; the group is still re-read.
+            record["phase"] = "finished"
+            _write_host_process_record(record_path, record)
         if proc.returncode != 0 or result is None:
             raise RuntimeError("Managed Host process supervision returned no result")
         return result

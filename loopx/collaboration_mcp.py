@@ -42,12 +42,18 @@ from .control_plane.turn_driver.journal_store import (
     turn_journal_path,
 )
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
+from .control_plane.turn_driver.host_process_transport import (
+    HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV, host_process_drain,
+)
 from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
     turn_lane_liveness, turn_lane_target,
 )
 from .control_plane.work_items.task_lease import release_task_lease
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
+from .control_plane.collaboration.delegation_inventory import (
+    DELEGATION_HOST_PROCESS_SUFFIX, DELEGATION_STOP_RECEIPT_SUFFIX,
+)
 from .control_plane.collaboration.peers import return_result
 from .control_plane.collaboration.inbox import acknowledge, _entry, normalize_request
 from .control_plane.collaboration.goal_instance_scope import (
@@ -443,7 +449,12 @@ class Delegations:
     @staticmethod
     def _stop_path(path: Path) -> Path:
         """The stop receipt sits beside its execution record and is never merged into it."""
-        return path.with_name(path.stem + ".stop.json")
+        return path.with_name(path.stem + DELEGATION_STOP_RECEIPT_SUFFIX)
+
+    @staticmethod
+    def _host_process_record(path: Path) -> Path:
+        """Where this operation's Turn names the native Host it launched, for drain readback."""
+        return path.with_name(path.stem + DELEGATION_HOST_PROCESS_SUFFIX)
 
     @staticmethod
     def _dispatch_lock(path: Path) -> Path:
@@ -913,7 +924,9 @@ class Delegations:
         holder is signalled by process group and given a bounded grace to
         acknowledge; another host's holder is left to find the request at its
         next checkpoint or fenced write. ``settled`` and ``unknown`` come from
-        the typed decision over lock facts; elapsed time proves nothing.
+        the typed decision over lock facts and the drain of the native Host the
+        Turn launched, whose TS supervisor alone terminates it; elapsed time
+        proves nothing.
         """
 
         require_operation_id(operation_id)
@@ -943,6 +956,9 @@ class Delegations:
                         self._acknowledge_stop(path, _read(path), binding, source="requester")
                 except LockAcquireTimeoutError:
                     pass  # an unnamed holder meets the request at its next checkpoint or write
+                else:
+                    # A Host left behind by an earlier worker may still be terminating.
+                    self._await_host_drain(path, time.monotonic() + DELEGATION_STOP_GRACE_SECONDS)
             else:
                 # Only the named worker acknowledges. If it vanishes first, the typed
                 # decision reports unknown instead of a requester settlement.
@@ -982,9 +998,12 @@ class Delegations:
             os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
             return
+        # Poll the release facts the decision needs; the deadline only bounds this
+        # call, and a Host still draining when it passes leaves the stop open.
         deadline = time.monotonic() + DELEGATION_STOP_GRACE_SECONDS
         while time.monotonic() < deadline:
             if self._operation_lock_free(path):
+                self._await_host_drain(path, deadline)
                 return
             time.sleep(0.2)
         try:
@@ -993,6 +1012,14 @@ class Delegations:
             return
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and not self._operation_lock_free(path):
+            time.sleep(0.1)
+        # The Host supervisor sits outside the worker's group and cleans up on its own.
+        self._await_host_drain(path, time.monotonic() + DELEGATION_STOP_GRACE_SECONDS)
+
+    def _await_host_drain(self, path: Path, deadline: float) -> None:
+        """Wait, never kill: the TS Host supervisor owns terminating its process group."""
+        while (host_process_drain(self._host_process_record(path)) == HOST_PROCESS_DRAINING
+               and time.monotonic() < deadline):
             time.sleep(0.1)
 
     def _acknowledge_stop(self, path: Path, row: dict, binding: dict, *, source: str) -> None:
@@ -1018,10 +1045,11 @@ class Delegations:
             transition = effect_runtime_result("collaboration.delegation.observe", {
                 "from": observed, "to": "stopped",
             })
-            # This process holds the operation lock and its lane read comes later.
+            # This process holds the operation lock; its lane and Host drain are read later.
             phase = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": True,
                 "operation_lock_free": False, "worker_lane_released": False,
+                "host_process": HOST_PROCESS_DRAINING,
             })
             current["status"] = transition["status"]
             _write(path, current)
@@ -1068,6 +1096,8 @@ class Delegations:
                 return self._stop_receipt(row, binding, stop)
             facts = {"operation_lock_free": self._operation_lock_free(path)}
             facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
+            # Read last: a Host seen drained after its worker and lane let go stays drained.
+            facts["host_process"] = host_process_drain(self._host_process_record(path))
             decision = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
                 "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
@@ -1085,12 +1115,17 @@ class Delegations:
                 _write(self._stop_path(path), stop)
             return self._stop_receipt(row, binding, stop)
 
-    def _cli(self, binding: dict, *args: str, timeout: int = 60) -> dict:
+    def _cli(self, binding: dict, *args: str, timeout: int = 60, host_record: Path | None = None) -> dict:
+        environment = _pinned_release_environment()
+        environment.pop(HOST_PROCESS_RECORD_ENV, None)
+        if host_record is not None:
+            # The Turn's Host transport names the process group its supervisor owns.
+            environment[HOST_PROCESS_RECORD_ENV] = str(host_record)
         completed = subprocess.run([*_python_module_command("loopx.cli"),
             "--registry", str(self.registry),
             "--runtime-root", str(self.root), "--format", "json", *args,
         ], cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout, env=_pinned_release_environment())
+            timeout=timeout, env=environment)
         try:
             value = json.loads(completed.stdout)
         except ValueError as exc:
@@ -1456,7 +1491,8 @@ class Delegations:
                     ]
                 )
                 result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
-                                   "--execute", timeout=binding["timeout_seconds"] + 60)
+                                   "--execute", timeout=binding["timeout_seconds"] + 60,
+                                   host_record=self._host_process_record(path))
                 self._record_turn_result(path, row, result)
         finally:
             # The compatibility bootstrap is private host input.  Keeping it
@@ -1500,6 +1536,7 @@ class Delegations:
                     *execution,
                     "--execute",
                     timeout=binding["timeout_seconds"] + 60,
+                    host_record=self._host_process_record(path),
                 )
                 self._record_turn_result(path, row, result, publish=False)
             if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
@@ -1616,7 +1653,8 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
         """Stop one original operation and return what was proven, not what was hoped.
 
         settled: the worker acknowledged, released the operation and let go of its
-        Turn lane. acknowledged/requested: still winding down; call again. unknown:
+        Turn lane, and the native host and its process group exited.
+        acknowledged/requested: still winding down; call again. unknown:
         the named worker vanished before acknowledging; inspect its Turn and task
         lease before reusing the task. noop: already accepted/rejected/stopped.
         Stopped work is not resumed; a new scope needs a new operation id. Elapsed
