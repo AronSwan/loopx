@@ -756,6 +756,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-proposal-row strong { font-size: 13px; }
 .personal-proposal-row p { margin: 0; color: #686f7c; font-size: 11px; }
 .personal-proposal-row > b { color: #315fc8; font-size: 11px; }
+.personal-proposal-row[data-action-kind="operation.execute"] { grid-template-columns: 36px minmax(0, 1fr); }
+.personal-proposal-row[data-action-kind="operation.execute"] > b { grid-column: 2; overflow-wrap: anywhere; }
 .personal-proposal-row.is-applied { border-color: #b5ddcc; background: #f3fbf7; }
 .personal-proposal-row.is-error, .personal-proposal-row.is-stale { border-color: #efc3c3; background: #fff7f7; }
 .personal-proposal-row.is-gated { border-color: #ead39c; background: #fffaf0; }
@@ -1173,6 +1175,18 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-detail-card dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; font-size: 12px; }
 .personal-detail-card dt { color: var(--pw-faint); }
 .personal-detail-card dd { margin: 0; overflow-wrap: anywhere; }
+.personal-attention-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--pw-muted); font-size: 12px; }
+.personal-attention-brief h3 { margin: 20px 0 12px; font-size: 16px; }
+.personal-attention-brief h4 { margin: 24px 0 8px; font-size: 13px; font-weight: 600; }
+.personal-attention-brief .personal-md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-attention-brief .personal-md p { color: var(--pw-text); font-size: inherit; line-height: inherit; }
+.personal-attention-brief .personal-attention-missing { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--pw-amber-bg); color: var(--pw-amber); }
+.personal-attention-identifiers { margin-top: 24px; border-top: 1px solid var(--pw-line); padding-top: 16px; }
+.personal-attention-identifiers summary { color: var(--pw-muted); cursor: pointer; font-size: 12px; min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }
+.personal-attention-identifiers summary::-webkit-details-marker { display: none; }
+.personal-attention-identifiers summary::before { content: "▸"; }
+.personal-attention-identifiers[open] summary::before { content: "▾"; }
+.personal-attention-identifiers dl { margin: 0 0 16px; }
 .personal-run-drawer-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 11px; background: #efefec; }
 .personal-run-drawer-tabs button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: 12px; font-weight: 650; }
 .personal-run-drawer-tabs button[aria-selected="true"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 12%); }
