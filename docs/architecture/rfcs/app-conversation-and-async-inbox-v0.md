@@ -108,6 +108,46 @@ This is a proposed App presentation improvement, not installed readback or
 full GQ10 prioritization. Cross-project selection, at most two recommended
 priorities and actual scoped adoption remain in the existing P1 attention work.
 
+### Waiting is part of the conversation
+
+One shared TypeScript activity surface serves manager and Goal conversations,
+including the compact overview receipt. It appears when the user sends, before
+executor session preparation can block. The shortest journey is send → visible
+receipt → observed work or actionable failure → readable answer in the same place.
+
+- Show the latest reported activity and request elapsed time on one quiet line.
+  Time measures waiting, not percent complete or proof of active computation.
+  View changes retain the request timestamp; recovery uses the recorded turn
+  timestamp when available, and omits duration when it is unknown.
+- Keep tool/phase events in an expandable recent-activity list. Render only
+  upstream observations; never simulate phases, expose hidden reasoning, or
+  infer progress from elapsed time. A period without new events has an explicit
+  waiting caption, not an invented failure or continually changing animation.
+- Before dispatch, cancel only session preparation and state that the request
+  was not submitted. After acceptance, existing exact-turn steering/interrupt
+  controls own effects; stopping observation is not stopping the worker.
+- The compact receipt and full conversation offer the same controls. Failure
+  ends the live indicator, preserves the request/partial answer and names the
+  next supported action. A completed delegation still shows receiver adoption
+  separately; finishing the manager turn does not complete the delegated work.
+
+Primary-source research (2026-09-29), not hands-on certification of other apps:
+[Perplexity Pro Search](https://www.perplexity.ai/help-center/en/articles/10352903-what-is-pro-search)
+documents research decomposition and source links;
+[Cursor Agent](https://cursor.com/docs/agent/overview) distinguishes queued
+follow-ups from steering an active run;
+[Gemini Deep Research](https://support.google.com/gemini/answer/15719111?hl=en)
+documents a reviewable plan and completion notification. Borrow observability,
+control and clear completion boundaries, not provider-specific activity names.
+Notifications and durable cross-restart timing remain separate acceptance;
+a browser timer does not implement either.
+
+Decisive regression: delay executor connection, cancel before dispatch, retry
+through startup failure, then observe a streamed turn while switching between
+overview and conversation. Verify stable elapsed time, quiet waiting, exact-turn
+controls, preserved partial output and no duplicate submission. Exercise the
+packaged UI with synthetic fixtures and qualify the chosen real query separately.
+
 ## Current owners and gaps
 
 | Boundary inspected | Existing implementation | Gap to address through that owner |
@@ -262,6 +302,18 @@ backs off without resending, and typed terminal blockers stay stopped. This
 qualifies the persisted recovery boundary, not live provider availability or
 the complete GQ09 journey.
 
+The pending-receipt checkpoint moves file-existence classification into the
+shared `collaboration/inbox_receipts.ts` read model. Missing, unreadable and
+identity-conflicting decisions/results are explicit; a damaged conclusion cannot
+silently clear the receiver's request or remove the original App collaboration
+card. Original-byte recovery returns once without rerunning work or changing
+audience. Native private-file/CLI and production HTTP tests cover this boundary;
+packaged browser checks cover its existing unverified-delivery presentation.
+The adapter batches by count and encoded bytes rather than raising the bridge
+limit. No new store or persisted schema is introduced. This does not complete
+the accept/consume/cancel lifecycle migration or qualify native owner selection,
+steering, team adoption or live Lark transport.
+
 Before each extraction report base/head real-call latency, boundary crossings,
 bytes, owners deleted/retained and compatibility callers. Product delivery must
 not wait for full Python retirement. Python may retain IO; TS owns migrated
@@ -316,6 +368,24 @@ polish, materials and attention summaries follow; promotional film and scale
 follow product evidence. Reuse pending acceptance-recovery and GoalRef work
 rather than implement a competing session or inbox lifecycle. Generic TS inbox
 extraction remains incremental within those journeys, not their prerequisite.
+
+The direct-group companion retains typed non-admission causes through the
+provider and App. Feedback describes the last observed event and current trigger
+separately: enabling direct messages does not prove an old message ran, and does
+not scan and dispatch captured history. Consecutive concise requests and a
+correction must retain their own object, constraints and return lineage. Transport
+fixtures do not qualify receiver adoption or actual repair and merge.
+
+The shared conversation intake resolves intent and verifies decision-relevant
+facts before delegation. A currently satisfied outcome returns its evidence
+without duplicate work or another protected-action proposal; a historical record
+or unavailable read is not current proof. Direct analysis, existing-work reuse
+and bounded peer verification are valid outcomes. This is general reasoning
+guidance for every domain, not another classifier or authority owner. Core's
+typed grants/effects remain authoritative; normal authorized host tools resolve
+external facts, and restricted audiences retain explicit gaps. GQ03/GQ07 include
+both already-satisfied and genuinely unfinished requests, alongside the equivalent
+report cases. Actual lookup and model quality remain release qualification.
 
 ### Entry behavior compatibility
 
@@ -394,3 +464,8 @@ prompt/case hashes, request settings, token usage and repeat count. This layer
 qualifies model interpretation of supplied evidence, not live discovery, actual
 dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
 real collaboration transport tests qualify those separate boundaries.
+
+The same conversation surface preserves reading position during streaming: output
+follows only while the reader stays near the bottom, and a latest-message action
+restores following. Multiline drafts expand within a bounded composer; suggestions
+remain on overview/empty entry states rather than displacing an active conversation.
