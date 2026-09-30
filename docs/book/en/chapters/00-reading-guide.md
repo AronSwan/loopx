@@ -82,8 +82,8 @@ Developers ready to enter Kernel implementation can go directly to the
   [long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/)
   and [Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
 - **How do I change a rule and prove it is deliverable?** Read the [contribution map](source-protocol-map.md), [rule changes](source-change-control-plane-rule.md), and [validation to PR](source-validation-to-pr.md), then descend into
-  [Lesson 9](/loopx/docs/development/control-plane-course/09-engineering-a-control-plane-rule/) and
-  [Lesson 10](/loopx/docs/development/control-plane-course/10-autonomous-agent-quality-gates/).
+  [Lesson 9](/loopx/docs/development/control-plane-course/09-engineering-a-control-plane-rule/)
+  and [Lesson 10](/loopx/docs/development/control-plane-course/10-autonomous-agent-quality-gates/).
 - **How do Extensions, domain capabilities, and the Kernel compose?** Read [placement](08-extension-placement.md), [scaffolding](09-extension-scaffold.md), and [lifecycle](10-extension-lifecycle.md), then
   descend into [Lesson 11](/loopx/docs/development/control-plane-course/11-extension-layer/).
 
@@ -114,22 +114,60 @@ The book explains why LoopX is designed this way, then connects the design to us
 
 Each chapter begins with a concrete problem, then explains design, conditions, real costs, and the next action. Source and RFCs substantiate those explanations. Follow the contribution path and Course for implementation depth.
 
-## How chapters are organized
+## Read a book, not a command inventory {#book-journey}
 
-Each chapter prioritizes four questions:
+See complete work first, then enter its internals. The learning path does not require memorizing every
+protocol name up front:
 
-1. What job does the reader need to complete now?
-2. What observable result proves success?
-3. Which concepts are necessary to predict the behavior?
-4. Where should the reader recover when the normal path fails?
+| Learning stage | Continue with | What you should be able to do afterward |
+| --- | --- | --- |
+| Decide whether a control plane is useful | Session-to-loop, Host/Goal, four demands | Identify facts that must outlive a session and short tasks that do not justify extra governance |
+| Understand a normal delivery | One governed Turn, then state and authority | Follow current facts through governed action, validation, and acceptance, with distinct owners |
+| Understand how work continues | Recovery, observation, state-machine reference | Separate unknown outcomes, legitimate waiting, drift, and stopping instead of substituting restarts for judgment |
+| Connect a project and return a result | Onboarding, App/CLI, Workspace, applicability | Choose a real execution route, inspect the first artifact, and explain remaining responsibility and the next entrypoint |
+| Change the system safely | Contribution map, protocol chain, rule changes, validation to PR, Extensions, engineering boundaries | Locate a real problem's owner and deliver required implementation, counterexamples, compatibility, and evidence |
 
-Command snippets fall into three categories:
+Concept chapters explain causes and tradeoffs; practice chapters provide prerequisites, actions, readback,
+and failure exits; contribution chapters follow protocols and implementation to the first boundary that
+needs to change. They need not all become the same four-column checklist, but must not leave essential
+reasoning for readers to guess. State-machine details and the appendix are references, not material that
+must be memorized before a first connection.
 
-- **Runnable:** checked against the stated LoopX baseline.
-- **Based on the official scaffold:** the example focuses on the domain changes, protocol, and validation
-  needed for the task without a separate exercise repository.
-- **Simplified for explanation:** illustrates a state relationship and must not be pasted into production
-  configuration.
+[The onboarding chapter](05-connect-existing-project.md#three-completions) separates installation,
+connection, and delivery. Its [first-delivery walkthrough](05-connect-existing-project.md#first-delivery)
+rejoins T1/T2, CI, decisions, and the final return. Come back to that path after activating the actual Host.
+Operators need not run source tests first; prospective contributors can use
+[the Course exercises](12-control-plane-course.md#reader-checkpoints) to check their predictions.
+
+Command categories remain explicit. **Runnable** requires the stated version, inputs, and authorization.
+**Based on the official scaffold** follows the existing teaching package without inventing a runtime.
+**Simplified for explanation** tables, labels, and data shapes must not be pasted into production
+configuration. Record preview, execution, readback, and test results separately; supplying a command is
+not evidence that it ran successfully.
+
+## Four questions for an accountable explanation {#judgment-standard}
+
+The architecture questions explain why mechanisms exist. These four questions check whether an individual
+conclusion is complete:
+
+| Question | An adequate answer includes | Not an adequate answer |
+| --- | --- | --- |
+| What facts does it use? | Object identity, current source, applicable mode, version/time; history separated from current facts | A page says so; it worked before |
+| Why allow or refuse? | The owning rule, satisfied or missing conditions, and the scope of the conclusion | Quota remains; no error appeared; the system refuses |
+| What evidence supports it? | Object-bound readback, validation, or receipt, with explicit limits | Only a test title, successful build, or executor claim |
+| Which entrypoint comes next? | Legal read/action, prerequisites, post-action readback, and when to stop or seek help | Run it again; turn off the check |
+
+For example, C1 tests passed and T1 settled, but current code is C2 and G1 has not approved publication.
+A complete explanation goes beyond refusing publication: it identifies C1-bound evidence, explains why
+settlement grants no publication authority, names missing C2 checks and decisions, and considers whether
+independent T2 work remains legal. Follow the reasoning in
+[onboarding and delivery](05-connect-existing-project.md#first-delivery), then supply your own answer in
+[the integrated exercise](12-control-plane-course.md#integrated-judgment).
+
+This is an editorial and learning standard, not a new schema, runtime obligation, or approval gate. When
+information is insufficient, name what cannot yet be concluded, the missing evidence, and who can confirm
+it. Do not guess to fill a table. Refusal is not the end goal either: reassess when conditions are repaired,
+preserve work that already happened, and find the next legal action.
 
 ## How to read the evidence
 
@@ -188,9 +226,11 @@ If your version differs, inspect current command help and release notes before d
 documentation drift, a release difference, or a product behavior change. This book does not guess what
 different version identifiers imply.
 
-### How to read the TypeScript migration
+### Reading the TypeScript migration's historical baseline
 
-`v0.5.4` does not mean that all of LoopX has been rewritten in TypeScript. The current release baseline is:
+This section explains migration history at `v0.5.4`, not the currently installed version. The preceding
+release baseline and actual `--version` still apply. Do not infer the shipped state of every current
+Host/provider from these phase descriptions. `v0.5.4` does not mean all of LoopX was rewritten in TypeScript:
 
 - TypeScript owns the canonical semantics for migrated slices of the Effect Program, Turn and Host Todo
   settlement, Todo completion, quota delivery/spend/void/monitor-poll, the local task-lease lifecycle,
@@ -202,7 +242,9 @@ different version identifiers imply.
 - current `main` is in the transaction-payoff phase: later progress is measured by complete transaction
   cutovers and deleted legacy semantics, not by accumulating leaf helpers and bridge calls.
 
-Treat the `v0.5.4` tag and release notes as the shipped baseline. Use the current status of the
+Use the `v0.5.4` tag and release notes when checking that historical milestone. Stage 3/Stage 4 in this
+record are phase boundaries, not a current support matrix. For subsequent cutovers and CLI/App convergence,
+consult the current status of the
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
 for later cutovers and final CLI/App convergence. `v0.5.4` ships only the first receipt-bound scheduler
 follow-up slice of Stage 3; broader CLI/App convergence and Stage 4 distribution cleanup remain future

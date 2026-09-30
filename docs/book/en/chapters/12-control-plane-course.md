@@ -46,22 +46,22 @@ entering Kernel implementation topics.
 
 ## From reading to making a judgment {#reader-checkpoints}
 
-The whole Course is not a prerequisite for adopting LoopX. To operate your own project,
-start with [onboarding](05-connect-existing-project.md) and the [Workspace](workspace-v1.md).
-Before changing implementation, use the checks below. They connect four questions from
-[the running example](00-reading-guide.md#running-example) to existing regression tests,
-without adding a teaching state machine, running a model, or actually publishing T3.
+Use [the reading guide's four questions](00-reading-guide.md#judgment-standard): **what facts support
+it, why it is allowed or refused, what evidence supports the conclusion, and which entrypoint comes next.**
+“Try again” answers none of them. “Stop first” also needs the missing condition, who can repair it, and
+when to reassess.
 
-For each check, predict the result, run the tests, and locate the assertions that support
-the answer. Record input facts, allowed outcomes, forbidden outcomes, and evidence limits.
-You do not need a new Goal, acceptance protocol, or committed exercise notes.
+If you have not completed actual work yet, follow [onboarding and the first delivery](05-connect-existing-project.md#first-delivery).
+These tests support explanation and contribution, not a substitute for real operation. For everyday operation, start with [reading entrypoints](#read-before-change) and
+[diagnostic routing](#diagnostic-routing). Before changing implementation, work through the four exercises:
+predict, inspect assertions, and give a conditional next step. Completing the whole Course, creating a
+new Goal or acceptance protocol, and committing exercise notes are not prerequisites.
 
 ### Environment and evidence limits {#checkpoint-environment}
 
-Run the commands from the repository root of a complete LoopX source checkout, not from
-the business project you intend to manage. They need Python 3.11+, Node.js 22.22.3+, uv,
-and the test extra; dependency installation may access package indexes. Record the
-checkout first rather than treating the book's answer as a passing run on your machine:
+Run tests from the root of a complete LoopX source checkout, not the business project. They require
+Python 3.11+, Node.js 22.22.3+, uv, and the test extra. Installing dependencies may access package indexes.
+Record the actual checkout first:
 
 ```bash
 git rev-parse HEAD
@@ -70,98 +70,200 @@ node --version
 uv sync --extra test
 ```
 
-The first three checks use real local state or CLI calls in temporary directories; the
-fourth uses constructed quota inputs. These are not write-free demonstrations: they
-create test state and may start a local Effect runtime. Do not replace fixture registries,
-state deletion, or corruption injection with your live Goal. Missing dependencies or an
-unavailable runtime block the exercise; they do not establish a passing rule. Do not
-remove a guard to make the exercise pass.
+The first three groups use real local state or CLI calls in temporary directories; the fourth uses
+constructed quota inputs. They write test state and may start a local Effect runtime. Never substitute
+a live Goal for fixture registries, deletion, or corruption injection. Missing dependencies, collection
+failures, zero collected tests, or unavailable runtimes do not count as passing behavior.
 
-Source links below are pinned to the inspected main commit; the commands execute your
-recorded checkout. When a test is renamed or behavior changes, follow the original invariant
-to its current owner and recheck the explanation instead of copying new output into the
-expectation. Passing these tests covers their paths, not full-product or real-Host qualification.
+Source links are pinned to the inspected commit; commands execute your recorded checkout. Check version
+differences first. When tests move, follow the original invariant to the owner rather than copying new
+output into the expected result. These tests do not qualify models, real Hosts, remote providers, or the
+whole product.
+
+### Read before deciding whether to change state {#read-before-change}
+
+These are operator reading entrypoints, not fixture initialization. Identify the exact existing registry,
+runtime root, Goal, and Todo from configuration, not display names or the exercise's T1/M1 labels. Set the
+four shell variables before running this block; missing variables stop it:
+
+```bash
+: "${REGISTRY:?Set the existing registry path}"
+: "${RUNTIME:?Set the existing runtime root}"
+: "${GOAL:?Set the exact goal id}"
+: "${TODO:?Set the exact todo id}"
+loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
+  todo list --goal-id "$GOAL" --todo-id "$TODO"
+loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
+  task-lease inspect --goal-id "$GOAL" --todo-id "$TODO"
+```
+
+One reads the work item; the other inspects its lease. Neither requests completion, acquisition, or
+settlement. Reads can still start a runtime, and the two responses are not an atomic snapshot. Record
+their respective identities, sources, times, and available versions. Record missing fields as missing,
+not as approved, open, or zero.
+
+Not every command that sounds like a check is a side-effect-free read. The admission path of
+`quota should-run --codex-app` can create a heartbeat receipt; `refresh-state` is governed writeback.
+Acquire/renew, settlement, and ACK are not either of the two reading commands above. The tests below
+exercise those operations in isolated fixtures, not as production diagnostic scripts to copy sequentially.
 
 <!-- reader-checkpoint:state:start -->
 ### Check one: which state can admit work? {#checkpoint-state}
 
-**Predict first.** T1 is done or blocked in the selected File/SQLite authority, while old
-Markdown still shows open. Can T1 execute? If authority reads temporarily fail, can
-Markdown supply a fallback answer?
+Predict first: T1 is done or blocked in the selected authority but open in Markdown. Can it run?
+Conversely, does a missing display entry prove work does not exist?
+
+#### Factual basis {#state-facts}
+
+Identify the same Goal's selected authority, exact Todo state, and current Agent constraints. The role
+of display and source depends on mode: promoted File/SQLite paths cannot substitute stale Markdown for
+the authoritative answer, while a legacy path may still use Markdown as source.
+
+#### Why allow or refuse? {#state-reason}
+
+Refusal follows source state or a failed read, not page wording. Cached open status cannot readmit
+done/blocked work, and unreadable authority does not prove that work is open. Display truncation, however,
+is not a rejection reason: existing work that satisfies current conditions can be selected precisely.
+
+#### Supporting evidence {#state-evidence}
 
 ```bash
 uv run --extra test pytest -q \
   tests/control_plane/test_quota_authority_settlement_journey.py::test_stale_markdown_cannot_admit_terminal_or_blocked_work \
-  tests/control_plane/test_quota_authority_settlement_journey.py::test_failed_canonical_read_cannot_fall_back_to_markdown
+  tests/control_plane/test_quota_authority_settlement_journey.py::test_failed_canonical_read_cannot_fall_back_to_markdown \
+  tests/control_plane/test_quota_authority_settlement_journey.py::test_exact_selection_reaches_work_beyond_display_limits
 ```
 
-**Compare with the answer.** The first test covers File/SQLite and done/blocked combinations:
-`decision=skip`, no selected Todo, and a `not_committed` heartbeat receipt. The second makes
-File authority unreadable: it must not select a Todo or create this Turn's heartbeat receipt.
-The presence of a display does not create another admission source.
+[The first test](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py)
+asserts `decision=skip`, no selected Todo, and a `not_committed` receipt. The second asserts no selection
+and zero receipts for this Turn. The third covers legacy/File/SQLite: exact selection returns
+`decision=run`, with both selected Todo and settlement identity naming the target even beyond display limits.
 
-**Evidence limit.** This protects admission under a selected authority. It does not mean all
-Markdown is a cache: a legacy path can still use Markdown as source. It also does not prove
-the unavailable provider has been repaired. Revisit [state](state-substrate.md) and inspect
-[the tests](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py).
+These establish source/selection constraints for the tested paths, not provider recovery, projection-only
+behavior for every legacy path, or permission to run merely because a Todo is open.
+
+#### Next entrypoint and stopping condition {#state-next}
+
+Use [exact reads](#read-before-change) to establish source and status. For done work, follow existing
+continuation rather than reopening it to satisfy a tutorial. For blocked work, inspect
+[dependencies and authority](work-graph-and-authority.md). With unreadable source, the
+[state owner](state-substrate.md) resolves unavailability; do not let Markdown take over in the meantime.
+Continue through the original Host's admission entrypoint only after the source is restored and current
+conditions rechecked. A visible page is not an admission receipt.
 <!-- reader-checkpoint:state:end -->
 
 <!-- reader-checkpoint:lease:start -->
 ### Check two: does historical success still grant execution? {#checkpoint-lease}
 
-**Predict first.** A acquires and renews a lease, then repeats the original acquire request.
-Does it receive the current lease, or proof that automatically restores old execution rights?
-After release, should the original acquire key grant execution again?
+Predict first: A acquires, renews, and replays the original acquire request. Should the historical
+receipt and current lease be identical? What does reusing the key after release mean?
+
+#### Factual basis {#lease-facts}
+
+Read the current lease and original receipt separately. Check Goal/Todo, owner, mode, state, version,
+and execution identity. This example covers only the File/SQLite `hard_lease` fixture. The same Agent
+name or a past success is insufficient proof for the current execution instance.
+
+#### Why allow or refuse? {#lease-reason}
+
+Returning history must not revive old authority. Renewal requires current lease proof; after release,
+the old acquire key is retired and cannot transform the same request into new execution. A new key is
+not a bypass either: fresh work admission, current ownership, and version conditions must hold before
+acquiring another lease.
+
+#### Supporting evidence {#lease-evidence}
 
 ```bash
 uv run --extra test pytest -q \
   tests/control_plane/test_canonical_lease_acquire.py::test_public_acquire_renew_complete_and_retired_retry
 ```
 
-**Compare with the answer.** In this File/SQLite, `hard_lease` fixture, retry after renewal
-returns the current lease while retaining the original receipt. Reusing the retired acquire
-key after release is rejected as `idempotency_key_reuse`; a new valid acquire uses a new key.
-After completion writeback, the Todo is done and the lease is released. The test asserts
-`state.exists()` after actual completion, not that all state files are absent at the end.
+[The test](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_canonical_lease_acquire.py)
+asserts that acquire readback after renewal returns the current lease and retains the original receipt.
+Reusing the key after release yields `idempotency_key_reuse`. A new valid acquire advances version;
+completion leaves the Todo done and lease released; acquire against completed work yields `todo_not_open`.
+`state.exists()` is true after actual completion, not proof that every state file was deleted.
 
-**Evidence limit.** Read historical receipts and current execution proof separately. This
-sequential test does not prove strong exclusion for every soft-claim path, or cover concurrent
-real Hosts, TTL expiry, or fencing at an external write sink. Revisit
-[authority](work-graph-and-authority.md) and inspect
-[the test](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_canonical_lease_acquire.py).
+This is sequential execution, not evidence of strong exclusion for soft-claim, real competition after
+TTL expiry, or an external service fencing an old executor's writes.
+
+#### Next entrypoint and stopping condition {#lease-next}
+
+Start with [lease inspection](#read-before-change), not another acquire. When ownership differs or work
+has ended, stop this write path and return to the [claim/lease and lifecycle owner](work-graph-and-authority.md).
+Do not renew on behalf of another executor. If new execution is needed, obtain current proof through
+its legal entrypoint, then inspect Todo and lease readback. Keep the old receipt to explain history,
+not to manufacture fresh authorization.
 <!-- reader-checkpoint:lease:end -->
 
 <!-- reader-checkpoint:settlement:start -->
 ### Check three: which part of incomplete work should be repeated? {#checkpoint-settlement}
 
-**Predict first.** T1's writeback exists, and quota has been debited, but its settlement
-receipt is missing. Should recovery repeat T1, debit again, or recover the original operation's
-receipt? What proves that recovery did not debit again?
+Predict first: T1 writeback and quota debit exist, but the settlement receipt is missing. Should you
+repeat T1, debit again, or repair the record?
+
+#### Factual basis {#settlement-facts}
+
+You need the original Goal/Agent/Todo/Turn binding, completed writeback, debit record, receipt, and
+settlement state. A timeout alone cannot establish them. Missing receipt does not automatically mean
+no debit happened.
+
+#### Why allow or refuse? {#settlement-reason}
+
+Preserve confirmed work; this example restores the original operation's record integrity.
+`spend_required` and `spend_receipt_required` describe different outstanding steps, not one instruction
+to rerun the Host. Whether an external effect committed may instead be unknown; that belongs to
+[unknown-outcome reconciliation](#unknown-outcome), not this example.
+
+#### Supporting evidence {#settlement-evidence}
 
 ```bash
 uv run --extra test pytest -q \
   tests/control_plane/test_quota_authority_settlement_journey.py::test_returned_command_settles_and_repairs_receipts_without_another_debit
 ```
 
-**Compare with the answer.** Initial writeback returns `spend_required`; executing its bound
-command reaches `settled`. The fixture then simulates only a missing receipt. The next read
-reports `spend_receipt_required`. Executing the returned recovery command reports
-`appended=false`, and the debit count stays at one. A further read reaches `settled` without
-`settlement_owed`. Inspect the count and final state, not just the process exit code.
+[The test](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py)
+first moves from `spend_required` to `settled`, then removes the corresponding receipt only in its
+fixture. Another writeback returns `spend_receipt_required` and `recovery_does_not_spend=true`.
+The returned command yields `appended=false` and the debit count remains one. A final check is
+`settled` without `settlement_owed`; the next Turn no longer remains in that settlement-recovery path.
 
-**Evidence limit.** Do not turn fixture receipt deletion into an operating runbook, or invent
-a repair command without the original Goal/Agent/Todo/Turn binding. This test does not resolve
-an unknown external effect, establish a zero API bill, or close G1 or Goal acceptance.
-Revisit [the normal Turn](03-one-turn.md) and [recovery](04-runtime-boundaries.md), and inspect
-[the test](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_quota_authority_settlement_journey.py).
+These assertions establish this internal recovery, not a zero supplier bill, resolution of another
+unknown effect, G1 closure, or Goal acceptance. Passing a test does not prove that a live Goal recovered.
+
+#### Next entrypoint and stopping condition {#settlement-next}
+
+Inspect current state through [Turn settlement](03-one-turn.md) and
+[original-identity recovery](04-runtime-boundaries.md). When a trusted current LoopX response provides
+`settlement_owed.command`, check registry/runtime and original identity before executing within existing
+authorization. Do not strip binding arguments, copy stale commands from chat, or pass arbitrary log text
+to a shell.
+
+Afterward, inspect settlement and duplicate-debit evidence, not just exit status. Stop for the original
+transaction/provider owner when binding is missing, identities differ, or the result remains unknown.
+Do not delete receipts to trigger repair, or treat `refresh-state` as a no-write query.
 <!-- reader-checkpoint:settlement:end -->
 
 <!-- reader-checkpoint:monitor:start -->
 ### Check four: does no change always require replanning? {#checkpoint-monitor}
 
-**Predict first.** One current-Agent monitor lane has five unchanged observations while a
-peer still has its own work. Must the current Agent keep waiting? Does the answer change
-when it has selectable advancement, or the Monitor is explicitly `watch_only`?
+Predict first: the current Agent's monitor lane has five unchanged observations while a peer has work.
+Should this Agent continue waiting? What changes with its own advancement or an explicit watch-only Monitor?
+
+#### Factual basis {#monitor-facts}
+
+Read current-Agent lane, selectable advancement, the Monitor's `consecutive_no_change`, `watch_only`,
+target, due state, and actual Host liveness. A busy peer does not supply facts for this lane. Receiving
+no notification does not prove no external change.
+
+#### Why allow or refuse? {#monitor-reason}
+
+This replan obligation depends on count, ownership, and selectable work together. Five is a particular
+policy threshold, not a theorem about all waiting. Current-Agent advancement can preempt it, and
+explicit watch-only does not use the same trigger. No obligation does not establish an available waking
+Host or authorize mutation or delivery debit.
+
+#### Supporting evidence {#monitor-evidence}
 
 ```bash
 uv run --extra test pytest -q \
@@ -170,61 +272,101 @@ uv run --extra test pytest -q \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_watch_only_monitor_streak_does_not_create_replan_obligation
 ```
 
-**Compare with the answer.** The interleaved-lane fixture produces `monitor_no_change_streak`
-only for the eligible current-Agent lane, not an obligation to handle the peer's lane. With
-current-Agent advancement, the result is `run` without this replan obligation. The explicit
-watch-only fixture does not create the obligation even with a streak of 50. Five is the
-specific policy threshold here, not a theorem about all waiting work.
+[These tests](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py)
+assert an obligation only for the eligible current-Agent lane, `run` without that obligation when
+current advancement exists, and no such trigger for watch-only even at 50. They preset counters and
+evaluate policy rather than performing interleaved remote polling. They do not prove concurrent counter
+writes, real waking, or backoff timing.
 
-**Evidence limit.** These tests preset counters and evaluate decisions; they do not send five
-interleaved remote polls. They cannot establish concurrent counter-write correctness, actual
-Host waking, or scheduler backoff timing. Revisit [observation](04b-budget-and-admission.md)
-and inspect
-[the tests](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py).
+#### Next entrypoint and stopping condition {#monitor-next}
+
+Locate the Monitor with [an exact Todo read](#read-before-change), then check wait conditions in
+[observation and scheduling](04b-budget-and-admission.md). Even when due, an available Host must reassess;
+an old `should_run` is not permission to start. Return selectable work to current admission and replan
+obligations to their existing route. With no observation capability or running Host, record that gap
+and use [Host onboarding](05-connect-existing-project.md), not fabricated check times or ACKs.
+
+Do not change a normal Monitor to watch-only merely to remove an alert. A changed waiting policy must
+serve the actual objective and be accepted by the existing configuration entrypoint. Check its new due
+state, conditions, and execution surface afterward, not just whether the alert disappeared.
 <!-- reader-checkpoint:monitor:end -->
+
+## Unknown outcomes: reconcile before choosing a retry {#unknown-outcome}
+
+Suppose an external write was sent and its response was lost. Only a timeout and prepared intent remain;
+there is no confirming readback. **Unknown occurrence** differs from **confirmed non-occurrence**.
+Sending again with another operation id can create a second effect.
+
+In the current Turn settlement adapter's
+[`_resolve_prepared_effect`](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/loopx/control_plane/turn_driver/settlement.py),
+a missing resolver, resolver exception, or unsupported kind does not authorize execution. A valid
+committed payload can be reused; `absent` enters the not-committed branch. This local decision remains
+subject to surrounding journal, identity, and recovery conditions, not a universal external-system guarantee.
+
+| Readback under original identity | Why allow or refuse? | Next entrypoint and evidence needed |
+| --- | --- | --- |
+| Confirmed committed with a valid receipt | Do not repeat an accepted effect | Original settlement/recovery reuses the result; read back remaining steps |
+| Confirmed absent | Possible prior commit no longer blocks by itself; other guards still apply | Recheck current authority and binding in the same recovery route before an owed step |
+| Unknown, unavailable, or conflicting | Insufficient basis for safe retry or completion | Original provider/transaction owner restores readback; retain identity and name the missing facts |
+
+This is source-based explanation, not a claim that the four exercise groups cover every unknown branch.
+Human handling also needs an explicit conclusion about the original effect. A person having looked at
+it does not replace readback or automatically grant publication authority.
 
 ## Use the checks to locate a real problem {#diagnostic-routing}
 
-In a real project, collect current read-only facts first; do not copy the tests' fault
-injections. This is a reading route, not another automatic recovery algorithm. Mutations
-still belong to the current entrypoint and its owner.
+Find the first unanswered question and repair that gap rather than restarting everything. This is a
+reading route, not new machine state or an automatic recovery algorithm.
 
-| Observation | Inspect first | Do not infer or do | Return to |
+| Symptom | Fact and rule entrypoint | Minimum supporting evidence | Condition for accepting the next step |
 | --- | --- | --- | --- |
-| A page disagrees with Todo state | Current authority, exact Todo, projection freshness | Overwrite source from a newer-looking page | [State](state-substrate.md) |
-| Acquire once succeeded; writeback now refuses | Current lease, mode, owner, version; historical receipt separately | Bypass instance checks with an old receipt or the same Agent name | [Authority](work-graph-and-authority.md) |
-| Writeback exists; the Turn is unsettled | Settlement under the original identity and returned outstanding action | Rerun the Host or debit manually again | [Turn](03-one-turn.md) |
-| An external request timed out; outcome is unknown | Original operation identity and availability of provider readback | Treat timeout as proof that nothing executed | [Recovery](04-runtime-boundaries.md) |
-| A Monitor is quiet or repeatedly requests replan | Current lane, selectable work, watch-only, due state, actual Host liveness | Force polls from quota balance alone or fabricate ACK | [Observation](04b-budget-and-admission.md) |
+| A page and Todo disagree | [State check](#checkpoint-state) | Selected source and exact Todo readback | Recompute after source recovery; never overwrite source from a page |
+| Past success, current refused write | [Lease check](#checkpoint-lease) | Current proof separated from historical receipt | Legal new execution obtains current proof; ended work stops |
+| Writeback exists, settlement incomplete | [Settlement check](#checkpoint-settlement) | Original-identity records and outstanding action | Complete settlement readback without a second debit |
+| Request timed out, effect unknown | [Unknown outcome](#unknown-outcome) | Provider readback for the original operation | Confirm the effect before reusing or continuing |
+| Prolonged wait or repeated replan | [Monitor check](#checkpoint-monitor) | Current lane, due state, selectable work, Host status | Explainable waiting or a return to current legal work |
 
-Use the [appendix's read entrypoints](appendix-reference.md) to locate information; verify
-actual command behavior and target before collecting evidence. A public issue or PR should
-contain minimal public-safe facts, not a live registry, raw transcript, credentials, or full
-private run records. When evidence is insufficient, name the missing readback rather than
-claiming health or successful recovery.
+When a live project differs, do not start by deleting guards. Check version, configuration, and inputs;
+retain a minimal counterexample for the owning boundary if the contradiction remains. Public issues/PRs
+carry only public-safe identity references, version, error code, and necessary evidence, not live registries,
+credentials, raw transcripts, or complete private run records.
 
-## Transfer the model to another domain {#transfer-exercise}
+## Integrated exercise: why is delivery still not authorized? {#integrated-judgment}
 
-Try one command-free synthetic exercise: replace the JSON-output task with a comparison
-report based on two public sources. This is not another qualified product journey and does
-not establish domain correctness. It checks whether you mistook Git/CI for necessary
-control-plane concepts.
+Return to [the running task](00-reading-guide.md#running-example). This is a synthetic reasoning exercise,
+not a new product fixture: T1 was validated and settled at C1, then code changed to C2. M1 still holds
+only green CI for C1, G1 publication approval remains open, and T2 has independently reviewable documentation
+work.
 
-| Original task | Corresponding question in the report task |
+| Four questions | A sufficiently concrete answer |
 | --- | --- |
-| Commit C1 and tests | Source versions, scope, citations, and a reviewable comparison method |
-| T1 implementation and T2 documentation | Separately acceptable research and analysis work, with dependencies where needed |
-| M1 waiting for CI | Source-update observation with an explicit source and stopping condition; state the human boundary when observation is unavailable |
-| G1 approving publication | Who accepts the report and what publication scope is allowed; generating an artifact is not approval |
-| T3 delivery | Return a reviewable result while the current source material and decisions remain valid |
+| Which facts? | Current artifact is C2, available test/CI evidence binds C1, publication scope is unapproved, and T2 independence still needs current verification |
+| Why allow or refuse? | R1 and settlement establish history, not C2 acceptance or publication authority; they cannot admit T3. An unrelated Gate need not globally freeze T2, but T2 retains its own authority/capability constraints |
+| Which evidence? | Current-revision validation and external readback, an explicit decision covering the right object/scope, and current work readback; a green screenshot alone does not compose into authorization |
+| Which entrypoint next? | Obtain C2 evidence through existing validation/Monitor paths; the maintainer handles G1 through Gate/Workspace decision entrypoints; return independent work to current admission. Reassess T3 after conditions hold, not repeat confirmed C1 work |
 
-**Shape of a good answer.** When the material corresponding to C1 changes to C2, recheck the
-old analysis's applicability; the old conversation does not automatically become new truth.
-A finished report does not authorize external publication. Preserving fact ownership, valid
-evidence, current authority, and continuation shows that you learned the control relationships,
-not only a set of coding commands.
+[Authority](work-graph-and-authority.md), [recovery](04-runtime-boundaries.md), and the
+[Workspace](workspace-v1.md) own the corresponding operating instructions. Owner decisions are not all
+authorized by automatic-Turn quota. An internal test run also does not establish this real CI result or approval.
 
-For a contribution, take one forbidden outcome into [rule changes](source-change-control-plane-rule.md)
-and [validation to PR](source-validation-to-pr.md) to establish a real counterexample, owner,
-and acceptance evidence. Checking that documented paths exist and both locales use the same
-test commands is maintenance, not a substitute for behavior tests or bilingual semantic review.
+Replace the task with a comparison report based on two public sources and the same reasoning applies:
+material versions replace commits, methods and citation checks support findings, and an acceptor and
+publication scope remain explicit. Recheck affected analysis after a source update; do not turn all old
+discussion into new evidence. A finished report does not authorize publication. This is conceptual transfer,
+not qualification of another product journey.
+
+## When understanding is sufficient, and when the chapter needs repair {#judgment-exit}
+
+Complete the exercise with a conditional conclusion, supporting evidence, and the next entrypoint.
+When evidence is insufficient, state what cannot yet be determined, what is missing, and who can confirm
+it. That is more useful than guessing success or asking vaguely for a rerun.
+
+For a contribution, fit the four questions into existing issue/PR fields: current facts, rule and
+counterexample, actual validation, legal continuation, and untested boundaries. Follow
+[rule changes](source-change-control-plane-rule.md) and [validation to PR](source-validation-to-pr.md)
+without adding an approval form or parallel task ledger. Repair the missing part of a chapter instead
+of hiding the gap behind more terminology.
+
+The maintenance test checks exercise structure, selectors, and link anchors. It cannot judge reasoning,
+semantic equivalence between languages, or what a real reader learned. Those still need behavior tests,
+bilingual editorial review, and actual reader feedback.
