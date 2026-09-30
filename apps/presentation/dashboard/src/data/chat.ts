@@ -115,6 +115,7 @@ export const managerChannelBindingSchema = z.object({
   executor_kind: z.string(),
   model: z.string(),
   model_source: z.string(),
+  reasoning_effort: z.string().optional(),
   selection_policy: z.enum(["preferred", "pinned", "flexible"]).default("preferred"),
   allocation_reason: z.string().default(""),
   configured_endpoint: z.string().nullable().optional(),
@@ -645,6 +646,7 @@ export async function createChatSession(
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
   contextKind: "goal" | "manager" = "goal",
+  signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
@@ -654,7 +656,7 @@ export async function createChatSession(
     session_id: string;
     session: ChatSessionSummary;
   }>("/api/chat/sessions", {
-    method: "POST",
+    method: "POST", signal,
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.
@@ -2039,6 +2041,9 @@ const larkTopicEventRejectionReasons = [
   "self_message",
   "invalid_routing_state",
   "not_addressed",
+  "historical_context_only",
+  "bot_message",
+  "human_identity_unverified",
 ] as const;
 export type LarkTopicEventRejectionReason = typeof larkTopicEventRejectionReasons[number];
 export type LarkPermissionGuidance = {
