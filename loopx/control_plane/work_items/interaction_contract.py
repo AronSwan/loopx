@@ -1003,11 +1003,11 @@ def _interaction_required_reads(payload: dict[str, Any]) -> list[dict[str, Any]]
     for item in reads:
         if not isinstance(item, dict):
             continue
-        command = protocol_action_text(item.get("command"), limit=(
-            item.get("prompt_budget_bytes", 360) if item.get("source") == "turn_start_capability_hook" else 360))
-        if not command:
+        # Transport the admitted command intact; display compaction can change
+        # quoted paths or remove arguments. The typed envelope owns validation.
+        if not item.get("command"):
             continue
-        result.append({**item, "command": command})
+        result.append(dict(item))
     return result
 
 
@@ -1375,6 +1375,11 @@ def _build_interaction_cli_channel(
                     },
                 },
             }
+            replan_binding = (
+                replan_settlement_contract.get("settlement_binding")
+                if isinstance(replan_settlement_contract, Mapping)
+                else None
+            )
             if _auxiliary_monitor_receipt_binding_required(payload):
                 auxiliary_projection.update(
                     {
@@ -1393,6 +1398,17 @@ def _build_interaction_cli_channel(
                     {
                         "availability": "turn_binding_required",
                         "reason_code": "auxiliary_monitor_turn_instance_id_missing",
+                    }
+                )
+            elif isinstance(replan_binding, Mapping) and replan_binding.get("kind") == "autonomous_replan":
+                auxiliary_projection.update(
+                    {
+                        "availability": "receipt_binding_required",
+                        "reason_code": "auxiliary_monitor_replan_receipt_binding",
+                        "next_step": (
+                            "settle the current autonomous replan Turn, then "
+                            "observe the due monitor from a Todo-bound Turn"
+                        ),
                     }
                 )
             elif (payload.get("requires_user_action") is True and
