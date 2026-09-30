@@ -680,10 +680,23 @@ export type ChatSessionSummary = {
   updated_at: string;
   last_activity_at: string;
   resumable: boolean;
-  session_mode?: string;
+  session_mode?: ChatSessionMode;
   host_surface?: string | null;
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
+
+/** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */
+export type ChatSessionMode = "managed_runtime" | "attached_host";
+
+/**
+ * Whether the Chat service queues a message sent while this Session's Turn
+ * runs, per ``ChatRuntimeController.submit_turn``: an attached host Session
+ * enqueues bounded follow-ups behind the host's Turn, while a managed runtime
+ * Session admits one Turn at a time and answers 409 with ``active_turn_id``.
+ */
+export function chatSessionQueuesFollowUps(session: Pick<ChatSessionSummary, "session_mode">) {
+  return session.session_mode === "attached_host";
+}
 
 export type ManagerRuntimeSessionReadback = {
   schema_version: "manager_runtime_session_readback_v0";

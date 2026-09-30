@@ -55,6 +55,7 @@ import {
   resumeChatSession,
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
+  chatSessionQueuesFollowUps,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -1400,6 +1401,9 @@ function PersonalGoalHome({
   const [proposalsByContext, setProposalsByContext] = useState<Record<string, PersonalProposalCard[]>>({});
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
+  // Bound Sessions whose mode queues a message sent while a Turn runs, read
+  // from the Session owner each time this page binds a Session.
+  const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   // Bumped when the service reports a running Turn this page did not know
   // about, so the Turn recovery effect re-reads the Session and adopts it.
@@ -1539,6 +1543,17 @@ function PersonalGoalHome({
     return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [readOnly, conversationReturnSessionKey, contextId]);
 
+  function recordSessionAdmission(session: ChatSessionSummary) {
+    const queues = chatSessionQueuesFollowUps(session);
+    setFollowUpQueueSessionIds((current) => {
+      if (current.has(session.session_id) === queues) return current;
+      const next = new Set(current);
+      if (queues) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
+  }
+
   function recordRuntimeBinding(targetContextId: string, binding: PersonalRuntimeBinding | null) {
     setRuntimeBindings((current) => {
       if (binding === null) {
@@ -1675,6 +1690,7 @@ function PersonalGoalHome({
         if (contextKind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
         }
+        recordSessionAdmission(created.session);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -2073,6 +2089,7 @@ function PersonalGoalHome({
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
     const session = await createChatSession(goalId, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", "goal");
+    recordSessionAdmission(session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
     recordRuntimeBinding(goalId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
@@ -2158,6 +2175,7 @@ function PersonalGoalHome({
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
+        recordSessionAdmission(session.session);
         sessionId = session.session_id;
         sessionIds.current.set(sessionKey, sessionId);
         recordRuntimeBinding(targetContextId, {
@@ -2443,6 +2461,7 @@ function PersonalGoalHome({
     if (!sessionId) return;
     try {
       const restored = await resumeChatSession(sessionId);
+      recordSessionAdmission(restored.session);
       sessionIds.current.set(sessionKey, sessionId);
       newSessionRequired.current.delete(sessionKey);
       recordRuntimeBinding(targetContextId, {
@@ -3013,6 +3032,7 @@ function PersonalGoalHome({
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
+        conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         model={workspaceModel}
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}

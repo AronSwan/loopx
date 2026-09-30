@@ -12,6 +12,7 @@ import {
 import { writeDashboardBrowserCoverage } from "./dashboard-browser-coverage.mjs";
 import { conversationActivityScenario } from "./personal-workspace-browser/conversation-activity.mjs";
 import { chatRecoveryScenario } from "./personal-workspace-browser/chat-recovery.mjs";
+import { composerSessionAdmissionScenario } from "./personal-workspace-browser/composer-session-admission.mjs";
 import { conversationReturnContinuityScenario } from "./personal-workspace-browser/conversation-return-continuity.mjs";
 import { executionChipScenario } from "./personal-workspace-browser/execution-chip.mjs";
 import {
@@ -47,7 +48,7 @@ import { goalDraftScenario } from "./personal-workspace-browser/goal-draft.mjs";
 import { larkCliMissingScenario } from "./personal-workspace-browser/lark-cli-missing.mjs";
 import { executionServiceOfflineScenario } from "./personal-workspace-browser/execution-service-offline.mjs";
 
-const scenarioCatalog = [goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, conversationReturnContinuityScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
+const scenarioCatalog = [goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, conversationReturnContinuityScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

@@ -727,6 +727,7 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
 }
 
 export function PersonalWorkspacePage({
+  conversationQueuesFollowUps = false,
   conversationSessionId,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
@@ -741,6 +742,8 @@ export function PersonalWorkspacePage({
   statusSourceControl,
   serviceNotice,
 }: {
+  /** The bound Session's mode queues a message sent while its Turn runs. */
+  conversationQueuesFollowUps?: boolean;
   conversationSessionId?: string;
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
@@ -995,13 +998,15 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
-  // The Chat service accepts one Turn per Session. While the current Session shows
-  // a Turn in flight, a new message would only be rejected, so the composer
-  // waits and points to the reply's own adjust/interrupt controls. LoopX mode
-  // delivers into a running Turn through its own queue, so it stays open.
+  // A managed runtime Session admits one Turn at a time. While the current
+  // Session shows a Turn in flight, a new message would only be rejected, so
+  // the composer waits and points to the reply's own adjust/interrupt
+  // controls. Two deliveries stay open because the service queues them behind
+  // the running Turn: LoopX mode through its own queue, and any message to an
+  // attached host Session.
   const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
     && loopxMode?.enabled && loopxMode.active_turn_id);
-  const conversationTurnRunning = !loopxDeliveryOpen && Boolean(conversationSessionId)
+  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(conversationSessionId)
     && managerMessages.some((message) => message.pending && Boolean(message.sourceTurnId)
       && message.sourceSessionId === conversationSessionId);
   const composerBlocked = sending || conversationTurnRunning;
