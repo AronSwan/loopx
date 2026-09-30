@@ -4,6 +4,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  BEARER_VALUE_MIN_LENGTH,
+  BEARER_VALUE_SHAPE,
   CREDENTIAL_WORD_PATTERNS,
   INTERNAL_STATE_PRIVATE_TEXT_PATTERNS,
   INTERNAL_STATE_SHAPE_PATTERNS,
@@ -111,6 +113,15 @@ test("the internal-state tier drops the words and adds the ported shapes", () =>
     INTERNAL_STATE_PRIVATE_TEXT_PATTERNS.map((pattern) => pattern.source),
     expected,
   );
+});
+
+test("the bearer floor is the named constant the pattern carries", () => {
+  // BEARER_VALUE_SHAPE is a literal so the digest guard can fold it, which means
+  // the constant has to be checked against the source rather than used to build it.
+  const floor = new RegExp(`\\{${BEARER_VALUE_MIN_LENGTH},\\}`);
+  assert.ok(floor.test(BEARER_VALUE_SHAPE.source), BEARER_VALUE_SHAPE.source);
+  assert.ok(!BEARER_VALUE_SHAPE.test(`Bearer ${"a".repeat(BEARER_VALUE_MIN_LENGTH - 1)}`));
+  assert.ok(BEARER_VALUE_SHAPE.test(`Bearer ${"a".repeat(BEARER_VALUE_MIN_LENGTH)}`));
 });
 
 test("the narrower tier still rejects every value and assignment shape", () => {

@@ -114,14 +114,16 @@ const GOAL_VISION_STATE_ALIASES: Readonly<Record<string, string>> = {
 // recognized but no longer rejected by this owner, because a checkpoint reason
 // that says the bearer token expired describes a credential rather than carrying
 // one. The value and assignment arms below are what keep a real credential out.
-const BEARER_VALUE_MIN_LENGTH = 8;
+export const BEARER_VALUE_MIN_LENGTH = 8;
 const AUTHORIZATION_CREDENTIAL_SHAPE = /\bAuthorization["']?\s*[:=]/i;
 const BASIC_CREDENTIAL_VALUE =
   /[Bb]asic\s+(?=[A-Za-z0-9+/=]*[a-z])(?=[A-Za-z0-9+/=]*[A-Z])[A-Za-z0-9+/=]{16,}/;
-const BEARER_VALUE_SHAPE = new RegExp(
-  String.raw`\bBearer\s+[A-Za-z0-9._~+/=-]{${BEARER_VALUE_MIN_LENGTH},}`,
-  "i",
-);
+// A literal, not `new RegExp` with an interpolated floor: the digest guard
+// (`tests/control_plane_ts/content_digest_single_owner.test.ts`) requires every
+// construction whose pattern it cannot fold to be declared as a second owner of a
+// value shape, and an interpolated quantifier is exactly that. The tie to the named
+// constant is asserted in the corpus test instead of built into the pattern here.
+export const BEARER_VALUE_SHAPE = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/i;
 const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)\s*[:=]/i;
 // Ported from the Python owner's two in-policy shape detectors, so one corpus
 // yields one verdict in both runtimes (Refs #5136, direction 4). The third
