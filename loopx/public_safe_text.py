@@ -110,9 +110,11 @@ CREDENTIAL_LABEL_PATTERN_SOURCE = (
 CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE = (
     r"(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*"
 )
-# A run that carries a digit or a base64-only character, at two characters long.
+# A run that carries a digit or a base64-only character. The signal has no
+# length floor: a one-character value still carries a credential value, and the
+# assignment arm already makes the same length-independent decision.
 _SHAPE_VALUE_TOKEN_SOURCE = (
-    r"(?=[A-Za-z0-9._~+/=-]{2,})(?=[A-Za-z0-9._~+/=-]*[0-9+/=])[A-Za-z0-9._~+/=-]+"
+    r"(?=[A-Za-z0-9._~+/=-]*[0-9+/=])[A-Za-z0-9._~+/=-]+"
 )
 _OPAQUE_VALUE_RUN_SOURCE = r"[A-Za-z]{%d,}" % OPAQUE_VALUE_MIN_LENGTH
 
@@ -139,7 +141,7 @@ QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN = re.compile(
     r"\b"
     + CREDENTIAL_LABEL_PATTERN_SOURCE
     + CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE
-    + r"[\"'][^\"'\n]{2,}[\"']",
+    + r"[\"'][^\"'\n]+[\"']",
     re.IGNORECASE,
 )
 

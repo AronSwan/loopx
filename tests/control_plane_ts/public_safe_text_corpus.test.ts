@@ -144,7 +144,10 @@ test("the letter-run ceiling is the named constant the pattern carries", () => {
   assert.ok(!CONNECTED_CREDENTIAL_VALUE_SHAPE.test(below), below);
   assert.ok(CONNECTED_CREDENTIAL_VALUE_SHAPE.test(at), at);
   // Shape signals need no length at all, which is what retired the bearer floor.
+  assert.ok(CONNECTED_CREDENTIAL_VALUE_SHAPE.test("Bearer 1"));
+  assert.ok(CONNECTED_CREDENTIAL_VALUE_SHAPE.test("Bearer +"));
   assert.ok(CONNECTED_CREDENTIAL_VALUE_SHAPE.test("Bearer abc123"));
+  assert.ok(QUOTED_CREDENTIAL_VALUE_SHAPE.test('Bearer is "a"'));
   assert.ok(QUOTED_CREDENTIAL_VALUE_SHAPE.test(`Bearer is "${"a".repeat(8)}"`));
 });
 
@@ -158,6 +161,7 @@ test("the narrower tier still rejects every value and assignment shape", () => {
   const token = "tok" + "en";
   const rejected = [
     `${bearer} abc123def456`,
+    `${bearer} 1`,
     `${bearer} abc123de`,
     `${bearer}, aB3d9QkLm`,
     `${bearer} is abc123`,
@@ -165,6 +169,7 @@ test("the narrower tier still rejects every value and assignment shape", () => {
     `${bearer} ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH + 24)}`,
     `${password}=hunter2`,
     `${password} is hunter2`,
+    `${password} is "a"`,
     `${password} is "${"a".repeat(8)}"`,
     `${secret}: env`,
     `${secret} - Qz8m2Xp7`,

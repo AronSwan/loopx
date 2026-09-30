@@ -74,6 +74,12 @@
       "abc",
       "123def"
     ],
+    "ONE_DIGIT": [
+      "1"
+    ],
+    "ONE_LETTER": [
+      "a"
+    ],
     "OPAQUE_VALUE": [
       "aB3",
       "d9QkLm"
@@ -196,6 +202,12 @@
       "note": "The copula spelling the whitespace-only arm missed."
     },
     {
+      "id": "copula_token_single_digit_value",
+      "template": "{TOKEN_LOWER} is {ONE_DIGIT}",
+      "shape": "shaped_value_token",
+      "note": "The token-shape signal has no length floor: a one-character digit is still a credential value."
+    },
+    {
       "id": "space_secret_opaque_value",
       "template": "{SECRET_LOWER} {OPAQUE_VALUE}",
       "shape": "shaped_value_token"
@@ -216,6 +228,12 @@
       "template": "the {PASSWORD_LOWER} is \"{LONG_LETTER_RUN}\"",
       "shape": "quoted_value",
       "note": "Letter-only and un-quantifiable by shape, but quoted: the quote is the signal."
+    },
+    {
+      "id": "quoted_password_single_letter_value",
+      "template": "the {PASSWORD_LOWER} is \"{ONE_LETTER}\"",
+      "shape": "quoted_value",
+      "note": "A non-empty quoted value is rejected without a length floor."
     },
     {
       "id": "bearer_opaque_letter_run_at_ceiling",

@@ -172,11 +172,12 @@ def test_value_is_decided_by_a_signal_not_by_a_token_floor() -> None:
         assert not _internal_rejects(prose), prose
     for length in (OPAQUE_VALUE_MIN_LENGTH, OPAQUE_VALUE_MIN_LENGTH + 24):
         assert _internal_rejects(f"{label} " + "a" * length), length
-    # A digit or a base64-only character makes the same position a value at the
-    # shortest length the arms read at all, which is what retired the floor.
-    for value in ("ab1", "abc123de", "ab+cd", "Qz8m2Xp7"):
+    # A digit or a base64-only character makes the same position a value without
+    # a length floor, which is what retired the floor.
+    for value in ("1", "+", "ab1", "abc123de", "ab+cd", "Qz8m2Xp7"):
         assert _internal_rejects(f"{label} {value}"), value
-    # A quoted run is a value whatever it is made of.
+    # A non-empty quoted run is a value whatever it is made of.
+    assert _internal_rejects(f'{label} is "a"')
     assert _internal_rejects(f'{label} is "abc"')
 
 
@@ -378,6 +379,7 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
     ]
     assert newly_rejected == [
         "token_space_digit_value",
+        "copula_token_single_digit_value",
         "token_assignment_colon",
         "raw_github_token_unlabeled",
         "private_key_block_unlabeled",
