@@ -703,6 +703,11 @@ export function chatSessionQueuesFollowUps(session: Pick<ChatSessionSummary, "se
   return session.session_mode === "attached_host";
 }
 
+/** Native steering is offered only by the managed Codex adapter; attached follow-ups keep their queue contract. */
+export function chatSessionSupportsSteering(session: Pick<ChatSessionSummary, "session_mode" | "adapter_kind">) {
+  return session.session_mode !== "attached_host" && session.adapter_kind === "codex_app_server";
+}
+
 export type ManagerRuntimeSessionReadback = {
   schema_version: "manager_runtime_session_readback_v0";
   runtime_profile: "restricted" | "trusted_owner";
