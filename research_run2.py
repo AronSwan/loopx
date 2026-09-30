@@ -255,7 +255,11 @@ def attempts_ledger(root, n):
     return ledger
 
 
-def homog_warning(root, n, threshold=0.7):
+# 同质化告警阈值(单一常量,门禁打印与告警共用——审计批三#1: 曾两处0.7脱钩)
+HOMOG_THRESHOLD = 0.7
+
+
+def homog_warning(root, n, threshold=HOMOG_THRESHOLD):
     """超阈值→写给架构师任务书的告警段;未超→空串(不注入)。"""
     hot = [p for p in homog_report(root, n) if p["jaccard"] > threshold]
     if not hot:
@@ -744,10 +748,11 @@ def gate(root, include_final=True):
     print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒"
           + ("" if len(first) == len(live) else f"(重试棒: { {p: a for p, a in live.items() if a > 1} })"),
           flush=True)
-    top = next((p for p in report["homogenization"] if p["jaccard"] > 0.7), None)
+    top = next((p for p in report["homogenization"]
+                if p["jaccard"] > HOMOG_THRESHOLD), None)  # 与homog_warning同参(审计批三#1:曾两处硬编码脱钩)
     if top:
         print(f"!! 同质化信号(非拦截): research-{top['pair'][0]}×research-{top['pair'][1]} "
-              f"J={top['jaccard']}(共享{top['shared']}个URL) > 0.7", flush=True)
+              f"J={top['jaccard']}(共享{top['shared']}个URL) > {HOMOG_THRESHOLD}", flush=True)
     print(json.dumps({"ok": ok, "failed": [c["check"] for c in checks if not c["pass"]]},
                      ensure_ascii=False))
     return ok
@@ -868,6 +873,12 @@ def gate_with_repair(root, include_final, max_rounds=2):
 
 
 def auto(root):
+    # 端点快查(丙席#14): 端点只在launch脚本export,错走标准端点要烧完一场才报
+    # 1113"假余额不足"——发射前拦住,代价为零
+    base = os.environ.get("DEEPSEEK_BASE_URL", "")
+    if base and not base.rstrip("/").endswith("/api/coding/paas/v4"):
+        raise SystemExit(f"DEEPSEEK_BASE_URL={base} 不是Coding Plan专属端点"
+                         "(标准端点报1113假余额不足);launch脚本须export coding/paas/v4端点")
     timing = {}
     t_all = time.time()
 

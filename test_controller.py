@@ -400,7 +400,34 @@ def test_gate_report_carries_passk_ledger(tmp_path):
     rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
     assert rep["attempts"]["researcher-1"] == 2
     assert "researcher-1" not in rep["first_pass"]
-    assert "planner" in rep["first_pass"] or rep["attempts"]["planner"] == 1
+    # 独立断言(审计批三#1: 原or写法两侧同条件恒真,first_pass改坏也拦不住)
+    assert rep["first_pass"] == ["planner"] and rep["attempts"]["planner"] == 1
+
+
+def test_homog_threshold_boundary_strict_above():  # 审计批三#1: J=0.7边界行为零覆盖
+    """严格大于: J恰=0.7不告警,>0.7告警(阈值曾两处硬编码,现单一常量)。"""
+    assert r2.HOMOG_THRESHOLD == 0.7
+    sa = {f"https://a.io/{i}" for i in range(10)}        # 10个
+    sb = {f"https://a.io/{i}" for i in range(7)}          # 7个全共享→交7/并10=0.7
+    t1 = "# x\n" + FILLER + " " + " ".join(sorted(sa)) + "\n"
+    t2 = "# y\n" + FILLER + " " + " ".join(sorted(sb)) + "\n"
+    assert abs(len(sa & sb) / len(sa | sb) - 0.7) < 1e-9  # 交7/并10恰=0.7
+    assert "同质化" not in _warn_with_texts(t1, t2)  # J=0.7恰不告警(严格大于)
+    sb2 = {f"https://a.io/{i}" for i in range(8)}    # 交8/并10=0.8>0.7
+    assert len(sa & sb2) / len(sa | sb2) > 0.7
+    t2b = "# y\n" + FILLER + " " + " ".join(sorted(sb2)) + "\n"
+    assert "同质化" in _warn_with_texts(t1, t2b)
+
+
+def _warn_with_texts(t1, t2, n=2):
+    import tempfile
+    from pathlib import Path as P
+    root = P(tempfile.mkdtemp())
+    for k, t in ((1, t1), (2, t2)):
+        d = root / "agents" / f"researcher-{k}" / "outputs"
+        d.mkdir(parents=True)
+        (d / f"research-{k}.md").write_text(t, encoding="utf-8")
+    return r2.homog_warning(root, n)
 
 
 # ==== 六门复审整改批次(2026-10-01): 逐条钉死审计实锤项 ====

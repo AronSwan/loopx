@@ -4,7 +4,7 @@
 # 守卫(丙席审计#3/#5修复): cd/source/prepare 任一失败必须立刻退,否则会在错误目录
 # 或残根上继续跑——"重装后一次跑通"的靶心路径。
 set -u
-export PATH=/c/Users/Administrator/ZCodeProject/node22/node-v22.22.3-win-x64:$PATH
+for d in /c/Users/Administrator/ZCodeProject/node22/node-v*-win-x64; do export PATH="$d:$PATH"; done  # node升级不再静默回退(丙席#13)
 cd /c/Users/Administrator/ZCodeProject/loopx-green || { echo "FATAL: cd 主仓失败" >&2; exit 1; }
 source ./secrets.env || { echo "FATAL: secrets.env 缺失(key未注入)" >&2; exit 1; }
 export DEEPSEEK_BASE_URL="https://open.bigmodel.cn/api/coding/paas/v4"
