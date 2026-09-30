@@ -533,6 +533,14 @@ def parse(module: ModuleType) -> ast.Module:
 
 
 def module_level_bindings(tree: ast.Module) -> set[str]:
+    """Names bound at module level, including ``def`` and ``class``.
+
+    A consumer can shadow the imported owner helper with a local ``def _token``
+    placed above the import; behaviourally that copy is dead code, structurally
+    it is the duplicate the guard exists to prevent, so a function name counts as
+    a binding here.
+    """
+
     names: set[str] = set()
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -541,6 +549,8 @@ def module_level_bindings(tree: ast.Module) -> set[str]:
             )
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
     return names
 
 
