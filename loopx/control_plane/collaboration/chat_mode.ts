@@ -61,13 +61,15 @@ const RESUMABLE_NATIVE = ["paused", "blocked", "usageLimited", "budgetLimited"];
  * a closed or exited origin is refused rather than handed over implicitly.
  *
  * ``wake_turn`` is the Turn already accepted under this intent's client id in
- * that conversation, if any.  Only a started Turn is dispatch evidence: it is
- * recorded as ``woken`` without another dispatch.  A still-queued Turn is not;
- * it is replayed through the native acceptance owner under the same admission
- * as a new wake, so pause and revocation still hold.  ``started_at`` is the
- * durable start fact, so a Turn still activating stays pending rather than
- * being read as a start.  A Turn that ended before it started is refused,
- * since its client id cannot admit another Turn.
+ * that conversation, if any.  Only a dispatched Turn is dispatch evidence: it
+ * is recorded as ``woken`` without another dispatch.  A still-queued Turn is
+ * not; it is replayed through the native acceptance owner under the same
+ * admission as a new wake, so pause and revocation still hold.  Dispatch is
+ * proven by ``upstream_turn_id``, which the runtime writes when the provider
+ * reports ``turn.started`` — not by ``started_at``, which the worker stamps
+ * before it builds the context and reaches the provider, so a Turn that is
+ * merely activating stays pending.  A Turn that ended without dispatch is
+ * refused, since its client id cannot admit another Turn.
  *
  * The same facts that admit an owner resume admit a host wake, plus mode
  * enabled and not paused.  A refusal is terminal for that intent; pending
@@ -91,12 +93,19 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
     if (turn.loopx_execution !== true || turn.operation !== "wake" || turn.intent_id !== intent.intent_id) {
       return outcome("refused", "wake_identity_conflict");
     }
-    if (typeof turn.started_at === "string" && turn.started_at) {
+    // `upstream_turn_id` is written when the provider reports `turn.started`,
+    // so it is evidence that a Turn was actually dispatched. `started_at` is
+    // earlier than that: the worker stamps it before it builds the turn
+    // context, prepares LoopX mode and hands the message to the adapter, so
+    // recording `woken` on it would claim a dispatch that may never happen and
+    // lose the intent, since a terminal receipt is never rescanned.
+    if (typeof turn.upstream_turn_id === "string" && turn.upstream_turn_id) {
       return {operation: "wake", state: "woken", reason: null, dispatch: "recorded"};
     }
-    // Ended without ever starting: its client id cannot admit another Turn.
+    // Ended without ever being dispatched: its client id cannot admit another
+    // Turn, but the owner must be told rather than left waiting.
     if (isTerminalTurnStatus(turn.status)) return outcome("refused", "wake_turn_ended_unstarted");
-    // Accepted but not yet started, including a start still activating.
+    // Accepted but not yet dispatched, including a start still activating.
     if (turn.status !== "queued") return outcome("pending", "wake_dispatch_pending");
   }
   if (input.goal_active !== true) return outcome("refused", "goal_stopped");

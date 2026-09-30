@@ -75,6 +75,11 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
     "live_steering_turn_not_started",
 })
 
+# The opaque payload an adapter forwards to its provider. Named here so the
+# worker signature that carries it between methods does not open another
+# module-level `Any`.
+AttachmentPayload = dict[str, Any]
+
 
 class ChatTurnAcceptanceUnavailableError(Exception):
     """The durable acceptance attempt can be retried with the same request."""
@@ -159,7 +164,7 @@ class CodexAppServerAdapter:
         self,
         message: str,
         event_sink: EventSink,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
     ) -> dict[str, Any]:
         return self.session.send(message, attachments=attachments, on_event=event_sink)
 
@@ -939,7 +944,7 @@ class ChatRuntimeController:
         session_id: str,
         client_turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]] | None = None,
+        attachments: list[AttachmentPayload] | None = None,
         work_dir: Path,
         objective: str,
         loopx_execution: bool = False,
@@ -1024,7 +1029,7 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         loopx_execution: bool,
     ) -> bool:
@@ -1385,7 +1390,7 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         done_event: threading.Event | None = None,
         loopx_execution: bool = False,
@@ -1421,7 +1426,6 @@ class ChatRuntimeController:
                 attachments=attachments,
                 adapter=adapter,
                 loopx_execution=loopx_execution,
-                done_event=done_event,
             )
         finally:
             done_event.set()
@@ -1435,12 +1439,15 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         loopx_execution: bool,
-        done_event: threading.Event,
     ) -> None:
-        """The body of a Turn whose `queued -> starting` fact is already durable."""
+        """The body of a Turn whose `queued -> starting` fact is already durable.
+
+        `_run_turn` owns the single-flight release, so nothing here needs the
+        done event.
+        """
         key = (session_id, turn_id)
         event_buffer = _TurnEventBuffer(
             store=self.store,

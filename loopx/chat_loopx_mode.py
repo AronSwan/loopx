@@ -501,6 +501,9 @@ class ChatLoopXMode:
             wake_turn = {
                 "turn_id": existing.get("turn_id"),
                 "status": existing.get("status"),
+                # The provider-start fact. `started_at` is stamped before the
+                # provider is reached, so it cannot prove a dispatch.
+                "upstream_turn_id": existing.get("upstream_turn_id"),
                 "started_at": existing.get("started_at"),
                 "loopx_execution": existing.get("loopx_execution") is True,
                 "operation": request.get("operation"),
