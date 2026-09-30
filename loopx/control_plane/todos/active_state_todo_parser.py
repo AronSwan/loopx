@@ -16,6 +16,7 @@ from .todo_summary import (
     MAX_STATUS_TODOS_PER_ROLE,
     compact_todo_group,
     count_advancement_todos,
+    normalize_todo_text,
 )
 from ..runtime.time import now_utc_iso
 
@@ -109,7 +110,11 @@ def parse_active_state_todos(
         evaluated_at=resume_evaluated_at,
     )
     archived_advancement_done_count = count_advancement_todos(
-        [item for item in archive_items if item.get("done") is True]
+        # Lossless source text must not widen legacy attention classification.
+        [
+            {**item, "text": normalize_todo_text(str(item.get("text") or ""))}
+            for item in archive_items if item.get("done") is True
+        ]
     )
     if agent and archived_advancement_done_count:
         agent["archived_advancement_done_count"] = archived_advancement_done_count

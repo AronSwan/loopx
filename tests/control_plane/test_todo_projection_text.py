@@ -70,6 +70,18 @@ def test_source_continuations_do_not_drop_the_suffix_before_compaction():
     assert normalize_todo_text(expected, limit=220).endswith("…")
 
 
+def test_legacy_archive_summary_does_not_reclassify_from_long_source_tail():
+    text = "Completed " + "retained " * 70 + "dependency monitor"
+    source = SOURCE + (
+        "\n## Completed Work Archive\n"
+        f"- [x] {text}\n"
+        "  <!-- loopx:todo todo_id=todo_old role=agent status=done -->\n"
+    )
+    summary = parse_active_state_todos(source)["agent_todos"]
+    assert summary["archived_advancement_done_count"] == 1
+    assert summary["advancement_done_count"] == 1
+
+
 def test_explicit_title_disagreement_after_the_display_prefix_is_still_rejected():
     title = "Same prefix " * 60 + "original tail"
     record = {
