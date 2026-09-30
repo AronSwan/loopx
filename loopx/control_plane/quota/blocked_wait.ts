@@ -152,8 +152,12 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
       todo.resume_ready !== false || (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
     return {status: "none"};
   }
-  // Share the same validation as the real writeback, including target
-  // existence, monitor generation and bounded timer checks.
+  // This projection repairs registered Todo dependencies. Other wait kinds
+  // retain their existing route: in particular, a valid long timer must not
+  // be rejected by the separate 1–30 minute blocked-retry writeback budget.
+  const kind = jsonObject(todo.resume_condition)?.kind;
+  if (kind !== "monitor_changed" && kind !== "todo_done") return {status: "none"};
+  // Share the real writeback validation of target existence and generation.
   const wait = prepareBlockedWait({...request, schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     allow_turn_settlement_retry: false});
   const reason = "The Todo bound to this Turn now waits on a dependency. Record its verified blocked closeout without spending quota; select independent work on the next host Turn.";

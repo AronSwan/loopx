@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {projectReceiptBoundWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA} from "../../loopx/control_plane/quota/blocked_wait.ts";
+import {evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION} from "../../loopx/control_plane/todos/resume_condition.ts";
 
 function request() {
   return {schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, agent_id: "agent-a",
@@ -45,3 +46,21 @@ test("a fabricated, missing, or changed dependency cannot qualify blocked closeo
   input.todos[1]!.material_change_generation = 3;
   assert.throws(() => projectReceiptBoundWait(input), /registered pending/);
 });
+
+for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-01T02:00:00Z",
+  "pr_merged:example/project#1", "capacity_available:git_push"]) {
+  test(`${resume_when} keeps its existing route instead of entering Todo-dependency recovery`, () => {
+    const input = request();
+    const waiting = {...input.todos[0]!, resume_when};
+    const projection = evaluateTodoResumeConditions({
+      schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+      items: [waiting], source_items: [waiting], evaluated_at: input.observed_at,
+      available_capabilities: [],
+    });
+    const condition = (projection.conditions as {condition: Record<string, unknown>}[])[0]!.condition;
+    assert.equal(condition.satisfied, false);
+    assert.deepEqual(projectReceiptBoundWait({...input, todos: [
+      {...waiting, resume_condition: condition, resume_ready: false},
+    ]}), {status: "none"});
+  });
+}
