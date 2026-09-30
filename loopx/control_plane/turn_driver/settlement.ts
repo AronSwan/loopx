@@ -13,6 +13,8 @@ import {
   type SettlementIdentity,
   type SettlementResult,
   type SettlementStepKind,
+  TURN_PROVIDER_STEP_KINDS,
+  type TurnProviderStepKind,
 } from "../effect_program.ts";
 import {
   optionalNonEmptyString,
@@ -35,13 +37,6 @@ const BASE_SETTLEMENT_STEPS = [
   "durable_writeback",
   "quota_spend",
 ] as const satisfies readonly SettlementStepKind[];
-
-const PROVIDER_STEP_KINDS = [
-  "durable_writeback",
-  "quota_spend",
-  "terminal_closeout",
-] as const;
-type ProviderStepKind = (typeof PROVIDER_STEP_KINDS)[number];
 
 const PROVIDER_RESOLUTION_KINDS = ["committed", "absent", "unknown"] as const;
 type ProviderResolutionKind = (typeof PROVIDER_RESOLUTION_KINDS)[number];
@@ -70,19 +65,19 @@ interface ProviderObservation {
 }
 
 interface FailedProviderAttempt {
-  step_kind: ProviderStepKind;
+  step_kind: TurnProviderStepKind;
   payload: JsonObject;
 }
 
 interface ProviderExecutionEffect {
-  step_kind: ProviderStepKind;
+  step_kind: TurnProviderStepKind;
   action: "prepare_and_execute";
   effect_ref: string;
   completed_phases: readonly string[];
 }
 
 interface ProviderResolutionEffect {
-  step_kind: ProviderStepKind;
+  step_kind: TurnProviderStepKind;
   action: "resolve_prepared";
   effect_ref: string;
   completed_phases: readonly string[];
@@ -106,8 +101,8 @@ interface TurnSettlementRequest {
   terminal_closeout_required: boolean;
   terminal_closeout_payload: JsonObject | null;
   failed_provider_attempt: FailedProviderAttempt | null;
-  effect_attempts: Partial<Record<ProviderStepKind, PreparedEffectAttempt>>;
-  provider_observations: Partial<Record<ProviderStepKind, ProviderObservation>>;
+  effect_attempts: Partial<Record<TurnProviderStepKind, PreparedEffectAttempt>>;
+  provider_observations: Partial<Record<TurnProviderStepKind, ProviderObservation>>;
   turn_result_kind: TurnResultKind | null;
 }
 
@@ -150,7 +145,7 @@ function decodeFailedProviderAttempt(
   return {
     step_kind: requireStringLiteral(
       attempt.step_kind,
-      PROVIDER_STEP_KINDS,
+      TURN_PROVIDER_STEP_KINDS,
       "failed_provider_attempt.step_kind",
     ),
     payload: requireJsonObject(
@@ -164,14 +159,14 @@ function decodeProviderRecord<Value>(
   value: unknown,
   label: string,
   decode: (value: unknown, label: string) => Value,
-): Partial<Record<ProviderStepKind, Value>> {
+): Partial<Record<TurnProviderStepKind, Value>> {
   if (value === null || value === undefined) return {};
   const record = requireJsonObject(value, label);
-  const decoded: Partial<Record<ProviderStepKind, Value>> = {};
+  const decoded: Partial<Record<TurnProviderStepKind, Value>> = {};
   for (const [rawStep, rawValue] of Object.entries(record)) {
     const step = requireStringLiteral(
       rawStep,
-      PROVIDER_STEP_KINDS,
+      TURN_PROVIDER_STEP_KINDS,
       `${label} step`,
     );
     decoded[step] = decode(rawValue, `${label}.${step}`);
@@ -466,7 +461,7 @@ function failedState(
 function providerFailure(
   identity: SettlementIdentity,
   request: TurnSettlementRequest,
-  stepKind: ProviderStepKind,
+  stepKind: TurnProviderStepKind,
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementOutcome {
   const attempt = request.failed_provider_attempt;
@@ -504,7 +499,7 @@ function providerFailure(
 function pendingProviderEffects(
   request: TurnSettlementRequest,
   identity: SettlementIdentity,
-  firstStep: ProviderStepKind,
+  firstStep: TurnProviderStepKind,
 ): readonly ProviderEffect[] {
   const completed = new Set(request.completed_phases);
   const effects: ProviderEffect[] = [];
@@ -556,7 +551,7 @@ function terminalCloseoutRequestFailure(
 function reduceBaseProviderAction(
   request: TurnSettlementRequest,
   identity: SettlementIdentity,
-  stepKind: ProviderStepKind,
+  stepKind: TurnProviderStepKind,
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementReduction {
   const effects = pendingProviderEffects(request, identity, stepKind);
@@ -646,15 +641,15 @@ function reduceTerminalCloseout(
 function providerExecution(
   request: TurnSettlementRequest,
   identity: SettlementIdentity,
-  firstStep: ProviderStepKind,
+  firstStep: TurnProviderStepKind,
   effects: readonly ProviderEffect[],
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementReduction {
   const attempts = Object.entries(request.effect_attempts) as Array<
-    [ProviderStepKind, PreparedEffectAttempt]
+    [TurnProviderStepKind, PreparedEffectAttempt]
   >;
   const observations = Object.entries(request.provider_observations) as Array<
-    [ProviderStepKind, ProviderObservation]
+    [TurnProviderStepKind, ProviderObservation]
   >;
   if (attempts.length === 0) {
     if (observations.length > 0) {
@@ -865,7 +860,7 @@ function reduceTurnSettlementRequest(
   receipts = terminal.receipts;
 
   const danglingAttempt = Object.keys(request.effect_attempts)[0] as
-    | ProviderStepKind
+    | TurnProviderStepKind
     | undefined;
   if (danglingAttempt) {
     return reduction(

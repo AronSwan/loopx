@@ -1,6 +1,10 @@
-import type { JsonObject } from "../effect_program.ts";
+import {
+  TURN_PROVIDER_STEP_KINDS,
+  type JsonObject,
+  type TurnProviderStepKind,
+} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { jsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireStringLiteral } from "../runtime_decode.ts";
 import {
   parseExactGoalRef,
   type ExactGoalRef,
@@ -66,16 +70,11 @@ export type GoalRecreationDecision =
     code: GoalRecreationRejection;
   }>;
 
-type SourceTurnEffectStep =
-  | "durable_writeback"
-  | "quota_spend"
-  | "terminal_closeout";
-
 type SourceTurnEffectAdmission = Readonly<{
   schema_version: typeof SOURCE_TURN_EFFECT_ADMISSION_SCHEMA_VERSION;
   goal_ref: WireGoalRef;
   turn_key: string;
-  step_kind: SourceTurnEffectStep;
+  step_kind: TurnProviderStepKind;
   effect_ref: string;
 }>;
 
@@ -229,17 +228,12 @@ function goalRefsEqual(left: ExactGoalRef, right: ExactGoalRef): boolean {
     && left.goalInstanceId.value === right.goalInstanceId.value;
 }
 
-function sourceTurnEffectStep(value: unknown): SourceTurnEffectStep {
-  if (
-    value !== "durable_writeback"
-    && value !== "quota_spend"
-    && value !== "terminal_closeout"
-  ) {
-    throw new EffectRuntimeRequestError(
-      "step_kind must name a supported Turn settlement effect",
-    );
-  }
-  return value;
+function sourceTurnEffectStep(value: unknown): TurnProviderStepKind {
+  return requireStringLiteral(
+    value,
+    TURN_PROVIDER_STEP_KINDS,
+    "step_kind",
+  );
 }
 
 function sourceTurnEffectAdmission(

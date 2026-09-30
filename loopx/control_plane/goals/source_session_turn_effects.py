@@ -12,7 +12,7 @@ from ...file_lock import (
     exclusive_cross_runtime_file_lock,
     exclusive_file_lock,
 )
-from ..effect_program import SettlementStepKind
+from ..effect_program import TurnProviderStepKind
 from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
@@ -31,7 +31,21 @@ from .source_session_registry_state import (
 
 _GATE_SCHEMA = "loopx_source_turn_effect_gate_v1"
 _ADMISSION_SCHEMA = "loopx_source_turn_effect_admission_v1"
-_HOLD_SCHEMA = "loopx_source_turn_effect_hold_v1"
+SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION = "loopx_source_turn_effect_hold_v1"
+_PENDING_RECOVERY_ACTIONS = {
+    "executor_active": "Wait for this Turn to finish, then retry recreate-goal.",
+    "goal_ref_mismatch": "Repair the admission GoalRef before retrying recreate-goal.",
+    "journal_effect_conflict": "Repair this Turn journal before retrying recreate-goal.",
+    "journal_identity_invalid": "Repair this Turn identity before retrying recreate-goal.",
+    "journal_unreadable": "Repair this Turn journal before retrying recreate-goal.",
+    "provider_readback_required": (
+        "Resume this Turn with provider readback, then retry recreate-goal."
+    ),
+    "turn_tail_conflict": "Repair this Turn tail before retrying recreate-goal.",
+    "turn_tail_recovery_required": (
+        "Resume this Turn to finish its settlement tail, then retry recreate-goal."
+    ),
+}
 
 SourceAdmissionFactory = Callable[[], Mapping[str, Any]]
 JournalPersist = Callable[[Mapping[str, Any]], None]
@@ -47,7 +61,7 @@ class SourceTurnEffectRejected(ValueError):
 class SourceTurnEffect:
     goal_ref: Mapping[str, str]
     turn_key: str
-    step_kind: SettlementStepKind
+    step_kind: TurnProviderStepKind
     effect_ref: str
     journal_path: Path
 
@@ -299,7 +313,7 @@ def decide_source_turn_effect_close_locked(
     reserved_goal_ref: Mapping[str, str],
     operation_id: str,
     request_digest: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     decision = _decision(
         "goal.source_session.turn_effect.gate",
         {
@@ -316,7 +330,7 @@ def decide_source_turn_effect_close_locked(
     gate = decision.get("gate")
     if not isinstance(gate, dict):
         raise RuntimeError("source Turn effect decision omitted gate")
-    return gate
+    return gate, decision["kind"] == "commit"
 
 
 def decide_source_turn_effect_publish_locked(
@@ -414,6 +428,7 @@ def _pending_projection(
         "turn_key": str(admission.get("turn_key") or ""),
         "step_kind": str(admission.get("step_kind") or ""),
         "reason": reason,
+        "recovery_action": _PENDING_RECOVERY_ACTIONS[reason],
     }
 
 
@@ -475,7 +490,7 @@ def drain_releasable_source_turn_effects(
                 )
                 if hold is not None:
                     expected_hold = {
-                        "schema_version": _HOLD_SCHEMA,
+                        "schema_version": SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION,
                         "status": "held",
                         "step_kind": step_kind,
                         "effect_ref": effect_ref,

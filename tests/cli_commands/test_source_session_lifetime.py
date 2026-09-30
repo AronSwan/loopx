@@ -15,8 +15,20 @@ from loopx.claude_goal_mode.scripts import connect as claude_connect
 from loopx.control_plane.goals import (
     source_session_recreation,
     source_session_registration,
+    source_session_turn_effects,
+)
+from loopx.control_plane.effect_program import (
+    SettlementStepKind,
+    require_turn_provider_step_kind,
+)
+from loopx.control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
 )
 from loopx.control_plane.projects import registry_codec
+from loopx.control_plane.turn_driver.journal_store import (
+    LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+    turn_journal_path,
+)
 
 
 def _registration_arguments(registry_path: Path, knowledge_root: Path) -> list[str]:
@@ -111,6 +123,94 @@ def _register(
 
 def _registry_payload(registry_path: Path) -> dict[str, object]:
     return json.loads(registry_path.read_text(encoding="utf-8"))[1]
+
+
+def test_recreation_default_output_reports_durable_drain_transition(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _knowledge_root, registry_path, registration = _register(tmp_path, capsys)
+    goal_ref = registration["goal_ref"]
+    assert isinstance(goal_ref, dict)
+    instance_a = str(goal_ref["goal_instance_id"])
+    turn_key = "sha256:" + ("a" * 64)
+    effect_ref = f"{turn_key}#durable_writeback"
+    runtime_root = Path(str(_registry_payload(registry_path)["common_runtime_root"]))
+    journal_path = turn_journal_path(
+        runtime_root,
+        goal_id="atlas-import",
+        turn_key=turn_key,
+    )
+    journal = {
+        "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+        "goal_id": "atlas-import",
+        "turn_key": turn_key,
+        "status": "in_progress",
+        "completed_phases": ["host_execute", "typed_result", "validation"],
+        "effect_attempts": {
+            "durable_writeback": {
+                "status": "prepared",
+                "effect_ref": effect_ref,
+            }
+        },
+    }
+    goal_admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry_path,
+        goal_id="atlas-import",
+        planned_goal_ref=goal_ref,
+    )
+    effect_admission = goal_admission.turn_effect_admission(
+        turn_key=turn_key,
+        journal_path=journal_path,
+    )
+    assert effect_admission is not None
+
+    def persist_journal(_source_admission: dict[str, object]) -> None:
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    effect_admission.prepare(
+        require_turn_provider_step_kind(SettlementStepKind.DURABLE_WRITEBACK),
+        effect_ref,
+        persist_journal,
+    )
+
+    arguments = _recreation_arguments(
+        registry_path,
+        goal_instance_id=instance_a,
+    )
+    del arguments[:2]
+    assert main(arguments) == 1
+    rendered = capsys.readouterr().out
+    gate = json.loads(
+        source_session_turn_effects.source_turn_effect_gate_path(
+            registry_path,
+            "atlas-import",
+        ).read_text(encoding="utf-8")
+    )
+
+    assert gate["state"] == "closing"
+    assert "- status: `drain_required`" in rendered
+    assert "- changed: `True`" in rendered
+    assert "- gate_state: `closing`" in rendered
+    assert f"turn_key=`{turn_key}`" in rendered
+    assert "step_kind=`durable_writeback`" in rendered
+    assert "reason=`provider_readback_required`" in rendered
+    assert "Resume this Turn with provider readback" in rendered
+    assert "retry recreate-goal with the same operation_id" in rendered
+
+    assert (
+        main(
+            _recreation_arguments(
+                registry_path,
+                goal_instance_id=instance_a,
+            )
+        )
+        == 1
+    )
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["changed"] is False
+    assert replay["replayed"] is True
 
 
 def test_registration_publishes_fresh_v2_without_global_sync(

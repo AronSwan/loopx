@@ -2297,9 +2297,33 @@ def test_final_provider_checkpoint_persists_tail_hold_before_confirmation(
             "turn_key": str(plan["transaction"]["turn_key"]),
             "step_kind": tail_step,
             "reason": "turn_tail_recovery_required",
+            "recovery_action": (
+                "Resume this Turn to finish its settlement tail, "
+                "then retry recreate-goal."
+            ),
         }
     ]
     assert load_project_registry(registry)["goals"][0]["goal_instance_id"] == INSTANCE_A
+
+    journal_path = turn_journal_path(
+        runtime_root,
+        goal_id="fixture-goal",
+        turn_key=str(plan["transaction"]["turn_key"]),
+    )
+    hold["schema_version"] = "loopx_source_turn_effect_hold_invalid"
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    conflicted = recreate_goal_instance(
+        RecreateGoalRequest(
+            registry_path=registry,
+            goal_id="fixture-goal",
+            goal_instance_id=INSTANCE_A,
+            operation_id=f"recreate-after-{tail_step}-checkpoint",
+        )
+    )
+    assert conflicted["changed"] is False
+    assert conflicted["replayed"] is True
+    assert conflicted["pending_effects"][0]["reason"] == "turn_tail_conflict"
 
 
 @pytest.mark.parametrize("first_scheduler_result", ["exception", "incomplete"])

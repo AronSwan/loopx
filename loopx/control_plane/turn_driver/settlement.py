@@ -10,9 +10,14 @@ from typing import Any, Protocol
 from ..effect_program import (
     SettlementResult,
     SettlementStepKind,
+    TurnProviderStepKind,
+    require_turn_provider_step_kind,
     settlement_result_payload,
 )
 from ..effect_runtime import effect_runtime_result
+from ..goals.source_session_turn_effects import (
+    SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION,
+)
 from ..settlement_driver import decode_settlement_result
 from .driver import selected_turn_todo
 from .transaction import (
@@ -39,28 +44,28 @@ SourceJournalPersist = Callable[[Mapping[str, Any]], None]
 class TurnSettlementEffectAdmission(Protocol):
     def prepare(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: SourceJournalPersist,
     ) -> None: ...
 
     def hold(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: SourceJournalPersist,
     ) -> None: ...
 
     def release(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: SourceJournalPersist,
     ) -> None: ...
 
     def allows_absent_reexecute(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
     ) -> bool: ...
 
@@ -74,7 +79,6 @@ class TurnSettlementState:
 
 TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION = "loopx_turn_settlement_transaction_v0"
 TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION = "loopx_turn_settlement_reduction_v0"
-SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION = "loopx_source_turn_effect_hold_v1"
 
 
 def _invoke_turn_effect(effect: TurnEffect, effect_ref: str) -> Mapping[str, Any]:
@@ -171,7 +175,7 @@ class TurnSettlementJournalAdapter:
             self.persist()
             return
         self.source_effects.prepare(
-            step_kind,
+            require_turn_provider_step_kind(step_kind),
             effect_ref,
             self._require_source_persist(),
         )
@@ -182,7 +186,7 @@ class TurnSettlementJournalAdapter:
             self.persist()
             return
         self.source_effects.release(
-            step_kind,
+            require_turn_provider_step_kind(step_kind),
             effect_ref,
             self._require_source_persist(),
         )
@@ -230,7 +234,10 @@ class TurnSettlementJournalAdapter:
     ) -> bool:
         if self.source_effects is None:
             return True
-        return self.source_effects.allows_absent_reexecute(step_kind, effect_ref)
+        return self.source_effects.allows_absent_reexecute(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+        )
 
     def hold_tail(
         self,
@@ -241,7 +248,7 @@ class TurnSettlementJournalAdapter:
             raise RuntimeError("source Turn effect admission is unavailable")
         self._set_tail_hold(step_kind, effect_ref)
         self.source_effects.hold(
-            step_kind,
+            require_turn_provider_step_kind(step_kind),
             effect_ref,
             self._require_source_persist(),
         )
@@ -258,7 +265,7 @@ class TurnSettlementJournalAdapter:
         if self.source_effects is None:
             raise RuntimeError("source Turn effect admission is unavailable")
         self.source_effects.release(
-            step_kind,
+            require_turn_provider_step_kind(step_kind),
             effect_ref,
             self._require_source_persist(),
         )
@@ -273,9 +280,17 @@ class TurnSettlementJournalAdapter:
         persist = self._require_source_persist()
         if step_kind is self.deferred_release_step:
             self._set_tail_hold(step_kind, effect_ref)
-            self.source_effects.hold(step_kind, effect_ref, persist)
+            self.source_effects.hold(
+                require_turn_provider_step_kind(step_kind),
+                effect_ref,
+                persist,
+            )
             return
-        self.source_effects.release(step_kind, effect_ref, persist)
+        self.source_effects.release(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            persist,
+        )
 
     @staticmethod
     def _tail_hold(

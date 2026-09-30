@@ -211,6 +211,20 @@ test("Turn effects admit once and release while retirement is closing", () => {
   assert.equal(admitted.kind, "commit");
   if (admitted.kind !== "commit") return;
   assert.equal(admitted.gate.state, "open");
+  assert.throws(
+    () => decideSourceTurnEffectAdmission({
+      profile_id: "source_session_v1",
+      requested_goal_ref: goalRef,
+      current_goal_ref: goalRef,
+      gate: admitted.gate,
+      admission: {
+        ...admission,
+        step_kind: "validation",
+      },
+      existing_admission: null,
+    }),
+    /step_kind/,
+  );
   assert.deepEqual(
     decideSourceTurnEffectAdmission({
       profile_id: "source_session_v1",

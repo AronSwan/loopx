@@ -15,7 +15,7 @@ from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
 )
-from ..effect_program import SettlementStepKind
+from ..effect_program import TurnProviderStepKind
 from .source_session_registry_state import (
     exact_goal_ref,
     guard_path,
@@ -50,7 +50,7 @@ class FirstPartyHostTurnEffectAdmission:
 
     def _effect(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
     ) -> SourceTurnEffect:
         goal_ref = self.goal_admission.planned_goal_ref
@@ -70,7 +70,7 @@ class FirstPartyHostTurnEffectAdmission:
 
     def prepare(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: JournalPersist,
     ) -> None:
@@ -87,7 +87,7 @@ class FirstPartyHostTurnEffectAdmission:
 
     def hold(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: JournalPersist,
     ) -> None:
@@ -95,7 +95,7 @@ class FirstPartyHostTurnEffectAdmission:
 
     def release(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
         persist_journal: JournalPersist,
     ) -> None:
@@ -112,7 +112,7 @@ class FirstPartyHostTurnEffectAdmission:
 
     def allows_absent_reexecute(
         self,
-        step_kind: SettlementStepKind,
+        step_kind: TurnProviderStepKind,
         effect_ref: str,
     ) -> bool:
         try:
