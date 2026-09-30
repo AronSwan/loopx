@@ -24,7 +24,7 @@ import hashlib
 
 from .content_digest import ENVELOPED_SHA256_PATTERN
 
-ENVELOPE_PREFIX = "sha256:"
+DIGEST_ENVELOPE_PREFIX = "sha256:"
 
 
 def enveloped_sha256(digest_hex: str) -> str:
@@ -34,7 +34,7 @@ def enveloped_sha256(digest_hex: str) -> str:
     digest that only the writer believes is well formed.
     """
 
-    enveloped = f"{ENVELOPE_PREFIX}{digest_hex}"
+    enveloped = f"{DIGEST_ENVELOPE_PREFIX}{digest_hex}"
     if ENVELOPED_SHA256_PATTERN.fullmatch(enveloped) is None:
         raise ValueError("content digest must be sha256:<64 lowercase hex characters>")
     return enveloped
