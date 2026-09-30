@@ -20,6 +20,13 @@ and the TypeScript owner mirrors the same semantics; the shared corpus in
 `tests/fixtures/public_safe_text_corpus.json` pins both runtimes to one
 contract.
 
+The four owners validate LoopX's own state, so they share one policy,
+`TEXT_OWNER_CATEGORIES`, which recognizes a bare credential word without
+rejecting it. Repository-publication surfaces keep the full set
+(`ALL_CATEGORIES`, reached through `find_private_text_match`), because a PR-time
+scan of development code is held to the stricter bar the maintainer asked for in
+#5136: internal state may be looser, publication may not.
+
 `control_plane/runtime/public_safety.py` also consumes the shape definitions
 here (`SECRET_LIKE_SURFACE_PATTERN`, `LOCAL_PATH_SURFACE_PATTERN`,
 `REMOTE_LOCATION_SURFACE_PATTERN`) instead of owning a competing set, so a
@@ -41,6 +48,7 @@ from dataclasses import dataclass
 # separate decisions (Refs #5136, direction 2).
 # ---------------------------------------------------------------------------
 CATEGORY_CREDENTIAL = "credential"
+CATEGORY_CREDENTIAL_WORD = "credential_word"
 CATEGORY_LOCAL_PATH = "local_path"
 CATEGORY_REMOTE_LOCATION = "remote_location"
 CATEGORY_ORG_MARKER = "org_marker"
@@ -48,11 +56,22 @@ CATEGORY_ORG_MARKER = "org_marker"
 ALL_CATEGORIES: frozenset[str] = frozenset(
     {
         CATEGORY_CREDENTIAL,
+        CATEGORY_CREDENTIAL_WORD,
         CATEGORY_LOCAL_PATH,
         CATEGORY_REMOTE_LOCATION,
         CATEGORY_ORG_MARKER,
     }
 )
+
+# Refs #5136, direction 2: a *mention* of a credential word is not a credential.
+# ``credential_word`` exists so a surface can recognize these words without
+# rejecting them; the value and assignment forms stay in ``credential`` so
+# narrowing one policy can never let ``password=hunter2`` out with the prose.
+# The floor below is explicit and corpus-pinned on both sides: the shared
+# shape detectors used to reject an ``Authorization: Bearer <12 chars>`` header
+# only because their value minimum happened to be met, and a bare-word arm was
+# the accidental backstop for the short values.
+BEARER_VALUE_MIN_LENGTH = 8
 
 
 # Credential shape, not the plain English word. LoopX governance prose says
@@ -73,6 +92,24 @@ _BASIC_CREDENTIAL_VALUE = re.compile(
     r"(?=[A-Za-z0-9+/=]*[a-z])"
     r"(?=[A-Za-z0-9+/=]*[A-Z])"
     r"[A-Za-z0-9+/=]{16,}",
+)
+
+# ``Bearer <value>`` with a value long enough to be a token rather than the next
+# English word. Kept separate from the word arm so a surface can stop rejecting
+# the scheme name while still rejecting the scheme plus a value.
+BEARER_VALUE_SHAPE_PATTERN = re.compile(
+    r"\b" + "Bear" + r"er\s+[A-Za-z0-9._~+/=-]{%d,}" % BEARER_VALUE_MIN_LENGTH,
+    re.I,
+)
+
+# An assignment form of the three demoted words. It carries no value-length floor
+# on purpose: ``password=``/``secret=``/``token=`` is a credential statement
+# whatever follows it, and the previous behavior already rejected every one of
+# them (and every bare mention), so this arm alone cannot tighten a surface that
+# has kept ``credential_word`` out of its policy.
+LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
+    r"\b(?:" + "tok" + r"en|pass" + r"word|sec" + r"ret)\s*[:=]",
+    re.I,
 )
 
 # Refs #5136: relocated here from control_plane/runtime/public_safety.py so a
@@ -183,9 +220,9 @@ _CATEGORIZED_PRIVATE_TEXT_PATTERNS: tuple[_CategorizedPattern, ...] = (
         "internal ticket identifier",
     ),
     _CategorizedPattern(
-        re.compile(r"\b" + "Bear" + r"er\b", re.I),
+        BEARER_VALUE_SHAPE_PATTERN,
         CATEGORY_CREDENTIAL,
-        "bearer auth scheme word",
+        "bearer scheme carrying a value",
     ),
     _CategorizedPattern(
         _AUTHORIZATION_CREDENTIAL_SHAPE,
@@ -196,18 +233,26 @@ _CATEGORIZED_PRIVATE_TEXT_PATTERNS: tuple[_CategorizedPattern, ...] = (
         _BASIC_CREDENTIAL_VALUE, CATEGORY_CREDENTIAL, "basic-auth credential value"
     ),
     _CategorizedPattern(
-        re.compile(r"\b" + "tok" + r"en\s*=", re.I),
+        LABELED_CREDENTIAL_ASSIGNMENT_PATTERN,
         CATEGORY_CREDENTIAL,
-        "token assignment shape",
+        "credential-word assignment shape",
+    ),
+    # The three word arms are the false-positive set direction 2 asked to move
+    # out of the rejection rule. They stay recognized -- under their own category
+    # -- so a surface that wants the older, stricter verdict opts back in by name.
+    _CategorizedPattern(
+        re.compile(r"\b" + "Bear" + r"er\b", re.I),
+        CATEGORY_CREDENTIAL_WORD,
+        "bearer auth scheme word",
     ),
     _CategorizedPattern(
         re.compile(r"\b" + "pass" + r"word\b", re.I),
-        CATEGORY_CREDENTIAL,
+        CATEGORY_CREDENTIAL_WORD,
         "password word",
     ),
     _CategorizedPattern(
         re.compile(r"\b" + "sec" + r"ret\b", re.I),
-        CATEGORY_CREDENTIAL,
+        CATEGORY_CREDENTIAL_WORD,
         "secret word",
     ),
 )
@@ -224,19 +269,36 @@ PRIVATE_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 # these named (rather than inline regex ORs at each caller) is what lets one
 # detection owner serve surfaces with different disclosure boundaries.
 # ---------------------------------------------------------------------------
-# The four text owners reject every recognized category (their historical
-# behavior): credential shapes, local paths, remote locations, org markers.
-TEXT_OWNER_CATEGORIES: frozenset[str] = ALL_CATEGORIES
+# The four text owners validate LoopX's own operational state, and the
+# maintainer set their strictness below the repository-publication surface:
+# "the Bearer token expired" or "read the secret from the environment" describes
+# a fact, it does not carry one (Refs #5136, direction 2). Two categories stay
+# out of their policy. `credential_word` is the loosening direction 2 asked for.
+# `remote_location` is not a loosening but a non-change: the word-only rule these
+# owners enforced never rejected an ordinary URL, and deciding per face whether
+# an internal-state field may carry one is the remaining caller-migration work in
+# #5136, not a verdict this PR is authorized to add.
+# The migration onto the classifier is still a net tightening where direction 2
+# asked for one: these owners now reject credential *values* that arrive with no
+# label at all -- a raw GitHub token, a Slack token, a private key block -- which
+# the word arms never covered, plus every local-path root rather than only
+# `/Users/`.
+TEXT_OWNER_CATEGORIES: frozenset[str] = ALL_CATEGORIES - {
+    CATEGORY_CREDENTIAL_WORD,
+    CATEGORY_REMOTE_LOCATION,
+}
 # artifact_lifecycle historically OR-ed find_private_text_match (the text-owner
 # set) with SECRET_LIKE_SURFACE_PATTERN, downstream of a validate_public_safe_value
 # call that already rejected the local-path and credential shapes. That union
 # covers every category *except* a raw remote location: this projection has
 # always let an ordinary http(s) URL through. The policy preserves that exactly
 # rather than silently tightening it; widening it to remote_location is a
-# separate, disclosed decision (Refs #5136, direction 2).
-ARTIFACT_LIFECYCLE_CATEGORIES: frozenset[str] = frozenset(
-    {CATEGORY_CREDENTIAL, CATEGORY_LOCAL_PATH, CATEGORY_ORG_MARKER}
-)
+# separate, disclosed decision (Refs #5136, direction 2). It keeps
+# ``credential_word`` on purpose: this surface never asked to be loosened, and a
+# new category must not widen an existing named policy by absence.
+ARTIFACT_LIFECYCLE_CATEGORIES: frozenset[str] = ALL_CATEGORIES - {
+    CATEGORY_REMOTE_LOCATION
+}
 
 
 @dataclass(frozen=True)

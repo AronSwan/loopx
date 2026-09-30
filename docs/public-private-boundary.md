@@ -125,6 +125,29 @@ authorization" stays public-safe. Both runtimes are pinned to the shared corpus
 in `tests/fixtures/public_safe_text_corpus.json`; extend that corpus rather
 than adding a per-file exception.
 
+Detection and permission are separate. The owner names a category for every
+recognized shape, and a surface picks the policy (the category set) its
+destination needs:
+
+- Repository publication -- a PR-time scan of development code -- uses the full
+  set (`ALL_CATEGORIES`). A bare credential word is rejected there.
+- LoopX's own operational state -- `feedback`, `authority`,
+  `boundary_authority`, and the Vision checkpoint -- uses
+  `TEXT_OWNER_CATEGORIES`, which recognizes a bare credential word without
+  rejecting it. "the Bearer token expired" describes a credential; it does not
+  carry one.
+
+The value arms stay in every policy, so the narrower tier releases prose only: an
+assignment (`password=`, `secret:`, `token:`) or a scheme followed by a value
+(`Bearer <8+ characters>`) is rejected by both tiers. A raw credential token with
+no label at all -- a GitHub token, a private key block -- is rejected by both
+tiers too, which the word-only rule never caught.
+
+A URL is in neither tier's internal-state policy yet. The rule these four owners
+enforced before never rejected an ordinary link, so this split does not start to;
+whether an internal-state field may carry one is decided per face, together with
+the remaining caller migration in #5136.
+
 ### Compact Artifacts
 
 Safe compact artifact:
