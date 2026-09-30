@@ -45,6 +45,24 @@ The instinct is to give the system an allowance: charge a little per round, stop
 
 So what is needed is not a ceiling but three cooperating mechanisms: **admission** decides whether this round should move; **backoff** decides how to retreat under repeated no-change; and **monitors** decide what does the waking.
 
+## Choosing how often to observe CI {#running-wait}
+
+M1 observes C1's CI while G1 awaits a maintainer decision. Both may be incomplete but need different actions: external readback for M1, the scoped decision for G1. Repeated questioning cannot substitute for either responsibility.
+
+| Option | Useful when | Cost and boundary |
+| --- | --- | --- |
+| A person returns to inspect | Low frequency, short duration, tolerable delay | Uses human attention and needs handoff information |
+| Fixed-cadence observation | Change rate is predictable | Repeated cost during long waits |
+| Backed-off monitor with available event wakes | Long no-change periods or a real event channel exists | Backoff delays discovery; without an event channel there is no immediate notification guarantee |
+
+| M1 observation | Fact to retain | Next action |
+| --- | --- | --- |
+| C1 CI pending, unchanged | Actual observation and no-change information | Follow due/backoff; no delivery spend |
+| C1 CI passed | New evidence / material change bound to C1 | Recheck T3; do not publish while G1 is unapproved |
+| Code advanced to C2 | C1's observation proves only historical C1 | Update the observation target and read C2's result |
+
+Monitors record observations their callers actually made; they do not query CI themselves. Establish current source, observation target, and the real wake path before relying on waiting behavior.
+
 ## The design
 
 ### Admission: whether this round should move
@@ -122,7 +140,7 @@ const noChange = replay ? previousNoChange : material || (previousHash && previo
   ? 0 : previousNoChange + 1;
 ```
 
-The material-change predicate is a human choice, and that cost gets its own paragraph later. For now, note its position: **it is the only entrance that can trigger a successor**, so it decides what actually drives subsequent work.
+The material-change predicate determines whether this observation carries new relevant evidence. It can inform follow-up work, but is neither the only source of successors nor an execution grant.
 
 ### Per-lane counting across monitors and agents
 

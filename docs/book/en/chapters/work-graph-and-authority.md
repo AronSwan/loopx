@@ -33,6 +33,34 @@ So the natural patch — "check that I still hold it right before writing back" 
 
 The hard problem is that **a write must either come from the execution instance that currently holds authority, or not land at all**. That judgment cannot happen before the write; it can only happen at the instant the write commits. Which means a Todo has to be more than an independent list entry — it has to be a graph that expresses who is advancing me, whom I advance, and who replaced me.
 
+## Why claiming work does not remove commit checks {#design-choice}
+
+A claim on T1 does not authorize A to submit indefinitely. B may legitimately take over after A stalls, or acceptance may change. Collaboration ownership and proof for this write need separate records.
+
+| Approach | What it solves | Remaining gap |
+| --- | --- | --- |
+| Record a claim | Peers know who is responsible | Does not alone establish the old instance may still write |
+| Check lease / revision before execution | Reject stale inputs early | State may change before commit |
+| Check in the applicable writer's commit boundary | Reject stale proof and protect current source | Conflicting callers must reread, revalidate, or hand off |
+
+The diagram applies only where the relevant lease/instance fence is enforced. `e1` and `e2` are teaching labels, not complete requests. Default legacy mode does not enforce identical fences on every writer.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent A
+    participant S as Current authority
+    participant B as Agent B
+    A->>S: Obtain T1 execution proof e1
+    Note over A: Execution interrupts or occupancy expires
+    B->>S: Lifecycle takeover produces e2
+    A->>S: Submit with old e1
+    S-->>A: Reject stale proof, preserve current state
+    B->>S: Validate and submit against current source
+    S-->>B: Accept and return receipt
+```
+
+B's receipt proves that submission, not authority for other work. Recovering a historical receipt for A is also distinct from permitting A to create new effects.
+
 ## Goal, Acceptance, and per-Agent Vision
 
 Goal, Acceptance, and per-Agent Vision work at different levels, and only together do they assemble the full basis for "who should advance this":

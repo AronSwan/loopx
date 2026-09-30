@@ -10,6 +10,20 @@ Faster refresh narrows that window but does not decide which record wins a disag
 
 This costs state maintenance, reads, and projection updates. It also allows sessions, Hosts, and interfaces to change while retaining checkable work records.
 
+## Why current state also needs historical receipts {#design-choice}
+
+T1 commits R1; later work advances the source revision. When A retries the original operation, it must distinguish current state from whether that operation was accepted. A current snapshot alone may not answer the latter; an old receipt cannot authorize the next write.
+
+| Option | Useful for | Cost in long-running work |
+| --- | --- | --- |
+| Reconstruct progress from chat | Motivation and small manual handoffs | Reinterpret identity, revision, and external freshness |
+| Keep only the latest snapshot | Fast current-work reads | May not identify a commit whose response was lost |
+| Current source plus identity-bound receipts | Read current head and historical operations separately | Maintain identity, retention, and recovery contracts |
+
+LoopX uses the last division on applicable authority paths. R1 may be recovered while current head includes a later R2. Replaying R1 must not restore an old state. This separation is a contract, not an automatic property of a file format.
+
+See `CoordinationCommandReceipt` and the [operation replay contract](/loopx/docs/reference/authority-operation-replay/). Provider- and command-specific recovery boundaries still apply.
+
 ## Identify the Goal and current authority first
 
 The durable boundary is the Goal: objective, Todos, Gates, Agent identities, and runtime routes. A Host thread is an execution context. Ending a session does not automatically delete the Goal, and reading it grants no write authority.

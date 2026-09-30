@@ -102,11 +102,11 @@ bilingual routes, official homepage entrypoints, and the no-Labs boundary. After
 change, rerun `python3 -m pip check` and `mkdocs build --strict`. Before changing any UI or
 documentation visual, read `docs/development/design.md`.
 
-The [scaffold chapter](09-extension-scaffold.md) supplies setup and two explicit contract tests. The official generator has no `[test]` extra. After implementing the domain changes and creating those tests, reuse its environment:
+The [scaffold chapter](09-extension-scaffold.md) supplies setup and the contract tests. The official generator has no `[test]` extra. After copying the complete companion package, reuse its environment:
 
 ```bash
-. .venv-extension/bin/activate
-python3 -m pytest standalone-extension/tests
+. .local/book-extension-venv/bin/activate
+python3 -m unittest discover -s standalone-extension/tests -v
 ```
 
 Then follow the [lifecycle chapter](10-extension-lifecycle.md) using an isolated state file to validate activation, invocation, disable, upgrade, and rollback. Markdown parsing alone cannot establish that user journey.

@@ -16,7 +16,7 @@ package 安装与 LoopX activation 是两个独立阶段。LoopX 不负责下载
 继续使用[上一章](09-extension-scaffold.md)已安装 LoopX 与 provider 的环境，从 `standalone-extension` 的父目录执行：
 
 ```bash
-. .venv-extension/bin/activate
+. .local/book-extension-venv/bin/activate
 extension_state_dir="$(mktemp -d)"
 extension_state="$extension_state_dir/state.json"
 ```

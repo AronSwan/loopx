@@ -29,6 +29,22 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
 
 [主要状态机与状态流转](core-state-machines.md)是一张可回查的专题地图。可以先读完一次 Turn，再回来把各机制连成整体，不必首次阅读就记住全部枚举。
 
+## 用同一项任务贯穿全书 {#running-example}
+
+后文沿用一个合成任务：给现有 CLI 增加兼容的 JSON 输出，补文档，等待 CI 与 schema 决定后交付。以下代号只用于教学，不是可直接导入的 Todo id 或 API payload。
+
+| 代号 | 工作与责任 | 接受条件 |
+| --- | --- | --- |
+| T1 / Agent A | 实现 JSON 输出，保留默认文本行为 | 对 commit C1 的本地兼容测试与受控写回 |
+| T2 / Agent B | 补使用文档，可与 T1 并行 | 示例与约定一致，产物可审阅 |
+| M1 | 观察 C1 的远端 CI | 有来源与 revision 的实际读回 |
+| G1 | 维护者决定 schema / 发布范围 | 对象与 scope 明确的批准 |
+| T3 | 发布或交付结果 | T1/T2、CI 与 G1 等当前条件均满足 |
+
+T1 的一次写回可留下回执 R1，但它不自动关闭 G1 或接受整个 Goal。若代码变为 C2，M1 对 C1 的旧观察不能验收新提交；新工作或恢复动作都要重新判断当前条件。
+
+首次阅读可以走“[四个问题](02b-long-horizon-requirements.md) → [完整一轮](03-one-turn.md#running-turn) → [状态](state-substrate.md#design-choice) → [权限](work-graph-and-authority.md#design-choice) → [恢复](04-runtime-boundaries.md#receipt-recovery) → [等待](04b-budget-and-admission.md#running-wait)”这条路线，再用状态机专题回查细节。
+
 ## Dev Book 与 Control-Plane Course 如何配合
 
 本书与仓库中的

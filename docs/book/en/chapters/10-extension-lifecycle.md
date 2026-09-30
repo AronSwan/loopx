@@ -16,7 +16,7 @@ If the new package replaced old files, a failed activation probe preserves the o
 Reuse the environment prepared in the [previous chapter](09-extension-scaffold.md), from the parent of `standalone-extension`:
 
 ```bash
-. .venv-extension/bin/activate
+. .local/book-extension-venv/bin/activate
 extension_state_dir="$(mktemp -d)"
 extension_state="$extension_state_dir/state.json"
 ```

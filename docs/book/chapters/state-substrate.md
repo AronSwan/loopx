@@ -10,6 +10,20 @@
 
 这会增加状态维护、读取和投影更新成本，但让 session、Host 和界面可以更换，同时保留可核对的工作记录。
 
+## 为什么当前状态之外还要保留历史回执 {#design-choice}
+
+T1 已提交 R1，随后其他工作把 source 推到新 revision。A 重试原操作时，有两个问题：当前状态是什么，原操作是否已经接受。只有最新状态，可能无法回答第二个问题；只有旧回执，又不足以判断下一次写入。
+
+| 可选做法 | 适用之处 | 长程工作中的代价 |
+| --- | --- | --- |
+| 从聊天重建进展 | 解释动机与人工接手的小任务 | 需要重新解释身份、版本和外部 freshness |
+| 只保存最新快照 | 快速读取当前工作 | 响应丢失后，未必能识别原操作已提交 |
+| 当前 source + identity-bound receipt | 分开读取当前 head 与历史操作结果 | 需要维护身份、回执保留和恢复合同 |
+
+LoopX 在相应 authority 路径上采用最后一种分工。历史 R1 可以被恢复，当前 head 仍可包含后来提交的 R2；重放 R1 不应把状态退回过去。这是 source 与 receipt 各有职责的理由，而非选择某一种文件格式就自动获得的性质。
+
+对应实现是 `CoordinationCommandReceipt` 与 [operation replay 合同](/loopx/docs/reference/authority-operation-replay/)。它们仍受 provider 与命令各自的恢复边界约束。
+
 ## 先确定 Goal 与当前 authority
 
 持久边界是 Goal。它包含目标、Todo、Gate、Agent 身份和运行路由；某个 Host thread 只是执行上下文。结束 session 不会自动删除 Goal，读到 Goal 也不会授予写权限。

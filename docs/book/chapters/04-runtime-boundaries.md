@@ -72,6 +72,34 @@ workspace 和授权还在不在。这些断言要么成立要么不成立，而�
 - external handle、readback 与 monitor due state；
 - current interaction contract 与 stop condition。
 
+### 同一任务：响应丢失之后恢复哪一项 {#receipt-recovery}
+
+假设 T1 的某项受控操作已经提交 R1，但响应丢失。调用者没有成功回复，仍可能存在持久结果。下面的 recovery 只读回原 operation，不重新执行整个 Host 任务。
+
+```mermaid
+sequenceDiagram
+    participant C as 调用者
+    participant O as 命令 owner
+    participant P as 选定 provider
+    C->>O: 提交原 operation
+    O->>P: 受控提交
+    P->>P: 保存结果与 R1
+    Note over C,P: 提交响应丢失
+    C->>O: 保持原 identity 恢复
+    O->>P: 读取原 receipt
+    alt 有效历史结果
+        P-->>O: 返回 R1
+        O-->>C: 恢复历史结果，不重复提交
+    else 仍无法确认
+        P-->>O: unavailable / unknown
+        O-->>C: 保留未知与恢复责任
+    end
+```
+
+已确认 `absent` 后是否可以执行，仍由该操作的当前合同决定。这与“未知时自动重试写入”不同。这个分工的代价是维护可读回回执，以及在 provider 不可用时接受等待。
+
+恢复 R1 后也要重读 T3 的条件：CI 和 G1 是否已满足，是否已有新 commit。恢复历史事实和批准后续发布是两次判断。
+
 ### 复现什么，重新探测什么
 
 这七类里，有一半可以从 durable project state 复现，另一半必须在当下重新探测。这个划分本身

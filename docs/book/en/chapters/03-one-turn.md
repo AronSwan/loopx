@@ -2,6 +2,31 @@
 
 This chapter answers one question: across a single round of agent work, what happens between "should this move at all" and "this counts as done" — and why the **ordering itself** is a safety boundary.
 
+## Follow the running task through a normal turn {#running-turn}
+
+In the [running task](00-reading-guide.md#running-example), A advances T1, B can independently handle T2, and G1 covers the unapproved T3. This table explains responsibility; not every Turn executes all these steps.
+
+| Point | Current facts | Action | Result for the next executor |
+| --- | --- | --- | --- |
+| Select | T1 open; A meets current scope, capability, and workspace requirements | Read admission | Selected work and Turn identity |
+| Execute | Inputs and compatibility requirements are clear | Produce C1 and tests | Candidate artifacts, not whole-Goal success |
+| Validate | Validator examines C1 | Check text compatibility, JSON, and invalid inputs | Evidence bound to C1 |
+| Accept | Source and authority still satisfy commit requirements | Lifecycle writeback and required settlement | R1 and this Turn's result; later timeout does not erase a commit |
+| Continue | M1 has not completed CI observation; G1 is unapproved | Reread the frontier; independent T2 may advance | Explicit waiting and follow-up; do not publish T3 early |
+
+```mermaid
+flowchart TD
+    F["Current Goal / Todo / Gate / external readback"] --> D["Select allowed work"]
+    D --> H["Host executes T1"]
+    H --> V["Validate C1 postconditions"]
+    V --> W["Governed writeback / Turn settlement"]
+    W --> P["Receipts and refreshed views"]
+    P --> N["Continue, wait, or recover"]
+    N --> F
+```
+
+The diagram shows ordinary delivery responsibilities. Historical receipt recovery, quiet waits, and no-spend observations have distinct branches. Next consider committed writeback whose complete result never reached the caller.
+
 ## The process stops after writeback
 
 Consider a teaching scenario: an Agent produces a compatibility fix, validation passes, and the result is written back. Quota settlement then times out and the process exits.

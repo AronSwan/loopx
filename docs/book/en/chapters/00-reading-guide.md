@@ -29,6 +29,22 @@ The foundations cover:
 
 [Core state machines](core-state-machines.md) is a reference map. You can finish the Turn chapter first, then use it to reconnect mechanisms without memorizing every enum on the first pass.
 
+## One task throughout the book {#running-example}
+
+Follow one synthetic task: add compatible JSON output to a CLI, document it, wait for CI and a schema decision, then deliver. These labels are teaching identifiers, not importable Todo ids or API payloads.
+
+| Label | Work and responsibility | Acceptance |
+| --- | --- | --- |
+| T1 / Agent A | Implement JSON while preserving default text output | Local compatibility tests at commit C1 and governed writeback |
+| T2 / Agent B | Document usage in parallel with T1 | Reviewable examples matching the contract |
+| M1 | Observe remote CI for C1 | Actual source- and revision-bound readback |
+| G1 | Maintainer decides schema / publication scope | Explicit approval for the named object and scope |
+| T3 | Publish or deliver | T1/T2, CI, G1, and other current conditions satisfied |
+
+A T1 writeback may produce receipt R1. It does not close G1 or accept the whole Goal. If code advances to C2, M1's observation of C1 cannot accept that new revision. Reassess conditions for new work and recovery.
+
+For a first pass, follow [four questions](02b-long-horizon-requirements.md), [a full turn](03-one-turn.md#running-turn), [state](state-substrate.md#design-choice), [authority](work-graph-and-authority.md#design-choice), [recovery](04-runtime-boundaries.md#receipt-recovery), and [waiting](04b-budget-and-admission.md#running-wait). Use the state-machine topic as a reference afterward.
+
 ## How the Dev Book and Control-Plane Course work together
 
 This book and the repository's

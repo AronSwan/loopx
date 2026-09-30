@@ -84,6 +84,34 @@ does not need a verbatim transcript, but it must rebuild these seven classes of 
 - external handles, readbacks, and monitor due state;
 - current interaction contract and stop condition.
 
+### Running task: recover the missing result {#receipt-recovery}
+
+Suppose a governed T1 operation commits R1 but its response is lost. Missing success output can coexist with a durable result. This recovery reads the original operation; it does not rerun the entire Host task.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant O as Command owner
+    participant P as Selected provider
+    C->>O: Submit original operation
+    O->>P: Governed commit
+    P->>P: Save result and R1
+    Note over C,P: Commit response is lost
+    C->>O: Recover with original identity
+    O->>P: Read original receipt
+    alt Valid historical result
+        P-->>O: Return R1
+        O-->>C: Recover result without duplicate commit
+    else Outcome still uncertain
+        P-->>O: unavailable / unknown
+        O-->>C: Preserve uncertainty and recovery ownership
+    end
+```
+
+Confirmed absence is handled by the operation's current contract. Unknown outcomes do not justify a blind write retry. This division costs receipt maintenance and may require waiting while the provider is unavailable.
+
+After R1 recovery, reread T3's conditions: CI, G1, and any newer commit. Recovering history and authorizing publication are separate decisions.
+
 ### What replays, and what must be inspected again
 
 Half of those seven classes replay from durable project state. The other half must be inspected now.
