@@ -243,14 +243,14 @@ def _drain_required_result(
     *,
     requested_goal_ref: dict[str, str],
     pending_effects: list[dict[str, str]],
-    gate_changed: bool,
+    changed: bool,
 ) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": "loopx_goal_recreation_v1",
         "status": "drain_required",
-        "changed": gate_changed,
-        "replayed": not gate_changed,
+        "changed": changed,
+        "replayed": not changed,
         "gate_state": "closing",
         "registry": str(request.registry_path),
         "retired_goal_ref": copy.deepcopy(requested_goal_ref),
@@ -358,17 +358,17 @@ def recreate_goal_instance(request: RecreateGoalRequest) -> dict[str, Any]:
             gate=closing_gate,
         )
 
-    pending_effects = drain_releasable_source_turn_effects(
+    drain_result = drain_releasable_source_turn_effects(
         registry_path=request.registry_path,
         goal_id=request.goal_id,
         requested_goal_ref=requested_goal_ref,
     )
-    if pending_effects:
+    if drain_result.pending_effects:
         return _drain_required_result(
             request,
             requested_goal_ref=requested_goal_ref,
-            pending_effects=pending_effects,
-            gate_changed=gate_changed,
+            pending_effects=drain_result.pending_effects,
+            changed=gate_changed or drain_result.changed,
         )
 
     with exclusive_cross_runtime_file_lock(

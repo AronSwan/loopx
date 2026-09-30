@@ -75,6 +75,16 @@ class SourceTurnEffect:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SourceTurnEffectDrainResult:
+    pending_effects: list[dict[str, str]]
+    released_count: int
+
+    @property
+    def changed(self) -> bool:
+        return self.released_count > 0
+
+
 def _gate_root(registry_path: Path, goal_id: str) -> Path:
     return lifetime_root(registry_path) / "turn-settlement" / alias_digest(goal_id)
 
@@ -437,7 +447,7 @@ def drain_releasable_source_turn_effects(
     registry_path: Path,
     goal_id: str,
     requested_goal_ref: Mapping[str, str],
-) -> list[dict[str, str]]:
+) -> SourceTurnEffectDrainResult:
     # turn_driver imports the Host admission owner, so defer this reverse edge.
     from ..turn_driver.journal_store import load_turn_journal, turn_journal_path
 
@@ -446,6 +456,7 @@ def drain_releasable_source_turn_effects(
     if not runtime_root.is_absolute() or runtime_root.resolve() != runtime_root:
         raise ValueError("source-session common_runtime_root must be absolute")
     pending: list[dict[str, str]] = []
+    released_count = 0
     for admission_path in _admission_paths(registry_path, goal_id):
         admission = _read_object(
             admission_path,
@@ -543,7 +554,7 @@ def drain_releasable_source_turn_effects(
                         admission_path,
                         label="source Turn effect admission",
                     )
-                    _decision(
+                    release_decision = _decision(
                         "goal.source_session.turn_effect.release",
                         {
                             "profile_id": SOURCE_SESSION_PROFILE_ID,
@@ -554,6 +565,11 @@ def drain_releasable_source_turn_effects(
                         },
                     )
                     _remove_admission(admission_path)
+                    if release_decision["kind"] == "commit":
+                        released_count += 1
         except LockAcquireTimeoutError:
             pending.append(_pending_projection(admission, reason="executor_active"))
-    return pending
+    return SourceTurnEffectDrainResult(
+        pending_effects=pending,
+        released_count=released_count,
+    )

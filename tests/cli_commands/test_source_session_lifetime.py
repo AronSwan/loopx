@@ -213,6 +213,108 @@ def test_recreation_default_output_reports_durable_drain_transition(
     assert replay["replayed"] is True
 
 
+def test_recreation_retry_reports_partial_drain_as_change(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _knowledge_root, registry_path, registration = _register(tmp_path, capsys)
+    goal_ref = registration["goal_ref"]
+    assert isinstance(goal_ref, dict)
+    instance_a = str(goal_ref["goal_instance_id"])
+    runtime_root = Path(str(_registry_payload(registry_path)["common_runtime_root"]))
+    journals: dict[str, Path] = {}
+
+    for marker in ("a", "b"):
+        turn_key = "sha256:" + (marker * 64)
+        effect_ref = f"{turn_key}#durable_writeback"
+        journal_path = turn_journal_path(
+            runtime_root,
+            goal_id="atlas-import",
+            turn_key=turn_key,
+        )
+        journal = {
+            "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+            "goal_id": "atlas-import",
+            "turn_key": turn_key,
+            "status": "in_progress",
+            "completed_phases": ["host_execute", "typed_result", "validation"],
+            "effect_attempts": {
+                "durable_writeback": {
+                    "status": "prepared",
+                    "effect_ref": effect_ref,
+                }
+            },
+        }
+        goal_admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path,
+            goal_id="atlas-import",
+            planned_goal_ref=goal_ref,
+        )
+        effect_admission = goal_admission.turn_effect_admission(
+            turn_key=turn_key,
+            journal_path=journal_path,
+        )
+        assert effect_admission is not None
+
+        def persist_journal(
+            _source_admission: dict[str, object],
+            *,
+            path: Path = journal_path,
+            payload: dict[str, object] = journal,
+        ) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        effect_admission.prepare(
+            require_turn_provider_step_kind(SettlementStepKind.DURABLE_WRITEBACK),
+            effect_ref,
+            persist_journal,
+        )
+        journals[turn_key] = journal_path
+
+    arguments = _recreation_arguments(
+        registry_path,
+        goal_instance_id=instance_a,
+    )
+    admissions = (
+        source_session_turn_effects.source_turn_effect_gate_path(
+            registry_path,
+            "atlas-import",
+        ).parent
+        / "admissions"
+    )
+
+    assert main(arguments) == 1
+    first = json.loads(capsys.readouterr().out)
+    assert first["changed"] is True
+    assert first["replayed"] is False
+    assert len(first["pending_effects"]) == 2
+    assert len(list(admissions.glob("*.json"))) == 2
+
+    released_turn_key = "sha256:" + ("a" * 64)
+    releasable = json.loads(journals[released_turn_key].read_text(encoding="utf-8"))
+    releasable.pop("effect_attempts")
+    journals[released_turn_key].write_text(
+        json.dumps(releasable),
+        encoding="utf-8",
+    )
+
+    assert main(arguments) == 1
+    partial = json.loads(capsys.readouterr().out)
+    assert partial["changed"] is True
+    assert partial["replayed"] is False
+    assert [effect["turn_key"] for effect in partial["pending_effects"]] == [
+        "sha256:" + ("b" * 64)
+    ]
+    assert len(list(admissions.glob("*.json"))) == 1
+
+    assert main(arguments) == 1
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["changed"] is False
+    assert replay["replayed"] is True
+    assert len(list(admissions.glob("*.json"))) == 1
+
+
 def test_registration_publishes_fresh_v2_without_global_sync(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
