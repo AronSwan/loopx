@@ -343,13 +343,21 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
 }
 
 /** The first transition to ``accepted`` is the one durable moment a requester
- * can be continued without polling.  The intent names the requester and the
- * exact accepted result; it grants no Turn and is not a second settlement. */
+ * can be continued without polling.  The intent names the requester, the
+ * conversation whose Turn started the operation (null when it was not started
+ * from one) and the exact accepted result; it grants no Turn and is not a
+ * second settlement.  The conversation is part of the intent identity, so the
+ * wake cannot be consumed by another conversation of the same requester. */
 function delegationWakeIntent(params: JsonObject): JsonObject {
   const requester = requireJsonObject(params.requester, "wake requester");
   requireThat([requester.goal_id, requester.agent_id, requester.operation_id, requester.request_id].every(text),
     "wake intent requires the requester and result identity");
   const goalRef = requester.goal_ref == null ? null : requireJsonObject(requester.goal_ref, "requester goal reference");
+  const origin = requester.conversation == null ? null
+    : requireJsonObject(requester.conversation, "requester conversation");
+  requireThat(origin === null || (text(origin.session_id) && text(origin.turn_id)),
+    "requester conversation requires its session and Turn");
+  const conversation = origin === null ? null : {session_id: origin.session_id, turn_id: origin.turn_id};
   requireThat(Array.isArray(requester.artifacts) && requester.artifacts.length > 0, "wake intent requires accepted artifacts");
   const digests = requester.artifacts.map(value => {
     const artifact = requireJsonObject(value, "accepted artifact");
@@ -360,8 +368,9 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
   return {
     schema_version: "loopx_delegation_wake_intent_v0",
     intent_id: canonicalAuthoritySha256([requester.goal_id, requester.agent_id, requester.operation_id,
-      requester.request_id, digests]),
+      requester.request_id, digests, conversation]),
     requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: goalRef},
+    conversation,
     operation_id: requester.operation_id, request_id: requester.request_id,
   };
 }
