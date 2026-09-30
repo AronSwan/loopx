@@ -359,6 +359,14 @@ def main() -> int:
     args = parser.parse_args()
 
     assert not (BOOK / "labs").exists(), "Dev Book publication must not include Labs"
+    companion = REPO_ROOT / "packages" / "loopx-text-stats"
+    for relative_path in (
+        "pyproject.toml", "extension.toml", "README.md", "README.zh-CN.md",
+        "src/loopx_text_stats/__init__.py", "src/loopx_text_stats/cli.py",
+        "schemas/request.schema.json", "schemas/response.schema.json",
+        "examples/request.json", "tests/test_provider.py",
+    ):
+        assert (companion / relative_path).is_file(), f"missing book companion asset: {relative_path}"
     assert not (REPO_ROOT / "mkdocs.book.zh.yaml").exists()
     assert not (REPO_ROOT / "mkdocs.book.en.yaml").exists()
 
