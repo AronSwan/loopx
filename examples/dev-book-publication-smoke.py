@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import tomllib
+from urllib.parse import unquote
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -180,6 +182,27 @@ def assert_community_casebook_is_bilingual() -> None:
             assert en_targets.count(target) == 1, target
 
 
+def assert_local_fragments_resolve(html: str, route: str) -> None:
+    class FragmentIndex(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: set[str] = set()
+            self.fragments: set[str] = set()
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            attributes = dict(attrs)
+            if identifier := attributes.get("id"):
+                self.ids.add(identifier)
+            href = attributes.get("href") or ""
+            if tag == "a" and href.startswith("#") and len(href) > 1:
+                self.fragments.add(unquote(href[1:]))
+
+    index = FragmentIndex()
+    index.feed(html)
+    missing = sorted(index.fragments - index.ids)
+    assert not missing, f"{route}: missing local fragment targets: {missing}"
+
+
 def validate_rendered_site(site_dir: Path) -> None:
     def assert_state_machine_diagrams(html: str, route: str) -> None:
         diagram_count = len(re.findall(r'<pre class="mermaid">', html))
@@ -318,6 +341,11 @@ def validate_rendered_site(site_dir: Path) -> None:
             "第四部分：工程边界",
         ):
             assert chinese_section not in html
+
+    for locale in ("", "en/"):
+        for chapter in CHAPTERS:
+            route = f"{locale}chapters/{chapter}/index.html"
+            assert_local_fragments_resolve(read(site_dir / route), route)
 
     main_docs_dir = site_dir.parent
     for page in COURSE_PAGES:
