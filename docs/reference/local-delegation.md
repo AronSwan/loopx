@@ -236,7 +236,10 @@ refused. The receipt `phase` is `settled` only when an acknowledgement exists,
 the operation lock is free, the member's Turn lane holder record shows it
 released by the stopped worker (the lane is read, never taken), the native
 host the Turn launched has exited together with every process in its group,
-and a required hard task lease was actually released. A release that failed is
+and a required hard task lease was actually released. The obligation is read
+from the operation record, not from the stop sidecar: the acknowledgement is
+persisted before the lease is released, so a crash in between must not turn
+"not yet written" into "nothing was owed". A release that failed is
 retried under the stop's own lock on the next read, so it never becomes a
 `settled` receipt that leaves the member's Todo blocked until the lease TTL;
 while it is unproven the stop stays `acknowledged` with
@@ -266,9 +269,10 @@ written after both leaves their acceptance intact.
 worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
 只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
 worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
-都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。释放失败会在
-下一次读取时于 stop 自己的锁下重试，因此不会产生一份「已结算」却让成员 Todo 被
-租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
+都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。该义务取自
+操作记录而非 stop sidecar：确认会先于释放落盘，因此两者之间发生崩溃时，不能把
+「尚未写入」当成「本就不需要释放」。释放失败会在下一次读取时于 stop 自己的锁下重试，
+因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
 `required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
 停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
 启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的

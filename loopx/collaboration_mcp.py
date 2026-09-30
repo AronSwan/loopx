@@ -1122,20 +1122,26 @@ class Delegations:
             facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
             # Read last: a Host seen drained after its worker and lane let go stays drained.
             facts["host_process"] = host_process_drain(self._host_process_record(path))
-            # A required lease the acknowledgement could not release is retried
-            # here, under the same lock that guards the record: every later
-            # read of this stop is another attempt, instead of one failure
-            # turning into a permanent `settled` with the lease still held.
+            # The obligation comes from the operation record, not from the stop
+            # sidecar. The acknowledgement writes its ACK before it releases the
+            # lease, so a process loss in between leaves the sidecar with no
+            # `lease` field at all — and reading that as "nothing was owed"
+            # settles a stop whose member still holds an active hard lease, with
+            # resume already refused and the Todo blocked until the TTL.
+            #
+            # The canonical `row.task_lease.required` is the source of truth, so
+            # the obligation survives the crash. A release is retried here, under
+            # the same lock that guards the record: every later read is another
+            # attempt rather than one failure becoming permanent.
+            owed = isinstance(row.get("task_lease"), dict) and row["task_lease"].get("required") is True
             lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
-            if lease.get("required") is True and lease.get("released") is not True:
+            if owed and lease.get("released") is not True:
                 retried = self._release_delegation_lease(row, binding)
                 if retried != lease:
                     stop["lease"] = retried
                     _write(self._stop_path(path), stop)
                 lease = retried
-            if lease.get("required") is True:
-                # Absent means the operation held no required lease, which is not
-                # the same claim as a lease that was released.
+            if owed:
                 facts["lease_released"] = lease.get("released") is True
             decision = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,

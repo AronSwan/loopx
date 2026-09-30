@@ -17,6 +17,7 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "managed-research-team"))
 import research_team as demo  # noqa: E402
 from test_managed_research_scenario import fixture  # noqa: E402
+from loopx import collaboration_mcp as delegation_module  # noqa: E402
 from loopx.collaboration_mcp import DelegationFenced, DelegationStopRequested, Delegations  # noqa: E402
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
@@ -748,3 +749,78 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
 
     with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
         runner.stop("analysis-platform", execute=True)
+
+
+def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(service, monkeypatch):
+    """The lease obligation survives process loss after the acknowledgement.
+
+    `_acknowledge_stop` writes the ACK before it releases the lease, so a crash
+    in between leaves the sidecar with no `lease` field. Reading that as "nothing
+    was owed" settles a stop whose member still holds an active hard lease, with
+    resume already refused and the Todo blocked until the TTL. The obligation
+    comes from the operation record, which the crash cannot lose.
+    """
+    from loopx.control_plane.collaboration.inbox import _write as write_inbox
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-crash", brief())
+    path = runner.path("analysis-crash")
+    row = _read(path)
+    # The member holds a real required lease, as a bounded task does.
+    row["task_lease"] = {"required": True, "idempotency_key": "lease-crash", "version": 1}
+    right_after_ack = {**row, "status": "stopped"}
+    runner._fenced_write(path, right_after_ack)
+
+    # The crash window: ACK persisted, no lease result written yet.
+    write_inbox(runner._stop_path(path), {
+        **runner._new_stop_record(right_after_ack, requested_by=runner.agent_id, worker=None),
+        "phase": "acknowledged",
+        "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
+                "source": "requester", "observed_status": "stopped", "turn_key": None},
+    })
+    sidecar = _read(runner._stop_path(path))
+    assert "lease" not in sidecar or sidecar.get("lease") is None
+    assert _read(path)["task_lease"]["required"] is True
+
+    # A release that succeeds on this read lets the stop settle, and the receipt
+    # says the lease really is gone.
+    monkeypatch.setattr(delegation_module, "release_task_lease",
+                        lambda **kw: {"released": True})
+    settled = runner.stop("analysis-crash", execute=True)
+    assert settled["phase"] == "settled", settled
+    assert settled["stop"]["lease"]["released"] is True
+    assert settled["stop"]["settled"]["lease_released"] is True
+
+
+def test_a_crash_between_the_ack_and_the_lease_result_never_settles_unreleased(service, monkeypatch):
+    """The same window, with the release still failing, must not report `settled`.
+
+    `settled` tells the owner the member is safely stopped. Claiming it while a
+    required lease is provably still active is exactly the terminal distortion
+    the crash window used to produce.
+    """
+    from loopx.control_plane.collaboration.inbox import _write as write_inbox
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-crash-open", brief())
+    path = runner.path("analysis-crash-open")
+    row = _read(path)
+    row["task_lease"] = {"required": True, "idempotency_key": "lease-open", "version": 1}
+    right_after_ack = {**row, "status": "stopped"}
+    runner._fenced_write(path, right_after_ack)
+    write_inbox(runner._stop_path(path), {
+        **runner._new_stop_record(right_after_ack, requested_by=runner.agent_id, worker=None),
+        "phase": "acknowledged",
+        "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
+                "source": "requester", "observed_status": "stopped", "turn_key": None},
+    })
+
+    def still_held(**kwargs):
+        raise RuntimeError("authority unavailable")
+
+    monkeypatch.setattr(delegation_module, "release_task_lease", still_held)
+    receipt = runner.stop("analysis-crash-open", execute=True)
+    assert receipt["phase"] == "acknowledged", receipt
+    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
