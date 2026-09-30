@@ -3,30 +3,79 @@
 This appendix routes readers; it does not replace the LoopX CLI reference. Run
 `loopx <command> --help` for complete arguments in the installed version.
 
-## Core terms
+## How to use this appendix
+
+Every long-horizon constraint in the book (the four requirements in 02b) has a matching group of terms,
+protocols, and commands here. Start from the kind of problem you have, not from alphabetical order:
+
+| The problem you have | Symptom | Go to |
+| --- | --- | --- |
+| State, memory, projections | A restart redoes finished turns, or a stale judgment is read as current | [Requirement one terms](#requirement-one-state-outlives-context) |
+| Interruption, recovery, resumption | You cannot say where it stopped, so you redo the whole unit | [Requirement two terms](#requirement-two-interruption-stops-at-identifiable-points) |
+| Authority, writes, takeover | Two executors each believe they are the owner | [Requirement three terms](#requirement-three-one-accountable-actor) |
+| Spend, quota, wake-ups | Nothing moves unwatched, and hot polling appears when watched | [Requirement four terms](#requirement-four-bounded-externally-observable-spend) |
+
+If you already have a term or command name, skip the routing: cross-cutting words are in
+[Words outside the four requirements](#words-outside-the-four-requirements), and commands are in
+[Core command quick index](#core-command-quick-index). The protocol index is organized by developer job,
+not by directory order.
+
+## Requirement one: state outlives context
+
+**Test: information that lives only in the prompt does not count as remembered.**
+
+| Term | Meaning in this book |
+| --- | --- |
+| Goal | Long-running project outcome and state boundary identified by a stable `goal_id` |
+| Acceptance | Observable conditions that prove the Goal is complete |
+| Evidence | Verifiable material that supports a judgment |
+| Projection | Read model derived from canonical state |
+| Kernel | Core that accepts transitions and owns durable control-plane state |
+
+## Requirement two: interruption stops at identifiable points
+
+**Test: if interruption is normal, "complete" has to be decidable.**
+
+| Term | Meaning in this book |
+| --- | --- |
+| Todo | Schedulable work item with identity |
+| Frontier | Todos currently runnable after dependency, Gate, capability, and boundary checks |
+| Receipt | Durable record of an accepted action or lifecycle transition |
+
+## Requirement three: one accountable actor
+
+**Test: authority cannot be self-asserted; a shared authority grants it and can revoke it.**
 
 | Term | Meaning in this book |
 | --- | --- |
 | Agent | Executor that plans and performs one bounded action in a Host/runtime |
-| Host | Product or runtime that owns sessions, model turns, and wake-up surfaces |
-| Goal | Long-running project outcome and state boundary identified by a stable `goal_id` |
 | Agent identity | Peer or lane identified by `agent_id`; it is not the Goal and does not prove the Host |
 | Vision | A bounded execution-routing contract for one `agent_id`, including role scope, direction, acceptance summary, and replan trigger |
-| Acceptance | Observable conditions that prove the Goal is complete |
-| Todo | Schedulable work item with identity |
-| Frontier | Todos currently runnable after dependency, Gate, capability, and boundary checks |
 | Claim | Soft ownership of a Todo |
 | Lease | Time-bound exclusive reservation that prevents conflicting execution |
 | Gate | Blocking decision with explicit scope and authority |
-| Evidence | Verifiable material that supports a judgment |
-| Receipt | Durable record of an accepted action or lifecycle transition |
-| Projection | Read model derived from canonical state |
+| Host | Product or runtime that owns sessions, model turns, and wake-up surfaces |
+
+## Requirement four: bounded, externally observable spend
+
+**Test: no delta means no spend, and a system with no external observation degrades into human polling.**
+
+| Term | Meaning in this book |
+| --- | --- |
 | Quota | Contract that decides whether a turn may run and records validated spend |
 | Monitor | Todo that observes an external condition on a cadence and advances only on material change |
+
+## Words outside the four requirements
+
+These do not hang off one requirement alone, and every requirement depends on them: Capability says what a
+caller may rely on, while Provider and Extension say where an implementation comes from and how it
+upgrades. Which layer they belong to is the placement rule in chapter 08.
+
+| Term | Meaning in this book |
+| --- | --- |
 | Capability | Caller-facing outcome contract |
 | Provider | Implementation or external-system caller that returns a bounded result |
 | Extension | Installation, activation, upgrade, rollback, and compatibility lifecycle for a Provider or package |
-| Kernel | Core that accepts transitions and owns durable control-plane state |
 
 ## Core protocol index
 
@@ -212,6 +261,35 @@ loopx extension rollback <extension-id>
 
 Lifecycle commands normally preview by default. Inspect current `--help` and add `--execute` only when you
 intend to mutate state or invoke the Provider.
+
+## Core command quick index
+
+Grouped by the kind of problem; verify arguments with `loopx <command> --help`.
+
+**Diagnose state (requirements one and two)**
+
+```bash
+loopx doctor
+loopx registry
+loopx status
+loopx history --goal-id <goal-id>
+loopx todo list --goal-id <goal-id>
+```
+
+**Read evidence and ownership (requirement three)**
+
+```bash
+loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30
+loopx register-agent --goal-id <goal-id> --agent-id <new-agent-id>
+```
+
+**Admission, wake-ups, and spend (requirement four)**
+
+```bash
+loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
+loopx quota scheduler-ack-current <packet-bound-args...>
+loopx extension list --format json
+```
 
 ## Source contribution entrypoints
 

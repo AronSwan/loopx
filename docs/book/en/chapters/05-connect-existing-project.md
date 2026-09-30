@@ -1,37 +1,94 @@
 # Connect an existing Git project
 
-Project onboarding is an independent track. You do not need to modify the LoopX Kernel or develop an
-Extension first. This chapter establishes the project state and Git boundary; the next two chapters
-activate work from Codex App and the visible Codex CLI TUI.
+This chapter answers one concrete question: when you connect a project that already exists, what exactly are you handing over — and why "run the command once" does not add up to an auditable onboarding.
 
-The recommended path is to delegate onboarding to the Agent already working in the repository. You define
-the goal, Host, and authority boundaries. The Agent inspects the repository, reads the current LoopX
-surface, executes the safe onboarding steps, and returns evidence you can review. The manual commands
-remain useful for understanding, verification, and recovery.
+It hangs on requirement one from earlier: **state must be able to live outside the context.** In a session, project state lives in the model's context. Long-running work requires it to live in the repository, where the next reader can pick it up. Onboarding is the act of handing your project's state to an external control plane.
 
 !!! tip "Fast reading path"
-    For basic onboarding, follow sections 1–6 and stop after Git-isolation verification. Read section 7 only
-    when the project needs an optional Capability or Extension.
+    For basic onboarding, follow the steps under "The design" and stop after Git-isolation
+    verification. Continue into the configuration sections only when the project actually needs an
+    optional Capability or Extension.
 
-## Observable success
+## Start from a bad ending
 
-When onboarding is complete:
+Consider a scenario where every step looks reasonable:
 
-- `loopx doctor` reports a usable installation;
-- `.loopx/registry.json` exists in the project;
-- `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exists;
-- `loopx status` can show the active state and the current frontier; a first connection creates no
-  onboarding Todo, so the Agent writes the first delivery Todo after you confirm it;
-- `.loopx/` and `.codex/goals/` do not enter Git;
-- reconnecting reuses the exact existing `goal_id` instead of overwriting the Goal;
-- a new executor receives a fresh `agent_id` unless the user explicitly authorizes a takeover.
+```text
+Mon 10:00  You start an Agent at the root of your service repository and ask it
+           to "connect the project to LoopX."
+Mon 10:02  The Agent runs loopx connect. It succeeds. .loopx/registry.json appears.
+Mon 10:03  The Agent runs start-goal, writing active state and a host activation
+           hint.
+Mon 10:06  The task is done, so it runs git add -A and commits.
+Mon 10:07  git push. The repository is public.
+Mon 10:09  CI scans the commit: a raw run log, a local credentials file, and a
+           path pointing at your internal host.
+Fri 16:00  Security classifies it as a private-information exposure incident.
+```
 
-These files are local control-plane state, not project source. Do not commit them to a public repository.
+Nothing in that sequence is a lie. `connect` really did succeed, `doctor` really did report a usable installation, and the state files really do contain what the control plane meant to write.
 
-## 1. Delegate onboarding to an Agent
+The problem is that **onboarding puts two kinds of thing into one directory tree**: project source, which belongs in commits, and runtime state, which does not. The Agent saw "I finished a task and the working tree has changes," so it committed.
 
-Open your Agent development tool from the repository root. Adapt the goal and Host in this prompt, then
-send it as one onboarding contract:
+That is what separates onboarding from writing code. When you write code, new files in `git status` are almost always your product. After onboarding, new files in `git status` are control-plane private state by default. **The same command means opposite things in the two contexts.**
+
+The second failure is quieter, because it raises no error at all: once onboarding finishes, the control plane starts treating "this Goal can write in this worktree" as settled. If the delivery workspace recorded in `registry` does not match the directory where files are actually changing, the Agent edits in one clean tree while you review another. The next `git status` shows no changes, yet the work counts as delivered.
+
+## Why "run the documented commands" reads back no truth
+
+The obvious reaction is to run the commands from the documentation and treat a success message as a finished onboarding.
+
+The trouble is that onboarding success depends on **four facts holding at once**, and each one belongs to a different owner:
+
+| Fact | Owned by | Can one command prove it |
+|---|---|---|
+| Install usable, import correct, runtime ready | The LoopX release | No; `which loopx` only proves an executable is on PATH |
+| Where control-plane state landed, and which Goal it belongs to | Your repository | No; a successful write does not mean it wrote the right Goal |
+| Private state did not enter a public commit | The Git index and the remote | No; `connect` does not look at Git at all |
+| Who acts next, under which constraints | The quota / status projection | No; `should_run: true` does not equal permission for any arbitrary action |
+
+One command covers one cell. Collapsing four cells into "the command returned 0" mistakes a local signal for global authority.
+
+The second instinct is "then let the Agent do the whole thing automatically." That fails too, because five decisions in onboarding **should be yours alone**: which Goal to pick when several exist, whether to take over an existing Agent identity, which Host surface owns activation, whether external writes and credentials are allowed, and whether anything is committed or pushed. The Agent can execute; it cannot decide these for you. The workable shape is an Agent that performs the executable part and stops at those points to hand the decision back.
+
+So the design goal is to make **onboarding something that can be read to the end, reviewed, and rolled back**, instead of one unobservable automation.
+
+## Design one: establish the Git boundary before connecting
+
+The order is itself the safety contract. Connect first and patch `.gitignore` later, and you are back at 10:07 in the opening timeline.
+
+The first step is neither installation nor `connect`; it is an ignore rule for local control state:
+
+```text
+.loopx/
+.codex/goals/
+.local/
+```
+
+Those three lines cover three different things: `.loopx/` holds the registry and local projection, `.codex/goals/` holds active state, leases, and evidence pointers, and `.local/` holds other private working material. They coexist, and dropping any one line leaves a gap.
+
+If the project already uses any of those names, read the existing contents before changing the rule. A LoopX state directory may already hold active state, a registry, leases, and local evidence pointers, and overwriting it destroys state that is in use.
+
+Have Git itself confirm the rule took effect, rather than trusting the rule file:
+
+```bash
+git check-ignore -v .loopx/registry.json
+git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
+```
+
+Both commands should print the matching rule and its source line. Git skips the check for paths that do not exist yet, so force a verdict with `--no-index`:
+
+```bash
+git check-ignore -v --no-index .loopx/registry.json
+```
+
+**That is the actual mechanism in this section**: the correctness of the ignore rule is decided by Git, not by your reading or the Agent's. The rule holds when `check-ignore` prints a match.
+
+## Design two: Delegate onboarding to an Agent, but only the execution
+
+The recommended path hands onboarding to the Agent already working in the repository. You supply the goal, the Host, and the authority boundary. The Agent inspects the repository, reads the current command surface, executes the safe steps, and returns a report you can review.
+
+The prompt below is an execution contract. Adapt the goal and the Host, then send it:
 
 ```text
 Safely connect the current Git project to LoopX.
@@ -72,13 +129,7 @@ Execution contract:
     action. If you completed only a preview, explicitly say that onboarding is not complete.
 ```
 
-This prompt delegates execution, not authority. You still decide:
-
-- which Goal to select when several exist;
-- whether to take over an existing Agent identity;
-- which Host surface owns activation;
-- whether external writes, credentials, or a wider write scope are allowed;
-- whether repository changes are committed or pushed.
+Note step 11: it rules out "the command succeeded" as a conclusion and demands a structured report instead. That is the auditable shape.
 
 ### The onboarding report
 
@@ -103,8 +154,7 @@ verification:
 next_action: <one concrete next step>
 ```
 
-Do not accept “the command succeeded” as sufficient evidence. Require state readback and Git-isolation
-proof.
+`gates` and `tracked_private_state` are the two fields most likely to be dropped, and the two where things most often go wrong. The first records the decisions still in your hands; the second records private state that has already reached Git. `tracked_private_state` should be an empty list. Once it is not, onboarding itself has manufactured a problem that needs repair.
 
 ### Example: first onboarding
 
@@ -125,7 +175,19 @@ If you find multiple Goals, an active lease, an unfinished mutation, or a worksp
 diagnosis and choices only. Do not write state, commit, or push.
 ```
 
-## 2. Install and inspect LoopX
+## Design three: what onboarding actually writes
+
+Only now do the mechanism names arrive. Onboarding writes two pieces of state:
+
+```text
+your-project/
+  .loopx/registry.json                          # which active states this project connects to
+  .codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md   # the durable state of this Goal
+```
+
+Those two local files are control-plane state rather than project source. That they can be read back on the next run is requirement one landing in practice.
+
+### Why install the release instead of cloning LoopX first
 
 Prerequisites:
 
@@ -133,8 +195,6 @@ Prerequisites:
 - Node.js 22.22.3 or later for the LoopX-managed TypeScript Effect runtime;
 - a macOS or Linux shell, or Windows PowerShell 7;
 - an existing Git project.
-
-Install the PyPI release and its LoopX workflow skills:
 
 ```bash
 python3 -m pip install --upgrade loopx
@@ -162,34 +222,7 @@ loopx doctor --deep
 See [Installing LoopX](/loopx/docs/guides/installing-loopx/) for the complete native Windows installation,
 upgrade, and rollback path. Do not require WSL merely to reproduce the POSIX examples.
 
-## 3. Establish the Git boundary
-
-Before connecting, add local control state to the project's `.gitignore`:
-
-```text
-.loopx/
-.codex/goals/
-.local/
-```
-
-If the project already uses any of these names, inspect the existing contents before changing the rule.
-LoopX directories may contain active state, registry, leases, and local evidence pointers. `.local/` may
-also contain unrelated private work.
-
-Confirm the ignore rules:
-
-```bash
-git check-ignore -v .loopx/registry.json
-git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
-```
-
-For paths that do not yet exist, Git may need `--no-index`:
-
-```bash
-git check-ignore -v --no-index .loopx/registry.json
-```
-
-## 4. Understand the connection flow
+### The three-step shape of a connection
 
 From the project root:
 
@@ -216,8 +249,8 @@ activation described by the packet.
 
 `connect` / `bootstrap` register the Goal and write the active state only: they create no first-connect
 onboarding Todo, owner-decision gate, or host-loop opt-in gate. A freshly connected goal therefore has no
-executable Agent Todo; the Agent or the connected domain adapter writes the first delivery Todo, so
-automation starts from the caller's own work queue instead of a generated onboarding queue.
+executable Agent Todo; the Agent writes the first delivery Todo after you confirm it, or the
+connected domain adapter writes it, so automation starts from the caller's own work queue instead of a generated onboarding queue.
 
 ### Choose the Goal before choosing the Agent
 
@@ -267,9 +300,9 @@ loopx start-goal --guided --project . \
 When the Host is unknown, omit `--host-surface`. LoopX should return a read-only selection Gate instead of
 guessing.
 
-## 5. Read current state
+## Design four: what you read back afterwards
 
-Use the shortest read paths first:
+Whether onboarding worked is not decided by `connect`; it is decided by the readback. Use the shortest read paths first:
 
 ```bash
 loopx registry
@@ -278,6 +311,8 @@ loopx todo list --goal-id <goal-id>
 loopx history --goal-id <goal-id>
 loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 ```
+
+These commands answer different questions, and dropping one leaves the conclusion incomplete:
 
 | Command | Primary question |
 | --- | --- |
@@ -290,9 +325,9 @@ loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 Do not reduce `should_run: true` to permission for any arbitrary action. Also inspect the
 `interaction_contract`, selected Todo, capability Gate, write scope, and scheduler hint.
 
-## 6. Verify Git isolation
+### Verify isolation with Git
 
-After connecting:
+The other half of the readback lives on the Git side:
 
 ```bash
 git status --short
@@ -300,12 +335,70 @@ git ls-files .loopx .codex/goals .local
 ```
 
 The second command should print nothing. If it lists a path, Git is already tracking local control state;
-adding `.gitignore` does not untrack it. Inspect the history before removing anything from the index so you
+**adding `.gitignore` does not untrack it.** Inspect the history before removing anything from the index so you
 do not delete valuable local state.
 
-## 7. Optional: enable Providers and Goal features
+Only at this point does each of the four facts have its own evidence: doctor reports the installation,
+registry and status report the state, `git ls-files` reports the boundary, and `quota should-run` reports
+admission for the next turn.
 
-Basic onboarding is complete. Continue only when this project needs an optional capability.
+## Cost and boundary: what onboarding gives up
+
+**Cost one: the project maintains an extra state directory.** `.loopx/` and `.codex/goals/` live in your working tree for the long haul, and they belong in `.gitignore`, in your backup policy, and in the notes you hand a new contributor. They are not source, and they are not a dispensable cache either.
+
+**Cost two: onboarding does not stay done.** Changing Host, executor, worktree path, or release can invalidate the route. Each time you read back again, rather than assuming last time's conclusion still holds.
+
+**Cost three: Agent authority has to be split by hand.** Some onboarding decisions are only yours, and what you delegate to the Agent is the execution. That is slower than letting the Agent run to completion on its own.
+
+**Cost four: read-only and writable are two different connections.** A read-only check (registry, status, history, `git status`) changes no state and can be run at any time. `connect`, `register-agent --execute`, `configure-goal --execute`, and `extension enable --execute` all write state. Mixing the two into a single operation costs you the "look before changing" step.
+
+**Boundary one: a project with strong regulatory constraints, an offline-only requirement, or a ban on external state directories is a poor fit.** If compliance forbids control-plane state outside the working tree, or forbids a third-party runtime process, the cost of onboarding cannot be paid. Stay at read-only use instead of connecting and sorting it out later.
+
+**Boundary two: no Git repository means no onboarding.** This chapter assumes a Git project. Onboarding leans on branches, worktrees, and commit boundaries to express delivery; without version control the control plane cannot answer "which revision changed."
+
+**Boundary three: onboarding does not change your product's permission model.** `connect` registers the Goal and writes active state. It grants no new external write permission, installs no Provider, and widens no write scope. Optional capabilities must be configured explicitly.
+
+**Boundary four: onboarding is not the same as having a plan.** A first connection creates no onboarding Todo. The absence of executable work in the state is the control plane declining to invent a work queue for you.
+
+## Named failures and recovery paths
+
+Talking abstractly about "safe onboarding" convinces nobody. The four scenarios below each leave an observable trace, and each has a recovery path.
+
+### `loopx doctor` fails
+
+Read the command path, release snapshot, and skill status in the report. If a command skill is missing
+after an upgrade:
+
+```bash
+loopx slash-commands
+loopx slash-commands --install
+```
+
+Do not copy `.loopx/` from another checkout without understanding the failure; that treats unidentified state as the fix.
+
+### The project already has LoopX state
+
+Reuse it by default. Run `loopx registry`, `loopx status`, and `loopx history` before deciding whether a
+migration is necessary. Continue one exact `goal_id`; when several Goals exist, resolve the selection Gate
+first. Then register a fresh `agent_id` for the new executor or take over a named identity only when the
+user requests it. Do not force a reconnect over a Goal that still carries useful state, and do not confuse
+an old Agent identity with the Goal itself.
+
+### A linked worktree points at the wrong directory
+
+This is the formal version of the second opening failure. The delivery workspace must match the worktree where files are actually changing. Inspect the registry and
+repair the route with the supported `refresh-state --delivery-workspace-path` flow. Do not copy active state
+to manufacture a second source of truth.
+
+### The global registry is not writable
+
+Project-local state and global visibility are separate layers. `loopx sync-global` merges the project `.loopx/registry.json` into the global registry, and by default it only affects the global projection rather than rewriting project-source state. If that step fails after connecting, `loopx status` may not see the Goal you just onboarded.
+
+Use the registry permission report from `loopx doctor`, repair ownership or permissions, and run `loopx sync-global` again. Never commit the global registry to the project.
+
+## Optional: enable Providers and Goal features
+
+Basic onboarding is complete at this point. Continue only when this project needs an optional capability. If you only wanted the basic path, you can stop here.
 
 Start with discovery and Goal configuration. Continue to the Extension example only when you have a
 separately distributed Provider to activate.
@@ -315,15 +408,13 @@ separately distributed Provider to activate.
 The Capability catalog, Goal feature configuration, and Extension activation are three different
 surfaces:
 
+Use `loopx capability list` for discovery and
+`loopx --format json configure-goal --goal-id <goal-id>` for the current Goal's optional features.
+
 ```bash
-# 1. Product Capabilities implemented by the current release
 loopx capability list --format json
 loopx capability show <capability-id> --format json
-
-# 2. Optional features and boundaries configured for this Goal
 loopx --format json configure-goal --goal-id <goal-id>
-
-# 3. Extension Providers installed and activated in this environment
 loopx extension list --format json
 ```
 
@@ -331,34 +422,19 @@ loopx extension list --format json
 smoke, and boundary. It does not modify the Goal or install a Provider. Passing
 `--extension-manifest` only declares a Provider for that catalog read; `declared=true` does not mean
 installed, enabled, or ready.
-Use `loopx capability list` for discovery and
-`loopx capability show <capability-id>` for one contract.
 
 `configure-goal` without a setting flag is also read-only and returns the current on-demand feature
 catalog. There is no generic “enable any capability id” command. Every default-off feature has explicit
-configuration fields and boundaries. Read the Goal catalog with
-`loopx --format json configure-goal --goal-id <goal-id>`. For example:
+configuration fields and boundaries. For example:
 
 ```bash
-loopx configure-goal \
-  --goal-id <goal-id> \
-  --change-quality-enabled
-
-loopx configure-goal \
-  --goal-id <goal-id> \
-  --change-quality-enabled \
-  --execute
+loopx configure-goal --goal-id <goal-id> --change-quality-enabled
+loopx configure-goal --goal-id <goal-id> --change-quality-enabled --execute
 ```
 
 For `multi_subagent`, Explore Graph, Explore Harness, Reward Memory, Lark inbox, and other optional
 features, read the current `configure-goal --help` and the catalog's exact delta instead of guessing flags
-from feature names. Use this sequence:
-
-1. inspect the read-only catalog;
-2. preview without `--execute`;
-3. inspect `before`, `after`, `changed_fields`, and the boundary;
-4. apply with explicit `--execute`;
-5. reread Goal config, status/quota, and relevant Provider readiness.
+from feature names. Always follow "read catalog -> preview -> inspect delta -> execute -> readback".
 
 Also keep the two Todo capability fields separate:
 
@@ -367,9 +443,15 @@ Also keep the two Todo capability fields separate:
 - `target_capabilities`: an ability this Todo is building, repairing, or validating; a missing target may
   enter repair mode and must not make the repair Todo impossible to run.
 
+Configuration entry points may use the global registry, but the Goal's configuration authority
+remains the project registry identified by `source_registry`. CLI and frontend reads, previews,
+revision checks and writes resolve that source before synchronizing the global projection.
+`--runtime-root` selects the projection target, not a different authority. An unreadable source
+fails explicitly instead of falling back to a mirror write, so later project synchronization
+cannot undo a successfully saved setting.
+
 “Visible in catalog,” “enabled for this Goal,” “Provider doctor-ready,” and “available in this turn” are
-four different facts. The onboarding report should state them separately instead of saying only “the
-capability is enabled.”
+four different facts.
 
 ### Enable an existing Extension during onboarding
 
@@ -433,48 +515,17 @@ loopx extension doctor \
   --format json
 ```
 
-If `extension list` reports the Extension as installed with `enabled=false`, do not install it again:
+If `extension list` reports the Extension as installed with `enabled=false`, preview `extension enable` and then add `--execute` instead of installing it again. Invocation also needs a `finance_value_discovery_input_v0` file. The onboarding report may say “Extension available” only after `extension list`, an executed doctor, and an example `extension run --execute` all succeed.
 
-```bash
-loopx extension enable loopx-finance-value-discovery --format json
-loopx extension enable loopx-finance-value-discovery --execute --format json
-```
+## Invariants
 
-Invocation also needs a `finance_value_discovery_input_v0` file. The onboarding report may say “Extension
-available” only after `extension list`, an executed doctor, and an example `extension run --execute` all
-succeed. The placement case in the next section explains why this package does not register a capability
-with the same name.
+Six claims you can check yourself.
 
-## Recovery paths
+1. **Git decides the ignore rule; reading does not.** The rule holds when `git check-ignore -v` prints a match.
+2. **`git ls-files .loopx .codex/goals .local` is empty.** Output means private state already reached version history, and adding `.gitignore` does not repair that.
+3. **A connection reuses an exact `goal_id`.** A second bootstrap, a force reconnect, or a Goal picked from objective similarity is a defect.
+4. **Identity is confirmed in two steps.** A new executor gets a fresh public-safe `agent_id`; takeover is an explicit choice, not a default.
+5. **The readback covers four facts.** Installation, state, the Git boundary, and next-turn admission each have their own evidence, and none substitutes for another.
+6. **Writes stop at a Gate.** Credentials, external writes, wider permissions, Host selection, destructive Git, and commit or push are yours to decide.
 
-### `loopx doctor` fails
-
-Read the command path, release snapshot, and skill status in the report. If a command skill is missing
-after an upgrade:
-
-```bash
-loopx slash-commands
-loopx slash-commands --install
-```
-
-Do not copy `.loopx/` from another checkout without understanding the failure.
-
-### The project already has LoopX state
-
-Reuse it by default. Run `loopx registry`, `loopx status`, and `loopx history` before deciding whether a
-migration is necessary. Continue one exact `goal_id`; when several Goals exist, resolve the selection Gate
-first. Then register a fresh `agent_id` for the new executor or take over a named identity only when the
-user requests it. Do not force a reconnect over a Goal that still carries useful state, and do not confuse
-an old Agent identity with the Goal itself.
-
-### A linked worktree points at the wrong directory
-
-The delivery workspace must match the worktree where files are actually changing. Inspect the registry and
-repair the route with the supported `refresh-state --delivery-workspace-path` flow. Do not copy active state
-to manufacture a second source of truth.
-
-### The global registry is not writable
-
-Project-local state and global visibility are separate layers. Use the registry permission report from
-`loopx doctor`, repair ownership or permissions, and sync again. Never commit the global registry to the
-project.
+These six answer one question: **when you hand an existing project to an external control plane, what tells you what you handed over, where it landed, and that it stayed inside the boundary?** This chapter gave requirement one's answer at the onboarding scale. The next two chapters activate that same state from two entry points, Codex App and the Codex CLI: where the state lives is now settled, and what remains is who reads it.

@@ -3,30 +3,76 @@
 本附录只提供阅读路由，不替代 LoopX CLI reference。运行 `loopx <command> --help` 获取当前版本的
 完整参数。
 
-## 核心术语
+## 怎么用这个附录
+
+正文里的每一条长程约束（见 02b 的"四个要求"）都在这里对应一组术语、协议和命令。按你手上的
+问题类型查，不用按字母顺序查：
+
+| 你手上是哪种问题 | 症状 | 跳到 |
+| --- | --- | --- |
+| 状态、记忆、投影 | 重启后重做已完成的轮次，或读到的判断已经过期 | [要求一词汇](#要求一状态能脱离上下文) |
+| 中断、恢复、续跑 | 说不清它停在哪，只能整段重做 | [要求二词汇](#要求二中断停在可辨识位置) |
+| 权限、写入、接管 | 两个执行者都认为自己是负责人 | [要求三词汇](#要求三唯一可问责的行动者) |
+| 消耗、配额、唤醒 | 没人看时不动，有人看时反复检查 | [要求四词汇](#要求四消耗有上限且可外部观察) |
+
+已有明确术语或命令名时跳过后面的路由：横切词汇在[四个要求之外的词](#四个要求之外的词)，
+命令速查见[核心命令速查](#核心命令速查)。协议索引按开发任务组织，不按目录顺序组织。
+
+## 要求一：状态能脱离上下文
+
+**判据：如果一条信息只存在于 prompt 里，它就不算被记住。**
+
+| 术语 | 本书中的含义 |
+| --- | --- |
+| Goal | 由 stable `goal_id` 标识的长期项目结果与状态边界 |
+| Acceptance | 判断 Goal 完成所需的可观察条件 |
+| Evidence | 支持判断的可验证材料 |
+| Projection | 从 canonical state 生成的读模型 |
+| Kernel | 接受状态转换并拥有 durable control-plane state 的核心 |
+
+## 要求二：中断停在可辨识位置
+
+**判据：如果中断是常态，"完成"就必须可判定。**
+
+| 术语 | 本书中的含义 |
+| --- | --- |
+| Todo | 有身份、可调度的工作单元 |
+| Frontier | 当前满足依赖、Gate、能力与边界后可推进的 Todo 集合 |
+| Receipt | 已接受动作或 lifecycle transition 的持久记录 |
+
+## 要求三：唯一可问责的行动者
+
+**判据：权限不能自证，必须由共享权威授予，并且可以被撤销。**
 
 | 术语 | 本书中的含义 |
 | --- | --- |
 | Agent | 在 Host/runtime 中规划并执行一个有界动作的执行者 |
-| Host | 承载 session、模型 Turn 与唤醒表面的产品或 runtime |
-| Goal | 由 stable `goal_id` 标识的长期项目结果与状态边界 |
 | Agent identity | 由 `agent_id` 标识的 peer/lane；不等于 Goal，也不证明 Host |
 | Vision | 绑定 `agent_id` 的 bounded execution-routing contract，记录当前 role scope、方向、acceptance summary 与 replan trigger |
-| Acceptance | 判断 Goal 完成所需的可观察条件 |
-| Todo | 有身份、可调度的工作单元 |
-| Frontier | 当前满足依赖、Gate、能力与边界后可推进的 Todo 集合 |
 | Claim | Todo 的软性执行归属 |
 | Lease | 带期限的强占用，避免冲突执行 |
 | Gate | 带 scope 与 authority 的阻塞决定 |
-| Evidence | 支持判断的可验证材料 |
-| Receipt | 已接受动作或 lifecycle transition 的持久记录 |
-| Projection | 从 canonical state 生成的读模型 |
+| Host | 承载 session、模型 Turn 与唤醒表面的产品或 runtime |
+
+## 要求四：消耗有上限且可外部观察
+
+**判据：没有 delta 就不该消耗；没有外部观察机制的系统会退化成人的轮询。**
+
+| 术语 | 本书中的含义 |
+| --- | --- |
 | Quota | 决定当前是否允许一轮工作并记录已验证消耗的合同 |
 | Monitor | 按 cadence 观察外部条件、仅在 material change 时推进的 Todo |
+
+## 四个要求之外的词
+
+这些词不挂在单独一条要求上，但每条都要求它们：Capability 描述调用者能依赖什么，Provider 与
+Extension 描述实现从哪来、怎么升级，它们落在哪一层由 08 章的放置规则决定。
+
+| 术语 | 本书中的含义 |
+| --- | --- |
 | Capability | 调用者可依赖的 outcome contract |
 | Provider | 调用外部系统或提供实现，并返回 bounded result |
 | Extension | Provider/package 的安装、启停、升级与兼容生命周期 |
-| Kernel | 接受状态转换并拥有 durable control-plane state 的核心 |
 
 ## 核心协议索引
 
@@ -202,6 +248,35 @@ loopx extension rollback <extension-id>
 
 除 list 外，生命周期命令通常默认 preview。执行 mutation 或 provider invocation 前显式检查当前
 `--help`，并只在确认后添加 `--execute`。
+
+## 核心命令速查
+
+按问题类型分组；命令名可通过 `loopx <command> --help` 复核参数。
+
+**诊断状态（要求一、二）**
+
+```bash
+loopx doctor
+loopx registry
+loopx status
+loopx history --goal-id <goal-id>
+loopx todo list --goal-id <goal-id>
+```
+
+**读取证据与归属（要求三）**
+
+```bash
+loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30
+loopx register-agent --goal-id <goal-id> --agent-id <new-agent-id>
+```
+
+**准入、唤醒与消耗（要求四）**
+
+```bash
+loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
+loopx quota scheduler-ack-current <packet-bound-args...>
+loopx extension list --format json
+```
 
 ## 源码贡献入口
 

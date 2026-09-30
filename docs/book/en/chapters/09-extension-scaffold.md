@@ -4,21 +4,30 @@ This chapter creates `loopx-text-stats` from the official LoopX scaffold. The of
 the complete runnable baseline; this chapter provides the narrowed manifest, request and response
 contracts, core function, and validation steps without a separate exercise repository.
 
-## Observable success
+## Start from a bad ending
 
-At the end:
+Someone needs to connect an internal statistics task, decides the capabilities shipped with LoopX look
+too heavy, and hand-writes a smaller directory instead: one `extension.toml`, one `cli.py`, reading stdin
+and printing a result. `loopx extension install --manifest <path> --execute` accepts it, and `run` works.
 
-- the scaffold is an independent Python package;
-- the manifest uses `loopx_extension_manifest_v0`;
-- request and response each have a versioned JSON Schema;
-- the Provider reads one JSON object from stdin and writes one JSON object to stdout;
-- doctor has no side effect;
-- invalid input fails closed before computation;
-- both manifest and runtime declare zero permissions.
+Two weeks later an audit finds:
 
-## 1. Generate the official scaffold
+```text
+request  carries a path field  -> the provider quietly read it as a file
+response has no schema_version -> downstream cannot tell the protocol version
+doctor   not implemented       -> ready only proves the process starts
+version  written outside the manifest -> upgrade cannot resolve a revision
+```
 
-From a workspace where you want to build the example:
+Each item looks like a small omission. Together they are one thing: **this provider has no checkable
+contract, so LoopX cannot judge whether it was called legally.** That it "works" proves only that the
+process starts.
+
+The scaffold exists to make the path complete by default: obtain a baseline with every contract field
+present, then delete from it, rather than building up from an empty directory. Deleting a domain field you
+do not need has a visible consequence; omitting a schema or a doctor fails only at audit time.
+
+## 1. Generate the official scaffold and its boundary
 
 ```bash
 loopx extension init loopx-text-stats \
@@ -27,9 +36,21 @@ loopx extension init loopx-text-stats \
   --format json
 ```
 
-`extension init` previews by default. `--execute` is required to write files, and the destination must not
-already exist, even as an empty directory. The command does not build, install, register, or enable the
-package.
+`extension init` previews by default. `--execute` is required to write files. The default destination is
+`packages/<extension-id>`, and `--destination` targets somewhere else. The destination must not already
+exist, even as an empty directory; there is no force or merge mode.
+
+The important part is the command's boundary: it does not build, install, register, or enable. Those are
+three separate actions with three owners, and running them separately keeps the package manager and the
+LoopX activation state from drifting together:
+
+```bash
+python3 -m pip install ./standalone-extension
+loopx extension install \
+  --manifest standalone-extension/extension.toml \
+  --execute \
+  --format json
+```
 
 The generated path is:
 
@@ -50,7 +71,10 @@ standalone-extension/
 ```
 
 This is a complete standalone path. It does not invent the Capability authority required for
-`[[provides]]` or `[[implements]]`.
+`[[provides]]` or `[[implements]]`, for a practical reason: `[[provides]]` needs a real caller contract,
+and `[[implements]]` needs an existing capability resolver, policy check, action/scope mapping, and
+execution-envelope adapter. A generic scaffold cannot infer those semantics safely. Define a capability
+integration profile first, then author the provider against it.
 
 ## 2. Read the manifest as a contract
 
@@ -73,14 +97,20 @@ timeout_seconds = 30
 
 The important constraints are:
 
-- `id` is the lifecycle identity;
+- `id` is the lifecycle identity: a lower-kebab path segment of at most 48 characters;
 - `version` participates in revision and upgrade;
-- `requires_loopx_api` declares the compatibility window;
+- `requires_loopx_api` declares the compatibility window; the current API version is the integer `1`;
 - `protocol` is the Provider wire contract;
-- `entrypoint` must exist on `PATH` in the Python environment running LoopX;
+- `entrypoint` and `python_module` are mutually exclusive, and `entrypoint` must exist on `PATH` in the
+  Python environment running LoopX;
 - `doctor_args` names a read-only readiness probe;
 - both permission lists are empty;
-- the managed runtime fixes the timeout rather than accepting an arbitrary caller override.
+- `timeout_seconds` ranges from 1 to 120, is read by the managed runtime, and cannot be overridden by the
+  caller.
+
+One further fail-closed rule deserves its own line: `runtime.required_permissions` must be a subset of the
+provider's `permissions`. Declaring a permission grants nothing; it only qualifies the provider to enter
+the call path that needs it.
 
 ## 3. Define a bounded request
 
@@ -100,17 +130,18 @@ The request schema requires:
 - a `text` string containing a non-whitespace character;
 - `additionalProperties: false`.
 
-Rejecting unknown fields protects the permission boundary. If the caller sends:
+Rejecting unknown fields is part of the permission boundary, not a style preference. If the caller sends:
 
 ```json
 {
   "schema_version": "loopx_text_stats_request_v0",
   "text": "hello",
-  "path": "/tmp/input.txt"
+  "path": "input.txt"
 }
 ```
 
-the Provider must reject it. It must not reinterpret `path` as file-read authority.
+the Provider must reject it. It must not reinterpret `path` as file-read authority. The schema is part of
+the bounded request.
 
 ## 4. Implement pure computation
 
@@ -186,7 +217,8 @@ For this pure Provider, readiness means the entrypoint starts and parses argumen
 - emit unbounded logs.
 
 A real Provider may perform bounded read-only dependency checks. Readiness still needs to be repeatable and
-effect-free.
+effect-free. The doctor receipt always reports `external_writes_performed: false`, and that assertion is
+itself part of the contract.
 
 ## 7. Install the package and run tests
 
@@ -200,8 +232,49 @@ python3 -m pip install -e '.[test]'
 python3 -m pytest
 ```
 
-LoopX validates the installed console entrypoint. If the package lives in another virtual environment,
-`entrypoint_missing` is the correct result; LoopX must not search arbitrary source directories.
+The single-environment requirement follows from how LoopX locates a provider: through its installed
+console entrypoint. If the package lives in another virtual environment, `entrypoint_missing` is the
+correct result; LoopX must not search arbitrary source directories.
+
+## Cost and boundary
+
+The scaffold moves cost from audit time to the beginning, and that cost deserves stating.
+
+**Cost one: you start with eight files.** A provider that only counts characters still carries two JSON
+Schemas, a README, and a `pyproject.toml`. For a one-off script that weight is real.
+
+**Cost two: the starter request and response are documentation, not a domain contract.** What it generates
+runs, but it does not describe your domain. Replace it with bounded, domain-specific semantics before
+productizing.
+
+**Cost three: the scaffold does all four other actions not at all.** It does not build, install, register,
+or enable. Skipping the install step lets the package and the activation state drift apart.
+
+**Boundary one: `extension init` currently generates only the standalone path.** An Extension needing
+`[[provides]]` or `[[implements]]` should have a capability integration profile first. Do not add manifest
+tables merely to make a runtime installable.
+
+**Boundary two: doctor proves readiness, and `--execute` proves intent.** Neither authorizes a business
+effect.
+
+**Boundary three: the destination is never reused.** Every existing directory is refused, which protects
+an existing package from being overwritten by a new extension.
+
+## Named failures: what these constraints stop
+
+**The scaffold rejects unsafe identifiers.** `test_scaffold_rejects_unsafe_identifiers` asserts a failure
+for `LoopX-example`, `loopx_example`, and the version string `v1`. The `id` becomes a path segment and a
+lifecycle identity, so loose validation defers a naming problem to after installation.
+
+**A preview writes nothing.** `test_scaffold_preview_is_read_only` asserts the preview returns the exact
+eight-file list along with `managed_entrypoint == "loopx extension run"`, `starter_kind == "standalone"`,
+and `capability_id is None`. That last one is the chapter's most important piece of evidence: the scaffold
+explicitly claims no capability.
+
+**The generated provider refuses out-of-bounds input.** The same suite asserts it rejects a non-object
+payload and a request contract ending in `_v1`, with a nonzero return code and `ok is False`.
+
+Corresponding tests: `tests/extensions/test_extension_scaffold.py`.
 
 ## Common mistakes
 
@@ -222,5 +295,24 @@ or an authorized Capability/domain command.
 
 ### Adding a permission for demonstration
 
-`extension run` rejects a permissioned Extension. Design the real Capability and authority before building
-an effectful Provider.
+Once a permission is declared, `extension run` rejects the call before invoking the provider, with the
+message "standalone extension run grants no effect dispatch". Design the real Capability and authority
+before building an effectful Provider.
+
+## Invariants
+
+1. **Every contract field in a scaffolded directory exists before you delete it.** Starting from an empty
+   directory guarantees a missing one, and a missing field surfaces only at audit time.
+2. **`extension init` generates only the standalone path.** It claims no capability and infers no
+   authority for `[[provides]]` or `[[implements]]`.
+3. **A provider call carries a checkable `schema_version`.** Without it, a receipt cannot be matched to a
+   compatible version.
+4. **Unknown fields are rejected outright.** Reading an extra field as implicit authorization defeats the
+   permission boundary.
+5. **Doctor must have zero side effect.** An `external_writes_performed` of `true` means the readiness
+   probe crossed its boundary.
+6. **The package and LoopX share one Python environment.** Across environments the correct result is
+   `entrypoint_missing`, never a silent fallback.
+
+The next chapter puts this structure through its real lifecycle: install, enable, invoke, upgrade, and
+rollback.

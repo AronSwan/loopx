@@ -53,18 +53,18 @@ Developers ready to enter Kernel implementation can go directly to the
   [Lesson 1: Harness is the effectful program](/loopx/docs/development/control-plane-course/01-agent-loop-effectful-program/),
   and [Lesson 2](/loopx/docs/development/control-plane-course/02-goal-control-plane-architecture/), then walk
   through a real Loop in [Lesson 3](/loopx/docs/development/control-plane-course/03-first-real-loop/).
-- **Who owns state, the work graph, and authority?** Read Chapters 3 and 4 plus
+- **Who owns state, the work graph, and authority?** Read Chapters 4 and 5 plus
   [Core state machines and transitions](./core-state-machines.md), then descend into
   [Lesson 4](/loopx/docs/development/control-plane-course/04-state-substrate/) and
   [Lesson 5](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/).
 - **Which rule wins when a Gate, Monitor, and Replan coexist?** Read
-  [Core state machines and transitions](./core-state-machines.md) and Chapter 5, then descend into
+  [Core state machines and transitions](./core-state-machines.md) and Chapter 6, then descend into
   [Lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/) and
   [Lesson 7](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/).
-- **How does long-running work avoid drift and local loops?** Read Chapter 6, then descend into
+- **How does long-running work avoid drift and local loops?** Read Chapter 7, then descend into
   [long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/)
   and [Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
-- **How do I change a rule and prove it is deliverable?** Read Chapters 10 through 13, then descend into
+- **How do I change a rule and prove it is deliverable?** Read Chapters 11 through 14, then descend into
   [Lesson 9](/loopx/docs/development/control-plane-course/09-engineering-a-control-plane-rule/) and
   [Lesson 10](/loopx/docs/development/control-plane-course/10-autonomous-agent-quality-gates/).
 - **How do Extensions, domain capabilities, and the Kernel compose?** Read Chapters 14 through 16, then
@@ -83,6 +83,23 @@ After those chapters:
 
 The paths share the same foundations but do not depend on each other. Extension lifecycle is one
 developer-contribution path, not the default destination for every contribution.
+
+## The spine of this book
+
+This is not a tour of LoopX features. It turns on a more basic question: **once work runs long enough, what must the system satisfy?**
+
+Those demands come from long running itself; any system spanning days, sessions, or processes meets them:
+
+| Demand | If ignored | Answered in |
+| --- | --- | --- |
+| State must outlive the context | Memory breaks and work repeats or drifts | Chapters 4 and 13 |
+| Every interruption must stop at an identifiable position | A half-finished state cannot be judged; retries become guesswork | Chapters 6 and 7 |
+| Exactly one accountable actor may write | Lost updates; a stale holder keeps editing | Chapters 5 and 15 |
+| Consumption must be bounded and externally observable | Idle spinning, double charging, a human forced to watch | Chapters 8 and 9 |
+
+Chapter 3 lays out the four demands in full. Every chapter after it hangs off one of them and answers the same set of questions: **what concrete problem arose, what design was chosen, what that design cost, and which checkable invariant the reader can take away.**
+
+The cost-and-boundary discussion is deliberate. Most technical writing explains how a mechanism works; the answer to "why is it designed this way" lives in what the design gave up.
 
 ## How chapters are organized
 

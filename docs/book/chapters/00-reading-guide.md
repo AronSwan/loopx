@@ -47,18 +47,18 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
   [第 1 讲：Harness 是 effectful program](/loopx/docs/development/control-plane-course/01-agent-loop-effectful-program/)与
   [第 2 讲](/loopx/docs/development/control-plane-course/02-goal-control-plane-architecture/)，
   再用[第 3 讲](/loopx/docs/development/control-plane-course/03-first-real-loop/)走一遍真实 Loop。
-- **状态、工作图与权限分别由谁拥有？** 先读第 3、4 章和
+- **状态、工作图与权限分别由谁拥有？** 先读第 4、5 章和
   [主要状态机与状态流转](./core-state-machines.md)，再下钻
   [第 4 讲](/loopx/docs/development/control-plane-course/04-state-substrate/)与
   [第 5 讲](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/)。
 - **Gate、Monitor、Replan 同时出现时哪条规则优先？** 先读
-  [主要状态机与状态流转](./core-state-machines.md)和第 5 章，再下钻
+  [主要状态机与状态流转](./core-state-machines.md)和第 6 章，再下钻
   [第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)与
   [第 7 讲](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/)。
-- **长程任务怎样防止目标漂移与局部空转？** 先读第 6 章，再下钻
+- **长程任务怎样防止目标漂移与局部空转？** 先读第 7 章，再下钻
   [长程收敛专题](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/)与
   [第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
-- **怎样修改规则并证明它可交付？** 先读第 10 至 13 章，再下钻
+- **怎样修改规则并证明它可交付？** 先读第 11 至 14 章，再下钻
   [第 9 讲](/loopx/docs/development/control-plane-course/09-engineering-a-control-plane-rule/)与
   [第 10 讲](/loopx/docs/development/control-plane-course/10-autonomous-agent-quality-gates/)。
 - **Extension、领域能力与 Kernel 怎样组合？** 先读第 14 至 16 章，再下钻
@@ -74,6 +74,23 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
 
 项目接入与开发者贡献共享基础模型，但没有先后依赖。Extension 是开发者贡献中的一种交付和
 lifecycle 选择，不是所有贡献的默认终点。
+
+## 这本书的主线
+
+本书不是 LoopX 的功能导览。它围绕一个更基础的问题展开：**运行时间足够长之后，系统必须满足哪些要求？**
+
+这些要求来自"长时间运行"这件事本身，任何跨天、跨会话、跨进程的系统都会遇到：
+
+| 要求 | 如果不管 | 谁来回答 |
+| --- | --- | --- |
+| 状态必须能脱离上下文存在 | 记忆一断，工作就重复或漂移 | 第 4 章、第 13 章 |
+| 每次中断必须停在可辨识位置 | 半成品状态无法判断，重试只能靠猜 | 第 6 章、第 7 章 |
+| 同一时刻必须唯一可问责的行动者 | 丢失更新、过期持有者继续写 | 第 5 章、第 15 章 |
+| 消耗必须有上限且可被外部观察 | 空转、重复计费、人被迫一直盯着 | 第 8 章、第 9 章 |
+
+第 3 章会把四条要求讲清楚。之后每一章都挂在其中一条上，并回答同一组问题：**遇到了什么具体问题、选择了什么设计、这个设计付出了什么代价、读者可以带走哪条可检查的不变式。**
+
+"代价与边界"是本书刻意保留的部分。多数技术说明只讲机制怎么工作；而"为什么这么设计"的答案，恰恰在这个设计放弃了什么里面。
 
 ## 章节如何组织
 

@@ -1,479 +1,334 @@
 # One governed turn
 
-LoopX is not about "running an Agent in an infinite loop." It compiles current project facts into one
-bounded, verifiable, writable work contract. This chapter starts from the `quota should-run` decision and
-explains how the user, Agent, and CLI each assume different obligations within a single turn.
+This chapter answers one question: across a single round of agent work, what happens between "should this move at all" and "this counts as done" — and why the **ordering itself** is a safety boundary.
 
-## What you should learn
+## Start from a bad ending
 
-After this chapter, you should be able to:
-
-- explain why quota is a decision kernel rather than only a balance check;
-- read the user, Agent, and CLI channels in an `interaction_contract`;
-- distinguish bounded delivery, user gate, monitor quiet, replan, repair, and terminal;
-- decide whether an Agent result is sufficient for canonical writeback;
-- explain why validation, refresh, receipt, and spend must happen in that order;
-- explain why a scheduler hint is not execution authority.
-
-## From Source Facts to an Interaction Contract
-
-Every turn begins by reading current facts, not by reusing the judgment from the previous prompt:
+Consider a scenario that is common in agent systems without governance:
 
 ```text
-registry and goal boundary
-  + todo frontier and claims
-  + decision scopes and gates
-  + capability and workspace
-  + evidence freshness and run history
-  + quota and scheduler context
-  + vision / replan obligations
-  -> interaction_contract
+09:00  Agent turn 40. It reads the Todo list, picks one, starts editing files.
+09:04  Done. A receipt is already written: code change + validation output.
+09:04  The machine reboots (or the process is killed, or the user hits stop,
+       or the model times out).
+09:06  The Agent restarts and reads state: the Todo is still pending, and no
+       evidence of the completed work is visible.
+09:06  It concludes the round never happened, and does it again.
+09:09  The second round "succeeds" too. Quota is charged twice, and the Todo
+       list now carries two records pointing at the same result.
 ```
 
-`loopx quota should-run` is the main entry point for this decision surface. Historical compatibility
-fields may still provide `should_run`, `action_required`, or `recommended_action`, but a new reader
-should prioritize:
+Nothing in that sequence is a lie. The agent did not misreport, the receipt really was written, and the Todo state was accurate at the time.
 
-1. `interaction_contract.mode`;
-2. the user, Agent, and CLI channels;
-3. selected Todo, goal boundary, and guards;
-4. scheduler hint and spend policy;
-5. then use compatibility fields for supporting display.
+The problem is that **these facts share no common commit point**: the receipt lands somewhere that disappears, the charge lands somewhere that does not, and "this round finished" cannot be reconstructed from the read model after a restart.
 
-`should_run: false` alone cannot distinguish "waiting for the user," "monitor not yet due," "no
-in-scope work for the current Agent," or "control-plane repair needed." Those states require entirely
-different next actions.
+That gap is what separates long-running work from a single session. In a session, "I said it" is roughly equivalent to "it happened," because the context is still there. In long-running work, **context is working memory that will be flushed**, so "what happened" has to be answerable by something that does not depend on it.
 
-## Three channels can be true at once
+## Why "check before retrying" is not the fix
 
-[`loopx_interaction_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/quota-allocation.md)
-splits one turn's obligations into three views:
+The obvious reaction is to have the agent check first. But checking requires reading state, and state may sit exactly in the middle — receipt written, charge not written — where both choices are wrong:
 
-### User channel
+- **Skip it:** the change may genuinely be on disk but unrecorded, so it can never be accepted, handed off, or audited.
+- **Redo it:** you may edit the same file twice, call the same external resource twice, or charge the same budget twice.
 
-It answers:
+The hard problem is **whether you can tell how far it got.** Without that, every retry branch is a guess.
 
-- whether the user must act now;
-- whether to notify or remain quiet;
-- the concrete question, decision scope, and reason;
-- whether the Gate blocks only a specific action, lane, or the entire Goal.
+So the design goal is **every failure stopping at an identifiable position**. Fewer failures is a different, weaker goal.
 
-### Agent channel
+## Scale one: the transaction inside one turn
 
-It answers:
+### Seven phases, and only legal prefixes
 
-- whether this Agent must attempt work;
-- whether delivery is allowed;
-- whether a quiet no-op is allowed;
-- which single primary action owns the turn;
-- whether this is ordinary delivery, observation, repair, or replan.
+LoopX splits one turn into seven ordered phases, recorded in a checkable contract:
 
-### CLI channel
+```text
+host_execute → typed_result → validation
+             → durable_writeback → quota_spend
+             → scheduler_apply → scheduler_ack
+```
 
-It answers:
+A turn only ever stops on some **prefix** of those seven. If it dies after phase 4, the completed set is the first four; after phase 6, the first six. There is no state in which phase 3 was skipped while phase 4 ran.
 
-- which lifecycle commands come next;
-- how validation leads to refresh or writeback;
-- when spend is allowed;
-- why a Gate, wait, or no-change poll must not spend.
+A validation rule maintains that constraint, not convention. When a transaction plan claims a set of completed phases, LoopX checks that the set is exactly a prefix:
 
-The three channels are not mutually exclusive booleans. For example:
+```python
+# loopx/control_plane/turn_driver/transaction.py
+expected = list(TRANSACTION_PHASES[: len(phases)])
+if phases != expected:
+    errors.append("completed_phases must be an ordered transaction prefix")
+```
+
+**That is the mechanism that makes recovery work.** The set of possible crash positions collapses from "any state at any moment" to "one of seven prefixes." Recovery does not guess; it reads the last completed phase and continues from the next one. Forty-three restarts and one restart take the same path.
+
+### Why the charge must come after the writeback
+
+The ordering constraint yields a counterintuitive conclusion. Notice the relative position of these two phases:
+
+```text
+durable_writeback  →  quota_spend
+```
+
+Writing back before charging means the state "money spent, result not recorded" cannot occur. The cost is that a failed charge wastes the round. LoopX accepts that loss, because **one wasted round is far cheaper than an unauditable "we charged you and cannot say where the result is."**
+
+Failure carries its own constraint. Every failure kind must declare which phase it stopped at:
+
+```python
+# loopx/control_plane/turn_driver/transaction.py
+FAILURE_PHASES = {
+    LoopXTurnResultKind.HOST_FAILURE:        "host_execute",
+    LoopXTurnResultKind.VALIDATION_FAILED:   "validation",
+    LoopXTurnResultKind.WRITEBACK_FAILED:    "durable_writeback",
+    LoopXTurnResultKind.QUOTA_SPEND_FAILED:  "quota_spend",
+    LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED: "terminal_closeout",
+}
+```
+
+A plan that declares `QUOTA_SPEND_FAILED` while claiming it stopped at `validation` is rejected. Failures cannot be attributed loosely, **because the attribution decides where recovery resumes.**
+
+### The five-stage closed loop: the shape of a normal delivery
+
+Beyond interruption, the normal path has a fixed shape too. A delivery contains at least five stages:
+
+```text
+Decide  →  Act  →  Validate  →  Write back  →  Account
+```
+
+**Decide.** Read the current decision and select the Todo named by `agent_channel.primary_action`. Do not override the current contract with an old prompt, an old dashboard card, or a previous `recommended_action`.
+
+**Act.** Complete one recoverable bounded segment. Bounded does not mean "one line changed" — it means the segment has clear inputs and boundaries, produces a coherent artifact, observation, or blocker, can be validated independently, and can produce a successor Todo or waiting condition. Reading a single file, repeating "analyzing," or running unrelated commands is not a delivery.
+
+**Validate.** Validation checks the real postcondition; it does not take the executor's word:
+
+| Delivery type | Validation |
+|---|---|
+| Code | focused test, contract test, smoke, or build |
+| Docs | build, links, command surface, public-boundary scan |
+| External effect | remote readback, revision, or service state |
+| Blocker | explicit evidence of the missing dependency, permission, or observable handle |
+
+`process exited 0` may only prove the tool started. It does not by itself prove the target behavior, external state, or acceptance.
+
+**Write back.** After validation, write compact truth back through Todo lifecycle, event, evidence, or `refresh-state`, stating at minimum: what was delivered, on what revision/command/readback, which acceptance or blocker advanced, what comes next, and whether per-Agent Vision changed. Raw transcripts and long logs do not enter public-safe state.
+
+**Account.** Record one quota spend on the CLI channel only when a validated writeback already exists. Gate notifications, dry-runs, failed preflights, unchanged monitor polls, scheduler cadence changes, and duplicate writebacks must not impersonate delivery spend.
+
+The order cannot be inverted:
+
+```text
+wrong:  act → spend → decide later whether it worked
+right:  act → independent validation → durable writeback → spend once
+```
+
+### Failure modes for a missing stage
+
+The five stages form a dependency chain. Each missing stage produces a specific failure; the loop does not simply keep running:
+
+| Missing stage | Visible symptom | Consequence |
+|---|---|---|
+| Validation | artifact exists, no postcondition check | Unqualified delivery enters writeback; later decisions rest on wrong evidence |
+| Writeback | artifact produced, Todo still open | The next peer cannot see completion; duplicate work or a wrong frontier |
+| Refresh | Todo updated, status/vision still stale | Quota targets the wrong goal; monitors judge on expired conditions |
+| Spend | Delivery written back, no quota record | Quota accounting and delivery causality disagree |
+
+**A missing validation is the most dangerous**, because it mistakes internal confidence for external fact. **A missing writeback is the most common**, because the agent skips the loop after "finishing the work" and keeps only a local artifact or chat message. **A missing refresh is the most subtle**: the surface state looks correct while quota and monitors were already reading stale values before the decision.
+
+## Scale two: whether this turn should move at all
+
+Everything above concerns what happens *after* work has been chosen. In long-running systems the more common failure is moving **when nothing should have moved**: starting because "quota is left," skipping validation because "the user hasn't complained," ignoring a Gate because "the goal is still active."
+
+### Quota is a decision compiler
+
+"Quota remaining" suggests subtraction: charge once per run, stop at zero. But a legal round of work may need no spend at all (monitor poll, dry-run, preflight), and a spend does not mean effective delivery (an artifact with no validation). Reading quota as a balance check breaks in these scenes:
+
+- **While PR checks are pending:** you cannot call the model just because the goal is active. You must wait for the external result first.
+- **After repeated dry-run or preflight failures:** no spend occurred, but the system must not retry forever. Repeated failure calls for repair or replan.
+- **When a monitor is not due:** you must not poll early just because quota remains; that wastes external resources.
+
+The correct model compiles source facts into an interaction contract under stable precedence. It decides what a turn may do and how many spends it allows, and rules out reasoning like "the balance is above zero, so start."
+
+### The Decision pipeline: the order is itself the safety contract
+
+A decision requires several rules to compile one contract together in dependency order, across nine stages:
+
+```text
+identity
+  → authority and boundary
+  → scoped decision
+  → repair obligation
+  → capability and workspace eligibility
+  → frontier and continuation
+  → interaction contract
+  → scheduler
+```
+
+1. **Identity:** resolve the exact Goal and registered Agent; fail closed when identity is unclear.
+2. **Goal boundary:** establish repository, write scope, authority source, spawn, and public/private boundary.
+3. **User Gate:** normalize blocking scope, decision scope, the concrete question, and the projection gap.
+4. **Outcome / repair obligation:** check consecutive surface-only progress and Vision or acceptance gaps to decide whether replan or self-repair is mandatory.
+5. **Capability:** filter candidates the current execution surface can actually perform.
+6. **Workspace:** check task repository, worktree, branch, and required write scope.
+7. **Frontier:** resolve priority, claim/lease, dependency, successor, monitor, and terminal closure.
+8. **Interaction contract:** compose the user, agent, and CLI channels.
+9. **Scheduler hint:** derive the next wake, backoff, and ACK from the now-settled lifecycle state.
+
+**The order is itself the safety contract.** Choosing a Todo before checking the workspace lets the Host start writing before discovering the working directory is wrong. Treating an open user item as a global block starves safe work that does not depend on that decision.
+
+### The three channels can hold at once
+
+A turn carries three perspectives, and all three can hold at once:
+
+| Channel | What it answers |
+|---|---|
+| User | Must the user act now; notify or stay quiet; which action, lane, or whole Goal does the Gate block |
+| Agent | Must this Agent attempt work; is delivery allowed, is a quiet no-op allowed; what is the single primary action |
+| CLI | Which lifecycle command comes next; how to refresh/writeback after validation; when spend is allowed; why a Gate, wait, or no-change must not spend |
 
 ```text
 user channel:
   action_required = true
   action = approve homepage publication
-
 agent channel:
   must_attempt = true
   primary_action = run an independent link check
-
 CLI channel:
   spend_after_validation = true
 ```
 
-The user Gate remains visible, but it does not cover the independent link-check Todo. Collapsing the
-three channels into "a user Todo exists, so stop the Agent" loses the scoped fallback. Collapsing them
-into "the Agent can run, so do not notify the user" is equally wrong.
+The user Gate stays visible, but it does not cover that independent link-check Todo. Collapsing this into "there is a user Todo, so the Agent stops" loses the scoped fallback; collapsing it into "the Agent can work, so no need to tell the user" is equally wrong.
 
-## Common interaction modes
+### Common interaction modes
 
-A mode compresses a related set of states into a testable contract. External developers should at least
-be able to recognize these categories:
+The combination of the three channels compresses into a **testable mode**. An external developer should at least recognize these:
 
 | Mode | Agent behavior | User behavior | Spend |
-| --- | --- | --- | --- |
-| `bounded_delivery` | Produce one bounded artifact, blocker, or state delta | Usually no interruption | Once after validation + writeback |
-| `user_gate` | Do not run the path covered by the Gate | Answer, reject, defer, or redirect | No spend |
-| `scoped_user_gate_fallback` | Run only the selected fallback that does not depend on the Gate | Gate remains visible | Once after fallback validation |
-| `external_evidence_observation` | Read a bounded handle/readback; do not invent delivery | Supply a missing handle only when needed | Spend possible only after material transition |
-| `monitor_quiet_skip` | Stay quiet when not due or no material change | No interruption | No spend |
-| `agent_scope_wait` | No in-scope candidate for the current peer; wait for reassignment | Usually no action | No spend |
-| `autonomous_replan` | Write Todo, Vision, acceptance, or no-follow-up delta | Interrupt only for owner-held decisions | After an accountable delta |
-| `outcome_floor_recovery` | Recover missing outcome evidence only, or write a blocker | Depends on blocker owner | After validated recovery |
-| `blocked_health` / repair | Repair registry, projection, or boundary first | Intervene only when owner authority is needed | No valid delta, no spend |
+|---|---|---|---|
+| `bounded_delivery` | Complete one bounded artifact, blocker, or state delta | Usually no interruption | Once, after validation + writeback |
+| `user_gate` | Do not run paths the Gate covers | Answer, reject, cancel, or redirect | No spend |
+| `scoped_user_gate_fallback` | Run only the selected fallback that does not depend on that Gate | Gate stays visible | Once, after fallback validation |
+| `external_evidence_observation` | Read a bounded handle or readback; invent no delivery | Provide a missing handle if needed | Only after a material transition |
+| `monitor_quiet_skip` | Stay quiet when not due or with no material change | No interruption | No spend |
+| `agent_scope_wait` | The current peer has no in-scope candidate; wait for reassignment | Usually no action | No spend |
+| `autonomous_replan` | Write a Todo, Vision, acceptance, or no-follow-up delta | Interrupt only for owner-held decisions | After an accountable delta |
+| `outcome_floor_recovery` | Restore only missing outcome evidence, or write a blocker | Depends on the blocker's owner | After recovery validation |
+| `blocked_health` / repair | Repair registry, projection, or boundary first | Intervene only when owner authority is needed | No spend without a valid delta |
 
-Specific modes will evolve with the protocol. What the book preserves is the reasoning method: who owns
-the next transition, which behavior is allowed, and what evidence permits writeback — not a permanently
-unchanging list of enum values.
+Specific modes shift as the protocol evolves. **What is worth keeping is the discrimination method**, not a memorized enumeration: who owns the next transition, what behavior is allowed, and what evidence permits writeback.
 
-## Decision pipeline: eliminate illegal paths before choosing the frontier
+### What observation, evidence, and receipts each prove
 
-Quota decision-making is not about letting multiple rules each return a boolean and letting the last
-assignment win. It compiles source facts into one interaction contract in dependency order. External
-developers do not need to memorize implementation functions, but they must understand the nine stages:
+The three carry different responsibilities within one turn, and conflating them produces accidents of the "I assumed someone validated it" kind:
 
-1. **Identity:** resolve the exact Goal and registered Agent; fail closed when identity is ambiguous;
-2. **Goal boundary:** establish repository, write scope, authority source, spawn policy, and the
-   public/private boundary;
-3. **User Gate:** normalize blocking scope, decision scope, the concrete question, and projection gaps;
-4. **Outcome / repair obligation:** inspect repeated surface-only progress, Vision, or acceptance gaps
-   to decide whether replan or self-repair must run;
-5. **Capability:** retain only candidates the current execution surface can actually perform;
-6. **Workspace:** check the task repository, worktree, branch, and required write scopes;
-7. **Frontier:** resolve priority, claim/lease, dependency, successor, monitor, and terminal
-   closure;
-8. **Interaction contract:** compose the result into the user, Agent, and CLI channels;
-9. **Scheduler hint:** derive the next wake, backoff, and ACK from the resolved lifecycle state.
+| Object | Proves | Does not prove |
+|---|---|---|
+| Observation | What was seen at some moment | That the conclusion was accepted, or is still fresh |
+| Evidence | Which materials support a judgment | That a state transition was actually written |
+| Receipt | That an action or transition was accepted under bound inputs and revision | That the outside world will stay that way |
 
-The order itself is a safety contract. For example, selecting a Todo before checking the workspace
-would let a Host start writing before discovering that "the current directory is wrong"; treating any
-open user item as a global block would starve safe work that does not depend on that decision. A more
-reliable reading order is:
+Taking a timed-out `git push`, the chain separates like this:
 
 ```text
-identity
-  -> authority and boundary
-  -> scoped decision
-  -> repair obligation
-  -> capability and workspace eligibility
-  -> frontier and continuation
-  -> interaction contract
-  -> scheduler
+tool invocation                → merely an attempt
+the result of git ls-remote    → a readback observation
+remote ref equals expected commit → can become evidence
+LoopX records the publish transition → that is the durable receipt
 ```
 
-### Three combined cases
+**A proposal is not an effect either.** A protocol declaring "recommends publishing" grants no credentials or permissions and does not prove the remote changed.
 
-**Scoped Gate with independent work.** When a P0 is blocked by a scoped Gate and an independent P1
-exists, keep the Gate in the user channel and execute only the explicitly selected P1 in the Agent
-channel. Do not simplify into "a User Todo exists, so stop the entire Goal."
+### The other face of a missing stage: treating a local signal as global authority
 
-**Monitor not yet due.** When no advancement work exists and a Monitor is not yet due, the correct
-result is quiet wait/backoff: do not poll, do not spend, and do not stop automation. `should_run=false`
-does not mean the Goal is terminal.
+| Source fact | Decision meaning |
+|---|---|
+| Whether the Goal is registered and the Agent identified | Fail closed on unclear identity; consume no resources |
+| Whether a User Gate blocks the current scope | Blocked paths do not run; unblocked fallbacks run independently |
+| Whether the frontier has a claimable Todo | With no runnable candidate, enter monitor or agent-scope wait |
+| Whether consecutive deliveries lack outcome | After several surface-only rounds, require a real outcome or self-repair |
+| Whether external evidence is fresh | Expired evidence cannot enter the decision; refresh readback first |
 
-**Monitor, Gate, and Replan changing together.** When a due Monitor produces a new Gate while
-autonomous replan is also due, first write the compact observation; then place the Gate in the user
-channel and let replan form a machine-visible frontier delta; finally recompute scheduler identity. Do
-not remain quiet on the old cadence merely because the Monitor finished this poll.
+Forbidden shortcuts include skipping a Gate because the goal is active, skipping the workspace check because quota once existed, and skipping validation because the user has not complained. Each of these mistakes a local signal for global authority.
 
-These cases show that rules compose rather than overwrite one another. A Gate constrains authority, a
-Monitor says when to observe, and Replan revises the frontier. Only the final interaction contract
-defines this turn's behavior.
+See [Control-Plane Course lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/) for the full decision table, the nine combined cases, and rule precedence, and [lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/) for the failure replay and repair path at each rung of the evidence ladder. This chapter teaches the discrimination method; it does not enumerate modes that will shift as the protocol evolves.
 
-For the complete decision table, nine combined cases, source seams, and smokes, use
-[Control-Plane Course Lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/).
-Host, heartbeat, stateful backoff, and scheduler receipt implementation details are in
-[Lesson 7](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/).
+### Who solely owns a rule
 
-### Quota is a decision compiler, not a balance check
+The nine-stage order from scale two holds only on one further condition: **a rule can have exactly one owner.** If Python and TypeScript each implement "when is charging allowed," the two implementations will eventually diverge, and the divergence means the ordering contract quietly stops holding on one side.
 
-The intuition of "how much quota is left" is subtraction-driven thinking: deduct one on each run, stop
-when exhausted. But a single turn of legitimate work may not need to spend (monitor poll, dry-run,
-preflight), and a single spend does not equal effective delivery (artifact without validation).
-Treating quota as a balance check causes the system to fail in these scenarios:
-
-- **PR checks pending:** do not invoke the model just because the goal is still active. You must first
-  wait for external results, then decide the next step.
-- **Repeated dry-run or preflight failures:** no spend has occurred, but the system should not retry
-  indefinitely. Repeated failures need repair or replan, not continued "attempts."
-- **Monitor not yet due:** do not poll early just because "there is still quota," wasting external
-  resources.
-
-The correct model for quota is compiling source facts into an interaction contract according to stable
-precedence. It decides "whether delivery is allowed this turn, what behavior is allowed, and how many
-spends are permitted," not "balance > 0, so start." Five key source facts and their decision
-implications:
-
-| Source Fact | Decision implication |
-| --- | --- |
-| Whether the Goal is registered and the Agent is recognized | Fail closed when identity is ambiguous; consume no resources |
-| Whether a User Gate blocks the current scope | Blocked paths do not execute; unblocked fallbacks can run independently |
-| Whether the frontier has a claimable Todo | Enter monitor/agent-scope wait when no runnable candidate exists; consume no agent resources |
-| Whether consecutive deliveries lack outcome | After multiple surface-only rounds, demand real outcome or self-repair; do not deliver indefinitely |
-| Whether external evidence is fresh | Stale evidence cannot enter the current decision; must refresh readback first |
-
-Prohibited shortcuts include: skipping the Gate because "the goal is active," skipping the workspace
-check because "there was quota before," and skipping validation because "the user has not complained."
-These all treat a local signal as global authorization.
-
-For the complete decision table, nine combined cases, and rule precedence, see
-[Control-Plane Course Lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/).
-
-## The five-stage bounded-delivery loop
-
-One normal delivery turn has at least five stages:
-
-```text
-Decide
-  -> Act
-  -> Validate
-  -> Write back
-  -> Account
-```
-
-### 1. Decide
-
-Read the current decision and select the Todo corresponding to `agent_channel.primary_action`. Do not
-override the current contract with an old prompt, an old dashboard card, or the previous
-`recommended_action`.
-
-### 2. Act
-
-Complete one recoverable bounded segment. Bounded does not mean "change only one line." It means the
-segment:
-
-- has an explicit input and boundary;
-- produces a coherent artifact, observation, or blocker;
-- can be independently validated;
-- can lead to a next Todo, wait condition, or no-follow-up.
-
-Reading only one file, repeating "still analyzing," or running unrelated commands is not delivery.
-
-### 3. Validate
-
-Validation must check the real postcondition, not trust the executor's self-report:
-
-- code: focused test, contract test, smoke, or build;
-- documentation: build, links, command surface, and public-boundary scan;
-- external effect: remote readback, revision, or service state;
-- blocker: concrete evidence of the missing dependency, permission, or observable handle.
-
-`process exited 0` may only prove that a tool started successfully. It does not automatically prove the
-target behavior, external state, or acceptance.
-
-### 4. Write back
-
-After validation, write compact truth back through Todo lifecycle, event, evidence, or `refresh-state`
-paths. Writeback should at least identify:
-
-- what was delivered;
-- based on what revision / command / readback;
-- which acceptance or blocker was advanced;
-- next step, successor, replan, or no-follow-up;
-- whether per-Agent Vision changed.
-
-Raw transcripts and large log tails should not enter public-safe state.
-
-### 5. Account
-
-Only after validated writeback already exists, record one quota spend according to the CLI channel.
-Gate notification, dry-run, failed preflight, unchanged monitor poll, scheduler cadence change, and
-duplicate writeback must not masquerade as delivery spend.
-
-The order must not be reversed:
-
-```text
-wrong: act -> spend -> later decide whether it worked
-right: act -> independent validation -> durable writeback -> spend once
-```
-
-### Delivery failure modes
-
-The five-stage loop is a continuous dependency chain. Missing any layer produces a different failure,
-not "the loop is still running":
-
-| Missing layer | Visible symptom | Consequence |
-| --- | --- | --- |
-| Missing Validation | Artifact exists but no postcondition check | Defective delivery enters writeback; subsequent decisions are based on wrong evidence |
-| Missing Writeback | Artifact was produced but Todo is still open | The next peer cannot see completion; duplicates work or selects the wrong frontier |
-| Missing Refresh | Todo was updated but status/vision is still stale | Quota selects the wrong target; monitor judges by expired conditions |
-| Missing Spend | Delivery was written back but no quota record exists | Quota accounting and delivery causality are inconsistent |
-
-Missing Validation is the most dangerous because it treats internal confidence as external fact. Missing
-Writeback is the most common because agents skip the loop after "finishing work," keeping only local
-artifacts or chat records. Missing Refresh is the most subtle: on the surface the state looks correct,
-but quota and monitor are actually reading a decision from before the state was refreshed.
-
-For complete experiments on this evidence ladder, see
-[Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/),
-which includes failure replay and repair paths for each layer.
-
-## Evidence, Receipt, and Observation
-
-Three concepts carry different responsibilities within a single turn:
-
-| Object | What it proves | What it does not prove |
-| --- | --- | --- |
-| Observation | What was seen at one moment | That a conclusion was accepted or remains fresh |
-| Evidence | Which material supports a judgment | That the state transition was actually written |
-| Receipt | That an action/transition was accepted with bound input and revision | That the external world stays unchanged forever |
-
-For example, after a `git push` timeout:
-
-- the tool invocation is an attempt;
-- the result of `git ls-remote` is a readback observation;
-- a remote ref matching the expected commit can become evidence;
-- LoopX recording the publication transition forms the durable receipt.
-
-A proposal is not an effect either. A protocol declaration that "publication is recommended" does not
-automatically grant credentials, authorize the action, or prove that the remote has changed.
-
-## TurnEnvelope and LoopX Turn
-
-A full quota decision can contain substantial diagnostic information. The optional
-[`loopx_turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
-compresses an already computed decision into a bounded read model that preserves:
-
-- selected Todo and effective action;
-- Gate, required reads, and goal boundary;
-- capability/workspace guard;
-- validation, writeback, and spend policy;
-- scheduler action;
-- a compact contract capsule.
-
-TurnEnvelope is a projection. It does not select different work or change quota semantics.
-
-[`LoopX Turn`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
-further defines an optional governed transaction:
-
-```text
-live decision
-  -> typed host request
-  -> Agent/Host candidate result
-  -> independent validator
-  -> durable writeback
-  -> one spend
-```
-
-Codex App heartbeat, a visible Codex CLI Goal, and another Host do not need to use the same adapter
-implementation, but they should maintain the same control semantics: the Host is responsible for
-execution and wake-up, the LoopX decision is responsible for the legal next action, and the validator
-does not directly trust a Host completion claim.
-
-!!! info "Current maturity"
-    TurnEnvelope is currently an explicitly enabled bounded projection, not the default quota output.
-    LoopX Turn remains an experimental protocol, but `v0.5.4` still ships executable `turn plan` /
-    `turn run-once` paths and Host adapters. They are suitable for understanding boundaries and building
-    explicit opt-in integrations, but should not be described as a recurring runtime enabled by default
-    across every Host.
-
-### Where the TypeScript Effect Program sits in one turn
-
-`v0.5.4` extends the Effect Program foundation by moving the canonical semantics for complete
-transactions into TypeScript:
+LoopX moves the canonical semantics of the complete transaction into TypeScript:
 
 ```text
 Python CLI / Host adapter
-  -> typed request
-  -> managed TypeScript Effect runtime
-  -> domain-owned decision or effect receipt
-  -> Python compatibility projection / explicit external Provider
+  → typed request
+  → managed TypeScript Effect runtime
+  → domain-owned decision or effect receipt
+  → Python compatibility projection / explicit external Provider
 ```
 
-Shipped typed owners include Turn settlement, Todo completion and Host Todo settlement, quota delivery
-routing plus spend/void/monitor-poll commit, the full local task-lease lifecycle, Vision refresh, governed
-capability-lifecycle validation, and scheduler heartbeat/state plus receipt-bound scheduler follow-up.
-Python still owns current CLI transport, explicit external Provider or Host effects, legacy projections,
-and Markdown/event writeback that has not migrated. Do not read the migration as “Python has been
-removed,” and do not reimplement the same rule inside a Python facade.
+Published typed owners include **Turn settlement**, **Todo completion**, and **Host Todo settlement**, plus quota delivery routing, **spend/void/monitor-poll commit**, the **full local task-lease lifecycle**, **Vision refresh**, governed capability-lifecycle validation, and scheduler heartbeat/state with **receipt-bound scheduler follow-up**.
 
-The current
-[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-defines later work as a transaction-payoff phase: migrate a complete transaction and delete the replaced
-Python semantic path. Adding only a leaf handler, DTO, or bridge call is not migration progress.
+Python still carries the current CLI transport, explicit external Provider/Host effects, legacy projection, and the Markdown/event writeback not yet migrated. The migration does not mean "**Python has been removed**" — but the same rule must never be reimplemented in a Python facade, because that creates a second source of truth and breaks exactly what this section protects. `v0.5.4` still ships a runnable `turn plan` / `turn run-once` path, and the migration effectively began from that release.
 
-## Monitor and Scheduler Hint
+The [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md) on current `main` defines the remaining work as transaction-payoff: one migration should move a complete transaction and delete the Python semantic path it replaced. Adding only leaf handlers, DTOs, or bridge calls does not count as migration progress.
 
-When the frontier depends only on an external condition, create a `continuous_monitor` instead of
-repeatedly asking the Agent "has anything changed." A monitor needs at least:
+This boundary has a practical consequence for readers: **when the two sides disagree, the canonical answer lives on the TypeScript side**, and the Python side is adaptation or compatibility projection. To tell where a piece of logic belongs, ask whether it is already a domain-owned decision or an effect receipt.
 
-- a stable target key;
-- cadence and next due time;
-- a bounded observation handle;
-- a material-change rule;
-- expiry or termination conditions;
-- a no-change accounting policy.
+## Cost and boundary: what this design gives up
 
-`scheduler_hint` projects current state into Host cadence: run now, wait for fresh evidence, wait for
-reassignment, or wake at monitor cadence. It is not execution permission:
+Every rule above buys one property by paying elsewhere. The costs matter, because they determine when you should not expect this machinery to help.
 
-```text
-scheduler hint: when to wake
-interaction contract: what this turn may do
-```
+**Cost one: every turn reads state first.** You cannot act on a judgment embedded in a prompt from an hour ago. That is slower than "keep going," and the state you read may already be stale when you finish reading it.
 
-Even if the Host wakes at the correct time, it must re-run the current decision. An old scheduler
-proposal, old `should_run`, or old selected Todo cannot be reused across state changes by default.
+**Cost two: the phase count is fixed.** You cannot slip an extra step into a round — "edit the file and clear the cache while we're here." That flexibility is traded for enumerability, and enumerability is what recovery requires.
 
-### Scheduler convergence requires apply, readback, and ACK
+**Cost three: wasted work is possible.** If the charge fails after writeback, the round produces no accounting at all. The system discards it rather than keep an unclassifiable partial result.
 
-For a Codex App heartbeat, `recommended_rrule` is the target cadence, not proof that the Host applied
-it. The complete convergence chain is:
+**Cost four: you cannot skip stages on intuition.** The nine stages mean an obvious-looking judgment — "the user hasn't complained, so continue" — has no place in the pipeline. To speed up decisions you improve the quality of source facts; you do not compress the order.
 
-```text
-LoopX proposes recommended_rrule
-  -> Host applies one automation update
-  -> Host result / observed RRULE proves the actual cadence
-  -> run the exact ack_hint.cli_args
-  -> LoopX records reset token, identity, and applied RRULE
-```
+**Boundary one: these seven phases describe a governed turn only; they do not cover everything an agent does.** The model's reasoning inside `host_execute`, and the order of its tool calls, are not governed by these phases — that belongs to the harness. LoopX governs **the part that crosses process boundaries, can be interrupted, and must be accounted for.**
 
-The important protocol branches are:
+**Boundary two: TurnEnvelope and LoopX Turn are not default paths.** TurnEnvelope is an explicitly enabled bounded projection, not the default quota output. LoopX Turn is an experimental protocol, though the current release ships a runnable `turn plan` / `turn run-once` path and a Host adapter. Both suit understanding boundaries and explicit opt-in integrations; neither should be described as a recurring runtime every Host adopts by default.
 
-- `apply_needed=true`: the Host attempts at most one update; after success it runs the complete
-  `ack_hint.cli_args` from the packet; after failure or timeout it does not ACK and runs
-  `failure_hint.cli_args` once;
-- `apply_needed=false, ack_needed=true`: the Host readback already exactly matches the proposal, so
-  skip the no-op update and execute the bound ACK directly;
-- `host_observation.status=drift_detected`: the actual cadence does not match the ledger; an old ACK
-  cannot override the current readback; repair is needed;
-- terminal pause/stop: verify the stop result according to the Host contract; do not disguise it as a
-  normal RRULE ACK.
+**Boundary three: Python still owns real responsibilities.** Python carries the current CLI transport, explicit external Provider/Host effects, legacy projection, and the Markdown/event writeback not yet migrated. The migration does not mean "Python was removed," and the same rule must never be reimplemented in a Python facade — that creates a second source of truth.
 
-The current ACK uses `quota scheduler-ack-current` to re-read the latest hint. The Host must execute
-the complete argv from the packet, because it may bind registry, runtime profile, Agent identity, and
-capability envelope; manually copying only the reset token or dropping global arguments will write the
-ACK to the wrong state.
+## Named failures: what these constraints stop
 
-Scheduler state also binds a `reset_token` and `identity_signature`. User feedback, a new Todo,
-reassignment, Gate resolution, or material evidence transition changes the identity and restores the
-cadence to the current profile's initial value; only consecutive unchanged polls continue backoff.
-Cadence apply, failure writeback, and ACK are control-plane housekeeping and do not consume delivery
-quota.
+Talking abstractly about "recoverability" convinces nobody. Three scenarios below each have a corresponding test you can run to watch the constraints take effect.
 
-### Per-lane counting when multiple monitors are interleaved
+**Replaying a legal prefix produces no duplicate effect.** For every legal prefix, a replay must converge on the same result — no second charge, no extra record. The tests cover every prefix combination; none of them sample. The decisive assertions are that `replay_calls == []` and that `combined_calls` contains at most one `DURABLE_WRITEBACK` and at most one `QUOTA_SPEND`.
 
-When two monitors M1 and M2 alternate polling, if you only count "whether consecutive runs are
-unchanged," M1's run will break M2's no-change streak, and M2 will break M1's. In the end, both
-monitors' `consecutive_no_change` never reaches the threshold, the system cannot enter backoff, and it
-turns into hot polling instead.
+**A charge without a writeback must fail closed.** A plan claiming it will charge while carrying no corresponding `durable_writeback` must be rejected rather than charged first and reconciled later. This guards precisely the 09:04 state from the opening: money spent, landing site unknown.
 
-The correct approach is to **maintain an independent `consecutive_no_change` counter for each monitor
-todo**. When M2 has a material change, only M2 is reset; M1 is unaffected. The turn order (A1, B1, A2,
-B2...) does not cause mutual zeroing.
+**One failure short-circuits every later effect.** After phase 3 fails, phases 4 through 7 do not run. Otherwise you get internally contradictory states like "validation failed but writeback succeeded."
 
-This per-lane design also applies to multi-agent scenarios: each agent's monitor is an independent
-lane; they share the same frontier read model, but no-change judgment is per-lane. Implementation
-details and interleaving experiments are in
-[Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
+Corresponding tests: `tests/control_plane/test_effect_program_fault_replay_matrix.py`. They serve as executable evidence for this design at each crash point, well beyond demonstration.
 
 ## How a turn ends
 
-A governed turn can end with different results:
+A turn can end in several ways, and all of them are legal:
 
 - validated delivery + writeback + spend;
-- a concrete blocker + recovery condition;
-- a user Gate notification;
-- one bounded external observation;
-- quiet monitor / no-candidate wait;
-- a replan / repair delta;
-- stop after terminal audit.
+- concrete blocker + recovery condition;
+- user Gate notification;
+- bounded external observation;
+- quiet monitor or no-candidate wait;
+- replan or repair delta;
+- stop after a terminal audit.
 
-"No code was written" is not necessarily failure; a Gate, wait, or quiet no-op may be exactly the
-legal result required by the protocol. Conversely, writing a lot of code does not mean the turn was
-valid, if it bypassed the selected Todo, authority, workspace, or validation.
+**Writing no code is not necessarily a failure** — a Gate, a wait, and a quiet no-op may be exactly what the protocol requires. Conversely, writing a lot of code does not make a turn effective if it bypassed the selected Todo, authority, workspace, or validation.
 
-The next chapter explains recovery across Turns, self-repair, and terminal closure, and places the
-operational responsibilities of Agent, Capability, Provider, Extension, and external systems back
-within the same fact boundary.
+## Invariants
+
+Six claims you can check yourself.
+
+**On the single-turn transaction:**
+
+1. **A turn's completion state is always some prefix of the seven phases.** If you observe spend performed without writeback, that is not a recovery boundary — it is a defect.
+2. **Replaying the same turn adds no effect.** Replay is idempotent, so retrying is safe — but retrying does not erase the question of how far it got.
+3. **A failure must declare where it stopped.** A failure that cannot name its phase cannot be recovered, and therefore cannot be handed off.
+
+**On cross-turn admission:**
+
+4. **The three channels can hold at once.** Collapsing any one of them into a global boolean loses either legal parallel work or a required human decision.
+5. **The decision order cannot be compressed.** To speed up decisions, improve the quality of source facts.
+6. **No delta means no spend.** Gate notifications, dry-runs, and unchanged polls are not deliveries.
+
+These six answer one question: **when nobody remembers what just happened and nobody is watching, what lets the system know whether to move and how far it got?** This chapter gave LoopX's answer at the single-turn scale. The next chapter stretches the scale — when a goal takes dozens or hundreds of turns across interruptions and handoffs, how these constraints continue to hold.
