@@ -373,3 +373,29 @@ def test_architect_task_injects_homog_warning(tmp_path, monkeypatch):
     r2.stage_route(root, "architect")
     task2 = (root / "agents/architect/tasks/architect.md").read_text(encoding="utf-8")
     assert "同质化告警" not in task2
+
+
+# ==== P4批次(2026-10-01智囊团): pass^k双轨指标——"最终全绿"须能拆出"首试绿" ====
+def test_attempts_ledger_counts_exact_home_dirs(tmp_path):
+    """与next_instance同源计数: home-x 与 home-x-rN 都算;不误吞别棒目录。"""
+    for d in ("home-planner", "home-planner-r1", "home-architect",
+              "home-researcher-1", "home-researcher-1-r1", "home-researcher-1-r2",
+              "home-reviewer-2"):
+        (tmp_path / d).mkdir()
+    led = r2.attempts_ledger(tmp_path, 2)
+    assert led["planner"] == 2 and led["architect"] == 1
+    assert led["researcher-1"] == 3 and led["researcher-2"] == 0
+    assert led["reviewer-1"] == 0 and led["reviewer-2"] == 1
+
+
+def test_gate_report_carries_passk_ledger(tmp_path):
+    """gate-report必须带attempts台账+first_pass清单: 全绿也要能拆出首试绿。"""
+    root = make_root(tmp_path, n=2)
+    (root / "home-planner").mkdir()      # planner首试
+    (root / "home-researcher-1").mkdir()  # r1首试
+    (root / "home-researcher-1-r1").mkdir()  # r2重试过
+    r2.gate(root, include_final=True)
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep["attempts"]["researcher-1"] == 2
+    assert "researcher-1" not in rep["first_pass"]
+    assert "planner" in rep["first_pass"] or rep["attempts"]["planner"] == 1

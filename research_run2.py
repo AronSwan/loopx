@@ -224,6 +224,20 @@ def homog_report(root, n):
     return pairs
 
 
+def attempts_ledger(root, n):
+    """pass^k台账(P4,2026-10-01智囊团;业界已证单次75%→3次全过仅42%,"最终全绿"
+    可能掩盖"重试才绿"): 每棒实际起跑次数=home-*目录计数(与next_instance同源)。
+    attempts==1即首试通过;>1即经重试/修复环才绿。"""
+    phases = (["planner", "architect", "reviewer-1", "reviewer-2", "finalizer"]
+              + [f"researcher-{k}" for k in range(1, n + 1)])
+    ledger = {}
+    for ph in phases:
+        names = {p.name for p in root.glob(f"home-{ph}*")}
+        exact = {x for x in names if x == f"home-{ph}" or re.fullmatch(rf"home-{ph}-r\d+", x)}
+        ledger[ph] = len(exact)
+    return ledger
+
+
 def homog_warning(root, n, threshold=0.7):
     """超阈值→写给架构师任务书的告警段;未超→空串(不注入)。"""
     hot = [p for p in homog_report(root, n) if p["jaccard"] > threshold]
@@ -689,12 +703,18 @@ def gate(root, include_final=True):
     for a, b in (("reviewer-1", "reviewer-2"), ("reviewer-2", "reviewer-1")):
         leaked = list((root / "agents" / a / "inputs").glob(f"review-{b[-1]}.md"))
         chk(f"盲评隔离({a}不见{b})", not leaked)
+    led = attempts_ledger(root, plan["N"])
+    first = sorted(p for p, a in led.items() if a == 1)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
+              "attempts": led, "first_pass": first,
               "digests": {str(pp.relative_to(root)): hashlib.sha256(pp.read_bytes()).hexdigest()
                           for pp in set(root.glob("agents/*/outputs/*.md"))
                           | set(root.glob("agents/planner/outputs/plan.json"))}}
     write(root / "gate-report.json", report)
+    print(f"pass^k: 首试通过 {len(first)}/{len(led)} 棒"
+          + ("" if len(first) == len(led) else f"(重试棒: { {p: a for p, a in led.items() if a > 1} })"),
+          flush=True)
     top = next((p for p in report["homogenization"] if p["jaccard"] > 0.7), None)
     if top:
         print(f"!! 同质化信号(非拦截): research-{top['pair'][0]}×research-{top['pair'][1]} "
