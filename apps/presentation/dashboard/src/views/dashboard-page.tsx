@@ -5,7 +5,7 @@ import {compactWorkspaceText as compactShareText} from "../features/personal-wor
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
-import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, reusableGoalSnapshots, type WorkspaceProgress, type WorkspaceLoadError } from "../data/workspace-progressive-status";
+import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 
@@ -1267,7 +1267,7 @@ function PersonalGoalHome({
   onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
-  onRefresh: () => void | Promise<void>;
+  onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
   payload: StatusPayload;
   progress: WorkspaceProgress | null;
@@ -3063,8 +3063,8 @@ function PersonalGoalHome({
             anchor.click();
             URL.revokeObjectURL(url);
           },
-          onRefresh: async () => {
-            await onRefresh();
+          onRefresh: async (scope) => {
+            await onRefresh(scope);
             setCapabilityRevision((revision) => revision + 1);
           },
           onRetryResumeRun: retryManagerSession,
@@ -3302,8 +3302,7 @@ export function DashboardPage() {
     url: string,
     options: {
       background?: boolean;
-      retryOnly?: boolean;
-      reuseSnapshots?: boolean;
+      readScope?: WorkspaceReadScope;
       invalidateGoalIds?: string[];
       resyncAttempt?: number;
       selectionRevision?: number;
@@ -3335,16 +3334,13 @@ export function DashboardPage() {
       const directory = await fetchWorkspaceDirectory(trimmed, window.location.href).catch(() => null);
       if (!statusRequestCanCommit(statusRequestFenceRef.current, request)) return;
       if (directory) {
-        // A refresh that keeps the same source only re-reads the Goals whose
-        // directory entry moved or that the caller just acted on. Dropping every
-        // snapshot here would send the whole workspace back to its loading lane
-        // after one Goal's pause, resume or open.
-        const retained = (options.retryOnly || options.reuseSnapshots)
-          && source.kind === "url" && source.label === trimmed
-          ? reusableGoalSnapshots(progress, directory, { invalidateGoalIds: options.invalidateGoalIds })
-          : {};
-        setProgress({ directory, snapshots: retained, errors: {} });
-        const requestedDirectory = { ...directory, goals: directory.goals.filter((goal) => !retained[goal.id]) };
+        // Keep valid snapshots on screen during a refresh. Only an explicit
+        // partial read may skip them; lifecycle identity is not data freshness.
+        const { snapshots, requestedDirectory } = workspaceReadPlan(
+          source.kind === "url" && source.label === trimmed ? progress : null,
+          directory, options.readScope, { invalidateGoalIds: options.invalidateGoalIds },
+        );
+        setProgress({ directory, snapshots, errors: {} });
         let directoryChanged = false;
         const initial = directoryStatusPayload(directory);
         if (background) setPayload(initial);
@@ -3353,11 +3349,14 @@ export function DashboardPage() {
         await loadWorkspaceGoalSnapshots(trimmed, window.location.href, requestedDirectory,
           (id, snapshot, error) => {
             if (error === "revision") directoryChanged = true;
-            setProgress((current) => current ? {
-            ...current,
-            snapshots: snapshot ? { ...current.snapshots, [id]: snapshot } : current.snapshots,
-            errors: error ? { ...current.errors, [id]: error } : current.errors,
-          } : current);
+            setProgress((current) => {
+              if (!current) return current;
+              const snapshots = { ...current.snapshots };
+              const errors = { ...current.errors };
+              if (snapshot) { snapshots[id] = snapshot; delete errors[id]; }
+              else if (error) { delete snapshots[id]; errors[id] = error; }
+              return { ...current, snapshots, errors };
+            });
           },
           () => statusRequestCanCommit(statusRequestFenceRef.current, request),
           () => preferredGoalRef.current,
@@ -3529,7 +3528,7 @@ export function DashboardPage() {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
     const goal = progress.directory.goals.find((item) => item.id === search.goalId);
     if (goal?.activation_state === "stopped" && !progress.snapshots[goal.id] && !progress.errors[goal.id]) {
-      void loadFromUrl(source.label, { retryOnly: true });
+      void loadFromUrl(source.label, { readScope: "missing" });
     }
   }, [search.goalId, isLoading, progress, source]);
 
@@ -3577,10 +3576,10 @@ export function DashboardPage() {
       onSelectGoal={selectGoal}
       onReconcileStatus={(options) => loadFromUrl(
         source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl),
-        { background: true, invalidateGoalIds: options?.invalidateGoalIds, reuseSnapshots: true },
+        { background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
       )}
       onRetryGoalArchive={retryGoalArchive}
-      onRefresh={() => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { retryOnly: Boolean(progress && Object.keys(progress.errors).length) })}
+      onRefresh={(readScope = "all") => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope })}
       payload={payload}
       progress={progress}
       rows={goalRows}
