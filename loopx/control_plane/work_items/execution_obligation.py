@@ -73,7 +73,10 @@ def build_execution_obligation(
                 "source is unchanged and no concrete safe handoff exists"
             ),
         }
-    if should_run and recommended_mode == "autonomous_replan_required":
+    if should_run and (
+        effective_action == "autonomous_replan_required"
+        or recommended_mode == "autonomous_replan_required"
+    ):
         raw_replan_obligation = heartbeat_recommendation.get("replan_obligation")
         replan_obligation = (
             cast(dict[str, Any], raw_replan_obligation)
