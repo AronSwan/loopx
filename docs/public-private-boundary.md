@@ -137,11 +137,24 @@ destination needs:
   rejecting it. "the Bearer token expired" describes a credential; it does not
   carry one.
 
-The value arms stay in every policy, so the narrower tier releases prose only: a
-credential label followed by an assignment operator, or a bearer scheme carrying
-a value of at least eight characters, is rejected by both tiers. A raw credential token with
-no label at all -- a GitHub token, a private key block -- is rejected by both
-tiers too, which the word-only rule never caught.
+The value arms stay in every policy, so the narrower tier releases prose only. A
+label carries a value when one of four independent signals is present: an
+assignment operator (`:` or `=`), which carries whatever follows with no length
+condition; a connector (whitespace, comma, semicolon, dash, or a copula such as
+"is" or "set to") followed by a token containing a digit or one of `+ / =`; the
+same connector followed by a quoted run; or the same connector followed by an
+unbroken letter-only run of `OPAQUE_VALUE_MIN_LENGTH` (16) characters or more. A
+raw credential token with no label at all -- a GitHub token, a private key block
+-- is rejected by both tiers too, which the word-only rule never caught.
+
+No signal reads the length of a word to decide whether a credential *word* is
+present, so a scheme name beside an ordinary English word stays prose while the
+same word with one digit appended is a value. One residual is stated rather than
+argued: a letter-only run of fifteen characters or fewer, written beside the label
+with no quotes and no assignment operator, is prose to this owner. The publication
+tier still rejects the mention, and the internal-state tier is not a
+credential-storage exemption; the corpus carries that row as
+`disclosed_residual_short_letter_value` so the limit stays a decision with a test.
 
 A URL is in neither tier's internal-state policy yet. The rule these four owners
 enforced before never rejected an ordinary link, so this split does not start to;
