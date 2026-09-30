@@ -479,11 +479,15 @@ class ChatLoopXMode:
         client_turn_id = "wake-" + intent_id[:32]
         now = time.time()
 
-        def settled(state, reason):
-            if state == "pending" and intent.get("reason") == reason:
+        def settled(state, reason, **facts):
+            if (
+                state == "pending"
+                and intent.get("reason") == reason
+                and all(intent.get(key) == value for key, value in facts.items())
+            ):
                 return None  # unchanged: no churn on the record
             at = "refused_at" if state == "refused" else "checked_at"
-            return wake_receipt(intent, state, reason=reason, **{at: now})
+            return wake_receipt(intent, state, reason=reason, **facts, **{at: now})
 
         session = self.store.load_session(session_id)
         if not session:
@@ -497,7 +501,7 @@ class ChatLoopXMode:
             wake_turn = {
                 "turn_id": existing.get("turn_id"),
                 "status": existing.get("status"),
-                "started": existing.get("started_at") is not None,
+                "started_at": existing.get("started_at"),
                 "loopx_execution": existing.get("loopx_execution") is True,
                 "operation": request.get("operation"),
                 "intent_id": (request.get("wake") or {}).get("intent_id"),
@@ -556,7 +560,7 @@ class ChatLoopXMode:
                     for key in ("intent_id", "operation_id", "request_id")
                 },
             }
-        turn, created = self.controller.submit_turn(
+        turn, _created = self.controller.submit_turn(
             session_id=session_id,
             client_turn_id=client_turn_id,
             message=message,
@@ -566,7 +570,10 @@ class ChatLoopXMode:
             loopx_execution=True,
             loopx_request=loopx_request,
         )
-        return self._woken(intent, session_id, turn["turn_id"], created=created, now=now)
+        # Accepted is not started.  ``submit_turn`` returning proves admission
+        # and an asynchronous dispatch, not that the start fact is durable, so
+        # the intent stays pending until a later tick reads it back.
+        return settled("pending", "wake_dispatch_pending", turn_id=turn["turn_id"])
 
     @staticmethod
     def _woken(intent, session_id, turn_id, *, created, now):

@@ -1373,21 +1373,51 @@ class ChatRuntimeController:
                 if done_event is None:
                     done_event = threading.Event()
                     self.turn_done_events[key] = done_event
-        started = utc_now()
-        started_turn = self.store.update_turn(
-            session_id,
-            turn_id,
-            expected_statuses={"queued"},
-            status="starting",
-            started_at=started,
-        )
-        if started_turn is None:
+        # Everything runs inside the terminal release. The start fact is the
+        # first durable write and is not guaranteed to land: if it raises, the
+        # Turn was never dispatched, so the single-flight guard must be given
+        # back here rather than left holding the key, which would make every
+        # later dispatch of this same Turn a silent no-op.
+        try:
+            started_turn = self.store.update_turn(
+                session_id,
+                turn_id,
+                expected_statuses={"queued"},
+                status="starting",
+                started_at=utc_now(),
+            )
+            if started_turn is None:
+                with self.lock:
+                    self.cancelled_turns.discard(key)
+                return
+            self._run_started_turn(
+                session_id=session_id,
+                turn_id=turn_id,
+                message=message,
+                attachments=attachments,
+                adapter=adapter,
+                loopx_execution=loopx_execution,
+                done_event=done_event,
+            )
+        finally:
+            done_event.set()
             with self.lock:
-                self.cancelled_turns.discard((session_id, turn_id))
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
-            done_event.set()
-            return
+
+    def _run_started_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        message: str,
+        attachments: list[dict[str, Any]],
+        adapter: ChatRuntimeAdapter,
+        loopx_execution: bool,
+        done_event: threading.Event,
+    ) -> None:
+        """The body of a Turn whose `queued -> starting` fact is already durable."""
+        key = (session_id, turn_id)
         event_buffer = _TurnEventBuffer(
             store=self.store,
             session_id=session_id,
@@ -1573,9 +1603,6 @@ class ChatRuntimeController:
             event_buffer.close()
             with self.lock:
                 self.turn_event_buffers.pop(key, None)
-                if self.turn_done_events.get(key) is done_event:
-                    self.turn_done_events.pop(key, None)
-            done_event.set()
 
     def _fail_turn(
         self,

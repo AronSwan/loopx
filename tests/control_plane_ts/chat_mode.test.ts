@@ -100,7 +100,7 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
 
 test("only a started wake Turn is dispatch evidence; a queued one is replayed under the same admission", () => {
   const own = {turn_id: "wake-turn", loopx_execution: true, operation: "wake", intent_id: intent.intent_id};
-  const queued = {...own, status: "queued", started: false};
+  const queued = {...own, status: "queued", started_at: null};
   // Queued, not started: replay the same Turn; its own active id does not block it.
   const replay = planChatMode({...wake, wake_turn: queued, session: {...enabled, active_turn_id: "wake-turn"}});
   assert.equal(replay.state, "admitted");
@@ -116,20 +116,25 @@ test("only a started wake Turn is dispatch evidence; a queued one is replayed un
   for (const [changes, state, reason] of held) {
     assert.deepEqual(planChatMode({...wake, wake_turn: queued, ...changes}), {operation: "wake", state, reason}, reason);
   }
-  // Started (running or terminal): recorded without another dispatch, even after the mode changed.
+  // The durable start fact, in any later status and even after the mode changed.
   for (const status of ["starting", "running", "completed", "failed"]) {
-    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started: true},
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started_at: "2026-09-30T00:00:00Z"},
       session: {...enabled, loopx_mode: {enabled: false}}}),
     {operation: "wake", state: "woken", reason: null, dispatch: "recorded"}, status);
   }
   // Ended before it started: its client id cannot admit another Turn.
-  for (const status of ["interrupted", "interrupting", "failed", "completing"]) {
-    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started: false}}),
-      {operation: "wake", state: "refused", reason: "wake_turn_not_started"}, status);
+  for (const status of ["interrupted", "failed", "timed_out", "completed"]) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started_at: null}}),
+      {operation: "wake", state: "refused", reason: "wake_turn_ended_unstarted"}, status);
+  }
+  // Accepted but not yet started: still pending, so the next tick re-reads the fact.
+  for (const status of ["interrupting", "completing"]) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started_at: null}}),
+      {operation: "wake", state: "pending", reason: "wake_dispatch_pending"}, status);
   }
   // A client id owned by another request is never claimed.
   for (const other of [{loopx_execution: false}, {operation: "resume"}, {intent_id: "b".repeat(64)}]) {
-    assert.deepEqual(planChatMode({...wake, wake_turn: {...queued, ...other, started: true}}),
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...queued, ...other, started_at: "2026-09-30T00:00:00Z"}}),
       {operation: "wake", state: "refused", reason: "wake_identity_conflict"});
   }
   // An intent without its origin conversation cannot be decided by any conversation.

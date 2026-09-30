@@ -64,11 +64,29 @@ def _idle_resumable_lead(mode):  # noqa: F811
     return service, sid, calls
 
 
-def _pump(service, repo):
+def _pump_with(controller, repo):
     return pump_delegation_wakes(
-        service.controller,
+        controller,
         goal_context=lambda session: {"project": repo, "objective": "Continue"},
     )
+
+
+def _pump(service, repo):
+    return _pump_with(service.controller, repo)
+
+
+def _start_worker_turn(service, sid):
+    """The worker's first durable step, for the stubbed ``submit_turn`` fixture.
+
+    The shared fixture's ``submit_turn`` records acceptance only, exactly as the
+    real one returns before the worker writes ``started_at``.
+    """
+    turn = service.store.turn_for_client(sid, "wake-" + INTENT_ID[:32])
+    service.store.update_turn(
+        sid, turn["turn_id"], expected_statuses={"queued"},
+        status="starting", started_at="2026-09-30T00:00:00Z",
+    )
+    return turn
 
 
 def test_accepted_result_wakes_the_lead_exactly_once(mode):  # noqa: F811
@@ -82,13 +100,24 @@ def test_accepted_result_wakes_the_lead_exactly_once(mode):  # noqa: F811
     assert calls[0]["client_turn_id"] == "wake-" + INTENT_ID[:32]
     assert calls[0]["loopx_request"]["operation"] == "wake"
     assert calls[0]["loopx_request"]["wake"]["intent_id"] == INTENT_ID
+    # Dispatch is accepted; the receipt stays pending until the start fact lands.
     receipt = _wake(path)
-    assert receipt["state"] == "woken" and receipt["created"] is True
-    assert receipt["session_id"] == sid and changed == [receipt]
+    assert receipt["state"] == "pending" and changed == [receipt]
+    assert _pump(service, repo) == [] and _wake(path) == receipt
+
+    # Once the worker's start lands, the next tick records it without a Turn.
+    _start_worker_turn(service, sid)
+    changed = _pump(service, repo)
+    woken = _wake(path)
+    assert woken["state"] == "woken" and woken["created"] is False
+    assert woken["session_id"] == sid and changed == [woken]
 
     # A second tick finds no pending intent: no second Turn, receipt unchanged.
     assert _pump(service, repo) == []
-    assert len(calls) == 1 and _wake(path) == receipt
+    assert _wake(path) == woken
+    # Every attempt used the one stable client identity, so one Turn resulted.
+    assert {call["client_turn_id"] for call in calls} == {"wake-" + INTENT_ID[:32]}
+    assert len(_wake_turns(service, sid)) == 1
 
 
 def test_lost_receipt_after_the_turn_started_records_it_once(mode):  # noqa: F811
@@ -225,12 +254,20 @@ def test_only_an_accepted_result_can_wake(mode, status):  # noqa: F811
 # so no model runs; "dispatch" below is a request to start the worker.
 
 class Transport:
-    """Adapter/worker boundary with injectable faults."""
+    """Adapter/worker boundary with injectable faults.
 
-    def __init__(self, service, *, adapter_failures=0, start_turns=False):
+    ``start_worker`` drives the real ``_run_turn`` body when the wake Turn can
+    start, so the worker's durable start fact, its single-flight release and
+    the native acceptance recovery path are the shipped ones; only the adapter
+    and the thread are replaced.  No model runs.
+    """
+
+    def __init__(self, service, *, adapter_failures=0, start_write_failures=0,
+                 real_worker=False):
         self.service = service
         self.adapter_failures = adapter_failures
-        self.start_turns = start_turns
+        self.start_write_failures = start_write_failures
+        self.real_worker = real_worker
         self.adapter_attempts = []
         self.dispatches = []
 
@@ -238,15 +275,70 @@ class Transport:
         self.adapter_attempts.append(session["session_id"])
         if len(self.adapter_attempts) <= self.adapter_failures:
             raise RuntimeError("adapter initialization failed")
-        return object()
+        return StubAdapter(self.service, session)
 
-    def start_worker(self, *, session_id, turn_id, **kwargs):
+    def arm(self, monkeypatch, controller):
+        """Bind this transport to ``controller``, including the start-fact fault."""
+        store = self.service.store
+        real_update_turn = store.update_turn
+
+        def update_turn(*args, **changes):
+            # Exactly the worker's first durable step, on its first attempt.
+            if self.start_write_failures and changes.get("status") == "starting" \
+                    and changes.get("started_at"):
+                self.start_write_failures -= 1
+                raise OSError("chat turn store unavailable")
+            return real_update_turn(*args, **changes)
+
+        monkeypatch.setattr(store, "update_turn", update_turn)
+        monkeypatch.setattr(controller, "_ensure_adapter_locked", self.ensure_adapter)
+        monkeypatch.setattr(controller, "_start_accepted_turn_worker", self.start_worker)
+        return self
+
+    def start_worker(self, *, session_id, turn_id, message="", attachments=None,
+                     adapter=None, loopx_execution=False, **kwargs):
         self.dispatches.append((session_id, turn_id))
-        if self.start_turns:  # the worker's first durable step
+        if not self.real_worker:  # the worker's first durable step only
             self.service.store.update_turn(
                 session_id, turn_id, expected_statuses={"queued"},
                 status="starting", started_at="2026-09-30T00:00:00Z",
             )
+            return True
+        if (self.service.store.load_turn(session_id, turn_id) or {}).get("status") != "queued":
+            return False
+        # The shipped worker body, over a stub adapter: the failure is after the
+        # durable start write, which is the fact under test.
+        self.service.controller._run_turn(
+            session_id=session_id, turn_id=turn_id, message=message,
+            attachments=attachments or [], adapter=adapter, loopx_execution=loopx_execution,
+        )
+        return True
+
+
+class StubAdapter:
+    """Enough adapter for the real worker to reach a bounded, non-model failure."""
+
+    upstream_thread_id = "stub-upstream"
+
+    def __init__(self, service, session):
+        self.service = service
+        self.session = session
+        self.goal_driver = None
+        self.team_plan_context = None
+
+    def capabilities(self):
+        return {}
+
+    def start_turn(self, message, event_sink):  # pragma: no cover - never reached
+        raise AssertionError("the stub adapter must not start a native turn")
+
+    def interrupt_turn(self, turn_id=None):
+        return None
+
+    def close_session(self):
+        return None
+
+    def healthcheck(self):
         return True
 
 
@@ -260,11 +352,9 @@ def _native(mode, monkeypatch, **faults):  # noqa: F811
     store.update_session(sid, active_turn_id=None, status="ready", loopx_tools=True,
                          native_goal={"status": "paused", "tokensUsed": 0})
     controller = service.controller
-    transport = Transport(service, **faults)
+    transport = Transport(service, **faults).arm(monkeypatch, controller)
     monkeypatch.setattr(controller, "submit_turn",
                         ChatRuntimeController.submit_turn.__get__(controller))
-    monkeypatch.setattr(controller, "_ensure_adapter_locked", transport.ensure_adapter)
-    monkeypatch.setattr(controller, "_start_accepted_turn_worker", transport.start_worker)
     return service, sid, repo, transport
 
 
@@ -292,11 +382,12 @@ def _second_lead(service, sid, settings):
 
 
 def _fail_next_wake_receipt(monkeypatch):
+    """Lose the next wake receipt write, whatever state it settles to."""
     real = collaboration_mcp._write
     failed = []
 
     def write(path, row):
-        if not failed and (row.get("wake") or {}).get("state") == "woken":
+        if not failed and (row.get("wake") or {}).get("state") in {"woken", "pending"}:
             failed.append(path)
             raise OSError("receipt write lost")
         return real(path, row)
@@ -320,9 +411,14 @@ def test_adapter_failure_after_acceptance_is_redispatched_not_recorded(mode, mon
     assert len(transport.adapter_attempts) == 2
     assert transport.dispatches == [(sid, queued["turn_id"])]
     assert [row["turn_id"] for row in _wake_turns(service, sid)] == [queued["turn_id"]]
+    assert _wake(path)["state"] == "pending"
+
+    # Only after the start fact is durable does the next tick record the wake.
+    _pump(service, repo)
+
     receipt = _wake(path)
     assert receipt["state"] == "woken" and receipt["turn_id"] == queued["turn_id"]
-    assert receipt["created"] is False
+    assert receipt["created"] is False and transport.dispatches == [(sid, queued["turn_id"])]
 
 
 def test_failure_after_the_prepared_capsule_is_repaired_and_dispatched(mode, monkeypatch):  # noqa: F811
@@ -348,27 +444,46 @@ def test_failure_after_the_prepared_capsule_is_repaired_and_dispatched(mode, mon
     [settled] = _wake_turns(service, sid)
     assert settled["turn_id"] == prepared["turn_id"] and "_acceptance" not in settled
     assert transport.dispatches == [(sid, prepared["turn_id"])]
+    assert _wake(path)["state"] == "pending"
+
+    _pump(service, repo)
+
     assert _wake(path)["state"] == "woken"
+    assert transport.dispatches == [(sid, prepared["turn_id"])]
 
 
 @pytest.mark.parametrize("started", [False, True])
 def test_lost_receipt_replays_only_the_original_turn(mode, monkeypatch, started):  # noqa: F811
-    service, sid, repo, transport = _native(mode, monkeypatch, start_turns=started)
+    # ``started=False`` fails the start write itself, before any receipt exists;
+    # the native owner replays that same Turn.  ``started=True`` loses only the
+    # receipt, after the start fact landed.  Both must start it exactly once.
+    service, sid, repo, transport = _native(
+        mode, monkeypatch, start_write_failures=0 if started else 1)
     path = _write_record(service, session_id=sid)
     lost = _fail_next_wake_receipt(monkeypatch)
 
-    assert _pump(service, repo) == [] and lost
+    assert _pump(service, repo) == []
     assert _wake(path)["state"] == "pending" and len(transport.dispatches) == 1
+    # The receipt is the write that was lost, when the start fact survived.
+    assert bool(lost) is started
+    [queued] = _wake_turns(service, sid)
+    assert (queued["started_at"] is not None) is started
 
+    # Replay through native dispatch: the still-queued case dispatches once
+    # more for that same Turn; the started case does not dispatch again.
+    _pump(service, repo)
+    # A started Turn is recorded without another dispatch.
     _pump(service, repo)
 
     [turn] = _wake_turns(service, sid)
+    assert turn["turn_id"] == queued["turn_id"] and turn["started_at"]
     receipt = _wake(path)
     assert receipt["state"] == "woken" and receipt["turn_id"] == turn["turn_id"]
-    # A started Turn is recorded without another dispatch; a still-queued one
-    # is handed to the native owner again for the same Turn.
     expected = 1 if started else 2
     assert transport.dispatches == [(sid, turn["turn_id"])] * expected
+    # Both paths start the Turn exactly once and never mint a second one.
+    assert _pump(service, repo) == [] and _wake(path) == receipt
+    assert len(_wake_turns(service, sid)) == 1
 
 
 def test_wake_turn_cancelled_before_it_started_is_not_woken(mode, monkeypatch):  # noqa: F811
@@ -383,7 +498,7 @@ def test_wake_turn_cancelled_before_it_started_is_not_woken(mode, monkeypatch): 
     _pump(service, repo)
 
     receipt = _wake(path)
-    assert receipt["state"] == "refused" and receipt["reason"] == "wake_turn_not_started"
+    assert receipt["state"] == "refused" and receipt["reason"] == "wake_turn_ended_unstarted"
     assert transport.dispatches == []
 
 
@@ -425,8 +540,83 @@ def test_closed_origin_conversation_is_refused_without_a_substitute(mode, monkey
     assert transport.dispatches == [] and _wake_turns(service, other) == []
 
 
+def _rebuilt(mode, monkeypatch, **faults):  # noqa: F811
+    """A fresh real controller over the same persisted store, as after a restart."""
+    service = mode[0]
+    controller = ChatRuntimeController(
+        store=service.store,
+        codex_bin="codex",
+        registry_path=service.controller.registry_path,
+    )
+    transport = Transport(service, **faults).arm(monkeypatch, controller)
+    monkeypatch.setattr(controller, "submit_turn",
+                        ChatRuntimeController.submit_turn.__get__(controller))
+    return controller, transport
+
+
+def test_start_fact_write_failure_is_not_a_wake(mode, monkeypatch):  # noqa: F811
+    """An accepted Turn whose start never persisted is pending, never woken.
+
+    ``submit_turn`` returning proves admission and a queued Turn; only the
+    worker's durable ``started_at`` proves dispatch.  The first write of that
+    fact fails here, so the intent must stay recoverable.
+    """
+    service, sid, repo, transport = _native(
+        mode, monkeypatch, real_worker=True, start_write_failures=1)
+    path = _write_record(service, session_id=sid)
+
+    # The worker's start write fails: no dispatch fact, so no terminal receipt.
+    assert _pump(service, repo) == []
+    [queued] = _wake_turns(service, sid)
+    assert queued["status"] == "queued" and queued["started_at"] is None
+    assert _wake(path)["state"] == "pending" and "woken_at" not in _wake(path)
+    # The failed start released the worker single-flight guard for this Turn.
+    assert (sid, queued["turn_id"]) not in service.controller.turn_done_events
+
+    # The next tick replays that same Turn through native dispatch; it starts
+    # once, and the wake is still not terminal on the same tick's return.
+    _pump(service, repo)
+    [started] = _wake_turns(service, sid)
+    assert started["turn_id"] == queued["turn_id"] and started["started_at"]
+    assert _wake(path)["state"] == "pending"
+
+    # A later tick reads the durable start fact back: one receipt, no new Turn.
+    changed = _pump(service, repo)
+    receipt = _wake(path)
+    assert receipt["state"] == "woken" and receipt["turn_id"] == started["turn_id"]
+    assert receipt["created"] is False and changed == [receipt]
+    assert [row["turn_id"] for row in _wake_turns(service, sid)] == [started["turn_id"]]
+    # Settled: another tick is a no-op.
+    assert _pump(service, repo) == [] and _wake(path) == receipt
+
+
+def test_start_fact_write_failure_recovers_after_a_rebuilt_controller(mode, monkeypatch):  # noqa: F811
+    """A restart rediscovers the same intent and starts the same Turn once."""
+    service, sid, repo, transport = _native(
+        mode, monkeypatch, real_worker=True, start_write_failures=1)
+    path = _write_record(service, session_id=sid)
+
+    assert _pump(service, repo) == []
+    [queued] = _wake_turns(service, sid)
+    assert queued["status"] == "queued" and _wake(path)["state"] == "pending"
+
+    # A fresh controller over the same persisted store, as after a restart.
+    controller, rebuilt = _rebuilt(mode, monkeypatch, real_worker=True)
+    _pump_with(controller, repo)
+
+    [started] = _wake_turns(service, sid)
+    assert started["turn_id"] == queued["turn_id"] and started["started_at"]
+    assert rebuilt.dispatches == [(sid, queued["turn_id"])]
+
+    changed = _pump_with(controller, repo)
+    receipt = _wake(path)
+    assert receipt["state"] == "woken" and receipt["session_id"] == sid
+    assert receipt["turn_id"] == started["turn_id"] and changed == [receipt]
+    assert _pump_with(controller, repo) == []
+
+
 def test_lost_receipt_then_new_conversation_cannot_dispatch_twice(mode, monkeypatch):  # noqa: F811
-    service, sid, repo, transport = _native(mode, monkeypatch, start_turns=True)
+    service, sid, repo, transport = _native(mode, monkeypatch)
     path = _write_record(service, session_id=sid)
     _fail_next_wake_receipt(monkeypatch)
     _pump(service, repo)

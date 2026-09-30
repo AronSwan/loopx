@@ -4,6 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {resolveConversationScope} from "./conversation_scope.ts";
+import {isTerminalTurnStatus} from "../turn_driver/chat_turn_acceptance.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -63,8 +64,10 @@ const RESUMABLE_NATIVE = ["paused", "blocked", "usageLimited", "budgetLimited"];
  * that conversation, if any.  Only a started Turn is dispatch evidence: it is
  * recorded as ``woken`` without another dispatch.  A still-queued Turn is not;
  * it is replayed through the native acceptance owner under the same admission
- * as a new wake, so pause and revocation still hold.  A Turn that ended before
- * it started is refused, since its client id cannot admit another Turn.
+ * as a new wake, so pause and revocation still hold.  ``started_at`` is the
+ * durable start fact, so a Turn still activating stays pending rather than
+ * being read as a start.  A Turn that ended before it started is refused,
+ * since its client id cannot admit another Turn.
  *
  * The same facts that admit an owner resume admit a host wake, plus mode
  * enabled and not paused.  A refusal is terminal for that intent; pending
@@ -88,8 +91,13 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
     if (turn.loopx_execution !== true || turn.operation !== "wake" || turn.intent_id !== intent.intent_id) {
       return outcome("refused", "wake_identity_conflict");
     }
-    if (turn.started === true) return {operation: "wake", state: "woken", reason: null, dispatch: "recorded"};
-    if (turn.status !== "queued") return outcome("refused", "wake_turn_not_started");
+    if (typeof turn.started_at === "string" && turn.started_at) {
+      return {operation: "wake", state: "woken", reason: null, dispatch: "recorded"};
+    }
+    // Ended without ever starting: its client id cannot admit another Turn.
+    if (isTerminalTurnStatus(turn.status)) return outcome("refused", "wake_turn_ended_unstarted");
+    // Accepted but not yet started, including a start still activating.
+    if (turn.status !== "queued") return outcome("pending", "wake_dispatch_pending");
   }
   if (input.goal_active !== true) return outcome("refused", "goal_stopped");
   if (session.status === "closed" || mode.enabled !== true) return outcome("refused", "no_wake_owner");
