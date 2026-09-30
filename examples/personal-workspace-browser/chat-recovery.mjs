@@ -37,7 +37,7 @@ export const chatRecoveryScenario = {
         await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       }
       if (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞"))) throw new Error("Progress report shortcut did not send a useful scoped request");
-      while (await page.getByRole("button", { name: "汇总所有 Goal 进展" }).isDisabled()) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
@@ -88,7 +88,7 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "manager-chat.png"), fullPage: false, animations: "disabled" });
       await page.getByLabel("向 LoopX 发送消息").fill("请把库存方案交给 worker，保留预留两件的修订，并请同伴独立复核后回报。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      while (await page.getByRole("button", { name: "汇总所有 Goal 进展" }).isDisabled()) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.screenshot({ path: resolve(outputDir, "collaboration-before.png"), fullPage: false, animations: "disabled" });
       const returnSessionId = api.turnRequests.at(-1).sessionId;
       const turnsBeforeReturn = api.turnRequests.length;
@@ -131,8 +131,17 @@ export const chatRecoveryScenario = {
       if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Deferred explanation overflows on mobile");
       await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified" }];
+      // Match the production readback when a stored reply/delivery record is
+      // unreadable. Native-file + real HTTP tests qualify the recovery itself;
+      // this scripted API fixture qualifies only the packaged presentation.
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified", error: "delivery_state_unreadable" }];
       await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Unreadable return status overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
