@@ -134,11 +134,19 @@ shadow result cannot mutate goal policy or grant merge authority.
 - `strict_receipt=true` requires exact-scope evidence before merge and grants
   no permission to edit.
 
-When `safe_fix` is false, report risks without modifying files. When it is
-true, one repair pass may address a clear simplify opportunity or risk inside
-the selected todo and goal boundary. Do not use destructive git, broaden
+For edits authorized only by this review policy, when `safe_fix` is false,
+report risks without modifying files. When it is true, one repair pass may
+address a clear simplify opportunity or risk inside the selected todo and
+goal boundary. Do not use destructive git, broaden
 permissions, change product intent, add unrelated refactors, or conceal a
 failing validator.
+
+This limit does not revoke separately authorized implementation work. A failed
+receipt stops delivery, not repair of an actionable defect in the accepted
+task. Preserve the failure and return it to its owning implementation or
+validation boundary; then prepare and qualify the repaired final scope. Do not
+reset the review pass count, retry automatically under a new fingerprint, or
+interpret implementation authorization as a receipt or merge-policy waiver.
 
 After any edit, rerun `prepare`. The old fingerprint is invalid. Review the
 entire new final scope, not only the lines changed by the repair.
