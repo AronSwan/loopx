@@ -168,7 +168,15 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     assert envelope["compaction"]["hook_prompt_budget_bytes"] == 1536
     assert build_turn_envelope(baseline)["compaction"]["budget_bytes"] == 8192
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet"}:
+        if key not in {
+            "required_reads",
+            "interaction_contract",
+            "protocol_action_packet",
+            # The observation of the turn-start hook that produced the added
+            # read travels with it; the hint still arrives through the existing
+            # required-read channel rather than a new one.
+            "turn_start_capability_hook_dispatch",
+        }:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline
