@@ -2220,6 +2220,11 @@ const usageStatisticsSchema = z.object({
   notice: z.object({ version: z.number(), endpoint: z.string(), policy: z.string() }),
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
+  diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  identity_scope: z.string().optional(), delivery_history: z.array(z.object({
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    status: z.enum(["accepted", "rejected", "unavailable"]),
+  })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
