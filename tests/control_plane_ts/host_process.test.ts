@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {existsSync} from "node:fs";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
@@ -75,4 +76,27 @@ test("output consumer failure cancels execution rather than leaving an orphan", 
   const result = await runHostProcess(request(`setInterval(()=>process.stdout.write('tick\\n'),10)`),
     async () => { throw new Error("consumer left"); });
   assert.equal(result.outcome, "cancelled"); assert.equal(result.output_complete, false);
+});
+
+test("the spawned Host group is reported once before input, and an unrecorded group never runs", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-spawned-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const seen: unknown[] = [];
+  let stdout = "";
+  const result = await runHostProcess(request(`process.stdout.write(String(process.pid)+' '+String(require('child_process').execSync('ps -o pgid= -p '+process.pid)).trim())`),
+    async item => { stdout += item.text; }, undefined, async item => { seen.push(item); });
+  const [pid, pgid] = stdout.split(" ").map(Number);
+  assert.equal(result.outcome, "exited");
+  assert.deepEqual(seen, [{kind: "spawned", pid, process_group: pid}]); assert.equal(pgid, pid);
+  // A caller that cannot record the owned group runs nothing unaccounted for, and
+  // the armed host proves it really started, so this is not an unspawned process.
+  const script = (marker: string) => `require('fs').writeFileSync(${JSON.stringify(marker)},'')
+    process.stdin.on('data',()=>{});setInterval(()=>{},1000)`;
+  const recorded = join(root, "recorded");
+  const refused = await runHostProcess(request(script(recorded)), async () => {}, undefined, async () => {
+    const until = Date.now() + 2000;
+    while (!existsSync(recorded) && Date.now() < until) await delay(5);
+    assert.ok(existsSync(recorded), "the Host never started");
+    throw new Error("record unavailable"); });
+  assert.equal(refused.outcome, "cancelled"); assert.equal(refused.output_complete, false);
 });

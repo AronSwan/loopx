@@ -117,7 +117,8 @@ test("stopped is terminal and reachable only from open observations", () => {
 });
 
 test("a stop settles only on an acknowledgement plus released holders; time alone proves nothing", () => {
-  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, worker_lane_released: false};
+  const open = {phase: "requested", acknowledged: false, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained"};
   assert.deepEqual(decideDelegationStop(open), {phase: "requested", terminal: false, reason: "awaiting_acknowledgement"});
   assert.deepEqual(decideDelegationStop({...open, timed_out: true}),
     {phase: "requested", terminal: false, reason: "holder_still_running_after_grace"});
@@ -129,20 +130,44 @@ test("a stop settles only on an acknowledgement plus released holders; time alon
     {phase: "requested", terminal: false, reason: "worker_lane_release_unproven"});
   assert.deepEqual(decideDelegationStop({...open, operation_lock_free: true, worker_lane_released: true}),
     {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"});
-  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, worker_lane_released: false};
+  const acked = {phase: "acknowledged", acknowledged: true, operation_lock_free: false, worker_lane_released: false,
+    host_process: "drained"};
   assert.deepEqual(decideDelegationStop(acked), {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
   assert.deepEqual(decideDelegationStop({...acked, worker_lane_released: true}),
     {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
   assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true}),
     {phase: "acknowledged", terminal: false, reason: "worker_lane_release_unproven"});
   assert.deepEqual(decideDelegationStop({...acked, phase: "requested", operation_lock_free: true, worker_lane_released: true}),
-    {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"});
+    {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"});
   assert.deepEqual(decideDelegationStop({...acked, operation_lock_free: true, worker_lane_released: true, timed_out: true}),
-    {phase: "settled", terminal: true, reason: "acknowledged_and_worker_released"});
+    {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"});
   for (const patch of [{phase: "settled"}, {phase: "unknown"}, {phase: "noop"}, {acknowledged: "yes"},
+    {host_process: undefined}, {host_process: "exited"}, {host_process: true},
     {operation_lock_free: 1}, {worker_lane_released: undefined}, {lane_lock_free: true, worker_lane_released: undefined},
     {timed_out: "later"}, {phase: "acknowledged", acknowledged: false}])
     assert.throws(() => decideDelegationStop({...open, ...patch}));
+});
+
+test("a released worker and lane never settle a stop while the native Host still drains", () => {
+  const released = {phase: "acknowledged", acknowledged: true, operation_lock_free: true, worker_lane_released: true};
+  assert.deepEqual(decideDelegationStop({...released, host_process: "draining", timed_out: true}),
+    {phase: "acknowledged", terminal: false, reason: "host_process_still_running"});
+  // Without an attributable drain the stop stays open for a later same-identity read.
+  assert.deepEqual(decideDelegationStop({...released, host_process: "unattributable"}),
+    {phase: "acknowledged", terminal: false, reason: "host_process_drain_unproven"});
+  for (const host_process of ["drained", "not_launched"])
+    assert.deepEqual(decideDelegationStop({...released, host_process}),
+      {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"});
+  // A held lock still dominates a drained Host.
+  assert.deepEqual(decideDelegationStop({...released, operation_lock_free: false, host_process: "drained"}),
+    {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});
+  // A vanished holder is unknown only once its Host is no longer seen running.
+  const vanished = {...released, phase: "requested", acknowledged: false};
+  assert.deepEqual(decideDelegationStop({...vanished, host_process: "draining"}),
+    {phase: "requested", terminal: false, reason: "host_process_still_running"});
+  for (const host_process of ["drained", "not_launched", "unattributable"])
+    assert.deepEqual(decideDelegationStop({...vanished, host_process}),
+      {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"});
 });
 
 test("a false rejection can reopen only for exact validated settlement recovery", () => {

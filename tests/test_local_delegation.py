@@ -36,6 +36,11 @@ envelope = request['turn_envelope']
 actor = envelope['agent_id']
 counter = workspace / 'host-invocations'
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
+if (root / 'ignore-term').exists():
+    import signal, subprocess
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)'])
+    (root / 'host-child-pid').write_text(str(child.pid))
 if (root / 'hold').exists():
     (root / 'host-pid').write_text(str(os.getpid()))
     (root / 'host-started').touch()
@@ -288,14 +293,16 @@ def until(predicate, timeout=45):
 
 
 def process_gone(pid):
+    """Platform-valid: a zombie has exited; a process ``ps`` cannot see is gone."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
-    try:
-        return "State:\tZ" in Path(f"/proc/{pid}/status").read_text()
-    except OSError:
-        return True
+    except PermissionError:
+        return False
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                           capture_output=True, text=True).stdout.strip()
+    return not state or state.startswith("Z")
 
 
 def start_held_worker(service, operation="analysis-stop"):
@@ -320,7 +327,9 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     assert lane["state"] == "live" and lane["holder"]["pid"] != before["worker"]["pid"]
     assert os.getpgid(lane["holder"]["pid"]) == before["worker"]["pgid"]
     receipt = runner.stop("analysis-stop", execute=True)
+    host_gone = process_gone(host_pid)  # the instant settled returns, not after a wait
     assert receipt["phase"] == "settled" and receipt["status"] == "stopped", receipt
+    assert host_gone
     stop = receipt["stop"]
     assert stop["requested_by"] == "lead" and stop["requested_status"] == "running"
     assert stop["worker"]["pid"] == before["worker"]["pid"]
@@ -328,12 +337,12 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     assert stop["ack"]["observed_status"] == "running" and stop["ack"]["turn_key"]
     assert stop["settled"]["operation_lock_free"] and stop["settled"]["worker_lane_released"]
     assert stop["settled"]["lane_state"] in {"dead", "released"}
+    assert stop["settled"]["host_process"] == "drained"
     assert stop["settled"]["turn_journal_status"] == "in_progress"
     assert stop["lease"] == {"required": False, "released": None}
     # The acknowledged record is final: nobody writes it again, the Todo stays open,
-    # the host process group is gone and the member's Turn lane can be taken.
+    # the worker exits and the member's Turn lane can be taken.
     frozen = path.read_bytes()
-    assert until(lambda: process_gone(host_pid), timeout=20)
     assert until(lambda: process_gone(before["worker"]["pid"]), timeout=20)
     with try_exclusive_file_lock(runner._lane_target(binding)) as held:
         assert held is not None
@@ -364,6 +373,7 @@ def test_stop_without_a_holder_is_acknowledged_by_the_requester(service, monkeyp
     assert receipt["stop"]["ack"]["pid"] == os.getpid() and receipt["stop"]["ack"]["source"] == "requester"
     assert receipt["stop"]["settled"]["turn_journal_status"] is None
     assert receipt["stop"]["settled"]["lane_state"] in {"absent", "released"}
+    assert receipt["stop"]["settled"]["host_process"] == "not_launched"
     frozen = runner.path("analysis-idle").read_bytes()
     with pytest.raises(ValueError, match="start a new operation id"):
         runner.resume("analysis-idle")
@@ -534,3 +544,80 @@ def test_fenced_write_after_another_process_stop_writes_nothing(service, monkeyp
     acknowledged = _read(runner._stop_path(entry))
     assert acknowledged["phase"] == "acknowledged" and acknowledged["ack"]["source"] == "worker_entry"
     assert runner.stop("analysis-entry", execute=True)["phase"] == "settled"
+
+
+def test_stop_settles_only_after_the_owned_host_and_its_descendants_exit(service):
+    """A host and its same-group child that ignore SIGTERM keep the stop open until they exit.
+
+    The postcondition is checked at the instant ``settled`` returns, not after a wait.
+    """
+    root, runner = service
+    (root / "ignore-term").touch()
+    host_pid = start_held_worker(service)
+    assert until(lambda: (root / "host-child-pid").exists())
+    child_pid = int((root / "host-child-pid").read_text())
+    assert not process_gone(host_pid) and not process_gone(child_pid)
+    receipt = runner.stop("analysis-stop", execute=True)
+    host_gone, child_gone = process_gone(host_pid), process_gone(child_pid)
+    assert receipt["phase"] == "settled", receipt
+    assert host_gone and child_gone, (receipt, host_gone, child_gone)
+    settled = receipt["stop"]["settled"]
+    assert settled["host_process"] == "drained", settled
+    # Rereading a settled stop neither reopens it nor admits or completes anything.
+    frozen = runner.path("analysis-stop").read_bytes()
+    assert runner.stop("analysis-stop", execute=True) == receipt
+    assert runner.read("analysis-stop")["stop"]["phase"] == "settled"
+    assert runner.path("analysis-stop").read_bytes() == frozen
+    assert int((root / "analyst" / "initial" / "host-invocations").read_text()) == 1
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+    assert returns(runner.root, runner.goal_id, "lead")["items"] == []
+
+
+def test_interrupted_host_cleanup_keeps_the_stop_open_until_a_reread_sees_it_drained(service, monkeypatch):
+    """A Host supervisor that never finishes cleaning up leaves no settlement to claim.
+
+    Rereads with the same identity stay acknowledged without admitting or completing
+    anything, and settle once the Host's group is observed gone.
+    """
+    import signal
+    from loopx import collaboration_mcp
+
+    root, runner = service
+    monkeypatch.setattr(collaboration_mcp, "DELEGATION_STOP_GRACE_SECONDS", 2.0)
+    host_pid = start_held_worker(service)
+    path = runner.path("analysis-stop")
+    record = json.loads(runner._host_process_record(path).read_text())
+    assert record["phase"] == "spawned" and record["host_pid"] == host_pid == record["process_group"]
+    bridge = record["bridge_pid"]
+    os.kill(bridge, signal.SIGSTOP)  # the supervisor cannot run its cleanup
+    try:
+        first = runner.stop("analysis-stop", execute=True)
+        assert first["phase"] == "acknowledged" and first["status"] == "stopped", first
+        assert first["reason"] == "host_process_still_running" and not process_gone(host_pid)
+        os.kill(bridge, signal.SIGKILL)  # and now never will: the Host is orphaned
+        assert until(lambda: process_gone(bridge), timeout=20)
+        frozen = path.read_bytes()
+        for _ in range(3):
+            again = runner.stop("analysis-stop", execute=True)
+            assert again["phase"] == "acknowledged" and again["reason"] == "host_process_still_running", again
+            assert again["stop"]["stop_id"] == first["stop"]["stop_id"]
+            assert again["stop"]["ack"] == first["stop"]["ack"] and again["stop"]["settled"] is None
+        assert runner.read("analysis-stop")["stop"]["phase"] == "acknowledged"
+        assert not process_gone(host_pid) and path.read_bytes() == frozen
+        with pytest.raises(ValueError, match="start a new operation id"):
+            runner.resume("analysis-stop")
+    finally:
+        for target, sig in ((bridge, signal.SIGCONT), (host_pid, signal.SIGKILL)):
+            try:
+                os.killpg(target, sig) if target == host_pid else os.kill(target, sig)
+            except ProcessLookupError:
+                pass
+    assert until(lambda: process_gone(host_pid), timeout=20)
+    receipt = runner.stop("analysis-stop", execute=True)
+    assert receipt["phase"] == "settled" and receipt["stop"]["settled"]["host_process"] == "drained", receipt
+    assert receipt["stop"]["stop_id"] == first["stop"]["stop_id"]
+    assert runner.stop("analysis-stop", execute=True) == receipt
+    assert path.read_bytes() == frozen
+    assert int((root / "analyst" / "initial" / "host-invocations").read_text()) == 1
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+    assert returns(runner.root, runner.goal_id, "lead")["items"] == []

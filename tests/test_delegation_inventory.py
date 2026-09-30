@@ -59,6 +59,8 @@ def test_corruption_and_stopped_worker_do_not_hide_healthy_sibling(service, monk
     # A stop receipt beside its record is not another record and reads back as stopped.
     assert runner.stop("healthy", execute=True)["phase"] == "settled"
     assert runner._stop_path(runner.path("healthy")).exists()
+    # Nor is the record naming the native Host an operation's Turn launched.
+    runner._host_process_record(runner.path("healthy")).write_text("{}")
     page = runner.operations()
     by_id = {row["operation_id"]: row for row in page["items"] if row["operation_id"]}
     assert len(page["items"]) == 4 and by_id["healthy"]["status"] == "stopped"
