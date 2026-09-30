@@ -46,18 +46,28 @@ test("all three delivery modes require the exact active execution turn", () => {
   assert.throws(() => planChatMode({...message, delivery_mode: "queue", session: {...active, loopx_mode: {enabled: true, paused: true}}}));
 });
 
+const enabled = {...session, session_id: "origin", loopx_mode: {enabled: true, paused: false}};
+const intent = {intent_id: "a".repeat(64), requester: {goal_id: "research", agent_id: "lead"},
+  conversation: {session_id: "origin", turn_id: "lead-turn"}};
+const wake: JsonObject = {...input, operation: "wake", origin: "host", session: enabled, intent,
+  native: {status: "paused", tokensUsed: 400}};
+
 test("a host wake reuses the resume facts and returns a typed outcome, never an owner change", () => {
-  const enabled = {...session, loopx_mode: {enabled: true, paused: false}};
-  const wake: JsonObject = {...input, operation: "wake", origin: "host", session: enabled,
-    native: {status: "paused", tokensUsed: 400}};
   const admitted = planChatMode(wake);
   assert.equal(admitted.state, "admitted");
   assert.equal(admitted.reason, null);
+  assert.equal(admitted.dispatch, "create");
   assert.deepEqual(admitted.settings, input.settings);
   // Terminal refusals: the intent is settled and nothing waits.
   const refused: [JsonObject, string][] = [
     [{goal_active: false}, "goal_stopped"],
     [{session: {...enabled, loopx_mode: {enabled: false}}}, "no_wake_owner"],
+    [{session: {...enabled, status: "closed"}}, "no_wake_owner"],
+    // Pinned: another conversation or coordinator of the requester is not the origin.
+    [{session: {...enabled, session_id: "other"}}, "wake_identity_conflict"],
+    [{session: {...enabled, session_id: "origin"}, intent: {...intent, requester: {goal_id: "other", agent_id: "lead"}}},
+      "wake_identity_conflict"],
+    [{settings: {agent_id: "other", token_budget: 1000}, registered_agents: ["other"]}, "wake_identity_conflict"],
     [{registered_agents: ["other"]}, "lead_unbound"],
     [{execution_binding_valid: false}, "binding_revoked"],
     [{native: {status: "complete", tokensUsed: 400}}, "native_goal_complete"],
@@ -86,4 +96,43 @@ test("a host wake reuses the resume facts and returns a typed outcome, never an 
   assert.throws(() => planChatMode({...wake, origin: "web"}), /local managed/);
   assert.throws(() => planChatMode({...wake, origin: "external"}), /local managed/);
   assert.throws(() => planChatMode({...wake, session: {...enabled, channel_id: "manager"}}));
+});
+
+test("only a started wake Turn is dispatch evidence; a queued one is replayed under the same admission", () => {
+  const own = {turn_id: "wake-turn", loopx_execution: true, operation: "wake", intent_id: intent.intent_id};
+  const queued = {...own, status: "queued", started: false};
+  // Queued, not started: replay the same Turn; its own active id does not block it.
+  const replay = planChatMode({...wake, wake_turn: queued, session: {...enabled, active_turn_id: "wake-turn"}});
+  assert.equal(replay.state, "admitted");
+  assert.equal(replay.dispatch, "replay");
+  // The replay keeps every boundary of a new wake.
+  const held: [JsonObject, string, string][] = [
+    [{session: {...enabled, active_turn_id: "wake-turn", loopx_mode: {enabled: true, paused: true}}}, "pending", "lead_paused"],
+    [{session: {...enabled, active_turn_id: "other"}}, "pending", "lead_turn_active"],
+    [{session: {...enabled, loopx_mode: {enabled: false}}}, "refused", "no_wake_owner"],
+    [{execution_binding_valid: false}, "refused", "binding_revoked"],
+    [{goal_active: false}, "refused", "goal_stopped"],
+  ];
+  for (const [changes, state, reason] of held) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: queued, ...changes}), {operation: "wake", state, reason}, reason);
+  }
+  // Started (running or terminal): recorded without another dispatch, even after the mode changed.
+  for (const status of ["starting", "running", "completed", "failed"]) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started: true},
+      session: {...enabled, loopx_mode: {enabled: false}}}),
+    {operation: "wake", state: "woken", reason: null, dispatch: "recorded"}, status);
+  }
+  // Ended before it started: its client id cannot admit another Turn.
+  for (const status of ["interrupted", "interrupting", "failed", "completing"]) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...own, status, started: false}}),
+      {operation: "wake", state: "refused", reason: "wake_turn_not_started"}, status);
+  }
+  // A client id owned by another request is never claimed.
+  for (const other of [{loopx_execution: false}, {operation: "resume"}, {intent_id: "b".repeat(64)}]) {
+    assert.deepEqual(planChatMode({...wake, wake_turn: {...queued, ...other, started: true}}),
+      {operation: "wake", state: "refused", reason: "wake_identity_conflict"});
+  }
+  // An intent without its origin conversation cannot be decided by any conversation.
+  assert.throws(() => planChatMode({...wake, intent: {...intent, conversation: null}}), /conversation/);
+  assert.throws(() => planChatMode({...wake, intent: {...intent, intent_id: "short"}}), /intent/);
 });

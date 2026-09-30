@@ -234,6 +234,31 @@ def test_host_timeout_removes_private_delegation_bootstrap(service, monkeypatch)
     assert runner.read("analysis-timeout")["error"] == "TimeoutExpired"
 
 
+def test_the_starting_conversation_is_pinned_beside_the_operation(service, monkeypatch):
+    """The wake can only return to the conversation whose Turn started the work.
+
+    A second start under the same operation id (another conversation, or a
+    requester recovering its context) replays the original request; it never
+    rebinds the pin, which is part of the operation's own identity.
+    """
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _operation_id: None)
+    start = {"session_id": "chat-session-1", "turn_id": "turn-1"}
+    runner.start("analysis", "analysis-1", brief(), conversation=start)
+    assert _read(runner.path("analysis-1"))["conversation"] == start
+
+    elsewhere = {"session_id": "chat-session-2", "turn_id": "turn-9"}
+    runner.start("analysis", "analysis-1", brief(), conversation=elsewhere)
+    assert _read(runner.path("analysis-1"))["conversation"] == start
+    # Starting without a conversation neither adds nor clears one.
+    runner.start("analysis", "analysis-1", brief())
+    assert _read(runner.path("analysis-1"))["conversation"] == start
+    # An operation started outside a conversation carries no wake target.
+    monkeypatch.setattr(runner, "_spawn", lambda _operation_id: None)
+    runner.start("analysis", "analysis-2", brief())
+    assert "conversation" not in _read(runner.path("analysis-2"))
+
+
 def test_model_success_without_receiver_adoption_cannot_complete(service):
     root, runner = service
     (root / "skip-adoption").touch()

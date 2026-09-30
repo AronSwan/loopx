@@ -114,6 +114,18 @@ test("only the first transition to accepted leaves a wake intent for the exact r
   assert.deepEqual(intent.requester, {goal_id: "research", agent_id: "coordinator", goal_ref: null});
   assert.equal(intent.operation_id, "analysis-1");
   assert.equal(intent.request_id, "req-1");
+  assert.equal(intent.conversation, null);
+  // The originating conversation is pinned into the intent identity.
+  const pinned = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1", extra: "dropped"}}});
+  const pinnedIntent = pinned.wake_intent as Record<string, unknown>;
+  assert.deepEqual(pinnedIntent.conversation, {session_id: "s-1", turn_id: "t-1"});
+  assert.notEqual(pinnedIntent.intent_id, intent.intent_id);
+  const elsewhere = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-2", turn_id: "t-1"}}});
+  assert.notEqual((elsewhere.wake_intent as Record<string, unknown>).intent_id, pinnedIntent.intent_id);
+  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1"}}}), /conversation/);
   // Same requester and result: same intent, so a replayed transition cannot mint a second wake.
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts}), accepted);
   const changed = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
