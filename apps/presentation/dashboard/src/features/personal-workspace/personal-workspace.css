@@ -60,6 +60,10 @@
 .personal-status-source-meta > span.is-error i { background: #dd5b47; }
 .personal-status-source-meta > span.is-degraded i { background: #e5a33d; }
 .personal-service-notice { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--pw-line); background: var(--pw-amber-bg); color: var(--pw-amber); font-size: 13px; line-height: 20px; }
+.personal-history-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--pw-muted); font-size: 13px; line-height: 1.5; }
+.personal-history-notice > div { display: grid; gap: 2px; }
+.personal-history-notice button { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
+.personal-history-notice button:disabled { opacity: .6; cursor: wait; }
 .personal-status-source-meta small { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .personal-status-source-meta button { margin-left: auto; width: 22px; height: 22px; color: var(--pw-faint); }
 .personal-status-source-error { margin: 0 3px; color: var(--pw-red); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -1174,6 +1178,18 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-detail-card dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; font-size: 12px; }
 .personal-detail-card dt { color: var(--pw-faint); }
 .personal-detail-card dd { margin: 0; overflow-wrap: anywhere; }
+.personal-attention-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--pw-muted); font-size: 12px; }
+.personal-attention-brief h3 { margin: 20px 0 12px; font-size: 16px; }
+.personal-attention-brief h4 { margin: 24px 0 8px; font-size: 13px; font-weight: 600; }
+.personal-attention-brief .personal-md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-attention-brief .personal-md p { color: var(--pw-text); font-size: inherit; line-height: inherit; }
+.personal-attention-brief .personal-attention-missing { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--pw-amber-bg); color: var(--pw-amber); }
+.personal-attention-identifiers { margin-top: 24px; border-top: 1px solid var(--pw-line); padding-top: 16px; }
+.personal-attention-identifiers summary { color: var(--pw-muted); cursor: pointer; font-size: 12px; min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }
+.personal-attention-identifiers summary::-webkit-details-marker { display: none; }
+.personal-attention-identifiers summary::before { content: "▸"; }
+.personal-attention-identifiers[open] summary::before { content: "▾"; }
+.personal-attention-identifiers dl { margin: 0 0 16px; }
 .personal-run-drawer-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 11px; background: #efefec; }
 .personal-run-drawer-tabs button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: 12px; font-weight: 650; }
 .personal-run-drawer-tabs button[aria-selected="true"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 12%); }
