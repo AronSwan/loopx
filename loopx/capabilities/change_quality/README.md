@@ -78,11 +78,7 @@ file, permission, or merge authority.
    an all-clear row for each one. The result uses
    `change_quality_agent_result_v2`.
 4. If policy allows it, the host may perform one bounded safe-fix pass. Any edit
-   invalidates the old fingerprint, so prepare and final review run again. This
-   limits edits authorized by review policy; separately authorized implementation
-   work may repair an accepted defect. Preserve failed evidence and the safe-fix
-   limit, then qualify the repaired final scope. A failed receipt still blocks
-   delivery, and implementation authority does not waive receipt or merge policy.
+   invalidates the old fingerprint, so prepare and final review run again.
 5. `change-quality record --execute` validates those four result blocks against
    the current fingerprint, derives guardrail states from sparse risks and
    validation outcomes, and writes a compact local runtime receipt. Failed

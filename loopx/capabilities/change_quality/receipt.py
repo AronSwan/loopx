@@ -206,11 +206,10 @@ def build_change_quality_prepare_packet(
                 "Use blocker only for concrete correctness, security, privacy, contract, or required-validation failures.",
                 "Use repository-native tests, linters, type checkers, and build tools as language-specific oracles.",
                 (
-                    "This review policy allows one bounded safe-fix pass; rerun prepare after edits and review the final scope."
+                    "One bounded safe-fix pass is allowed; rerun prepare after edits and review the final scope."
                     if policy["safe_fix"]
-                    else "This review policy grants no editing authority; report findings only."
+                    else "Do not modify files; report findings only."
                 ),
-                "A failed receipt blocks delivery, not separately authorized implementation work on an accepted defect. Preserve the failure and the safe-fix limit, then qualify the repaired final scope; implementation authority does not waive receipt or merge policy.",
                 "Record a result only after reviewing the final scope fingerprint.",
             ],
             "result_schema_version": CHANGE_QUALITY_RESULT_SCHEMA_VERSION,
