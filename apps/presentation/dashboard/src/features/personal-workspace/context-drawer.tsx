@@ -38,7 +38,7 @@ import type {
   WorkspaceTodo,
 } from "./personal-workspace-model";
 import type { LarkGoalConnection } from "../../data/chat";
-import { localizedAttentionAge, localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
+import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
@@ -57,6 +57,7 @@ const focusableSelector = [
   "textarea:not([disabled])",
   "select:not([disabled])",
   "input:not([disabled])",
+  "summary",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
@@ -264,7 +265,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       }
       if (event.key === "Tab" && selection.kind !== "todo") {
         const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
-          .filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true");
+          .filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true" && element.checkVisibility({ visibilityProperty: true }));
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
@@ -316,7 +317,6 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     || Boolean(selection.item.latestActivity)
     || Boolean(selection.item.outputs?.length)
   );
-  const attentionAge = selection.kind === "attention" ? localizedAttentionAge(selection.item.updatedAt, t) : null;
   const normalizedTodoResumeWhen = parseTodoResumeCondition(todoResumeWhen);
 
   const selectedRunId = selection.kind === "run" ? selection.item.runId : null;
@@ -602,16 +602,6 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       <div className="personal-drawer-body">
         {selection.kind === "attention" ? (
           <>
-            <section className="personal-detail-card is-attention">
-              <small>{selection.item.blocking ? t("drawer.attentionBlocking") : t("drawer.attentionWaiting")}</small>
-              <h3>{selection.item.text}</h3>
-              <dl>
-                <div><dt>Goal</dt><dd>{selection.item.goalTitle ?? selection.item.goalId}</dd></div>
-                <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? "medium"}</dd></div>
-                {attentionAge ? <div><dt>{t("common.waiting")}</dt><dd>{t("tasks.waitingAge", { age: attentionAge })}</dd></div> : null}
-
-              </dl>
-            </section>
             <AttentionDetailCard item={selection.item} onSelect={onSelectAttention} successor={attentionSuccessor(selection.item, attentionHistory)} />
             {!readOnly && canReviewAttention(selection.item) ? <>
               <button className="personal-primary-action" onClick={() => void previewDecision(selection.item, "approve", t("common.confirm"))} type="button"><Check size={17} />{t("drawer.decisionReview")}</button>
