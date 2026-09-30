@@ -1396,6 +1396,12 @@ function PersonalGoalHome({
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Set<string>());
+  // Recovered Turns whose Todo drafts still owe a preview, keyed by
+  // `sessionId:turnId`. Leaving a Goal aborts its recovery stream before the
+  // completion event arrives, so the projection cannot depend on that view
+  // staying subscribed: an entry survives the teardown and is replayed when
+  // the owner returns to the Goal that owns it.
+  const pendingRecoveryTurns = useRef(new Map<string, { goalId: string; sessionId: string; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1657,7 +1663,25 @@ function PersonalGoalHome({
           turnId: activeTurnId || undefined,
         });
         newSessionRequired.current.delete(sessionKey);
-        if (!activeTurnId) return;
+        if (!activeTurnId) {
+          // The Turn this Goal was waiting on has since finished. Its stream was
+          // aborted when the owner left, so replay its stored completion to give
+          // the drafts the card the owner never saw.
+          if (contextKind === "goal" && pendingRecoveryTurns.current.size) {
+            await replayPendingRecoveryProposals(sessionGoalId, created.session_id, () => cancelled);
+          }
+          return;
+        }
+        // Leaving this Goal before the Turn completes aborts the stream below,
+        // so remember the Turn: the Goal it belongs to still owes its drafts a
+        // card, and returning settles that here instead of on a manual reload.
+        if (contextKind === "goal") {
+          pendingRecoveryTurns.current.set(`${created.session_id}:${activeTurnId}`, {
+            goalId: sessionGoalId,
+            sessionId: created.session_id,
+            turnId: activeTurnId,
+          });
+        }
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
         if (recoveringTurnKeys.current.has(recoveryKey)) return;
         recoveringTurnKeys.current.add(recoveryKey);
@@ -1711,6 +1735,14 @@ function PersonalGoalHome({
               }));
             },
           });
+          // The completed Turn's proposal projection outlives this view: the
+          // owner may have left for another conversation while it finished, and
+          // returning must still find the card. Only the transcript update below
+          // belongs to the mounted view, so this runs before the cancellation
+          // guard that retires the pending reply.
+          const recoveryGoalId = targetContextId !== "manager" ? activeSnapshot?.session.goal_id : undefined;
+          projectRecoveredTurnProposals(targetContextId, recoveryGoalId, streamed.turnId, streamed.response.proposals, streamingMessageId);
+          pendingRecoveryTurns.current.delete(recoveryKey);
           if (cancelled) return;
           updateManagerAssistantMessage(targetContextId, streamingMessageId, {
             lines: streamed.response.gate
@@ -1722,27 +1754,6 @@ function PersonalGoalHome({
               || streamedText.trim()
               || `${answerIdentityLabel(targetContextId, selectedAgent.label)} 已完成分析。`,
           });
-          // A recovered Turn cannot hand previews back to the composer, so its
-          // Todo proposals are stored directly and the page re-reads the store
-          // to show their cards. Only the Session's own Goal may own them.
-          const recoveryGoalId = targetContextId !== "manager" ? activeSnapshot?.session.goal_id : undefined;
-          const recoveryRequests = recoveryGoalId && model.goals.some((goal) => goal.goalId === recoveryGoalId)
-            ? todoProposalPreviewRequests(recoveryGoalId, streamed.turnId, streamed.response.proposals)
-            : [];
-          if (recoveryRequests.length) {
-            void Promise.allSettled(recoveryRequests.map((request) => previewTypedAction(request))).then((results) => {
-              if (results.some((result) => result.status === "fulfilled")) setTypedActionsRevision((current) => current + 1);
-              if (!results.some((result) => result.status === "rejected")) return;
-              // The answer stays readable; say its draft is missing so the
-              // owner knows to ask again.
-              setMessagesByContext((messages) => ({
-                ...messages,
-                [targetContextId]: (messages[targetContextId] ?? []).map((message) => message.id !== streamingMessageId
-                  ? message
-                  : { ...message, lines: [...message.lines, t("feedback.proposalDraftFailed")] }),
-              }));
-            });
-          }
         } catch (error) {
           if (cancelled) return;
           const interrupted = interruptedTurnIds.current.delete(activeTurnId)
@@ -1792,6 +1803,62 @@ function PersonalGoalHome({
       recoveryController?.abort();
     };
   }, [contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents]);
+
+  // The projection deliberately outlives the mounted view. Its caller may be
+  // running for a Goal the owner has already left, and the recovery stream's
+  // teardown aborts only the display subscription, never the owner's claim on
+  // the drafts the Turn already produced. A Goal other than the Session's own
+  // never owns them, and the Turn-derived idempotency key makes re-projecting
+  // the same completion a no-op.
+  function projectRecoveredTurnProposals(
+    targetContextId: string,
+    goalId: string | undefined,
+    turnId: string,
+    proposals: AgentResponse["proposals"],
+    streamingMessageId: number | null,
+  ) {
+    const requests = goalId && model.goals.some((goal) => goal.goalId === goalId)
+      ? todoProposalPreviewRequests(goalId, turnId, proposals)
+      : [];
+    if (!requests.length) return;
+    void Promise.allSettled(requests.map((request) => previewTypedAction(request))).then((results) => {
+      if (results.some((result) => result.status === "fulfilled")) setTypedActionsRevision((current) => current + 1);
+      if (!results.some((result) => result.status === "rejected")) return;
+      // The answer stays readable; say its draft is missing so the owner knows
+      // to ask again. A view that has since been left has no message to amend.
+      if (streamingMessageId === null) return;
+      setMessagesByContext((messages) => ({
+        ...messages,
+        [targetContextId]: (messages[targetContextId] ?? []).map((message) => message.id !== streamingMessageId
+          ? message
+          : { ...message, lines: [...message.lines, t("feedback.proposalDraftFailed")] }),
+      }));
+    });
+  }
+
+  // A Goal Turn that finished after its owner left keeps its identity in
+  // `pendingRecoveryTurns`. Re-reading its stored completion re-derives the Todo
+  // drafts it produced and projects them through the same preview endpoint, so
+  // returning to the Goal shows the card without a manual reload. The
+  // Turn-derived idempotency key makes the replay safe to repeat.
+  async function replayPendingRecoveryProposals(goalId: string, sessionId: string, isCancelled: () => boolean) {
+    const pending = [...pendingRecoveryTurns.current.values()]
+      .filter((entry) => entry.goalId === goalId && entry.sessionId === sessionId && entry.turnId);
+    for (const entry of pending) {
+      if (isCancelled()) return;
+      const key = `${entry.sessionId}:${entry.turnId}`;
+      try {
+        const streamed = await resumeChatTurnStreaming(entry.sessionId, entry.turnId);
+        if (isCancelled()) return;
+        projectRecoveredTurnProposals(goalId, goalId, entry.turnId, streamed.response.proposals, null);
+        pendingRecoveryTurns.current.delete(key);
+      } catch {
+        // An interrupted or failed Turn owes no card. Dropping the claim keeps a
+        // permanently broken Turn from replaying on every re-entry.
+        pendingRecoveryTurns.current.delete(key);
+      }
+    }
+  }
 
   useEffect(() => {
     if (readOnly) return;

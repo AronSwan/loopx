@@ -15,6 +15,11 @@ const COMBINED_TEXT = "[P1] 合并前补齐 PR #123 的发布说明";
 // The owner leaves this Goal conversation before the answer arrives.
 const DEPARTED_PROMPT = "请给出一个任务建议，我先去看看别处。";
 const DEPARTED_TEXT = "[P2] 补充发布回滚预案";
+// A Turn the owner reloads into recovery and then leaves before it completes.
+// The fixture answers a resumed "刷新恢复" Turn after 5s, which is the window the
+// owner leaves in.
+const DEPARTED_RECOVERY_PROMPT = "刷新恢复：离开后仍会完成的回合。";
+const RECOVERED_DEPARTURE_TEXT = "[P2] 离开后仍完成的恢复草稿";
 const proposalAnswer = {
   message: "我找到一个可评审的步骤。",
   proposals: [{ kind: "todo", priority: "P1", rationale: "发布前需要可核对的证据。", text: PROPOSAL_TEXT }],
@@ -37,6 +42,7 @@ export const chatTodoProposalScenario = {
       : message === DEPARTED_PROMPT ? { message: "离开后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "离开对话不改变建议归属。", text: DEPARTED_TEXT }] }
       : message === COMBINED_PROMPT ? { message: "我识别到一个明确的合并请求，并建议先补齐发布说明。", proposals: [{ kind: "todo", priority: "P1", rationale: "合并前需要可核对的说明。", text: COMBINED_TEXT }] }
       : message === RECOVERY_PROMPT ? { message: "恢复后给出一个步骤。", proposals: [{ kind: "todo", priority: "P2", rationale: "恢复回合同样需要可确认的草稿。", text: RECOVERY_TEXT }] }
+      : message === DEPARTED_RECOVERY_PROMPT ? { message: "离开后仍然完成的恢复回合。", proposals: [{ kind: "todo", priority: "P2", rationale: "离开 Goal 不改变恢复回合草稿的归属。", text: RECOVERED_DEPARTURE_TEXT }] }
       : null);
     const previewsWithText = (text) => api.actionPreviews.filter((preview) => preview.action_kind === "todo.create"
       && preview.normalized_parameters?.text === text);
@@ -139,6 +145,50 @@ export const chatTodoProposalScenario = {
       await openGoalChat();
       await page.waitForTimeout(1_000);
       if (api.actionApplies.length !== appliesAfterRecovery) throw new Error("Reloading after the recovered Turn applied a preview again");
+
+      // A recovery Turn whose completion lands after the owner has left its Goal
+      // must still give its Todo draft a card in the Goal that owns it. The
+      // fixture answers a resumed "刷新恢复" Turn after 5s, which is the window
+      // the owner leaves in.
+      const turnsBeforeDeparture = api.turnRequests.length;
+      await composer.fill(DEPARTED_RECOVERY_PROMPT);
+      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await waitFor(() => api.turnRequests.length > turnsBeforeDeparture, "The departure recovery prompt was not sent");
+      // Reload so the still-running Turn is owned by recovery rather than the
+      // original send, then leave for Manager Chat before it completes.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await openGoalChat();
+      const departedRecoveryCard = page.locator(".personal-proposal-row", { hasText: RECOVERED_DEPARTURE_TEXT });
+      await openManagerChat();
+      // The recovery stream is aborted by the switch; the worker still finishes.
+      if (await departedRecoveryCard.count()) throw new Error("A recovery Turn's Todo leaked into Manager Chat");
+      await page.waitForTimeout(6_000);
+      if (api.actionPreviews.filter((item) => item.normalized_parameters?.text === RECOVERED_DEPARTURE_TEXT).length) {
+        throw new Error("The departed recovery Turn wrote its preview while its Goal was not mounted");
+      }
+
+      // Returning to the owning Goal must show the card without another reload.
+      await openGoalChat();
+      await waitFor(() => api.actionPreviews.filter((item) => item.normalized_parameters?.text === RECOVERED_DEPARTURE_TEXT).length === 1,
+        "Returning to the Goal did not replay the completed recovery's Todo preview");
+      await departedRecoveryCard.waitFor({ state: "visible", timeout: 5_000 });
+      await departedRecoveryCard.waitFor({ state: "visible", timeout: 5_000 });
+      // Re-entering and reloading must not add a second card or write a Todo.
+      const appliesBeforeDepartureReplay = api.actionApplies.length;
+      await openManagerChat();
+      await openGoalChat();
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await openGoalChat();
+      await departedRecoveryCard.waitFor({ state: "visible", timeout: 10_000 });
+      await page.waitForTimeout(1_000);
+      await waitFor(() => new Set(
+        api.actionPreviews.filter((item) => item.normalized_parameters?.text === RECOVERED_DEPARTURE_TEXT).map((item) => item.idempotency_key),
+      ).size === 1, "Replaying the departed recovery mapped to more than one Todo preview");
+      if (api.actionApplies.length !== appliesBeforeDepartureReplay) {
+        throw new Error("A departed recovery applied a preview without the owner confirming it");
+      }
 
       // One answer may carry a protected action and Todo proposals together:
       // the protected decision keeps the drawer and the Todo still becomes a card.
