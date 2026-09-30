@@ -749,6 +749,7 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
 }
 
 export function PersonalWorkspacePage({
+  conversationQueuesFollowUps = false,
   conversationSessionId,
   conversationHistoryState,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
@@ -764,6 +765,8 @@ export function PersonalWorkspacePage({
   statusSourceControl,
   serviceNotice,
 }: {
+  /** The bound Session's mode queues a message sent while its Turn runs. */
+  conversationQueuesFollowUps?: boolean;
   conversationSessionId?: string;
   conversationHistoryState?: ConversationHistoryStatus;
   agents?: WorkspaceAgentOption[];
@@ -1023,6 +1026,18 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
+  // A managed runtime Session admits one Turn at a time. While the current
+  // Session shows a Turn in flight, a new message would only be rejected, so
+  // the composer waits and points to the reply's own adjust/interrupt
+  // controls. Two deliveries stay open because the service queues them behind
+  // the running Turn: LoopX mode through its own queue, and any message to an
+  // attached host Session.
+  const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
+    && loopxMode?.enabled && loopxMode.active_turn_id);
+  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(conversationSessionId)
+    && managerMessages.some((message) => message.pending && Boolean(message.sourceTurnId)
+      && message.sourceSessionId === conversationSessionId);
+  const composerBlocked = sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
       || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
@@ -1627,6 +1642,7 @@ export function PersonalWorkspacePage({
       finally {setSending(false);}
       return;
     }
+    if (conversationTurnRunning) return;
     if (!messageOverride) {
       setComposer("");
       setImageAttachments([]);
@@ -1950,16 +1966,16 @@ export function PersonalWorkspacePage({
               <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.nextAction")} disabled={sending} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
-                <button aria-label={t("composer.agentProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
+                <button aria-label={t("composer.nextAction")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
+                <button aria-label={t("composer.agentProgress")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
                 <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
-                <button aria-label={t("composer.blockers")} disabled={sending || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
-                <button aria-label={t("composer.evidence")} disabled={sending || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
+                <button aria-label={t("composer.blockers")} disabled={composerBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
+                <button aria-label={t("composer.evidence")} disabled={composerBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
               </div>
             ) : (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.globalTasks")} disabled={sending} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
-                <button aria-label={t("composer.globalProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
+                <button aria-label={t("composer.globalTasks")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
+                <button aria-label={t("composer.globalProgress")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
@@ -1972,6 +1988,7 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
+            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{t("composer.turnRunning")}</p> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
@@ -2012,7 +2029,7 @@ export function PersonalWorkspacePage({
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || sending || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
             {conversationOpen ? <div className="personal-composer-hint">{sending
               ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")

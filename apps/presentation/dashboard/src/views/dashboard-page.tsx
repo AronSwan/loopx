@@ -1,6 +1,6 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
-import { useConversationHistory } from "../data/use-conversation-history";
+import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -55,6 +55,7 @@ import {
   resumeChatSession,
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
+  chatSessionQueuesFollowUps,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -1406,7 +1407,13 @@ function PersonalGoalHome({
   const [proposalsByContext, setProposalsByContext] = useState<Record<string, PersonalProposalCard[]>>({});
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
+  // Bound Sessions whose mode queues a message sent while a Turn runs, read
+  // from the Session owner each time this page binds a Session.
+  const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
+  // Bumped when the service reports a running Turn this page did not know
+  // about, so the Turn recovery effect re-reads the Session and adopts it.
+  const [turnRecoveryRequest, setTurnRecoveryRequest] = useState(0);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
   // undefined: not read yet; null: the session owner could not be read.
@@ -1420,6 +1427,14 @@ function PersonalGoalHome({
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Set<string>());
+  // A running Turn a 409 reported, keyed by context: its pending reply holds
+  // the composer closed until the recovery effect adopts it or an
+  // authoritative Session read finds no such Turn, so the handoff never leaves
+  // a sendable gap. A failed read is no such finding: it keeps the handoff and
+  // counts the attempt toward the next re-read's backoff. From the 409 on, the
+  // reported Session and Turn also own the context's Turn controls, so the
+  // Adjust/Interrupt the pending reply shows act on that exact Turn.
+  const turnHandoffs = useRef(new Map<string, { agentId: string; failedReads: number; messageId: number; sessionId: string; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1542,6 +1557,17 @@ function PersonalGoalHome({
     return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [readOnly, conversationReturnSessionKey, contextId]);
 
+  function recordSessionAdmission(session: ChatSessionSummary) {
+    const queues = chatSessionQueuesFollowUps(session);
+    setFollowUpQueueSessionIds((current) => {
+      if (current.has(session.session_id) === queues) return current;
+      const next = new Set(current);
+      if (queues) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
+  }
+
   function recordRuntimeBinding(targetContextId: string, binding: PersonalRuntimeBinding | null) {
     setRuntimeBindings((current) => {
       if (binding === null) {
@@ -1628,17 +1654,27 @@ function PersonalGoalHome({
     if (readOnly) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
-    const history = conversationHistory.history;
+    const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
     const contextKind = selectedGoal ? "goal" : "manager";
     let cancelled = false;
     let recoveryController: AbortController | null = null;
     let latestDiscoveredSessionId: string | null = null;
+    let sessionReadFailed = false;
+    let handoffRetryTimer: number | undefined;
     void (async () => {
       try {
         if (selectedAgent.agentId === "status-only") return;
-        const latest = conversationHistory.currentSession;
+        // A 409 handoff reports a Turn this page has not read, so the cached
+        // transcript cannot show it. Re-read the conversation before adopting
+        // that Turn; until the read returns, the handoff reply stays pending
+        // with its own Turn controls.
+        const history = turnHandoffs.current.has(targetContextId)
+          ? await conversationHistory.refresh()
+          : readHistory;
+        if (cancelled) return;
+        const latest = currentChannelSession(history, selectedAgent.agentId);
         latestDiscoveredSessionId = latest?.session_id ?? null;
         if (latest && !latest.resumable) {
           newSessionRequired.current.add(sessionKey);
@@ -1666,6 +1702,7 @@ function PersonalGoalHome({
         if (contextKind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
         }
+        recordSessionAdmission(created.session);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -1695,7 +1732,9 @@ function PersonalGoalHome({
         recoveryController = new AbortController();
         streamControllers.current.set(targetContextId, recoveryController);
         let streamedText = "";
-        const streamingMessageId = appendManagerAssistantMessage(targetContextId, {
+        const handoff = turnHandoffs.current.get(targetContextId);
+        if (handoff?.turnId === activeTurnId) turnHandoffs.current.delete(targetContextId);
+        const streamingMessageId = handoff?.turnId === activeTurnId ? handoff.messageId : appendManagerAssistantMessage(targetContextId, {
           activity: ["正在恢复进行中的 Agent 回合"],
           startedAt: typeof activeSnapshot?.active_turn?.created_at === "string"
             ? Date.parse(activeSnapshot.active_turn.created_at) || undefined : undefined,
@@ -1781,6 +1820,15 @@ function PersonalGoalHome({
             text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
           });
         } finally {
+          // A cancelled recovery never settles its placeholder. Retire it, so
+          // it cannot stay pending beside the placeholder of the recovery that
+          // replaces it when the user returns to this conversation.
+          if (cancelled) {
+            setMessagesByContext((messages) => ({
+              ...messages,
+              [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== streamingMessageId),
+            }));
+          }
           recoveringTurnKeys.current.delete(recoveryKey);
           if (activeTurnIds.current.get(targetContextId) === activeTurnId) {
             activeTurnIds.current.delete(targetContextId);
@@ -1800,6 +1848,9 @@ function PersonalGoalHome({
         }
       } catch (error) {
         if (cancelled) return;
+        // The service refusing the resume is an answer about the Session; any
+        // other failure left this run without one.
+        sessionReadFailed = !(error instanceof ChatApiError && error.payload.error_code === "resume_failed");
         if (error instanceof ChatApiError && error.payload.error_code === "resume_failed") {
           newSessionRequired.current.add(sessionKey);
           if (latestDiscoveredSessionId) {
@@ -1811,15 +1862,46 @@ function PersonalGoalHome({
             });
           }
         }
+      } finally {
+        // A reported Turn this run read the Session but did not adopt has
+        // ended (or belongs to another Session), so its reply no longer holds
+        // the composer. When the read itself failed the Turn may still run:
+        // keep the reply pending, with its Turn controls, and read again.
+        const unadopted = turnHandoffs.current.get(targetContextId);
+        if (!cancelled && unadopted && sessionReadFailed) {
+          const failedReads = unadopted.failedReads + 1;
+          turnHandoffs.current.set(targetContextId, { ...unadopted, failedReads });
+          updateConversationMessage(targetContextId, unadopted.messageId, {
+            activity: ["暂时无法读取会话状态，正在重试"],
+          });
+          handoffRetryTimer = window.setTimeout(
+            () => setTurnRecoveryRequest((current) => current + 1),
+            Math.min(1000 * 2 ** (failedReads - 1), 10_000),
+          );
+        } else if (!cancelled && unadopted) {
+          turnHandoffs.current.delete(targetContextId);
+          if (activeTurnIds.current.get(targetContextId) === unadopted.turnId) {
+            activeTurnIds.current.delete(targetContextId);
+            recordRuntimeBinding(targetContextId, {
+              agentId: unadopted.agentId,
+              resumable: true,
+              sessionId: unadopted.sessionId,
+              status: "ready",
+            });
+          }
+          setMessagesByContext((messages) => ({
+            ...messages,
+            [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== unadopted.messageId),
+          }));
+        }
       }
     })();
     return () => {
       cancelled = true;
       recoveryController?.abort();
+      window.clearTimeout(handoffRetryTimer);
     };
-  // Recovery of an older transcript only hydrates messages. Reconnect the
-  // executor when the current session becomes readable, not on every retry.
-  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -2028,6 +2110,7 @@ function PersonalGoalHome({
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
     const session = await createChatSession(goalId, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", "goal", signal);
+    recordSessionAdmission(session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
     recordRuntimeBinding(goalId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
@@ -2109,6 +2192,8 @@ function PersonalGoalHome({
       lines: [], pending: true, preparing: true, text: "",
     });
     let submittedTurnId: string | undefined;
+    let submittedSessionId: string | undefined;
+    let handedOff = false;
     let streamedText = "";
     try {
       let sessionId = targetContextId === "manager" ? sessionIds.current.get(sessionKey) : await prepareGoalConversation(targetContextId, selectedRoute.agentId, preparationController.signal);
@@ -2126,6 +2211,7 @@ function PersonalGoalHome({
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
+        recordSessionAdmission(session.session);
         sessionId = session.session_id;
         sessionIds.current.set(sessionKey, sessionId);
         recordRuntimeBinding(targetContextId, {
@@ -2136,6 +2222,7 @@ function PersonalGoalHome({
         });
         newSessionRequired.current.delete(sessionKey);
       }
+      submittedSessionId = sessionId;
       preparationController.signal.throwIfAborted();
       // Cancellation only owns preparation. Once dispatch begins, the server turn
       // and its acknowledgement own interruption; never claim an unsent request.
@@ -2273,6 +2360,46 @@ function PersonalGoalHome({
         return;
       }
       const payloadError = error instanceof ChatApiError ? error.payload : null;
+      const runningTurnId = !route?.loopxMode && typeof payloadError?.active_turn_id === "string"
+        ? payloadError.active_turn_id
+        : "";
+      if (runningTurnId) {
+        // The Session already runs a Turn this page had not seen, so the
+        // message was not accepted. Withdraw it and turn its reply into the
+        // running Turn's pending reply at once, so the composer stays closed
+        // while the recovery effect re-reads the Session and adopts that
+        // reply. Rejecting the send keeps the draft.
+        setMessagesByContext((messages) => ({
+          ...messages,
+          [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== userMessageId),
+        }));
+        if (submittedSessionId) {
+          updateConversationMessage(targetContextId, streamingMessageId, {
+            activity: ["正在接管进行中的 Agent 回合"],
+            pending: true,
+            sourceSessionId: submittedSessionId,
+            sourceTurnId: runningTurnId,
+          });
+          turnHandoffs.current.set(targetContextId, {
+            agentId: selectedRoute.agentId,
+            failedReads: 0,
+            messageId: streamingMessageId,
+            sessionId: submittedSessionId,
+            turnId: runningTurnId,
+          });
+          activeTurnIds.current.set(targetContextId, runningTurnId);
+          recordRuntimeBinding(targetContextId, {
+            agentId: selectedRoute.agentId,
+            resumable: true,
+            sessionId: submittedSessionId,
+            status: "running",
+            turnId: runningTurnId,
+          });
+          handedOff = true;
+        }
+        if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
+        throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});
+      }
       if (payloadError && sessionInvalidatedByPayload(payloadError)) {
         sessionIds.current.delete(sessionKey);
       }
@@ -2306,12 +2433,14 @@ function PersonalGoalHome({
       };
       updateConversationMessage(targetContextId, streamingMessageId, failureMessage);
     } finally {
-      activeTurnIds.current.delete(targetContextId);
+      // A handed-off Turn is still running: its ownership stays for the
+      // recovery that adopts it or the read that finds it ended.
+      if (!handedOff) activeTurnIds.current.delete(targetContextId);
       if (targetContextId === "manager") setCapabilityRevision((revision) => revision + 1);
       preparationControllers.current.delete(targetContextId);
       streamControllers.current.delete(targetContextId);
       const boundSessionId = sessionIds.current.get(sessionKey);
-      if (boundSessionId) {
+      if (boundSessionId && !handedOff) {
         recordRuntimeBinding(targetContextId, {
           agentId: selectedRoute.agentId,
           resumable: true,
@@ -2347,6 +2476,17 @@ function PersonalGoalHome({
         sessionId,
         status: "ready",
       });
+      // No stream settles a Turn still in its 409 handoff, so the receipt
+      // settles its pending reply.
+      const handoff = turnHandoffs.current.get(targetContextId);
+      if (handoff?.turnId === turnId) {
+        turnHandoffs.current.delete(targetContextId);
+        updateConversationMessage(targetContextId, handoff.messageId, {
+          lines: [],
+          pending: false,
+          text: "已中断。你可以在当前会话继续发送消息。",
+        });
+      }
       setSendingContextId((current) => current === targetContextId ? null : current);
     }
   }
@@ -2358,6 +2498,7 @@ function PersonalGoalHome({
     if (!sessionId) return;
     try {
       const restored = await resumeChatSession(sessionId);
+      recordSessionAdmission(restored.session);
       sessionIds.current.set(sessionKey, sessionId);
       newSessionRequired.current.delete(sessionKey);
       recordRuntimeBinding(targetContextId, {
@@ -2939,6 +3080,7 @@ function PersonalGoalHome({
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
+        conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
         readOnly={readOnly}
