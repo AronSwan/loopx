@@ -26,7 +26,7 @@ def parse_todo_source(
     goal: dict[str, Any] | None = None,
     state_path: Path | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], dict[str, str | None]]:
-    """Decode active and archived source rows without inventing archive roles."""
+    """Decode full source rows; attention summaries compact only after this read."""
     source_sections: dict[str, str | None] = {"user": None, "agent": None}
     items: dict[str, list[dict[str, Any]]] = {"user": [], "agent": []}
     archive_items: list[dict[str, Any]] = []
@@ -37,7 +37,9 @@ def parse_todo_source(
         target = archive_items if archive else items[region.role]
         if not archive and source_sections[region.role] is None:
             source_sections[region.role] = region.heading
-        for block in decode_todo_blocks(lines, region.start, region.body_end, visible=visible):
+        for block in decode_todo_blocks(
+            lines, region.start, region.body_end, visible=visible, text_limit=None,
+        ):
             todo = {"archive_state": "archive" if archive else "active",
                     "source_section": region.heading if archive else source_sections[region.role],
                     **({} if archive else {"role": region.role}),
