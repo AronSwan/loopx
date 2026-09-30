@@ -158,6 +158,24 @@ test("a released worker and lane never settle a stop while the native Host still
   for (const host_process of ["drained", "not_launched"])
     assert.deepEqual(decideDelegationStop({...released, host_process}),
       {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"});
+  // A required lease the stop could not release is not a settlement: the
+  // member's Todo can stay blocked by it until the lease TTL.
+  for (const host_process of ["drained", "not_launched"]) {
+    assert.deepEqual(decideDelegationStop({...released, host_process, lease_released: false}),
+      {phase: "acknowledged", terminal: false, reason: "required_lease_release_unproven"});
+    // An operation that held no required lease omits the fact, which settles.
+    assert.deepEqual(decideDelegationStop({...released, host_process}),
+      {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"});
+  }
+  assert.throws(() => decideDelegationStop({...released, host_process: "drained", lease_released: "yes"}),
+    /lease release fact/);
+  // A vanished holder whose required lease is still held is not terminal either.
+  const unacked = {phase: "requested", acknowledged: false, operation_lock_free: true,
+    worker_lane_released: true, host_process: "drained"};
+  assert.deepEqual(decideDelegationStop({...unacked, lease_released: false}),
+    {phase: "requested", terminal: false, reason: "required_lease_release_unproven"});
+  assert.deepEqual(decideDelegationStop(unacked),
+    {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"});
   // A held lock still dominates a drained Host.
   assert.deepEqual(decideDelegationStop({...released, operation_lock_free: false, host_process: "drained"}),
     {phase: "acknowledged", terminal: false, reason: "operation_lock_still_held"});

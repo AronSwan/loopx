@@ -234,17 +234,28 @@ acknowledges itself. A worker on another machine is never signalled; it finds
 the request at its next checkpoint or at its next record write, which is
 refused. The receipt `phase` is `settled` only when an acknowledgement exists,
 the operation lock is free, the member's Turn lane holder record shows it
-released by the stopped worker (the lane is read, never taken), and the native
-host the Turn launched has exited together with every process in its group.
-If that host cannot be attributed, or its supervisor never finished cleaning
-up, the stop stays `acknowledged` and a later `stop` rereads it. `unknown`
+released by the stopped worker (the lane is read, never taken), the native
+host the Turn launched has exited together with every process in its group,
+and a required hard task lease was actually released. A release that failed is
+retried under the stop's own lock on the next read, so it never becomes a
+`settled` receipt that leaves the member's Todo blocked until the lease TTL;
+while it is unproven the stop stays `acknowledged` with
+`required_lease_release_unproven`. If that host cannot be attributed, or its
+supervisor never finished cleaning up, the stop stays `acknowledged` and a
+later `stop` rereads it. On a platform without process groups the launched
+host cannot be proven drained at all, so `stop --execute` fails with an
+actionable error naming that boundary rather than leaving a receipt no read
+can settle. `unknown`
 means the holder vanished before acknowledging, and `noop` means the
 work was already accepted, rejected or stopped. `requested` or `acknowledged`
 means it is still winding down: call `stop` again. A grace timeout never turns
 into a receipt. Stopped work is not resumed; `resume` refuses it and a new
 scope needs a new operation id. The Turn journal keeps its `in_progress` entry
 for inspection, and the record is never rewritten as a completion. A stopped
-member's Todo stays open, so the coordinator decides what happens next.
+member's Todo stays open, so the coordinator decides what happens next. The
+member's Todo completion and reply publication commit under the same lock a
+stop takes, so a stop written first means neither effect lands, and a stop
+written after both leaves their acceptance intact.
 
 中文：`stop --execute` 结束一个成员的有界工作，并返回一份只陈述已证明事实的
 回执。停止请求写在执行记录旁边的 `<operation>.stop.json`，从不写进记录本身，
@@ -254,13 +265,20 @@ member's Todo stays open, so the coordinator decides what happens next.
 `stopped` 并释放硬任务租约。没有持有者时由请求方自行确认。另一台机器上的
 worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
 只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
-worker 释放（只读 lane，从不获取），且该 Turn 启动的原生 host 及其进程组内所有进程
-都已退出时，`phase` 才是 `settled`。host 无法归属或其 supervisor 未完成清理时，
-停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
+worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
+都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。释放失败会在
+下一次读取时于 stop 自己的锁下重试，因此不会产生一份「已结算」却让成员 Todo 被
+租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
+`required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
+停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
+启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的
+可操作错误失败，而不是留下一份任何读取都无法结算的回执。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
 rejected 或 stopped；`requested`/`acknowledged` 表示仍在收尾，再次调用 `stop`。
 宽限期超时永远不会变成回执。已停止的工作不能 `resume`，新范围需要新的
 operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会被改写成完成；
-成员的 Todo 仍然打开，由协调者决定下一步。
+成员的 Todo 仍然打开，由协调者决定下一步。成员的 Todo 完成与回执发布在 stop
+所取的同一把锁下提交，因此先写入停止则两个效果都不会落地，后写入停止则其验收结果
+保持不变。
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead

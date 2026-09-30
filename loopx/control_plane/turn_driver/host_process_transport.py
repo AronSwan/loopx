@@ -29,6 +29,19 @@ HOST_PROCESS_NOT_LAUNCHED = "not_launched"
 HOST_PROCESS_DRAINED = "drained"
 HOST_PROCESS_DRAINING = "draining"
 HOST_PROCESS_UNATTRIBUTABLE = "unattributable"
+HOST_PROCESS_UNSUPPORTED_PLATFORM = "unsupported_platform"
+
+
+def host_process_drain_supported() -> bool:
+    """Whether this platform can prove an owned Host group has exited.
+
+    The TS supervisor cleans up a process group on POSIX and a process tree
+    best-effort on Windows. Only the group gives the stop a fact it can prove,
+    so the caller must say so rather than reporting a settlement it cannot
+    support.
+    """
+
+    return hasattr(os, "killpg")
 
 
 def _write_host_process_record(path: Path, record: dict[str, Any]) -> None:
@@ -69,8 +82,12 @@ def host_process_drain(record_path: Path) -> str:
     except (OSError, ValueError):
         return HOST_PROCESS_UNATTRIBUTABLE
     if (not isinstance(record, dict) or record.get("schema_version") != HOST_PROCESS_RECORD_SCHEMA_VERSION
-            or record.get("host") != lock_holder_host_label() or not hasattr(os, "killpg")):
+            or record.get("host") != lock_holder_host_label()):
         return HOST_PROCESS_UNATTRIBUTABLE
+    if not hasattr(os, "killpg"):
+        # A launched Host on a platform without process groups is never proven
+        # drained. This is a platform boundary, not an attribution failure.
+        return HOST_PROCESS_UNSUPPORTED_PLATFORM
     bridge, group = record.get("bridge_pid"), record.get("process_group")
     if record.get("phase") != "finished":
         if not isinstance(bridge, int) or bridge <= 1:

@@ -17,11 +17,12 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "managed-research-team"))
 import research_team as demo  # noqa: E402
 from test_managed_research_scenario import fixture  # noqa: E402
-from loopx.collaboration_mcp import DelegationFenced, Delegations  # noqa: E402
+from loopx.collaboration_mcp import DelegationFenced, DelegationStopRequested, Delegations  # noqa: E402
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_liveness, turn_lane_singleflight  # noqa: E402
 from loopx.file_lock import exclusive_file_lock, try_exclusive_file_lock  # noqa: E402
+from loopx.file_lock import lock_holder_host_label  # noqa: E402
 
 
 HOST = '''import json, os, sys, time
@@ -621,3 +622,129 @@ def test_interrupted_host_cleanup_keeps_the_stop_open_until_a_reread_sees_it_dra
     assert int((root / "analyst" / "initial" / "host-invocations").read_text()) == 1
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
     assert returns(runner.root, runner.goal_id, "lead")["items"] == []
+
+
+def test_a_stop_written_before_the_effects_linearizes_against_them(service, monkeypatch):
+    """Todo completion and reply publication commit under the stop's own lock.
+
+    The pre-check alone was not a boundary: the worker could pass it, a stop
+    could be persisted, and both external effects still committed before the
+    fenced record write, leaving `settled`/`stopped` for a member whose work had
+    landed. Holding the dispatch lock across both effects makes the two sides
+    linearize in either order.
+    """
+    from loopx.control_plane.collaboration.inbox import _write as write_inbox
+
+    root, runner = service
+    runner.start("analysis", "analysis-race", brief())
+    path = runner.path("analysis-race")
+    row = _read(path)
+    # Reproduce the interleaving: the stop exists before the worker reaches its
+    # effects. A same-process request is what the worker then acknowledges.
+    write_inbox(runner._stop_path(path), runner._new_stop_record(
+        row, requested_by=runner.agent_id, worker=None))
+
+    # The checkpoint after the model returns refuses to run the effects.
+    with pytest.raises(DelegationStopRequested):
+        with exclusive_file_lock(runner._dispatch_lock(path)):
+            runner._raise_if_stop_requested(path)
+
+    runner.execute("analysis-race")
+    assert _read(path)["status"] == "stopped"
+    # Neither effect committed for a stop that was written first.
+    assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
+    assert not (root / "runtime" / "replies" / "analysis-race" / "conclusion.json").exists()
+    assert not (root / "host-started").exists()
+    receipt = runner.stop("analysis-race", execute=True)
+    assert receipt["phase"] == "settled" and receipt["status"] == "stopped"
+
+
+def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service, monkeypatch):
+    """A required lease the stop could not release is not a settlement.
+
+    The member's Todo can stay blocked by that lease until its TTL, so reporting
+    `settled` would be a terminal claim the owner cannot act on. The release is
+    retried under the stop's own lock on the next read instead of being attempted
+    once and forgotten.
+    """
+    from loopx import collaboration_mcp as delegation
+    from loopx.control_plane.collaboration.inbox import _write as write_inbox
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-lease", brief())
+    path = runner.path("analysis-lease")
+    row = _read(path)
+    # A bounded member task holds a required lease; make the record say so.
+    row["task_lease"] = {"required": True, "idempotency_key": "lease-1", "version": 1}
+    row["status"] = "stopped"
+    runner._fenced_write(path, row)
+    write_inbox(runner._stop_path(path), {
+        **runner._new_stop_record(row, requested_by=runner.agent_id, worker=None),
+        "phase": "acknowledged",
+        "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
+                "source": "requester", "observed_status": "stopped", "turn_key": None},
+        # The acknowledgement could not release it, which is what the receipt records.
+        "lease": {"required": True, "released": False, "error": "authority unavailable"},
+    })
+
+    attempts = []
+    outcomes = [RuntimeError("authority temporarily unavailable"), {"released": True}]
+
+    def flaky_release(**kwargs):
+        attempts.append(kwargs)
+        outcome = outcomes[min(len(attempts) - 1, len(outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(delegation, "release_task_lease", flaky_release)
+
+    # The first settle read tries the release, fails, and must not settle.
+    receipt = runner.stop("analysis-lease", execute=True)
+    assert attempts, "the stop never attempted the required release"
+    assert receipt["phase"] == "acknowledged", receipt
+    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
+    assert receipt["stop"]["lease"]["released"] is not True
+
+    # The next read retries the release and only then settles.
+    settled = runner.stop("analysis-lease", execute=True)
+    assert len(attempts) >= 2, "the failed release was never retried"
+    assert settled["phase"] == "settled", settled
+    assert settled["stop"]["lease"]["released"] is True
+    assert settled["stop"]["settled"]["lease_released"] is True
+
+    # Once settled the receipt is stable, and a released lease is not re-attempted.
+    before = len(attempts)
+    assert runner.stop("analysis-lease", execute=True) == settled
+    assert len(attempts) == before
+
+
+def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service, monkeypatch):
+    """A stop that cannot prove its Host drained says so instead of never settling.
+
+    Windows cleanup is process-tree best effort, so no fact proves the Host's
+    descendants exited. An acknowledged receipt the caller can never settle is
+    worse than an actionable refusal that names the platform boundary.
+    """
+    from loopx.control_plane.turn_driver import host_process_transport
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "analysis-platform", brief())
+    path = runner.path("analysis-platform")
+    record = runner._host_process_record(path)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({
+        "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
+        "host": lock_holder_host_label(), "phase": "finished",
+        "bridge_pid": os.getpid(), "process_group": os.getpid(),
+    }))
+
+    # The launched Host is real, but this platform cannot prove it drained.
+    assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_DRAINED
+    monkeypatch.delattr(host_process_transport.os, "killpg", raising=False)
+    assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_UNSUPPORTED_PLATFORM
+
+    with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
+        runner.stop("analysis-platform", execute=True)

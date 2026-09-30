@@ -43,7 +43,8 @@ from .control_plane.turn_driver.journal_store import (
 )
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.turn_driver.host_process_transport import (
-    HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV, host_process_drain,
+    HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV, HOST_PROCESS_UNSUPPORTED_PLATFORM,
+    host_process_drain,
 )
 from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
@@ -776,12 +777,15 @@ class Delegations:
             result["error"] = row["error"]
         return result
 
-    def _observe(self, path: Path, row: dict, status: str, **facts) -> None:
+    def _observe(self, path: Path, row: dict, status: str, *, already_locked: bool = False, **facts) -> None:
         decision = effect_runtime_result("collaboration.delegation.observe", {
             "from": row["status"], "to": status, **facts,
         })
         row.update(status=decision["status"])
-        self._fenced_write(path, row)
+        if already_locked:
+            self._fenced_write_locked(path, row)
+        else:
+            self._fenced_write(path, row)
 
     def _fenced_write(self, path: Path, row: dict) -> None:
         """Write the execution record only while no unacknowledged stop fences this process.
@@ -791,10 +795,20 @@ class Delegations:
         """
 
         with exclusive_file_lock(self._dispatch_lock(path)):
-            stop = self._read_stop(path)
-            if stop is not None and not self._acknowledged_here(stop):
-                raise DelegationFenced()
-            _write(path, row)
+            self._fenced_write_locked(path, row)
+
+    def _fenced_write_locked(self, path: Path, row: dict) -> None:
+        """The same write for a caller that already holds the dispatch lock.
+
+        The lock is a kernel file lock, so it is not reentrant: a caller that
+        widened its critical section to cover a whole effect group must use this
+        entry point rather than nesting ``_fenced_write``.
+        """
+
+        stop = self._read_stop(path)
+        if stop is not None and not self._acknowledged_here(stop):
+            raise DelegationFenced()
+        _write(path, row)
 
     @staticmethod
     def _acknowledged_here(stop: dict) -> bool:
@@ -1094,10 +1108,35 @@ class Delegations:
                 return self._stop_receipt(row, binding, None)
             if stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
                 return self._stop_receipt(row, binding, stop)
+            # A launched Host on a platform that cannot prove its group exited
+            # has no converging stop: say so plainly rather than leaving the
+            # caller with an acknowledged receipt it can never settle.
+            unsupported = host_process_drain(self._host_process_record(path)) == HOST_PROCESS_UNSUPPORTED_PLATFORM
+            if unsupported:
+                raise ValueError(
+                    "delegation stop cannot prove the launched Host drained on this platform: "
+                    "process groups are unavailable, so the Host supervisor is best-effort. "
+                    "Stop the member's Host through its own supervisor and re-read the receipt."
+                )
             facts = {"operation_lock_free": self._operation_lock_free(path)}
             facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
             # Read last: a Host seen drained after its worker and lane let go stays drained.
             facts["host_process"] = host_process_drain(self._host_process_record(path))
+            # A required lease the acknowledgement could not release is retried
+            # here, under the same lock that guards the record: every later
+            # read of this stop is another attempt, instead of one failure
+            # turning into a permanent `settled` with the lease still held.
+            lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
+            if lease.get("required") is True and lease.get("released") is not True:
+                retried = self._release_delegation_lease(row, binding)
+                if retried != lease:
+                    stop["lease"] = retried
+                    _write(self._stop_path(path), stop)
+                lease = retried
+            if lease.get("required") is True:
+                # Absent means the operation held no required lease, which is not
+                # the same claim as a lease that was released.
+                facts["lease_released"] = lease.get("released") is True
             decision = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
                 "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
@@ -1106,10 +1145,8 @@ class Delegations:
             if decision["phase"] != stop["phase"] or decision.get("reason") != stop.get("reason"):
                 stop.update(phase=decision["phase"], reason=decision.get("reason"))
                 if decision["phase"] in DELEGATION_STOP_TERMINAL_PHASES:
-                    lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
                     stop["settled"] = {
                         "at": time.time(), **facts, "lane_state": lane_state,
-                        "lease_released": lease.get("released"),
                         "turn_journal_status": self._turn_journal_status(row, binding),
                     }
                 _write(self._stop_path(path), stop)
@@ -1553,30 +1590,38 @@ class Delegations:
                 return
             self._bound(row, require_active=True)  # revocation or rebinding while the model ran
             delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
-            if not todo_completed_for_settlement:
+            # Both effects commit inside the dispatch lock that a stop also
+            # takes, so the two sides linearize: either a stop is written first
+            # and neither effect runs, or both effects commit first and the stop
+            # that follows reports a record that already reached its terminal
+            # observation. Committing them outside the lock let a stop settle
+            # for a member whose Todo and reply had already landed.
+            with exclusive_file_lock(self._dispatch_lock(path)):
                 self._raise_if_stop_requested(path)
-                self._complete_delegated_todo(row, binding)
-            row["artifacts"] = self._accepted(binding)
-            if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
-                return_result(
-                    self.root,
-                    self.goal_id,
-                    binding["agent_id"],
-                    request_id,
-                    json.dumps(
-                        {
-                            "todo_id": binding["todo_id"],
-                            "status": "accepted",
-                            "artifacts": [
-                                {k: v for k, v in item.items() if k != "text"}
-                                for item in row["artifacts"]
-                            ],
-                        }
-                    ),
-                    registry=self.registry,
-                    caller_goal_ref=self._caller_goal_ref(),
-                )
-            self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True, artifacts_current=True)
+                if not todo_completed_for_settlement:
+                    self._complete_delegated_todo(row, binding)
+                row["artifacts"] = self._accepted(binding)
+                if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
+                    return_result(
+                        self.root,
+                        self.goal_id,
+                        binding["agent_id"],
+                        request_id,
+                        json.dumps(
+                            {
+                                "todo_id": binding["todo_id"],
+                                "status": "accepted",
+                                "artifacts": [
+                                    {k: v for k, v in item.items() if k != "text"}
+                                    for item in row["artifacts"]
+                                ],
+                            }
+                        ),
+                        registry=self.registry,
+                        caller_goal_ref=self._caller_goal_ref(),
+                    )
+                self._observe(path, row, "accepted", already_locked=True,
+                              canonical_done=True, acceptance_ready=True, artifacts_current=True)
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.
             # No fresh Turn is ever created because its client timed out.

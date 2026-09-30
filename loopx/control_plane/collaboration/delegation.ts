@@ -372,6 +372,13 @@ export function decideDelegationStop(params: JsonObject): JsonObject {
     "delegation stop release facts required");
   requireThat(hostProcessDrains.includes(params.host_process as HostProcessDrain),
     "delegation stop host process drain fact required");
+  // A required hard lease is released by the stop itself. Its release is part
+  // of what the receipt promises: a member whose lease is still held can block
+  // its Todo until the lease TTL, which is not a safe stop and is not something
+  // the owner can act on. `undefined` means the operation held no required
+  // lease.
+  requireThat(params.lease_released === undefined || typeof params.lease_released === "boolean",
+    "delegation stop lease release fact must be boolean");
   requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
     "delegation stop timeout fact must be boolean");
   requireThat(phase !== "acknowledged" || params.acknowledged === true,
@@ -380,16 +387,19 @@ export function decideDelegationStop(params: JsonObject): JsonObject {
   const workerReleased = operationFree && params.worker_lane_released === true;
   const host = params.host_process as HostProcessDrain;
   const hostDrained = host === "drained" || host === "not_launched";
+  const leaseReleased = params.lease_released !== false;
   const pending = !operationFree ? "operation_lock_still_held"
     : params.worker_lane_released !== true ? "worker_lane_release_unproven"
-    : host === "draining" ? "host_process_still_running" : "host_process_drain_unproven";
+    : host === "draining" ? "host_process_still_running"
+    : host !== "drained" && host !== "not_launched" ? "host_process_drain_unproven"
+    : "required_lease_release_unproven";
   if (params.acknowledged === true) {
-    if (workerReleased && hostDrained) {
+    if (workerReleased && hostDrained && leaseReleased) {
       return {phase: "settled", terminal: true, reason: "acknowledged_worker_and_host_released"};
     }
     return {phase: "acknowledged", terminal: false, reason: pending};
   }
-  if (workerReleased && host !== "draining") {
+  if (workerReleased && host !== "draining" && leaseReleased) {
     return {phase: "unknown", terminal: true, reason: "holder_gone_without_acknowledgement"};
   }
   return {phase: "requested", terminal: false, reason: operationFree ? pending
