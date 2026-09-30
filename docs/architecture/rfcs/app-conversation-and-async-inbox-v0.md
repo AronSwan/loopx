@@ -74,8 +74,13 @@ Transfer the hierarchy, not the artwork or untested claims:
   routine activity; preserve missing authority, stale information and failures.
   Decision notices use the request body, object and evidence rather than a short
   scheduling label. Keep distinct request identities and label bounded previews;
-  users inspect the current request before deciding. App detail drawers retain
-  the request separately from the compact card label. Provider notices use the
+  users inspect the current request before deciding. Steward and Goal details
+  share one readable request brief: full body, reason/recommendation and linked
+  evidence first; identifiers and declared scope remain in a keyboard-accessible
+  disclosure. The compact list label is not repeated as another detail card.
+  A summary-only source is labelled as such rather than presented as a complete
+  request. Existing fresh-preview, read-only and lifecycle fences still govern
+  actions; Markdown presentation cannot infer authority. Provider notices use the
   same content distinction: missing request bodies are explicitly unavailable,
   never reconstructed from legacy action labels or free-form gate prompts.
   Retire obsolete presentation branches rather than preserving old data shapes
@@ -94,6 +99,14 @@ unavailable desktop/narrow views. Retain keyboard access, reading position and
 return context. First-screen changes still require the repository's preview gate.
 No external screenshot, private incident transcript or proprietary asset is
 redistributed by this proposal.
+
+The decision-detail slice qualifies the packaged renderer with synthetic
+desktop Chinese, narrow English and read-only sources: readable Markdown,
+retained full text, evidence links, disclosure/return focus, one correctly
+scoped preview, failed/missing/replaced source fences and inert source HTML.
+This is a proposed App presentation improvement, not installed readback or
+full GQ10 prioritization. Cross-project selection, at most two recommended
+priorities and actual scoped adoption remain in the existing P1 attention work.
 
 ## Current owners and gaps
 
