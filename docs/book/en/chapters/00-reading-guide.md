@@ -241,3 +241,11 @@ delivery. It does not duplicate the complete maintainer course or a full CLI ref
 Production effectful Providers, private organizational cases, and live benchmark operation remain outside
 the main path. Use official source, protocol documentation, and the target project's own facts for those
 workflows.
+
+The onboarding path uses Codex App and Codex CLI as its worked examples, because those two routes can be
+reproduced end to end. LoopX's agent type coverage is wider: `SUPPORTED_AGENT_TYPES` in
+`loopx/host_loop_activation.py` lists 21 types, and 9 of them have a dedicated goal-mode adapter package
+(`claude_goal_mode`, `kunluncode_goal_mode`, `opencode_goal_mode`, `pi_goal_mode`, `zcode_goal_mode`,
+`agy_goal_mode`, `dsh_goal_mode`, `kiro_cli_goal_mode`, and others). Choosing two routes is a teaching
+tradeoff, not a capability boundary: for another harness, follow its own adapter package and the
+[protocol documentation](/loopx/docs/reference/protocols/).

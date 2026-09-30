@@ -162,7 +162,7 @@ transition owner 才决定事实是否真的改变。
 回答的问题，不是 LoopX 1.0 已经提供的统一 schema：
 
 ```yaml
-GoalControlSnapshot:                 # desired read model，不是当前唯一可写 schema
+GoalControlSnapshot:                 # 概念视图；字段是待回答的问题，不是已实现字段名
   identity:
     goal_id: ...
     activation_state: active | stopped
@@ -199,7 +199,7 @@ acceptance、permissions 和 terminal conditions 目前还没有统一的 typed 
 | `goal_id` | registry 与所有 goal-scoped event 的稳定 identity |
 | `phase` | Goal activation 只有 `active | stopped`；阶段路线属于 Agent Vision / Todo，而不是通用 Goal phase |
 | `objective` / `acceptance` / `permissions` / terminal conditions | 目前分散在项目材料、Vision、Todo 与运行约束中；没有统一 typed canonical intent revision |
-| `completed_requirements` / `pending_requirements` | 由可用的 Todo、Vision checkpoint、acceptance gap 和 frontier facts 聚合；不是独立可写列表 |
+| 已完成 / 待完成的要求 | 概念占位，不是当前字段名；alignment 输出中的对应项是 `frontier_basis`，其余由 Todo、Vision checkpoint、acceptance gap 与 frontier facts 聚合，且不是独立可写列表 |
 | `artifacts` / `evidence` / `blockers` | 保存在 Todo、run、event 和 receipt 中的引用与 typed facts |
 | `version` | 按 owner 使用 event `append_sequence`、source checksum 或 opaque provider revision；不存在全局 Goal version |
 

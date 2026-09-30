@@ -183,7 +183,7 @@ For orientation, first imagine the desired Goal control plane as this **conceptu
 describes the questions one read should answer, not a unified schema already implemented in LoopX 1.0:
 
 ```yaml
-GoalControlSnapshot:                 # desired read model, not the one writable schema
+GoalControlSnapshot:                 # conceptual view; these fields are questions, not implemented field names
   identity:
     goal_id: ...
     activation_state: active | stopped
@@ -221,7 +221,7 @@ through a separate `todo_basis`; and then projects drift and conflict:
 | `goal_id` | Stable identity in the registry and every goal-scoped event |
 | `phase` | Goal activation is only `active | stopped`; stage routing belongs to Agent Vision / Todo, not a universal Goal phase |
 | `objective` / `acceptance` / `permissions` / terminal conditions | Currently distributed across project material, Vision, Todos, and runtime constraints; there is no unified typed canonical intent revision |
-| `completed_requirements` / `pending_requirements` | Aggregated from available Todo, Vision-checkpoint, acceptance-gap, and frontier facts; not independently writable lists |
+| Completed / pending requirements | A conceptual placeholder, not a current field name; the corresponding item in the alignment output is `frontier_basis`, with the rest aggregated from Todo, Vision-checkpoint, acceptance-gap, and frontier facts, and not independently writable lists |
 | `artifacts` / `evidence` / `blockers` | References and typed facts held by Todos, runs, events, and receipts |
 | `version` | Owner-specific event `append_sequence`, source checksum, or opaque provider revision; no global Goal version exists |
 

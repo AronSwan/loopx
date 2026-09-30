@@ -222,3 +222,10 @@ Goal Channel 与桌面恢复汇集到一个 operator surface，同时保留 CLI�
 Host/Runner、Projection/Docs/fixtures、Extension lifecycle、验证与 PR，不复制完整的核心
 维护者课程，也不提供完整 CLI reference。生产级 effectful provider、企业内部案例和 benchmark
 live operation 不进入当前主线。需要这些能力时，应回到官方源码、协议和具体项目的事实源。
+
+接入主线只以 Codex App 与 Codex CLI 为例，因为这两条路径可以端到端复现。LoopX 的 agent type
+覆盖面更宽：`loopx/host_loop_activation.py` 的 `SUPPORTED_AGENT_TYPES` 列出 21 个类型，其中 9 个
+另有独立的 goal-mode 适配包（`claude_goal_mode`、`kunluncode_goal_mode`、`opencode_goal_mode`、
+`pi_goal_mode`、`zcode_goal_mode`、`agy_goal_mode`、`dsh_goal_mode`、`kiro_cli_goal_mode` 等）。
+路线选择是教学取舍，不是能力边界：其余 harness 的接入差异，以各自适配包和
+[协议文档](/loopx/docs/reference/protocols/) 为准。
