@@ -276,7 +276,7 @@ def apply_receipt_bound_wait_recovery(
     )
     # Transport one coherent source read, narrowed by its typed dependency
     # reference. TS revalidates the wait; unrelated Todo bodies never cross RPC.
-    bound = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
+    bound: dict[str, Any] = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
     target_id = (bound.get("resume_condition") or {}).get("target_todo_id")
     items = [row for row in source["todos"] if row.get("todo_id") in {todo_id, target_id}]
     verdict = effect_runtime_result("quota.settlement.read", {
