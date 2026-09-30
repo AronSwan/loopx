@@ -305,7 +305,7 @@ def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: st
     return _root(root) / "executions" / _hash([goal_id, agent_id]) / (_hash(operation_id) + ".json")
 
 
-_WAKE_INTENT_KEYS = ("schema_version", "intent_id", "requester", "operation_id", "request_id")
+_WAKE_INTENT_KEYS = ("schema_version", "intent_id", "requester", "conversation", "operation_id", "request_id")
 
 
 def wake_receipt(intent: dict, state: str, **facts) -> dict:
@@ -496,7 +496,14 @@ class Delegations:
         })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
-              parent_request_id: str | None = None) -> dict:
+              parent_request_id: str | None = None, *, conversation: dict | None = None) -> dict:
+        """Start or replay one bound operation.
+
+        ``conversation`` is supplied only by the trusted Chat host, never by
+        the model: the session and Turn that started the operation.  It is
+        kept on first creation and never replaced, so a later wake returns to
+        that conversation and no other.
+        """
         binding = self.binding(binding_id, require_active=True)
         require_operation_id(operation_id)
         brief = normalize_request({"goal_id": self.goal_id, "agent_id": binding["agent_id"], "brief": brief})["brief"]
@@ -515,7 +522,10 @@ class Delegations:
                 if _read(path).get("identity") != identity:
                     raise ValueError("delegation operation identity conflict")
             else:
-                _write(path, {"identity": identity, "status": "prepared", "created_at": time.time()})
+                origin = ({"session_id": str(conversation["session_id"]), "turn_id": str(conversation["turn_id"])}
+                          if conversation else None)
+                _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
+                              **({"conversation": origin} if origin else {})})
                 self._spawn(operation_id)
         return self.read(operation_id)
 
@@ -704,6 +714,7 @@ class Delegations:
             "operation_id": row["identity"]["operation_id"],
             "request_id": row["identity"]["request_id"],
             "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]],
+            "conversation": row.get("conversation"),
         }
 
     def wake_observed_in_turn(self, operation_id: str) -> dict | None:
