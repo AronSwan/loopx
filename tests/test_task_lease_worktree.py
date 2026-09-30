@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
@@ -59,7 +60,8 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     (a / "src").symlink_to(project, target_is_directory=True)
     assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
     (a / "src").unlink()
-    first = acquire("a", a)
+    monkeypatch.chdir(a)
+    first = acquire("a", Path("."))
     assert first["source_authority"] == provider + "_v0"
     assert "write_workspace" in first["lease"]
     assert str(tmp_path) not in json.dumps(first["lease"])
@@ -68,7 +70,7 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert conflict["conflicts"][0]["owner"] == "agent-a"
     assert "--write-worktree" in conflict["recommended_action"]
     assert acquire("d", None, expected=1)["error_code"] == "write_scope_conflict"
-    second = acquire("b", b)
+    second = acquire("b", Path("../b"))
     assert second["integration_overlap_advisories"][0]["todo_id"] == "todo_worktree_a"
     assert second["lease"]["write_workspace"] != first["lease"]["write_workspace"]
     replay = acquire("a", alias)

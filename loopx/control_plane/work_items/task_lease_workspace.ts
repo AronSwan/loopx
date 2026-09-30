@@ -4,7 +4,7 @@ import {promisify} from "node:util";
 import {realpath, stat, readFile, lstat} from "node:fs/promises";
 import {platform} from "node:os";
 import {createHash} from "node:crypto";
-import {resolve} from "node:path";
+import {isAbsolute, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -46,6 +46,7 @@ export function independentLeaseWorktrees(left: unknown, right: unknown): boolea
 }
 
 export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
+  if (!isAbsolute(path)) throw new EffectRuntimeRequestError("worktree observation requires an absolute caller path");
   const cwd = await realpath(path);
   const git = async (...args: string[]) => (await run("git", ["-C", cwd, ...args],
     {timeout: 5000, maxBuffer: 4 * 1024 * 1024, env: {...process.env, GIT_OPTIONAL_LOCKS: "0"}})).stdout.trim();

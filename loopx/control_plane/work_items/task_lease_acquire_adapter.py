@@ -393,7 +393,10 @@ def execute_native_task_lease_acquire(
             "idempotency_key": idempotency_key,
             "ttl_seconds": ttl_seconds,
             "write_scopes": list(write_scopes or []),
-            **({"write_worktree": write_worktree} if write_worktree is not None else {}),
+            **({"write_worktree": (
+                str(Path(write_worktree).expanduser().absolute())
+                if write_worktree else write_worktree
+            )} if write_worktree is not None else {}),
             "expected_version": expected_version,
             "authority": authority,
         }

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {evaluateTaskLeaseAcquireDecision} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
-import {leaseWorkspace, independentLeaseWorktrees} from "../../loopx/control_plane/work_items/task_lease_workspace.ts";
+import {leaseWorkspace, independentLeaseWorktrees, observeLeaseWorktree} from "../../loopx/control_plane/work_items/task_lease_workspace.ts";
 
 const repo = "git:github.com/example/project";
 const workspace = {host: "1".repeat(64), common_directory: "2".repeat(64), worktree: "3".repeat(64), repository: repo};
+test("native observation never interprets a caller path relative to the worker", async () => {
+  await assert.rejects(observeLeaseWorktree(".", () => false), /absolute/);
+});
+
 function request(other: unknown = {...workspace, worktree: "4".repeat(64)}) {
   return {handoff_mode: "hard_lease", registered_agents: ["agent-a", "agent-b"],
     todo: {todo_id: "todo_a", status: "open", claimed_by: "agent-a", excluded_agents: [], task_repository: repo}, lease: null,
