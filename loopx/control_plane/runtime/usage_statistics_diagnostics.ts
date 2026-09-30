@@ -4,7 +4,7 @@ import type { Counter } from "./usage_statistics_contract.ts";
 
 export const DIAGNOSTIC_SCHEMA = "loopx_usage_diagnostics_v1";
 export const CONTEXTS = ["unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"] as const;
-export const OPERATIONS = ["default", "plan", "run-once", "status", "should-run", "spend-slot", "monitor-poll", "list", "add", "claim", "update", "complete", "register", "resolve", "bind-session", "unbind-session", "merge-readiness", "check-result", "result-return"] as const;
+export const DIAGNOSTIC_OPERATIONS = ["default", "plan", "run-once", "status", "should-run", "spend-slot", "monitor-poll", "list", "add", "claim", "update", "complete", "register", "resolve", "bind-session", "unbind-session", "merge-readiness", "check-result", "result-return"] as const;
 export const REASONS = ["none", "not_ready", "invalid_input", "permission", "not_found", "timeout", "connection", "interrupted", "command_failed"] as const;
 export const SIGNALS = ["none", "project_registered", "managed_turn_committed", "todo_completed", "todo_validated", "result_returned"] as const;
 const FEATURE_OPERATIONS: Record<string, readonly string[]> = {
@@ -18,7 +18,7 @@ const SIGNAL_SOURCES: Record<string, readonly [string, string]> = {
 };
 export type Diagnostic = Omit<Counter, "outcome" | "error"> & {
   outcome: "ok" | "blocked" | "failed" | "cancelled"; error: typeof REASONS[number];
-  operation: typeof OPERATIONS[number]; signal: typeof SIGNALS[number];
+  operation: typeof DIAGNOSTIC_OPERATIONS[number]; signal: typeof SIGNALS[number];
   version: string; activity_day: string; context: typeof CONTEXTS[number];
 };
 export type DiagnosticAggregate = { schema: typeof DIAGNOSTIC_SCHEMA; counters: Diagnostic[] };
@@ -31,7 +31,7 @@ export function diagnosticKey(value: Diagnostic): string {
 export function validDiagnostic(value: unknown): value is Diagnostic {
   if (!object(value) || Object.keys(value).sort().join() !== "activity_day,context,count,duration,error,feature,operation,outcome,signal,version") return false;
   if (!(FEATURES as readonly unknown[]).includes(value.feature) || !(DURATIONS as readonly unknown[]).includes(value.duration)
-    || !(OPERATIONS as readonly unknown[]).includes(value.operation) || !(SIGNALS as readonly unknown[]).includes(value.signal)
+    || !(DIAGNOSTIC_OPERATIONS as readonly unknown[]).includes(value.operation) || !(SIGNALS as readonly unknown[]).includes(value.signal)
     || !(CONTEXTS as readonly unknown[]).includes(value.context) || !(REASONS as readonly unknown[]).includes(value.error)
     || typeof value.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(value.version)
     || typeof value.activity_day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.activity_day)
