@@ -302,6 +302,20 @@ backs off without resending, and typed terminal blockers stay stopped. This
 qualifies the persisted recovery boundary, not live provider availability or
 the complete GQ09 journey.
 
+App history recovery is a shared TS read boundary for steward and Goal channels.
+One unavailable older Session must not hide readable messages, lose their
+original result locators or restart the current stream. Show incomplete history,
+retry missing snapshots with backoff, and preserve live text and drafts. An
+unreadable current Session blocks ordinary send until its exact record recovers;
+never infer an empty conversation or create a replacement driver from a read
+failure. A recovered read does not prove receiver adoption or native GQ02/GQ09.
+
+App 历史恢复由管家与 Goal 对话共用的 TS 读取边界负责。旧 Session 读取失败不应
+隐藏可用消息、丢失原结果位置或重启当前流；应明确展示历史不完整，退避重读缺失
+快照，并保留实时文本与草稿。当前 Session 无法读取时，普通发送等待原记录恢复，
+不能据此推断空会话或新建执行驱动。读取恢复仍不代表接收方采用或原生 GQ02/GQ09
+已经验收。
+
 The pending-receipt checkpoint moves file-existence classification into the
 shared `collaboration/inbox_receipts.ts` read model. Missing, unreadable and
 identity-conflicting decisions/results are explicit; a damaged conclusion cannot
