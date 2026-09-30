@@ -87,6 +87,7 @@ import {
   preflightPriorHostTurnCloseout,
   reduceUnsettledHostTurnRecovery,
 } from "./quota/unsettled_host_turn_recovery.ts";
+import { projectScopedOverride } from "./quota/scoped_override.ts";
 import { evaluateTurnEnvelope } from "./quota/turn_envelope.ts";
 import { evaluateQuotaMonitorPollCommit } from "./quota/monitor_poll_commit.ts";
 import { planMonitorSuccessor, selectMonitorTodoRequest } from "./scheduler/monitor_successor.ts";
@@ -577,6 +578,7 @@ export function createEffectRuntimeHandlers(
       reduceUnsettledHostTurnRecovery,
     ],
     ["quota.turn_envelope.evaluate", evaluateTurnEnvelope],
+    ["quota.scoped_override.project", projectScopedOverride],
     ["task_lease.owner_eligibility", evaluateTaskLeaseOwnerEligibility],
     ["task_lease.acquire.decide", evaluateTaskLeaseAcquireDecision],
     ["task_lease.acquire.native", executeTaskLeaseAcquire],
