@@ -39,6 +39,8 @@ def make_root(tmp_path, n=2, bad=()):
         (d / f"research-{k}.md").write_text(body, encoding="utf-8")
     for actor in ("planner", "architect", "reviewer-1", "reviewer-2", "finalizer"):
         (root / "agents" / actor / "tasks").mkdir(parents=True, exist_ok=True)
+    for k in range(1, n + 1):  # 调研员也要tasks目录(生产由prepare建,夹具须对齐)
+        (root / "agents" / f"researcher-{k}" / "tasks").mkdir(parents=True, exist_ok=True)
     a = root / "agents/architect/outputs"
     a.mkdir(parents=True, exist_ok=True)
     (a / "architecture.md").write_text(
@@ -51,7 +53,7 @@ def make_root(tmp_path, n=2, bad=()):
     f = root / "agents/finalizer/outputs"
     f.mkdir(parents=True, exist_ok=True)
     (f / "final-plan.md").write_text(
-        "# 测试课题终案\n决策摘要\n" + FILLER * 10 + "\n行动检查表(可打勾) 清单\n", encoding="utf-8")
+        "# 测试课题终案\n决策摘要\n" + FILLER * 10 + "\n决策与行动清单(可打勾)\n", encoding="utf-8")  # 只含'清单'不含'检查表'(门三#3: 双关键词曾致any-of回归测试恒真)
     return root
 
 
@@ -399,3 +401,97 @@ def test_gate_report_carries_passk_ledger(tmp_path):
     assert rep["attempts"]["researcher-1"] == 2
     assert "researcher-1" not in rep["first_pass"]
     assert "planner" in rep["first_pass"] or rep["attempts"]["planner"] == 1
+
+
+# ==== 六门复审整改批次(2026-10-01): 逐条钉死审计实锤项 ====
+def test_spread_sample_n1_takes_middle_no_crash():  # 门一#2: n=1曾除零
+    import claim_audit as ca
+    c = [(i, f"行{i}") for i in range(5)]
+    assert ca.spread_sample(c, 1) == [c[2]]
+    assert ca.spread_sample([], 1) == []
+
+
+def test_cite_counts_sticky_tail_single_url_counts_once():  # 乙席#2: 同URL三种粘尾曾计3源骗过门禁
+    t = "见 https://a.example/x。其次 https://a.example/x，见下。三处 https://a.example/x)"
+    n_url, _ = r2.cite_counts(t)
+    assert n_url == 1, f"粘尾变体应归一为1源,实得{n_url}"
+    assert not r2.citations_ok(t + FILLER, "strict")
+
+
+def test_verdict_neg_near_catches_fei_compounds():  # 门四#1: 并非/绝不曾放行
+    body = FILLER * 3 + "\n"
+    for bad in ("结论:并非重做", "裁决:绝不采纳", "判定:远非重做"):
+        assert not r2.verdict_ok(body + bad), bad
+
+
+def test_verdict_appendix_numbered_line_cannot_override():  # 门四#2: 附录编号行曾顶替真否定裁决
+    t = FILLER * 3 + "\n裁决:无需重做\n## 附录 处理记录\n1. 结论:采纳。\n"
+    assert not r2.verdict_ok(t)
+    # 正例: 附录之后的合法裁决不再算,但正文裁决仍在附录前且合法→过
+    t2 = FILLER * 3 + "\n裁决:修改后采纳\n## 附录\n1. 结论:采纳。\n"
+    assert r2.verdict_ok(t2)
+
+
+def test_citation_mode_negative_sentence_stays_strict():  # 门四#5: "不允许"曾照样切lit
+    assert r2.citation_mode("本课题不允许标准文献标识符") == "strict"
+    assert r2.citation_mode("本课题允许标准文献标识符") == "lit"
+
+
+def test_verdict_diagnose_agrees_with_ok_on_trailing_ws():  # 门四#4: 行尾空白曾致诊断与门禁分叉
+    t = FILLER * 3 + "\n裁决:采纳         \n"  # 9个尾随空格:TAIL{0,8}放不过
+    assert not r2.verdict_ok(t)
+    d = r2.verdict_diagnose(t)
+    assert "行尾不是三词" in d, d  # 诊断必须指出真实死因,不得报"好行"
+
+
+def test_stage_route_researcher_none_subtopics_falls_back_to_plan(tmp_path, monkeypatch):
+    """乙席#1: 修复环对researcher曾传None→TypeError→修复死路。现从plan.json回读。"""
+    root = make_root(tmp_path, n=2)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []})
+    import loopx.control_plane.collaboration.peers as peers_mod
+    monkeypatch.setattr(peers_mod, "request", lambda *a, **k: None)
+    r2.stage_route(root, "researcher-2", None)  # 修复环的真实调用形态
+    task = (root / "agents/researcher-2/tasks/researcher-2.md").read_text(encoding="utf-8")
+    assert "子课题2" in task
+
+
+def test_stale_repair_feedback_not_appended(tmp_path, monkeypatch):  # 乙席#17: 陈旧反馈误导无关重跑
+    import os
+    root = make_root(tmp_path, n=2)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []})
+    import loopx.control_plane.collaboration.peers as peers_mod
+    monkeypatch.setattr(peers_mod, "request", lambda *a, **k: None)
+    fb = root / "agents/researcher-1/outputs/repair-feedback.md"
+    art = root / "agents/researcher-1/outputs/research-1.md"
+    fb.write_text("# 旧反馈", encoding="utf-8")
+    os.utime(fb, (1000, 1000))          # 反馈很旧
+    os.utime(art, (2000, 2000))         # 工件更新=已修好
+    r2.stage_route(root, "researcher-1", ["s1", "s2"])
+    t1 = (root / "agents/researcher-1/tasks/researcher-1.md").read_text(encoding="utf-8")
+    assert "REPAIR ATTEMPT" not in t1
+    os.utime(art, (500, 500))           # 工件比反馈旧=真未修
+    r2.stage_route(root, "researcher-1", ["s1", "s2"])
+    t2 = (root / "agents/researcher-1/tasks/researcher-1.md").read_text(encoding="utf-8")
+    assert "REPAIR ATTEMPT" in t2
+
+
+def test_claim_audit_ssrf_and_anchor_window():  # 门二#6 + 窗口四件套直锚
+    import claim_audit as ca
+    assert ca._ssrf_blocked("http://127.0.0.1:9090/x")
+    assert ca._ssrf_blocked("http://169.254.169.254/latest/meta-data")
+    assert ca._ssrf_blocked("http://192.168.1.5/admin")
+    assert not ca._ssrf_blocked("https://eur-lex.europa.eu/x")
+    gdpr = open('.local/gdpr-fulltext.txt', encoding='utf-8').read() if Path('.local/gdpr-fulltext.txt').exists() else ("序言" * 100 + "Article 13 位置标记 " + "正文" * 100000 + "Article 13 个人数据透明义务条款" + "尾" * 5000)
+    w = ca.best_window("GDPR第13条规定透明义务,参考Article 13", gdpr)
+    assert "透明义务" in w or "Article 13" in w  # 直锚落在条款正文而非序言
+    w2 = ca.best_window("guard规则含退订链接与物理地址", gdpr)  # 无锚+零命中→首窗(诚实)
+    assert w2 == gdpr[:ca.JUDGE_WINDOW]
+
+
+def test_claim_audit_json_regex_nested_and_escape():
+    import re as _re
+    import claim_audit as ca
+    m = _re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}",
+                   'x {"verdict":"支持","reason":"引{Art. 13}原文"} y')
+    assert json.loads(m.group(0))["verdict"] == "支持"
+    assert ca.esc("a|b") == "a\\|b"  # 管道符真转义,引文逐字

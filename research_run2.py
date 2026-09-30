@@ -112,7 +112,7 @@ VERDICT_TAIL = re.compile(  # 三词收尾;尾部容粗体/全角标点;否定�
     r"(?<!无需)(?<!不需)(?<!不再)(?<!不)(?<!无)(?<!勿)(?<!莫)"
     r"(修改后采纳|重做|采纳)[\s。.，！!？?…*)）)」』’”】\[\]]{0,8}$")
 # 竣工检验V1: lookbehind只查紧邻1字,"不宜/不建议/拒绝/无法/暂缓采纳"曾全放行 → 前置窗口否定
-VERDICT_NEG_NEAR = re.compile(r"[不宜勿莫拒难暂缓无未]")
+VERDICT_NEG_NEAR = re.compile(r"[不宜勿莫拒难暂缓无未非]")  # 门四#1: "非"系(并非/绝非/远非)曾放行
 # 竣工检验V3: "有条件通过(等同修改后采纳)"借括号尾巴过验 → 收尾词前窗口出现"通过/pass"即拒
 VERDICT_BORROW = re.compile(r"通过|pass", re.I)
 
@@ -122,7 +122,12 @@ def verdict_ok(txt):
     引言里唯一的标签行恰以三词收尾曾顶替真裁决);自创词不放行,否定式不放行,
     借尾巴不放行。容忍裁决行后置附录(历史4/5真裁决带附录,V1严格末段会误拦)。"""
     all_lines = txt.splitlines()
-    hits = [(i, ln) for i, ln in enumerate(all_lines) if VERDICT_LABEL.match(ln)]
+    # 附录后的标签行不算裁决(门四#2: 真否定裁决+附录编号行"1. 结论:采纳"曾顶替成假阳性);
+    # 规则本就要求裁决置于附录之前,附录里的历史/引用裁决行一律排除。
+    appendix_at = next((i for i, ln in enumerate(all_lines)
+                        if re.match(r"^\s{0,3}#{1,6}\s*附\s*录|^\s{0,3}附\s*录", ln)), len(all_lines))
+    hits = [(i, ln) for i, ln in enumerate(all_lines)
+            if VERDICT_LABEL.match(ln) and i < appendix_at]
     if not hits:
         return False
     i, last = hits[-1]
@@ -143,24 +148,31 @@ def verdict_ok(txt):
 
 def verdict_diagnose(txt):
     """三段式诊断(P1,2026-10-01智囊团;VeriHarness: 位置+实际值+改法把修复成功率28%→72%):
-    告诉失败者"实际是什么"而非只重复规则——与verdict_ok子规则一一对应,供门禁detail。"""
+    告诉失败者"实际是什么"而非只重复规则——与verdict_ok子规则一一对应,供门禁detail。
+    全程用原始行匹配(门四#4: 曾先strip再匹配,行尾≥9空格时ok=False而诊断报"好行",自相矛盾)。"""
     lines = txt.splitlines()
-    hits = [(i, ln.strip()) for i, ln in enumerate(lines) if VERDICT_LABEL.match(ln)]
+    appendix_at = next((i for i, ln in enumerate(lines)
+                        if re.match(r"^\s{0,3}#{1,6}\s*附\s*录|^\s{0,3}附\s*录", ln)), len(lines))
+    hits = [(i, ln) for i, ln in enumerate(lines)
+            if VERDICT_LABEL.match(ln) and i < appendix_at]
     if not hits:
+        if any(VERDICT_LABEL.match(ln) for ln in lines):
+            return "实际状态: 标签行只出现在附录区(附录里的裁决不算数),正文没有 裁决:/判定:/结论: 行"
         return "实际状态: 全文没有 裁决:/判定:/结论: 开头的标签行(扫描了全文所有行)"
-    i, last = hits[-1]
+    i, raw = hits[-1]
+    disp = raw.strip()
     where = f"最后一条标签行在第{i + 1}行(全文{len(lines)}行)"
     if len(lines) >= 6 and i < len(lines) // 3:
-        return f"实际状态: {where},落在全文前1/3(引言区标签行顶替真裁决的位置规则): {last[:40]}"
-    m = VERDICT_TAIL.search(last)
+        return f"实际状态: {where},落在全文前1/3(引言区标签行顶替真裁决的位置规则): {disp[:40]}"
+    m = VERDICT_TAIL.search(raw)
     if not m:
-        return f"实际状态: {where},行尾不是三词之一: {last[:60]}"
-    prefix = last[:m.start()]
+        return f"实际状态: {where},行尾不是三词之一(含行尾多余空白也会拦): {disp[:60]}"
+    prefix = raw[:m.start()]
     if VERDICT_NEG_NEAR.search(prefix[-4:]):
-        return f"实际状态: {where},收尾词前4字含否定字'{prefix[-4:]}'(否定式裁决不放行): {last[:60]}"
+        return f"实际状态: {where},收尾词前4字含否定字'{prefix[-4:]}'(否定式裁决不放行): {disp[:60]}"
     if VERDICT_BORROW.search(prefix[-12:]):
-        return f"实际状态: {where},收尾词前12字含'通过/pass'借词'{prefix[-12:]}'(借尾巴不放行): {last[:60]}"
-    return f"实际状态: {where}: {last[:60]}"
+        return f"实际状态: {where},收尾词前12字含'通过/pass'借词'{prefix[-12:]}'(借尾巴不放行): {disp[:60]}"
+    return f"实际状态: {where}: {disp[:60]}"
 
 
 # ---- 引用双模式(课题自适应: 文献型课题的PMID/ISO源不再被URL规则误杀) ----
@@ -175,15 +187,17 @@ _CITE_ID_PATTERNS = [
 
 
 def citation_mode(brief_text):
-    """任务书声明制(人授权,模型不能自授): 出现文献规范行→lit,否则strict。"""
-    return "lit" if "允许标准文献标识符" in brief_text else "strict"
+    """任务书声明制(人授权,模型不能自授): 出现文献规范行→lit,否则strict。
+    否定句不放行(门四#5: "不允许标准文献标识符"曾照样切lit,弱化引用门禁)。"""
+    return "lit" if re.search(r"(?<![不未非])允许标准文献标识符", brief_text) else "strict"
 
 
 def cite_counts(txt):
-    """URL按去重计数(同一URL重复N次算1个源);标识符在剥除URL后的文本上计数
+    """URL按归一化去重(url_set同源: 同一URL的粘尾/大小写/末斜杠变体曾计3源骗过门禁——
+    乙席#2/门三#2实锤);标识符在剥除URL后的文本上计数
     (竣工检验V8: https://doi.org/... 曾被URL与DOI正则双重计数)。"""
-    urls = set(re.findall(r"https?://\S+", txt))
-    txt_no_url = re.sub(r"https?://\S+", "", txt)
+    urls = url_set(txt)
+    txt_no_url = URL_ASCII.sub("", txt)
     n_id = sum(len(pat.findall(txt_no_url)) for pat in _CITE_ID_PATTERNS)
     return len(urls), n_id
 
@@ -197,12 +211,15 @@ def citations_ok(txt, mode):
 
 # ---- 同质化防御(P3,2026-10-01智囊团;趋势席依据Anthropic蜂群实验:45 agent里18/30用
 # 同一分支名=从众病,并行调研员引同一批源、给同质结论是未设防的失效面) ----
-_URL_TAIL_PUNCT = ".,;:、。)】」』\"'"
+_URL_TAIL_PUNCT = ".,;:、。)】」』\"'，；！？：·"
+# URL只收ASCII可见字符(门三#2附注/门四#11: \S+会吞URL后无空格CJK,粘尾归一化做不干净)
+URL_ASCII = re.compile(r"https?://[A-Za-z0-9:/\-._~?#\[\]@!$&+;,%=~]+")
+
 
 def url_set(txt):
     """URL集合归一: 去尾部标点+小写+去末斜杠,让 [x](url) 与 url。 归并为同一源。"""
     return {u.rstrip(_URL_TAIL_PUNCT).lower().rstrip("/")
-            for u in re.findall(r"https?://\S+", txt)}
+            for u in URL_ASCII.findall(txt)}
 
 
 def homog_report(root, n):
@@ -367,9 +384,12 @@ def cli(root, *args, cwd=None):
     result = subprocess.run(
         [sys.executable, "-m", "loopx.cli", "--registry", str(root / "registry.json"),
          "--runtime-root", str(root / "runtime"), "--format", "json", *args],
-        capture_output=True, text=True, check=False, cwd=cwd, env=env)
+        capture_output=True, text=True, check=False, cwd=cwd, env=env,
+        timeout=1500)  # 内核--timeout-seconds 1200是传参不是子进程超时(乙席#16);1500=1200+余量
     if result.returncode:
-        (root / "last-cli-failure.log").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+        # 并发失败互覆只剩最后一份(乙席#11):至少让每份日志自述是哪条命令
+        (root / "last-cli-failure.log").write_text(
+            f"args: {args}\n{result.stdout}\n{result.stderr}", encoding="utf-8")
         raise SystemExit("CLI failed; inspect last-cli-failure.log")
     return json.loads(result.stdout)
 
@@ -502,6 +522,9 @@ def stage_route(root, phase, subtopics=None):
     brief = read_brief(root)
     fill = {"deliverables": deliverables_of(brief), "title": brief_title(brief)}
     if phase.startswith("researcher"):
+        if subtopics is None:  # 门禁修复环/CLI单棒只传(root,ph)——从plan.json回读子课题
+            subtopics = [s["scope"] for s in json.loads(
+                (root / "agents/planner/outputs/plan.json").read_text(encoding="utf-8"))["subtopics"]]
         task = RESEARCHER_TASK.format(k=phase.split("-")[1], scope=subtopics[int(phase.split("-")[1]) - 1])
     else:
         task = TASKS[phase].format(**fill)
@@ -567,7 +590,10 @@ def stage_route(root, phase, subtopics=None):
         "Host quirk: shell tools are BROKEN ('--profile <name> is required'); use read/write/edit/glob "
         "and web_search/web_fetch instead. Use file_sha256 for digests. "
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
-    if (ws / "outputs" / "repair-feedback.md").exists():
+    fb = ws / "outputs" / "repair-feedback.md"
+    art = ws / deliverable
+    # 陈旧反馈不附(乙席#17): 反馈早于工件=已修好,再附"先读反馈"误导无关重跑的方向
+    if fb.exists() and (not art.exists() or fb.stat().st_mtime >= art.stat().st_mtime):
         task += ("\n\nREPAIR ATTEMPT: FIRST read outputs/repair-feedback.md and follow its "
                  "针对性修复要求 exactly (previous attempt failed validation; do not repeat it).")
     (ws / "tasks" / f"{phase}.md").write_text(task + "\n", encoding="utf-8")
@@ -714,8 +740,9 @@ def gate(root, include_final=True):
                           for pp in set(root.glob("agents/*/outputs/*.md"))
                           | set(root.glob("agents/planner/outputs/plan.json"))}}
     write(root / "gate-report.json", report)
-    print(f"pass^k: 首试通过 {len(first)}/{len(led)} 棒"
-          + ("" if len(first) == len(led) else f"(重试棒: { {p: a for p, a in led.items() if a > 1} })"),
+    live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
+    print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒"
+          + ("" if len(first) == len(live) else f"(重试棒: { {p: a for p, a in live.items() if a > 1} })"),
           flush=True)
     top = next((p for p in report["homogenization"] if p["jaccard"] > 0.7), None)
     if top:
@@ -875,7 +902,13 @@ def auto(root):
 
     with cf.ThreadPoolExecutor(max_workers=2) as ex:
         futs = {ex.submit(ensure_phase, root, ph): ph for ph in ("reviewer-1", "reviewer-2")}
-        results = {futs[fu]: fu.result().get("status") for fu in cf.as_completed(futs)}
+        results = {}
+        for fu in cf.as_completed(futs):
+            ph = futs[fu]
+            try:  # 与调研员池对称(乙席#6): 单评审失败落账不裸穿,另一路结果不丢
+                results[ph] = fu.result().get("status")
+            except (Exception, SystemExit) as exc:
+                results[ph] = f"FAILED: {str(exc)[:80]}"
     print(f">>> 双盲评: {results}")
     assert all(v == "committed" for v in results.values()), "有评审未committed"
     stamp("双盲评(2路并行)")
