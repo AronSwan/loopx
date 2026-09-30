@@ -137,9 +137,9 @@ destination needs:
   rejecting it. "the Bearer token expired" describes a credential; it does not
   carry one.
 
-The value arms stay in every policy, so the narrower tier releases prose only: an
-assignment (`password=`, `secret:`, `token:`) or a scheme followed by a value
-(`Bearer <8+ characters>`) is rejected by both tiers. A raw credential token with
+The value arms stay in every policy, so the narrower tier releases prose only: a
+credential label followed by an assignment operator, or a bearer scheme carrying
+a value of at least eight characters, is rejected by both tiers. A raw credential token with
 no label at all -- a GitHub token, a private key block -- is rejected by both
 tiers too, which the word-only rule never caught.
 

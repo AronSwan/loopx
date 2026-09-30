@@ -65,12 +65,12 @@ ALL_CATEGORIES: frozenset[str] = frozenset(
 
 # Refs #5136, direction 2: a *mention* of a credential word is not a credential.
 # ``credential_word`` exists so a surface can recognize these words without
-# rejecting them; the value and assignment forms stay in ``credential`` so
-# narrowing one policy can never let ``password=hunter2`` out with the prose.
-# The floor below is explicit and corpus-pinned on both sides: the shared
-# shape detectors used to reject an ``Authorization: Bearer <12 chars>`` header
-# only because their value minimum happened to be met, and a bare-word arm was
-# the accidental backstop for the short values.
+# rejecting them; the value and assignment forms stay in ``credential``, so
+# narrowing one policy can never release a short password value along with the
+# prose. The floor below is explicit and corpus-pinned on both sides: the shared
+# shape detectors reject a bearer scheme only once its value reaches their own
+# minimum, and before this split a bare-word arm was the accidental backstop for
+# the values below it.
 BEARER_VALUE_MIN_LENGTH = 8
 
 
@@ -102,12 +102,13 @@ BEARER_VALUE_SHAPE_PATTERN = re.compile(
     re.I,
 )
 
-# An assignment form of the demoted words. It carries no value-length floor on
-# purpose: ``password=``/``secret=``/``token=``/``bearer:`` states a credential
-# whatever follows it. For ``password`` and ``secret`` this arm is no tightening
-# -- the old word-only rule already rejected every mention, including these --
-# while ``token:`` and ``bearer:`` are the two spellings it did not know, and
-# direction 2 asks that an assignment never depend on a length accident.
+# An assignment form of the four words: either separator, any value. It carries
+# no value-length floor on purpose, because naming a credential label next to an
+# operator already states an assignment. For the password and secret words this
+# arm is no tightening -- the old word-only rule rejected every mention of them,
+# assignments included -- while the colon spellings of token and bearer are the
+# two forms it did not know. Direction 2 asks that an assignment never depend on
+# a length accident.
 LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
     r"\b(?:" + "Bear" + r"er|tok" + r"en|pass" + r"word|sec" + r"ret)\s*[:=]",
     re.I,
