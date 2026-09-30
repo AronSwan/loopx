@@ -1,7 +1,8 @@
 {
-  "schema_version": "public_safe_text_corpus_v0",
+  "schema_version": "public_safe_text_corpus_v1",
   "purpose": "One corpus for every real public-safe text validator owner: loopx/public_safe_text.py (used by feedback, authority, and boundary_authority) and the TypeScript Vision checkpoint. Both runtimes must agree on every sample.",
   "sample_encoding": "Each sample is a template. Substitute every {NAME} placeholder with the joined parts of tokens[NAME], and {NAME_LOWER} with the lowercased join. Samples are assembled at test time so this fixture carries no literal credential-looking string.",
+  "bucket_semantics": "public_safe is accepted by every owner and by the publication policy. private_looking is rejected by every owner and by the publication policy. internal_state_prose is the two-tier set from Refs #5136 direction 2: the four owners validate LoopX's own state and accept it, while the stricter publication policy (ALL_CATEGORIES / find_private_text_match) still rejects it.",
   "tokens": {
     "AUTHZ": ["Author", "ization"],
     "BASIC": ["Bas", "ic"],
@@ -9,7 +10,10 @@
     "TOKEN": ["tok", "en"],
     "PASSWORD": ["pass", "word"],
     "SECRET": ["sec", "ret"],
-    "HOME_PATH": ["/Us", "ers/"]
+    "HOME_PATH": ["/Us", "ers/"],
+    "GH_TOKEN_PREFIX": ["gh", "p_"],
+    "KEY_HEAD": ["---", "---"],
+    "PRIVATE_KEY": ["PRIVATE KE", "Y"]
   },
   "public_safe": [
     {
@@ -35,6 +39,11 @@
     {
       "id": "ordinary_word_token_without_assignment",
       "template": "the action kind is a public-safe {TOKEN_LOWER}"
+    },
+    {
+      "id": "ordinary_public_url",
+      "template": "metrics published at https://example.com/run-7/metrics.json",
+      "note": "The internal-state tier does not decide URLs: the rule these four owners enforced before never rejected one either, and per-face URL policy is the caller-migration work still open in #5136."
     }
   ],
   "private_looking": [
@@ -72,23 +81,70 @@
     },
     {
       "id": "bare_bearer_scheme",
-      "template": "{BEARER} abc123def456"
+      "template": "{BEARER} abc123def456",
+      "note": "Rejected by the bearer-value arm, not by the word arm: 12 chars >= BEARER_VALUE_MIN_LENGTH."
+    },
+    {
+      "id": "bearer_value_at_named_floor",
+      "template": "{BEARER} abc123de",
+      "note": "Exactly BEARER_VALUE_MIN_LENGTH (8) characters of value."
     },
     {
       "id": "token_assignment",
       "template": "{TOKEN_LOWER}=abc123def456"
     },
     {
-      "id": "password_word",
-      "template": "the {PASSWORD_LOWER} is stored in the vault"
+      "id": "password_assignment_short_value",
+      "template": "{PASSWORD_LOWER}=hunter2",
+      "note": "The assignment form carries no value-length floor, so a 6-char value is still rejected after the word arm moved to credential_word."
     },
     {
-      "id": "secret_word",
-      "template": "read the {SECRET_LOWER} from the environment"
+      "id": "secret_assignment_colon",
+      "template": "{SECRET_LOWER}: env",
+      "note": "Newly rejected: the old rule only had an equals form for this label."
+    },
+    {
+      "id": "token_assignment_colon",
+      "template": "{TOKEN_LOWER}: abc123",
+      "note": "Newly rejected: the old text-owner rule matched token= but not the colon form."
     },
     {
       "id": "local_home_path",
       "template": "{HOME_PATH}operator/work/loopx/state.json"
+    },
+    {
+      "id": "raw_github_token_unlabeled",
+      "template": "carry {GH_TOKEN_PREFIX}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa forward",
+      "note": "Newly rejected by the internal-state tier: the word-only rule had no arm for a credential value that arrives without a label."
+    },
+    {
+      "id": "private_key_block_unlabeled",
+      "template": "{KEY_HEAD}BEGIN RSA {PRIVATE_KEY}-----",
+      "note": "Same class as the raw token: recognized only by the value-shape arm."
+    }
+  ],
+  "internal_state_prose": [
+    {
+      "id": "bearer_word_in_prose",
+      "template": "the {BEARER} token expired",
+      "note": "The maintainer's own example in #5136: a sentence about an expired scheme is not a leak."
+    },
+    {
+      "id": "password_word_in_prose",
+      "template": "the {PASSWORD_LOWER} is stored in the vault"
+    },
+    {
+      "id": "secret_word_in_prose",
+      "template": "read the {SECRET_LOWER} from the environment"
+    },
+    {
+      "id": "rotation_note_names_two_schemes",
+      "template": "{AUTHZ_LOWER} rotation is pending; reissue the {BEARER} value and the vault {SECRET_LOWER}."
+    },
+    {
+      "id": "bearer_value_below_named_floor",
+      "template": "the {BEARER} abc123d was rejected",
+      "note": "One character below BEARER_VALUE_MIN_LENGTH, so it is a word mention. Both sides of the floor are pinned; the floor is a named constant, not a regex accident."
     }
   ]
 }

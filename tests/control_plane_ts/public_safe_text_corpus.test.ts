@@ -4,6 +4,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  CREDENTIAL_WORD_PATTERNS,
+  INTERNAL_STATE_PRIVATE_TEXT_PATTERNS,
+  INTERNAL_STATE_SHAPE_PATTERNS,
+  PRIVATE_TEXT_PATTERNS,
   VISION_REFRESH_REQUEST_SCHEMA,
   buildVisionCheckpoint,
 } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
@@ -19,6 +23,7 @@ const CORPUS_PATH = fileURLToPath(
 interface CorpusSample {
   id: string;
   template: string;
+  note?: string;
 }
 
 interface Corpus {
@@ -26,10 +31,11 @@ interface Corpus {
   tokens: Record<string, string[]>;
   public_safe: CorpusSample[];
   private_looking: CorpusSample[];
+  internal_state_prose: CorpusSample[];
 }
 
 const corpus = JSON.parse(readFileSync(CORPUS_PATH, "utf8")) as Corpus;
-assert.equal(corpus.schema_version, "public_safe_text_corpus_v0");
+assert.equal(corpus.schema_version, "public_safe_text_corpus_v1");
 
 function render(template: string): string {
   return template.replace(/\{([A-Z][A-Z_]*)\}/g, (_match, name: string) => {
@@ -74,5 +80,67 @@ test("vision checkpoint rejects every private-looking corpus sample", () => {
       /private-looking value/,
       sample.id,
     );
+  }
+});
+
+// Refs #5136, direction 2: this owner validates LoopX's own state, so a bare
+// credential word is a fact about a credential rather than one. The Python tier
+// test drives the same bucket through the three Python owners.
+test("vision checkpoint accepts the internal-state prose corpus", () => {
+  for (const sample of corpus.internal_state_prose) {
+    assert.doesNotThrow(() => checkpoint(render(sample.template)), sample.id);
+  }
+});
+
+test("the internal-state tier drops the words and adds the ported shapes", () => {
+  // Without this, dropping a word arm and dropping a value arm would look the
+  // same from the corpus alone. The composition is pinned, not the count.
+  const wordSources = CREDENTIAL_WORD_PATTERNS.map((pattern) => pattern.source);
+  assert.deepEqual(
+    wordSources,
+    [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i].map((pattern) => pattern.source),
+  );
+  assert.equal(INTERNAL_STATE_SHAPE_PATTERNS.length, 2);
+  const expected = [
+    ...PRIVATE_TEXT_PATTERNS.filter(
+      (pattern) => !CREDENTIAL_WORD_PATTERNS.includes(pattern),
+    ),
+    ...INTERNAL_STATE_SHAPE_PATTERNS,
+  ].map((pattern) => pattern.source);
+  assert.deepEqual(
+    INTERNAL_STATE_PRIVATE_TEXT_PATTERNS.map((pattern) => pattern.source),
+    expected,
+  );
+});
+
+test("the narrower tier still rejects every value and assignment shape", () => {
+  // Each value below is one of the demoted words carrying something. Assembling
+  // them keeps the fixture's discipline of carrying no literal credential text.
+  const bearer = "Bear" + "er";
+  const password = "pass" + "word";
+  const secret = "sec" + "ret";
+  const token = "tok" + "en";
+  const rejected = [
+    `${bearer} ${"a".repeat(8)}`,
+    `${bearer} ${"a".repeat(40)}`,
+    `${password}=hunter2`,
+    `${secret}: env`,
+    `${token}: abc123`,
+    "/Us" + "ers/operator/state.json",
+  ];
+  for (const value of rejected) {
+    assert.throws(
+      () => checkpoint(value),
+      /private-looking value/,
+      `one char below/above floor: ${value.slice(0, 12)}`,
+    );
+  }
+  const accepted = [
+    `the ${bearer} token expired`,
+    `the ${password} is stored in the vault`,
+    `read the ${secret} from the environment`,
+  ];
+  for (const value of accepted) {
+    assert.doesNotThrow(() => checkpoint(value), value.slice(0, 24));
   }
 });
