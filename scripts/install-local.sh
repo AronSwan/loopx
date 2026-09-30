@@ -321,15 +321,21 @@ disable_legacy_shim() {
   append_legacy_line "legacy command disabled: $disabled"
 }
 
-install_symlink() {
-  local target="$1"
-  local link="$2"
-  local tmp="$link.tmp.$$"
-  rm -f "$tmp"
+check_symlink_destination() {
+  local link="$1"
   if [[ ! -L "$link" && -d "$link" ]]; then
     echo "loopx installer error: $link is a directory; remove it before installing" >&2
     return 1
   fi
+}
+
+install_symlink() {
+  local target="$1"
+  local link="$2"
+  local tmp="$link.tmp.$$"
+  # Repeat the check at replacement time in case a caller changed the path.
+  check_symlink_destination "$link" || return 1
+  rm -f "$tmp"
   ln -s "$target" "$tmp"
   LOOPX_LINK_TMP="$tmp" LOOPX_LINK_TARGET="$link" "${LOOPX_PYTHON:-python3}" - <<'PY'
 import os
@@ -710,6 +716,19 @@ promote_default=0
 if resolve_default_promotion; then
   promote_default=1
 fi
+# Reject unusable entry targets before building candidates or upgrading data.
+# Canary-only installs must leave the default entry alone, even if it is a directory.
+if [[ "$promote_default" == "1" ]]; then
+  check_symlink_destination "$bin_dir/loopx"
+  check_symlink_destination "$bin_dir/loopx-apply-rrule"
+elif [[ "$install_canary" == "0" ]]; then
+  echo "loopx installer error: default promotion is guarded and LOOPX_INSTALL_CANARY=0 leaves no install target" >&2
+  echo "Set LOOPX_PROMOTE_DEFAULT=1 only after explicitly approving this checkout." >&2
+  exit 2
+fi
+if [[ "$install_canary" != "0" ]]; then
+  check_symlink_destination "$bin_dir/loopx-canary"
+fi
 if [[ "$promote_default" == "1" ]]; then
   # Preparing shared Chat assets is part of the guarded installation.
   mkdir -p "$releases_dir"
@@ -730,11 +749,6 @@ fi
 "${LOOPX_PYTHON:-python3}" "$repo_root/scripts/chat_bundle.py" "${chat_bundle_args[@]}"
 
 if [[ "$promote_default" == "0" ]]; then
-  if [[ "$install_canary" == "0" ]]; then
-    echo "loopx installer error: default promotion is guarded and LOOPX_INSTALL_CANARY=0 leaves no install target" >&2
-    echo "Set LOOPX_PROMOTE_DEFAULT=1 only after explicitly approving this checkout." >&2
-    exit 2
-  fi
   mkdir -p "$bin_dir"
   chmod +x "$repo_root/scripts/loopx"
   install_symlink "$repo_root/scripts/loopx" "$bin_dir/loopx-canary"
