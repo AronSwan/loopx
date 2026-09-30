@@ -50,9 +50,9 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
         assert rc == expected, output
         return json.loads(output)
 
-    def acquire(key, path, expected=0):
+    def acquire(key, path, expected=0, scope="src/**"):
         return cli("acquire", key, "--owner", "agent-a" if key == "a" else "agent-b",
-                   "--idempotency-key", f"edit-{key}", "--ttl-seconds", "600", "--write-scope", "src/**",
+                   "--idempotency-key", f"edit-{key}", "--ttl-seconds", "600", "--write-scope", scope,
                    *(["--write-worktree", str(path)] if path else []), expected=expected)
 
     invalid = acquire("a", project, expected=1)
@@ -60,6 +60,21 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     (a / "src").symlink_to(project, target_is_directory=True)
     assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
     (a / "src").unlink()
+    # Ignore rules do not establish physical isolation. Check both an ignored
+    # scope root and an ignored ancestor of an exact, not-yet-created file.
+    (a / ".gitignore").write_text("src\noutside\n")
+    (a / "src").symlink_to(project, target_is_directory=True)
+    assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
+    (a / "src").unlink()
+    (a / "src").mkdir()
+    (a / "src" / "redirect").symlink_to(project, target_is_directory=True)
+    assert acquire("a", a, expected=1, scope="src/redirect/new.ts")["error_code"] == "invalid_worktree_lease_request"
+    (a / "src" / "redirect").unlink()
+    (a / "src" / "redirect").symlink_to(tmp_path / "missing", target_is_directory=True)
+    assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
+    (a / "src" / "redirect").unlink()
+    # An unrelated ignored link must not prevent a narrow code-edit lease.
+    (a / "outside").symlink_to(project, target_is_directory=True)
     monkeypatch.chdir(a)
     first = acquire("a", Path("."))
     assert first["source_authority"] == provider + "_v0"

@@ -1,7 +1,7 @@
 /** Filesystem observations for code-edit leases, never a shared-state fence. */
 import {execFile} from "node:child_process";
 import {promisify} from "node:util";
-import {realpath, stat, readFile, lstat} from "node:fs/promises";
+import {realpath, stat, readFile, lstat, opendir} from "node:fs/promises";
 import {platform} from "node:os";
 import {createHash} from "node:crypto";
 import {isAbsolute, resolve} from "node:path";
@@ -59,16 +59,25 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   // Code-edit leases must not describe shared Git administration or paths
   // redirected out of the checkout. Unknown/untracked symlinks also fail closed.
   if (overlaps(".git")) throw new EffectRuntimeRequestError("worktree scopes cannot include Git administration");
-  const paths = (await git("ls-files", "--cached", "--others", "--exclude-standard", "-z")).split("\0").filter(Boolean);
-  for (const relative of paths) {
-    if (!overlaps(relative)) continue;
-    const full = resolve(root, relative);
-    try {
-      if ((await lstat(full)).isSymbolicLink() || !(await realpath(full)).startsWith(`${root}/`)) {
-        throw new EffectRuntimeRequestError("worktree scope contains a redirected path");
+  // Inspect physical entries, including ignored files. Git's tracked/untracked
+  // inventory is not an isolation boundary. Subtree overlap also checks a
+  // redirected ancestor when the requested leaf does not exist yet.
+  const pending = [""];
+  while (pending.length > 0) {
+    const parent = pending.pop()!;
+    for await (const entry of await opendir(resolve(root, parent))) {
+      const relative = parent ? `${parent}/${entry.name}` : entry.name;
+      if (!overlaps(relative) && !overlaps(`${relative}/**`)) continue;
+      const full = resolve(root, relative);
+      try {
+        const info = await lstat(full);
+        if (info.isSymbolicLink() || !(await realpath(full)).startsWith(`${root}/`)) {
+          throw new EffectRuntimeRequestError("worktree scope contains a redirected path");
+        }
+        if (info.isDirectory()) pending.push(relative);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
   const remote = await git("remote", "get-url", "origin");
