@@ -170,7 +170,11 @@ async function waitForPickerLabel(page, settled, timeoutMs = 15_000) {
   throw new Error(`Chat runtime picker never settled: ${resolution}`);
 }
 
-async function assertHairlineRow(page, maxHeight = 26) {
+// The chip is the executor picker button, so its hairline row is the control's
+// own compact height (button.personal-execution-chip min-height: 28px), not the
+// 26px the static label used before it became interactive. What the check
+// protects is that the chip still renders as one row inside the channel header.
+async function assertHairlineRow(page, maxHeight = 28) {
   const headerBox = await page.locator(".personal-channel-header").boundingBox();
   const chipBox = await page.locator(".personal-execution-chip").boundingBox();
   if (!headerBox || !chipBox) throw new Error("Execution chip has no layout box");
