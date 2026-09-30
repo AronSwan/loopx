@@ -55,6 +55,17 @@ const RESUMABLE_NATIVE = ["paused", "blocked", "usageLimited", "budgetLimited"];
 
 /** A delegated result was accepted; decide only whether the lead may continue now.
  *
+ * The intent is pinned to the conversation whose Turn started the operation;
+ * no other conversation of the same Goal and coordinator can consume it, and
+ * a closed or exited origin is refused rather than handed over implicitly.
+ *
+ * ``wake_turn`` is the Turn already accepted under this intent's client id in
+ * that conversation, if any.  Only a started Turn is dispatch evidence: it is
+ * recorded as ``woken`` without another dispatch.  A still-queued Turn is not;
+ * it is replayed through the native acceptance owner under the same admission
+ * as a new wake, so pause and revocation still hold.  A Turn that ended before
+ * it started is refused, since its client id cannot admit another Turn.
+ *
  * The same facts that admit an owner resume admit a host wake, plus mode
  * enabled and not paused.  A refusal is terminal for that intent; pending
  * keeps it for a later tick.  A running Turn is checked before the native
@@ -63,13 +74,31 @@ const RESUMABLE_NATIVE = ["paused", "blocked", "usageLimited", "budgetLimited"];
  * starts a native Goal and never raises the conversation allowance. */
 function planDelegationWake(input: JsonObject, session: JsonObject, settings: JsonObject, native: JsonObject): JsonObject {
   const mode = requireJsonObject(session.loopx_mode ?? {}, "mode");
+  const intent = requireJsonObject(input.intent, "wake intent");
+  const requester = requireJsonObject(intent.requester, "wake requester");
+  const conversation = requireJsonObject(intent.conversation, "wake conversation");
+  requireThat(typeof intent.intent_id === "string" && /^[a-f0-9]{64}$/.test(intent.intent_id), "invalid wake intent");
   const outcome = (state: "pending" | "refused", reason: string) => ({operation: "wake", state, reason});
+  if (conversation.session_id !== session.session_id || requester.goal_id !== session.goal_id) {
+    return outcome("refused", "wake_identity_conflict");
+  }
+  const turn = input.wake_turn == null ? null : requireJsonObject(input.wake_turn, "wake Turn");
+  if (turn !== null) {
+    // Another request owns this client id; claiming it would be a false receipt.
+    if (turn.loopx_execution !== true || turn.operation !== "wake" || turn.intent_id !== intent.intent_id) {
+      return outcome("refused", "wake_identity_conflict");
+    }
+    if (turn.started === true) return {operation: "wake", state: "woken", reason: null, dispatch: "recorded"};
+    if (turn.status !== "queued") return outcome("refused", "wake_turn_not_started");
+  }
   if (input.goal_active !== true) return outcome("refused", "goal_stopped");
-  if (mode.enabled !== true) return outcome("refused", "no_wake_owner");
+  if (session.status === "closed" || mode.enabled !== true) return outcome("refused", "no_wake_owner");
+  if (settings.agent_id !== requester.agent_id) return outcome("refused", "wake_identity_conflict");
   if (!(typeof settings.agent_id === "string" && Array.isArray(input.registered_agents)
     && input.registered_agents.includes(settings.agent_id))) return outcome("refused", "lead_unbound");
   if (input.execution_binding_valid !== true) return outcome("refused", "binding_revoked");
-  if (session.active_turn_id) return outcome("pending", "lead_turn_active");
+  if (session.active_turn_id && session.active_turn_id !== turn?.turn_id) return outcome("pending", "lead_turn_active");
+  // The wake's own queued Turn has not run, so the native status is still the lead's.
   const status = String(native.status ?? "absent");
   if (status === "complete") return outcome("refused", "native_goal_complete");
   if (status === "absent") return outcome("refused", "native_goal_absent");
@@ -78,5 +107,5 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
   if (!(Number.isSafeInteger(settings.token_budget) && Number(settings.token_budget) > 0
     && Number(settings.token_budget) <= 2147483647
     && Number(settings.token_budget) > Number(native.tokensUsed ?? 0))) return outcome("pending", "allowance_exhausted");
-  return {operation: "wake", state: "admitted", reason: null, settings};
+  return {operation: "wake", state: "admitted", reason: null, dispatch: turn === null ? "create" : "replay", settings};
 }
