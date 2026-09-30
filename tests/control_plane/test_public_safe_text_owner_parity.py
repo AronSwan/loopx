@@ -43,7 +43,7 @@ PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z_]*)\}")
 
 def _load_corpus() -> dict[str, Any]:
     corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
-    assert corpus["schema_version"] == "public_safe_text_corpus_v1"
+    assert corpus["schema_version"] == "public_safe_text_corpus_v2"
     return corpus
 
 
@@ -71,6 +71,39 @@ def _samples(group: str) -> list[tuple[str, str]]:
 PUBLIC_SAFE_SAMPLES = _samples("public_safe")
 PRIVATE_LOOKING_SAMPLES = _samples("private_looking")
 INTERNAL_STATE_PROSE_SAMPLES = _samples("internal_state_prose")
+
+
+def _shaped_samples(group: str) -> list[tuple[str, str, str]]:
+    """The group's samples with the contract signal each row declares."""
+
+    corpus = _load_corpus()
+    tokens = corpus["tokens"]
+    return [
+        (str(sample["id"]), _render(str(sample["template"]), tokens), str(sample["shape"]))
+        for sample in corpus[group]
+    ]
+
+
+# Which named reason the contract expects for a declared signal. Written from the
+# contract prose in the fixture, so a row cannot pass by matching whichever
+# implementation pattern happens to be first: the reason has to be the one that
+# signal owns.
+SIGNAL_REASONS: dict[str, frozenset[str]] = {
+    "assignment_punctuation": frozenset(
+        {"credential-word assignment shape", "authorization header/assignment shape"}
+    ),
+    "shaped_value_token": frozenset({"credential label carrying a shaped value"}),
+    "quoted_value": frozenset({"credential label carrying a quoted value"}),
+    "opaque_value_run": frozenset({"credential label carrying a shaped value"}),
+    "unlabeled_secret_shape": frozenset({"credential-like value shape", "basic-auth credential value"}),
+    "non_credential_local_path": frozenset({"absolute home-directory path", "local filesystem path"}),
+    "credential_word_only": frozenset(
+        {"bearer auth scheme word", "password word", "secret word"}
+    ),
+    "remote_location_undecided": frozenset({"raw remote location URL"}),
+    "non_credential_prose": frozenset(),
+}
+CORPUS_GROUPS = ("public_safe", "private_looking", "internal_state_prose")
 
 
 def _ids(samples: list[tuple[str, str]]) -> list[str]:
@@ -130,7 +163,7 @@ def test_private_looking_corpus_is_rejected_by_every_owner(
 
 
 def test_corpus_covers_the_reviewed_credential_shapes() -> None:
-    """Guard the corpus itself: the three shapes that motivated this contract."""
+    """Guard the corpus itself: the shapes that motivated this contract."""
 
     required = {
         "raw_header_basic",
@@ -139,16 +172,64 @@ def test_corpus_covers_the_reviewed_credential_shapes() -> None:
     }
     assert required <= set(_ids(PRIVATE_LOOKING_SAMPLES))
     assert "governance_prose_needs_owner_authorization" in _ids(PUBLIC_SAFE_SAMPLES)
-    # Direction 2's boundary is part of the contract, so the corpus must keep a
-    # sample on each side of the value floor and one assignment per demoted word.
+    # Direction 2's boundary is part of the contract, so the corpus keeps a sample
+    # for each signal, for the ordinary word the retired length floor used to
+    # reject, and for the residual the contract cannot recognize.
     private_ids = set(_ids(PRIVATE_LOOKING_SAMPLES))
     assert {
         "bearer_value_at_named_floor",
+        "bearer_digit_value_below_old_floor",
+        "token_space_digit_value",
+        "copula_password_digit_value",
+        "space_secret_opaque_value",
+        "comma_bearer_opaque_value",
+        "dash_secret_opaque_value",
+        "quoted_password_passphrase",
+        "bearer_opaque_letter_run_at_ceiling",
+        "bearer_assignment_colon_bare_word",
         "password_assignment_short_value",
         "secret_assignment_colon",
         "token_assignment_colon",
     } <= private_ids
-    assert "bearer_word_in_prose" in _ids(INTERNAL_STATE_PROSE_SAMPLES)
+    prose_ids = set(_ids(INTERNAL_STATE_PROSE_SAMPLES))
+    assert {
+        "bearer_word_in_prose",
+        "bearer_before_long_ordinary_word",
+        "password_copula_ordinary_word",
+        "disclosed_residual_short_letter_value",
+    } <= prose_ids
+
+
+def test_every_corpus_row_is_declared_by_one_contract_signal() -> None:
+    # The fixture is the contract, so coverage goes both ways: every row names a
+    # declared signal, and every declared signal has at least one row. An arm added
+    # without a sample, or a sample whose verdict its own signal does not explain,
+    # fails here instead of in a reviewer's manual probe.
+    signals = set(_load_corpus()["contract_signals"])
+    declared: set[str] = set()
+    for group in CORPUS_GROUPS:
+        for sample_id, text, shape in _shaped_samples(group):
+            assert shape in signals, sample_id
+            declared.add(shape)
+            strict = classify_private_text(text, categories=ALL_CATEGORIES)
+            internal = classify_private_text(text, categories=TEXT_OWNER_CATEGORIES)
+            if group == "public_safe":
+                assert internal is None, sample_id
+                if shape == "remote_location_undecided":
+                    assert strict is not None, sample_id
+                    assert strict.reason in SIGNAL_REASONS[shape], (sample_id, strict.reason)
+                else:
+                    assert strict is None, sample_id
+            elif group == "private_looking":
+                assert strict is not None and internal is not None, sample_id
+                assert internal.reason == strict.reason, sample_id
+                assert internal.reason in SIGNAL_REASONS[shape], (sample_id, internal.reason)
+            else:
+                assert internal is None, sample_id
+                assert strict is not None, sample_id
+                assert strict.category == CATEGORY_CREDENTIAL_WORD, sample_id
+                assert strict.reason in SIGNAL_REASONS[shape], (sample_id, strict.reason)
+    assert declared == signals, signals ^ declared
 
 
 @pytest.mark.parametrize("owner", [check for _, check in OWNERS], ids=OWNER_IDS)

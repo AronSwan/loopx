@@ -114,16 +114,26 @@ const GOAL_VISION_STATE_ALIASES: Readonly<Record<string, string>> = {
 // recognized but no longer rejected by this owner, because a checkpoint reason
 // that says the bearer token expired describes a credential rather than carrying
 // one. The value and assignment arms below are what keep a real credential out.
-export const BEARER_VALUE_MIN_LENGTH = 8;
+// The credential-value contract, mirrored from loopx/public_safe_text.py: four
+// independent signals, of which this file owns the two connector arms. A label
+// plus `:` or `=` carries whatever follows (LABELED_CREDENTIAL_ASSIGNMENT below);
+// a label reached through a comma, dash, whitespace or copula carries a value only
+// when the next token looks assembled -- it holds a digit or a base64-only
+// character, or it is a quoted run, or it is an unbroken letter run at or above
+// OPAQUE_VALUE_MIN_LENGTH. An ordinary English word beside the label is prose.
+export const OPAQUE_VALUE_MIN_LENGTH = 16;
 const AUTHORIZATION_CREDENTIAL_SHAPE = /\bAuthorization["']?\s*[:=]/i;
 const BASIC_CREDENTIAL_VALUE =
   /[Bb]asic\s+(?=[A-Za-z0-9+/=]*[a-z])(?=[A-Za-z0-9+/=]*[A-Z])[A-Za-z0-9+/=]{16,}/;
-// A literal, not `new RegExp` with an interpolated floor: the digest guard
+// Literals, not `new RegExp` with interpolated parts: the digest guard
 // (`tests/control_plane_ts/content_digest_single_owner.test.ts`) requires every
 // construction whose pattern it cannot fold to be declared as a second owner of a
-// value shape, and an interpolated quantifier is exactly that. The tie to the named
-// constant is asserted in the corpus test instead of built into the pattern here.
-export const BEARER_VALUE_SHAPE = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/i;
+// value shape. The tie between the quantifier and OPAQUE_VALUE_MIN_LENGTH is
+// asserted in the corpus test instead of built into the pattern here.
+export const CONNECTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]{2,})(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
+export const QUOTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]{2,}["']/i;
 const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)\s*[:=]/i;
 // Ported from the Python owner's two in-policy shape detectors, so one corpus
 // yields one verdict in both runtimes (Refs #5136, direction 4). The third
@@ -139,7 +149,8 @@ export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
   /\bt-20\d{12}-[a-z0-9]+\b/,
-  BEARER_VALUE_SHAPE,
+  CONNECTED_CREDENTIAL_VALUE_SHAPE,
+  QUOTED_CREDENTIAL_VALUE_SHAPE,
   AUTHORIZATION_CREDENTIAL_SHAPE,
   BASIC_CREDENTIAL_VALUE,
   LABELED_CREDENTIAL_ASSIGNMENT,

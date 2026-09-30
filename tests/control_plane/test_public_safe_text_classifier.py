@@ -37,7 +37,6 @@ from loopx.domain_packs.ml_experiment import (
 from loopx.public_safe_text import (
     ALL_CATEGORIES,
     ARTIFACT_LIFECYCLE_CATEGORIES,
-    BEARER_VALUE_MIN_LENGTH,
     CATEGORY_CREDENTIAL,
     CATEGORY_CREDENTIAL_WORD,
     CATEGORY_LOCAL_PATH,
@@ -50,7 +49,9 @@ from loopx.public_safe_text import (
     TEXT_OWNER_CATEGORIES,
     _AUTHORIZATION_CREDENTIAL_SHAPE,
     _BASIC_CREDENTIAL_VALUE,
-    BEARER_VALUE_SHAPE_PATTERN,
+    CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
+    OPAQUE_VALUE_MIN_LENGTH,
+    QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
     LABELED_CREDENTIAL_ASSIGNMENT_PATTERN,
     _CATEGORIZED_PRIVATE_TEXT_PATTERNS,
     classify_private_text,
@@ -126,10 +127,16 @@ def test_text_owner_policy_drops_the_words_and_leaves_urls_undecided() -> None:
         ("the Bearer token expired", CATEGORY_CREDENTIAL_WORD),
         ("the password is stored in the vault", CATEGORY_CREDENTIAL_WORD),
         ("read the secret from the environment", CATEGORY_CREDENTIAL_WORD),
-        ("Bearer abc123def456", CATEGORY_CREDENTIAL),
+        ("Bearer authentication is required here", CATEGORY_CREDENTIAL_WORD),
+        ("Bear" + "er abc123def456", CATEGORY_CREDENTIAL),
         (f"{_PASSWORD_WORD}=hunter2", CATEGORY_CREDENTIAL),
+        (f"{_PASSWORD_WORD} is hunter2", CATEGORY_CREDENTIAL),
         (f"{_SECRET_WORD}: env", CATEGORY_CREDENTIAL),
+        (f"{_SECRET_WORD} - Qz8m2Xp7", CATEGORY_CREDENTIAL),
         (f"{_TOKEN_WORD}: abc123", CATEGORY_CREDENTIAL),
+        (f"{_TOKEN_WORD} abc123def", CATEGORY_CREDENTIAL),
+        ("Bear" + "er, aB3d9QkLm", CATEGORY_CREDENTIAL),
+        (f'the {_PASSWORD_WORD} is "correcthorsebatterystaple"', CATEGORY_CREDENTIAL),
     ],
 )
 def test_every_demoted_word_keeps_a_value_or_assignment_arm_in_policy(
@@ -145,22 +152,27 @@ def test_every_demoted_word_keeps_a_value_or_assignment_arm_in_policy(
     assert _internal_rejects(value) is not released_to_prose, value
 
 
-def test_bearer_value_floor_is_pinned_on_both_sides() -> None:
-    # The floor is a named constant, so the boundary is a decision with a test
-    # rather than a regex artifact. One character below it is a word mention; at
-    # it and above it the scheme carries a value every tier rejects.
-    below = "Bearer " + "a" * (BEARER_VALUE_MIN_LENGTH - 1)
-    at = "Bearer " + "a" * BEARER_VALUE_MIN_LENGTH
-    above = "Bearer " + "a" * (BEARER_VALUE_MIN_LENGTH + 12)
-    below_match = classify_private_text(below, categories=ALL_CATEGORIES)
-    assert below_match is not None
-    assert below_match.category == CATEGORY_CREDENTIAL_WORD
-    assert classify_private_text(below, categories=TEXT_OWNER_CATEGORIES) is None
-    for value in (at, above):
-        strict = classify_private_text(value, categories=ALL_CATEGORIES)
-        assert strict is not None
-        assert strict.category == CATEGORY_CREDENTIAL
-        assert _internal_rejects(value)
+def test_value_is_decided_by_a_signal_not_by_a_token_floor() -> None:
+    # The retired rule read one length: eight characters made a bearer value and
+    # seven made prose. That rejected ordinary English words beside the scheme name
+    # while releasing a six-character password value, so the boundary was a
+    # spelling accident. Each contract signal is now decided on its own shape, and
+    # a letter-only run changes class only at the named ceiling.
+    label = "Bear" + "er"
+    for length in (2, 5, 8, 14, OPAQUE_VALUE_MIN_LENGTH - 1):
+        prose = f"{label} " + "a" * length
+        match = classify_private_text(prose, categories=ALL_CATEGORIES)
+        assert match is not None, prose
+        assert match.category == CATEGORY_CREDENTIAL_WORD, prose
+        assert not _internal_rejects(prose), prose
+    for length in (OPAQUE_VALUE_MIN_LENGTH, OPAQUE_VALUE_MIN_LENGTH + 24):
+        assert _internal_rejects(f"{label} " + "a" * length), length
+    # A digit or a base64-only character makes the same position a value at the
+    # shortest length the arms read at all, which is what retired the floor.
+    for value in ("ab1", "abc123de", "ab+cd", "Qz8m2Xp7"):
+        assert _internal_rejects(f"{label} {value}"), value
+    # A quoted run is a value whatever it is made of.
+    assert _internal_rejects(f'{label} is "abc"')
 
 
 def test_migrating_the_owners_onto_the_classifier_closes_a_shape_hole() -> None:
@@ -310,7 +322,7 @@ def _legacy_rejects(value: str) -> bool:
 
 def _corpus_samples() -> list[tuple[str, str, str]]:
     corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
-    assert corpus["schema_version"] == "public_safe_text_corpus_v1"
+    assert corpus["schema_version"] == "public_safe_text_corpus_v2"
     tokens = corpus["tokens"]
 
     def render(template: str) -> str:
@@ -335,8 +347,8 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
     # The differential the maintainer asked for (Refs #5136, direction 4), stated
     # as two named lists instead of prose. Anything the old rule rejected stays
     # rejected by the publication tier; the only values the internal-state tier
-    # newly releases are the five prose samples, and the only value the
-    # publication tier newly rejects is the colon form of a token assignment.
+    # newly releases are the prose samples, and the newly rejected forms are the
+    # two colon spellings plus the value shapes that arrive with no label at all.
     newly_released: list[str] = []
     newly_rejected: list[str] = []
     for group, sample_id, value in _corpus_samples():
@@ -355,9 +367,12 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
         "password_word_in_prose",
         "secret_word_in_prose",
         "rotation_note_names_two_schemes",
-        "bearer_value_below_named_floor",
+        "bearer_before_long_ordinary_word",
+        "password_copula_ordinary_word",
+        "disclosed_residual_short_letter_value",
     ]
     assert newly_rejected == [
+        "token_space_digit_value",
         "token_assignment_colon",
         "raw_github_token_unlabeled",
         "private_key_block_unlabeled",
@@ -371,72 +386,153 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
             assert match.category == CATEGORY_CREDENTIAL_WORD, sample_id
 
 
-# The released class is enumerated, not sampled: every prefix x credential word x
-# separator x value the two tiers can disagree about. The invariant is a
-# biconditional, so a form that slips between the arms fails here.
-_WORDS = ("Bear" + "er", "pass" + "word", "sec" + "ret")
+# The form class is enumerated, not sampled: every prefix x credential label x
+# connector x value the two tiers can disagree about. Each separator and each
+# value carries the contract's *own* reading of it, so the expected verdict is a
+# declared fact about the spelling rather than a pattern the implementation
+# happens to use -- which is what makes this an oracle and not a mirror.
+_LABELS = ("Bear" + "er", "pass" + "word", "sec" + "ret", "tok" + "en")
+_WORD_ONLY_LABELS = frozenset({"Bear" + "er", "pass" + "word", "sec" + "ret"})
 _PREFIXES = ("", "the ", "Read the ", "retry used the ")
-_SEPARATORS = ("", " ", ",", ":", " =", ": ", "\t=", " of ", ". ")
+# kind: "assignment" carries anything after the label; "value_connector" carries a
+# value only when the next token is value-shaped; "none" and "foreign" connect a
+# label to nothing at all, so the next token cannot be read as a value.
+_SEPARATORS = (
+    ("", "none"),
+    (" ", "value_connector"),
+    (",", "value_connector"),
+    (", ", "value_connector"),
+    (";", "value_connector"),
+    (" - ", "value_connector"),
+    (" is ", "value_connector"),
+    (" are ", "value_connector"),
+    (" set ", "value_connector"),
+    (" to ", "value_connector"),
+    (" of ", "value_connector"),
+    (" with ", "value_connector"),
+    (". ", "foreign"),
+    (":", "assignment"),
+    ("=", "assignment"),
+    (" =", "assignment"),
+    (": ", "assignment"),
+    ("\t=", "assignment"),
+)
+# kind: the contract signal a value alone would express, if a connector reaches it.
 _VALUES = (
-    "",
-    "x",
-    "abc123",
-    "hunter2",
-    "a" * (BEARER_VALUE_MIN_LENGTH - 1),
-    "a" * BEARER_VALUE_MIN_LENGTH,
-    "a" * 20,
-    "QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
-    "token expired",
+    ("", "empty"),
+    ("x", "short_letter_run"),
+    ("abc", "short_letter_run"),
+    ("authentication", "long_ordinary_word"),
+    ("a" * (OPAQUE_VALUE_MIN_LENGTH - 1), "ceiling_minus_one"),
+    ("a" * OPAQUE_VALUE_MIN_LENGTH, "at_ceiling"),
+    ("a" * (OPAQUE_VALUE_MIN_LENGTH + 14), "above_ceiling"),
+    ("abc123", "digit_bearing"),
+    ("hunter2", "digit_bearing"),
+    ("ab+cd", "base64_punctuation"),
+    ("QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "base64_punctuation"),
+    ('"correcthorse"', "quoted_run"),
+    ("'abc123'", "quoted_run"),
+    ("token expired", "word_then_word"),
+)
+_VALUE_SHAPES = frozenset(
+    {"digit_bearing", "base64_punctuation", "at_ceiling", "above_ceiling", "quoted_run"}
 )
 
 
-def _word_form_corpus() -> list[str]:
+def _forms() -> list[tuple[str, str, str, str, str, str]]:
+    """Every (text, label, separator, value, connector kind, value kind) form."""
+
     return [
-        f"{prefix}{word}{separator}{value}"
-        for word in _WORDS
+        (f"{prefix}{label}{separator}{value}", label, separator, value, kind, value_kind)
+        for label in _LABELS
         for prefix in _PREFIXES
-        for separator in _SEPARATORS
-        for value in _VALUES
+        for separator, kind in _SEPARATORS
+        for value, value_kind in _VALUES
     ]
 
 
-def test_tier_delta_is_exactly_the_word_category_over_the_whole_class() -> None:
-    # Only values the old rule actually rejected are candidates for release; a
-    # form neither rule ever saw ("Bearerx") is not a tier delta.
-    released = [
-        value
-        for value in _word_form_corpus()
-        if _legacy_rejects(value)
-        and classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is None
-    ]
-    for value in released:
-        strict = classify_private_text(value, categories=ALL_CATEGORIES)
-        assert strict is not None, value
-        assert strict.category == CATEGORY_CREDENTIAL_WORD, value
-        # A released value must carry no assignment and no scheme-with-value, so
-        # the delta cannot be an unmeasured hole in the value arms.
-        assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(value) is None, value
-        assert BEARER_VALUE_SHAPE_PATTERN.search(value) is None, value
-        assert OWNER_SECRET_LIKE.search(value) is None, value
-    # Nothing the old rule accepted is newly rejected inside either tier.
-    for value in _word_form_corpus():
-        if _legacy_rejects(value):
-            assert _publication_rejects(value), value
-    assert len(released) > 0
+def _expected_carries_value(separator_kind: str, value_kind: str) -> bool:
+    """The contract applied to the declared factors, independent of any pattern."""
+
+    if separator_kind == "assignment":
+        return True
+    if separator_kind == "value_connector":
+        return value_kind in _VALUE_SHAPES
+    return False
 
 
-def test_adjacency_is_the_documented_limit_of_the_value_arms() -> None:
-    # A value named *beside* the word, with no assignment operator and no
-    # whitespace-adjacent scheme form, is prose to these arms. This is the known
-    # limit of the split and it is stated, not left implicit: the publication tier
-    # still rejects it, and a raw credential token is caught wherever it appears.
-    mention = "Bear" + "er, " + "a" * 20
-    assert _publication_rejects(mention)
-    assert not _internal_rejects(mention)
-    adjacent = "Bear" + "er " + "a" * 20
-    assert _internal_rejects(adjacent)
+def _expected_reads_the_label_as_a_word(separator: str, value: str) -> bool:
+    """Whether the label is a free-standing word in this form.
+
+    The word arms name the scheme or the vault word, so they can only fire when
+    nothing word-shaped is glued to the label -- `Bearerx` is one run, not a word
+    plus a value. The whole form class is glued only where the separator is empty.
+    """
+
+    following = separator or value
+    return not (following[:1].isalnum() or following[:1] == "_")
+
+
+def test_contract_biconditional_over_the_whole_form_class() -> None:
+    # Both directions over all 4,032 forms: nothing the contract calls a value is
+    # released by the internal-state tier, and nothing it calls prose is rejected
+    # there. The publication tier is pinned in the same sweep so the only
+    # difference between the two is the credential-word class.
+    forms = _forms()
+    assert len(forms) == 4_032, len(forms)
+    word_labels = {word.lower() for word in _WORD_ONLY_LABELS}
+    disagreements: list[str] = []
+    for text, label, separator, value, kind, value_kind in forms:
+        expected = _expected_carries_value(kind, value_kind)
+        if _internal_rejects(text) is not expected:
+            disagreements.append(f"internal {text!r} expected={expected}")
+        expected_publication = expected or (
+            label.lower() in word_labels
+            and _expected_reads_the_label_as_a_word(separator, value)
+        )
+        if _publication_rejects(text) is not expected_publication:
+            disagreements.append(f"publication {text!r} expected={expected_publication}")
+    assert disagreements == [], disagreements[:12]
+    # Both classes are actually populated, so a vacuous sweep cannot pass.
+    values = [text for text, _l, _s, _v, kind, vk in forms if _expected_carries_value(kind, vk)]
+    prose = [text for text, _l, _s, _v, _k, _vk in forms if not _expected_carries_value(_k, _vk)]
+    assert values and prose
+
+
+def test_documented_residual_is_a_short_letter_run_behind_a_prose_connector() -> None:
+    # The one class the contract cannot recognize: a letter-only run below the
+    # ceiling, beside the label, with no quotes and no assignment punctuation.
+    # Stated as a decision with a test, together with the three signals that each
+    # flip it back into the value class on their own.
+    label = "Bear" + "er"
+    residual = f"{label} " + "a" * (OPAQUE_VALUE_MIN_LENGTH - 1)
+    assert not _internal_rejects(residual), residual
+    assert _publication_rejects(residual), residual
+    for flipped in (
+        f'{label} "{ "a" * (OPAQUE_VALUE_MIN_LENGTH - 1) }"',
+        f"{label} is " + "a" * (OPAQUE_VALUE_MIN_LENGTH - 1) + "1",
+        f"{label}: " + "a" * (OPAQUE_VALUE_MIN_LENGTH - 1),
+        f"{label} " + "a" * OPAQUE_VALUE_MIN_LENGTH,
+    ):
+        assert _internal_rejects(flipped), flipped
+    # A credential value that needs no label at all is still caught wherever it
+    # appears, so the residual cannot travel with an unlabeled token.
     raw_token = "ghp_" + "a" * 36
     assert _internal_rejects(raw_token) and _publication_rejects(raw_token)
+
+
+def test_each_contract_signal_is_wired_to_its_own_arm() -> None:
+    # Which pattern implements which signal, so a later edit cannot drop an arm and
+    # still pass the behavioral sweep above. The verdicts themselves are decided by
+    # the corpus and the form matrix, not here.
+    bearer = "Bear" + "er"
+    assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(f"{bearer}:")
+    assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} abc123")
+    assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} is abc123")
+    assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer}, abc123")
+    assert QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f'{bearer} is "abc123"')
+    assert not CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} authentication")
+    assert not QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} authentication")
 
 
 def test_private_text_patterns_are_the_categorized_patterns_in_order() -> None:
@@ -446,7 +542,7 @@ def test_private_text_patterns_are_the_categorized_patterns_in_order() -> None:
     assert PRIVATE_TEXT_PATTERNS == tuple(
         entry.pattern for entry in _CATEGORIZED_PRIVATE_TEXT_PATTERNS
     )
-    assert len(PRIVATE_TEXT_PATTERNS) == 12
+    assert len(PRIVATE_TEXT_PATTERNS) == 13
     word_arms = tuple(
         entry.reason
         for entry in _CATEGORIZED_PRIVATE_TEXT_PATTERNS

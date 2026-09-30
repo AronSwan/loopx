@@ -67,11 +67,81 @@ ALL_CATEGORIES: frozenset[str] = frozenset(
 # ``credential_word`` exists so a surface can recognize these words without
 # rejecting them; the value and assignment forms stay in ``credential``, so
 # narrowing one policy can never release a short password value along with the
-# prose. The floor below is explicit and corpus-pinned on both sides: the shared
-# shape detectors reject a bearer scheme only once its value reaches their own
-# minimum, and before this split a bare-word arm was the accidental backstop for
-# the values below it.
-BEARER_VALUE_MIN_LENGTH = 8
+# prose.
+#
+# The credential-value contract has exactly four independent signals. Each one
+# is a shape fact about the text next to the label, which is what lets the two
+# directions be decided by different rules instead of by one length:
+#
+#   assignment_punctuation -- ``label:`` or ``label=`` carries whatever follows;
+#                             the label already asserts an assignment, so no
+#                             value floor applies (``LABELED_CREDENTIAL_...``).
+#   shaped_value_token -- a connector (whitespace, comma, semicolon, dash) or a
+#                             copula ("is", "set to") followed by a token
+#                             containing a digit or one of the base64-only
+#                             characters ``+ / =``.
+#   quoted_value          -- the same connector followed by a quoted run.
+#   opaque_value_run      -- the same connector followed by an unbroken
+#                             letter-only run of ``OPAQUE_VALUE_MIN_LENGTH`` or
+#                             more, which is how an assembled token with no digit
+#                             is still caught.
+#
+# ``OPAQUE_VALUE_MIN_LENGTH`` is the only length in this contract, and it is a
+# *word-length* ceiling, not a token floor: it exists to keep an ordinary English
+# word beside the label out of the value class. Fifteen is above the operational
+# prose seen in this repository ("authentication", "administrator",
+# "responsibilit" plus a suffix) and the value arms no longer depend on it for
+# short assembled tokens -- those are caught by shape at any length.
+#
+# The residual is stated rather than hidden: a value written with no digit, no
+# ``+/=``, no quotes, and fifteen letters or fewer is prose to this owner. That is
+# why the internal-state tier documents itself as not a credential-storage
+# exemption, and why the publication tier keeps the bare words.
+OPAQUE_VALUE_MIN_LENGTH = 16
+
+CREDENTIAL_LABEL_PATTERN_SOURCE = (
+    "(?:" + "Bear" + r"er|tok" + r"en|pass" + r"word|sec" + r"ret)"
+)
+# One connector definition, shared by the two connector arms so the Python and
+# TypeScript owners cannot drift on which separators and copulas count. `:` and
+# `=` are deliberately absent: the assignment arm already carries anything after
+# them, so leaving them here would give one spelling two owners and make the named
+# reason depend on list order.
+CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE = (
+    r"(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*"
+)
+# A run that carries a digit or a base64-only character, at two characters long.
+_SHAPE_VALUE_TOKEN_SOURCE = (
+    r"(?=[A-Za-z0-9._~+/=-]{2,})(?=[A-Za-z0-9._~+/=-]*[0-9+/=])[A-Za-z0-9._~+/=-]+"
+)
+_OPAQUE_VALUE_RUN_SOURCE = r"[A-Za-z]{%d,}" % OPAQUE_VALUE_MIN_LENGTH
+
+# A credential label reached through a connector, with a token next to it that
+# looks assembled. This is the arm that replaced the bearer-only length floor: it
+# covers the copula and punctuation spellings a bare `\s+` never reached, and it
+# no longer rejects an ordinary English word just because it is long-ish.
+CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN = re.compile(
+    r"\b"
+    + CREDENTIAL_LABEL_PATTERN_SOURCE
+    + CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE
+    + r"(?:"
+    + _SHAPE_VALUE_TOKEN_SOURCE
+    + "|"
+    + _OPAQUE_VALUE_RUN_SOURCE
+    + r")",
+    re.IGNORECASE,
+)
+
+# The same connector followed by a quoted run. Quoting is its own signal: the
+# value class does not depend on the quoted text looking like a token, so a
+# letter-only passphrase written as a quoted value is still rejected.
+QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN = re.compile(
+    r"\b"
+    + CREDENTIAL_LABEL_PATTERN_SOURCE
+    + CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE
+    + r"[\"'][^\"'\n]{2,}[\"']",
+    re.IGNORECASE,
+)
 
 
 # Credential shape, not the plain English word. LoopX governance prose says
@@ -92,14 +162,6 @@ _BASIC_CREDENTIAL_VALUE = re.compile(
     r"(?=[A-Za-z0-9+/=]*[a-z])"
     r"(?=[A-Za-z0-9+/=]*[A-Z])"
     r"[A-Za-z0-9+/=]{16,}",
-)
-
-# ``Bearer <value>`` with a value long enough to be a token rather than the next
-# English word. Kept separate from the word arm so a surface can stop rejecting
-# the scheme name while still rejecting the scheme plus a value.
-BEARER_VALUE_SHAPE_PATTERN = re.compile(
-    r"\b" + "Bear" + r"er\s+[A-Za-z0-9._~+/=-]{%d,}" % BEARER_VALUE_MIN_LENGTH,
-    re.I,
 )
 
 # An assignment form of the four words: either separator, any value. It carries
@@ -222,9 +284,14 @@ _CATEGORIZED_PRIVATE_TEXT_PATTERNS: tuple[_CategorizedPattern, ...] = (
         "internal ticket identifier",
     ),
     _CategorizedPattern(
-        BEARER_VALUE_SHAPE_PATTERN,
+        CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
         CATEGORY_CREDENTIAL,
-        "bearer scheme carrying a value",
+        "credential label carrying a shaped value",
+    ),
+    _CategorizedPattern(
+        QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
+        CATEGORY_CREDENTIAL,
+        "credential label carrying a quoted value",
     ),
     _CategorizedPattern(
         _AUTHORIZATION_CREDENTIAL_SHAPE,
