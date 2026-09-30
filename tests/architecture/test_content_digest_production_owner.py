@@ -71,10 +71,14 @@ CONVERTED_SURFACES: dict[str, dict[str, str]] = {
 
 
 def _string_constants(tree: ast.Module) -> dict[str, str]:
-    """Module-level `NAME = "..."` bindings, so a folded value is judged."""
+    """Every `NAME = "..."` binding in the module, so a folded value is judged.
+
+    Function-local on purpose: moving the prefix into a local name is the oldest
+    way to keep a literal while looking like you stopped using one.
+    """
 
     found: dict[str, str] = {}
-    for node in tree.body:
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
             continue
         value = node.value
@@ -170,6 +174,11 @@ BYPASS_CORPUS = (
     (
         "f-string interpolation",
         'import hashlib\n\ndef d(v):\n    return f"sha256:{hashlib.sha256(v).hexdigest()}"\n',
+        1,
+    ),
+    (
+        "prefix moved into a function-local constant",
+        'import hashlib\n\ndef d(v):\n    p = "sha256:"\n    return p + hashlib.sha256(v).hexdigest()\n',
         1,
     ),
     (
@@ -281,7 +290,9 @@ def test_each_migrated_helper_returns_the_previous_digest(
 def test_the_event_digest_helper_keeps_its_own_canonicalization() -> None:
     # runtime_producer sorts and uses ensure_ascii=True, unlike its neighbours; the
     # envelope moved to the owner, the byte recipe did not, and this pins both.
-    event_ids = ["evt-2", "evt-1"]
+    # A non-ASCII id, because that is the only input on which ensure_ascii is
+    # observable: with ASCII alone the two recipes produce identical bytes.
+    event_ids = ["\u4e8b\u4ef6-2", "evt-1"]
     encoded = json.dumps(
         sorted(event_ids), ensure_ascii=True, separators=(",", ":")
     ).encode("utf-8")
@@ -332,6 +343,34 @@ def test_the_builder_returns_the_owner_shape_and_borrows_its_pattern() -> None:
 def test_the_builder_refuses_a_value_the_owner_would_not_recognize(value: str) -> None:
     with pytest.raises(ValueError, match="sha256:<64 lowercase hex"):
         digest_envelope.enveloped_sha256(value)
+
+
+def test_the_builder_states_no_shape_of_its_own() -> None:
+    # Identity with the owner's object is not enough to prove borrowing: `re.compile`
+    # returns a cached object for a pattern compiled earlier, so a restated copy can
+    # compare identical. The load-bearing fact is that this module states no pattern.
+    source = (REPOSITORY_ROOT / PRODUCTION_OWNER).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    compiled = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "compile"
+    ]
+    assert not compiled, f"the production owner compiles a pattern at {compiled}"
+
+    def denotes_shape(value: str) -> bool:
+        return ENVELOPED_SHA256_PATTERN.fullmatch(value.strip("^$")) is not None
+
+    stated = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and denotes_shape(node.value)
+    ]
+    assert not stated, f"the production owner states a whole-value digest: {stated}"
 
 
 def test_a_valid_bare_digest_still_matches_the_bare_shape() -> None:
