@@ -256,13 +256,13 @@ detect mismatch
   -> rerun quota
 ```
 
-If active-state Markdown marks a Todo complete while the event projection remains open:
+For example, the workbench shows a completed Todo while status still shows open:
 
-1. check whether completion passed through a lifecycle command and formed an event;
-2. if only Markdown changed, normalize valid evidence into the canonical transition;
-3. if the event exists, repair the projection head or sequence;
-4. rerun status and quota;
-5. do not execute a dependent successor until the state is consistent.
+1. Identify whether this Goal reads legacy Markdown or a selected canonical provider.
+2. Inspect the source Todo and completion evidence, excluding scope, revision, and bounded-list differences.
+3. If only a manual edit occurred, repair missing acceptance or receipts through the lifecycle owner; a checked box is not validated delivery.
+4. If the source committed, repair its projection, then reread status and quota.
+5. Do not execute a dependent successor until the inconsistency is resolved.
 
 Do not hand-edit Markdown, a dashboard fixture, and a status cache until they merely look consistent.
 

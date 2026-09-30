@@ -1,41 +1,24 @@
 # 从 Codex CLI 可见 TUI 启动
 
-周四上午，你在 Codex CLI 里连上了项目，把当前 task 设成可见的 `/goal`，然后关掉终端去吃午饭。
-下午回来时，那条 Goal 仍然停在第一步。
+可见 TUI 与持续推进可以同时存在。LoopX 为 Codex native Goal 生成稳定 task body，由当前 decision 指定工作、结算和等待方式。理解这条路径，需要区分正在运行、被阻塞和进程已退出三个状态。
 
-没有报错，没有失败记录，没有任何东西看起来坏掉。Codex CLI 不会自己醒过来：它没有 heartbeat，没有
-定时器，没有一个在你离开后继续问"现在该做什么"的机制。你不发消息，就没有下一轮。Goal 体面地坐在
-那里等你，而如果你以为它在跑，这个误会可以持续一整天。
+## 为什么 active Goal 与后台唤醒不同
 
-## 为什么"那就加个定时器"接不住
+假设修复还未完成，你结束了当前 Codex 进程。再次打开终端时，工作没有继续。这说明执行环境已经离开，不代表 native Goal 在进程存活时每轮都需要用户发消息。
 
-自然反应是给 CLI 也装一套 heartbeat，让它自己定时唤醒。但这会拆掉这条路径存在的理由。
+| Host 状态 | 当前路径的行为 | 用户需要判断什么 |
+| --- | --- | --- |
+| TUI 与 native Goal 正在运行 | 按 task body 读 quota、执行允许的工作，结算后重新判断并继续 | 当前 Todo、Gate 与 authority 是否允许下一步 |
+| native Goal 已 blocked | 按 Host 的 blocked/resume 合同停止自动推进 | 阻塞是否解除，是否需要显式 `/goal resume` |
+| 承载执行的进程已退出 | 不能仅靠之前设置 `/goal` 就产生新的定时唤醒 | 重启并恢复原 Goal，或选择已验证的外部调度路径 |
 
-CLI 路径的核心约束是 **visible and interruptible**：工作发生在你眼前的 TUI 里，为了"自动化"默认切到
-隐藏的 headless worker 是它明确拒绝的做法。这条约束有实际代价。上一章说过，一次唤醒必须能证明自己
-没白花；在 CLI 里，这个证明由你本人提供，因此只在你在线时成立。
+因此，活跃 Goal 的 continuation 和周期性启动新工作是两个能力。App heartbeat 适合需要定时唤醒的场景；当前 CLI 可见路径不默认创建 App automation 或隐藏 worker。
 
-第二条直觉是让 Goal body 自己循环，把整套逻辑塞进 prompt。这条路的问题在别处：`/goal` body 是
-**稳定协议**，它不知道当前有哪些 Todo、哪个 Gate 正阻塞着、monitor 什么时候到期。把这些判断写进
-body，就等于在 TUI 里维护了第二份状态，而这份副本从写下的那一刻起就在过期。
+## 边界：Host 持续执行，LoopX 持续重新判断
 
-两条路都不通，因为 CLI 的答案本来就不同：它不假装自己能自驱，而是把"何时该动"完整地交还给 LoopX
-decision，由你在场时触发。
+稳定 body 不复制动态 Todo、Gate 或 monitor 状态。每轮读取完整 current decision，按 `interaction_contract` 工作与结算；之后重查 quota，继续允许的工作，或遵循当前等待/阻塞指引。
 
-## 边界：CLI 拥有可见交互，LoopX decision 拥有下一步
-
-分工是这样的：
-
-```text
-Codex CLI  —— 提供可见 TUI、接手 /goal continuation、由用户或可见循环触发
-LoopX      —— 决定这次调用该不该工作、做哪一个 Todo、何时等待或阻塞
-```
-
-CLI 是**按需调用**的 Host。它提供可见性，但不提供持续性。这条路径买到的是：每一步都在你眼前，随时
-可以打断，任何时刻都能读懂当前状态。它放弃的是无人值守时的继续推进。
-
-这是一个明确的选择，并非能力缺口。有些任务形态需要的正是可见性：你在调一个行为还不清楚的 bug，你在等
-自己的判断，你需要在中途改方向。这些场景里，一个安静空转的 timer 反而更危险。
+这个分工让 native Goal 保持可见、可中断，也让持久控制信息留在 LoopX。用户不必逐轮发送新任务；但 native Goal 可继续，并不意味着旧 selected Todo 或授权仍然有效。
 
 ## 启动可见 TUI
 
@@ -138,42 +121,21 @@ Agent identity 表达 LoopX 工作 lane，不证明具体 Host。判断工作是
 
 ## 代价与边界
 
-**代价一：没有外部触发就没有进展。** 你不调用，它不动。这不是配置问题，是这条路径的定义。指望它
-在夜里自己推进，等于把 App 的能力投射到一个明确不具备该能力的地方。
+**持续性依赖 Host 仍具备执行条件。** 活跃 native Goal 可以自主推进，退出进程或进入 blocked 后的行为另有边界。需要跨这些边界自动唤醒时，应选择相应的调度集成并核对其 readback。
 
-**代价二：可见性依赖你在线。** 可见 TUI 的价值在你看着它时兑现。你离开的时间越长，这段不推进的
-时间越长，而它不会在日志里留下任何异常痕迹。
+**可见性不替代验证。** TUI 能展示活动，成功还需要 validation、writeback 与 settlement。是否有人盯着屏幕，不会改变这些条件。
 
-**代价三：稳定性靠流程而不是机制。** `/goal` body 要稳定，setup 和 delivery 要分开，handoff 要按
-顺序走。这些都依赖正确操作，CLI 不会替你强制。App 那侧至少有 automation 这个物理事实可以 readback；
-这里能核对的是 registry、identity 和 history。
-
-**边界一：native Goal 的 continuation 不是 LoopX 的 frontier。** Goal 保证同一 TUI 内能接着做，
-它不保证这个 Todo 就是该做的那个。二者一致时才推进。
-
-**边界二：可见 Goal 不等于自动化。** 把 `/goal` 设好只是让工作可见可续；它不产生定时唤醒，也不能
-替代 decision。
-
-**边界三：两种 Host 可以读同一 Goal，但不共享执行权。** App 与 CLI 同时激活时，检查 claim、lease
-与 scheduler ownership。同一个有副作用的 Todo 只能有一个合法执行者。
+**接管需要重新核对 authority。** App 与 CLI 可以读取同一 Goal；变更执行者时要检查当前 claim、lease、worktree 和 writer fence 的适用模式，避免并发提交同一项有副作用的工作。
 
 ## 何时选 CLI，何时选 App
 
-两者面对同一个 frontier，差别在唤醒模式：
+| 需求 | 可选路径 | 需要核对的条件 |
+| --- | --- | --- |
+| 当前执行会话内持续推进，同时观察或介入 | CLI 可见 native Goal | Goal active，Host 存活，当前准入允许 |
+| 长时间等待后按 cadence 再检查 | App heartbeat 或已验证的 scheduler 集成 | 实际 automation、cadence 与 ACK/readback |
+| 进程退出后继续 | 恢复原 Goal，或使用支持该边界的调度路径 | 不能将旧 prompt 当作新执行环境 |
 
-| 任务形态 | 更适合 | 原因 |
-|---|---|---|
-| 需要反复看中间结果、随时介入 | CLI 可见 TUI | 每一步都在眼前，可随时打断 |
-| 短时集中会话，人不离开 | CLI 可见 TUI | 不需要在会话结束后继续唤醒 |
-| 外部状态在变化，要等它变 | App heartbeat | 你不在时仍会被唤醒 |
-| 有稳定节奏，可持续推进 | App heartbeat | 定时唤醒匹配按步推进 |
-
-两条经验规则：
-
-- **你要盯着过程，选 CLI**；你需要它在你不在时继续尝试，选 App。前者买到可见性，代价是不会自驱；
-  后者买到持续性，代价是定时开销和 ACK 收敛链。
-- **无论选哪个，LoopX decision 都拥有"下一步是否合法"**。CLI 不产生这个判断，它只是在你调用时把
-  问题交给 LoopX。
+依据实际需要选择唤醒方式，不将“可见”误解为“每轮手动触发”。两条路径都必须读取当前 LoopX decision。
 
 ## 恢复路径
 
@@ -200,17 +162,16 @@ Host 的 Goal resume 表面恢复，而不是反复重发完整任务。反复�
 
 ### App 与 CLI 同时激活
 
-检查 claim、lease 与 scheduler ownership。两种 Host 可以读同一 Goal，但同一个有副作用的 Todo
-只能有一个合法执行者。
+检查旧实例活动、claim、lease、scheduler ownership 与当前 writer 的围栏模式。两种 Host 可以读同一 Goal，接管写入仍需满足对应 lifecycle 条件。
 
 ## 不变式
 
-1. **没有调用就没有那一轮。** CLI 不自驱，任何"它在后台跑"的假设都需要单独证据。
+1. **区分 active、blocked 与进程退出。** 活跃 native Goal 可以继续；blocked 后按 Host resume 合同处理，退出后不能假定存在定时唤醒。
 2. **setup Turn 只建立连接。** 连接和交付混在一轮里，后续每一步都建立在一个未审的计划上。
 3. **`/goal` body 保持稳定。** 动态 Todo、Gate 和能力来自当次 decision packet，不来自 prompt。
 4. **visible Goal 与 selected Todo 是两件事。** Goal 能继续，不代表这个 Todo 就该做。
 5. **identity 一律显式。** 缺失或不匹配时 fail closed，不回退到"唯一身份"。
-6. **一个 effectful Todo 只有一个合法执行者。** 两个 Host 可以并存，执行权不能。
+6. **两个 Host 并存需要明确执行归属。** 复核当前 mode 下的 claim、lease 与围栏，不能凭同一 Goal 可读就并发写同一项工作。
 
 ## 完成项目接入之后
 
@@ -223,6 +184,6 @@ Host 的 Goal resume 表面恢复，而不是反复重发完整任务。反复�
 
 接下来按目标选择：
 
-- 要给 LoopX core 提交协议级改动，进入[协议地图与贡献入口]（./source-protocol-map.md）；
-- 要交付独立安装的 Provider，进入[选择正确的放置位置]（./08-extension-placement.md）；
+- 要给 LoopX core 提交协议级改动，进入[协议地图与贡献入口](./source-protocol-map.md);
+- 要交付独立安装的 Provider，进入[选择正确的放置位置](./08-extension-placement.md);
 - 只使用 LoopX 管理项目，可以直接把本章模式应用到自己的 repository。

@@ -177,27 +177,20 @@ App 能保证有人看，不能保证有东西可做；没有可运行候选时�
 **边界二：automation 不是第二控制面。** 不要在 automation prompt 里复制 quota 状态机，也不要让
 它自己解析 Todo 是否 runnable。稳定 prompt 只负责协议，判断属于每次读到的 packet。
 
-**边界三：切换 Host 不迁移 Goal，但也不共享执行权。** App 和 CLI 可以读同一个 registry 和
-active state，同一个有副作用的 Todo 只能有一个合法执行者。切换前确认没有两个 Agent 同时 claim
-同一 Todo；有 hard lease 的工作必须等 lease 释放或按生命周期显式移交。
+**边界三：切换 Host 要核对工作归属。** App 和 CLI 可以读同一 Goal；切换前应查清旧实例是否仍执行、claim/lease 由谁持有，以及当前 writer 的围栏模式。需要显式移交时走对应 lifecycle，不能仅凭新 Host 已启动就并发推进同一项工作。
 
 ## 何时选 App，何时选 CLI
 
-两种 Host 面对的是同一个 Frontier，差别在唤醒模式：
+两种 Host 的区别主要在运行与唤醒边界。活跃 Codex CLI native Goal 可以在可见 TUI 内继续允许的工作，不要求用户逐轮发消息。App heartbeat 额外提供经过配置和验证的定时唤醒路径。
 
-| 任务形态 | 更适合 | 原因 |
-|---|---|---|
-| 外部状态在变化，要等它变 | App heartbeat + 放慢的 cadence | 无人值守时仍会被唤醒，到期即检查 |
-| 有稳定的进展节奏，可持续推进 | App heartbeat | 定时唤醒正好匹配按步推进 |
-| 需要反复看中间结果、随时介入 | CLI 可见 TUI | 每一步都在你眼前，可随时打断 |
-| 短时集中会话，人不离开 | CLI 可见 TUI | 不需要在会话结束后继续唤醒 |
+| 需求 | 可选路径 | 核对重点 |
+| --- | --- | --- |
+| 等待外部条件，按 cadence 再检查 | App heartbeat | automation 存在，cadence 与 ACK/readback 一致 |
+| 当前会话内持续交付，同时看中间结果 | CLI 可见 native Goal | Host 存活、Goal active、当前准入允许 |
+| native Goal blocked 后继续 | Host 的显式 resume 路径 | 阻塞解除后重查 quota |
+| 承载执行的进程退出后继续 | 恢复原 Goal，或已验证的外部调度 | 不从旧 Goal body 推断后台服务存在 |
 
-两条经验规则：
-
-- **你需要它在你不看的时候继续尝试，选 App**；你需要自己盯着过程，选 CLI。前者买到的是持续性，
-  代价是定时开销；后者买到的是可见性，代价是不会自驱。
-- **无论选哪个，LoopX decision 都拥有"下一步是否合法"**。App 和 CLI 都不产生这个判断，它们只是
-  在不同的时间点把问题交给 LoopX。
+选择时分别核对 continuation 和定时唤醒能力。无论用哪种 Host，新的工作都要经过当前 LoopX decision。
 
 ## 恢复路径
 
@@ -243,7 +236,7 @@ loopx start-goal --guided --project . \
 4. **cadence 变化的四步缺一不可**：proposal、host apply、host readback、ACK。
 5. **本地 ACK ledger 不证明 Host 状态。** 只有 Host readback 与目标一致才闭合，不一致时按
    `drift_detected` 修复。
-6. **切换 Host 不迁移 Goal，也不共享执行权。** 同一个有副作用的 Todo 只有一个合法执行者。
+6. **切换 Host 需要明确接管。** 同一 Goal 可被多处读取，写入仍须满足当前 authority、claim/lease 与围栏要求。
 
 这六条指向同一件事：定时唤醒买到的是**持续尝试的能力**，不是**持续进展的事实**。区分这两者，
 就是本章要求四的全部内容。

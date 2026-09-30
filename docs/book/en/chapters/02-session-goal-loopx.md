@@ -1,8 +1,6 @@
 # Agent sessions, Codex Goal, and LoopX
 
-The previous chapter separated the four requirements long-horizon work imposes. This chapter handles an
-earlier question: **which layer should a task go to?** All three layers can run an agent; they differ in
-where they are allowed to stop. Choosing the wrong layer is paid for days later, by someone else.
+The previous chapter introduced cross-session handoff. This chapter asks which state and continuation capabilities the task needs. A normal session, Host Goal, and LoopX can be combined; verify the current surface retains the needed state, waits, and recovery entrypoints.
 
 ## Start from a bad ending
 
@@ -73,10 +71,7 @@ LoopX does not duplicate model execution, and it does not demote Codex Goal to a
 Goal owns continuation around an objective; LoopX compiles project state into the bounded work that is
 legal for the next turn.
 
-The only thing that survives a session is **state that was written down**. A session transcript
-disappears; a Host Goal keeps its objective and lifecycle; the project keeps its Todos, Gates, and
-evidence. That is the question requirement one in chapter 02b asks: is this information still here after
-the process restarts?
+A Host may persist both transcripts and native Goal objectives/lifecycle. LoopX adds structured project work state, authority, and recovery entrypoints. The distinction is not only retention duration, but whether current decisions can reliably read and validate that information.
 
 ## Four actors
 
@@ -376,16 +371,12 @@ registering a fresh Agent identity is a legal path. Inferring a similar `goal_id
 `agent_id` directly, leaves two writers assuming they own the same "current progress."
 
 The way to check is to read state, not the transcript. After a restart, the control plane should still be
-able to say where the task stopped, whom it is waiting for, and who acts next. Answer all three and the
-layer was chosen correctly.
+able to say where the task stopped, whom it is waiting for, and who acts next. These are the basis for handoff; task risk and maintenance cost still determine whether onboarding is worthwhile.
 
 ## Invariants
 
-1. **Information living only in a transcript cannot be used outside its layer.** Before moving a task,
-   ask whether that judgment is still here after the process restarts.
-2. **Every layer has its own legal stopping point.** A session stops only at session end; waiting,
-   blocking, and handoff belong to the long-running layer. Where a task must stop decides where it
-   should start.
+1. **Transcripts can carry information, but cannot alone establish current control state.** After changing runtime surfaces, recheck identity, authority, work items, and evidence revisions.
+2. **Verify each layer's continuation boundary.** Ordinary sessions can also wait or block; a long-running control plane gives those conditions structured persistence, readback, and continuation paths.
 3. **The qualification card has two dimensions.** Task properties say what the task needs; the Host
    surface says whether that is available now. Checking only the first column yields a Goal that is
    correct on every wake-up and never advances.
@@ -394,7 +385,4 @@ layer was chosen correctly.
 5. **Compare the three layers with one ruler.** Without a matched baseline and an independent verifier,
    you can report experience, not product uplift.
 
-These five come back to one question: **when should a task's control information move out of the
-session?** The answer depends on where the task will stop, who pushes it forward from there, and whether
-the current runtime can deliver that push. The next chapter narrows the lens to a single turn and follows
-one governed round of work from "should this move" to "this counts as done."
+Decide where the task will wait, who can advance it, and whether the current runtime supports that continuation. Next, [the four demands of long-running work](02b-long-horizon-requirements.md) develops the framework before state, work graphs, and Turn transactions.

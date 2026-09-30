@@ -24,7 +24,7 @@ The Workspace presents and initiates governed actions, but Goal, Todo, Gate, eve
 
 - **Projections lag.** The state on the page is a read model from some moment; between your seeing it and its being generated, the source may already have changed.
 - **HTTP success is not write completion.** A request being accepted and an action completing are two different things, and the second may be stopped by a Gate or rejected by a stale check.
-- **A click is not authorization.** A button in the UI initiates an action request; whether it is legal is still decided by the quota decision.
+- **A button is not an independent authority.** Goal stop/resume checks owner authority and the reviewed fingerprint; Todo actions use lifecycle rules; quota governs eligibility for automated Turns.
 
 The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate; it is not a new source of truth.**
 

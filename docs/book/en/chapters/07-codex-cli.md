@@ -1,48 +1,24 @@
 # Start from the visible Codex CLI TUI
 
-Thursday morning you connect the project inside Codex CLI, set the current task to a visible `/goal`, and
-close the terminal for lunch. When you come back in the afternoon, that Goal is still sitting on step one.
+A visible TUI can also sustain progress. LoopX generates a stable task body for a Codex native Goal, while current decisions govern work, settlement, and waits. Distinguish running, blocked, and exited-process states.
 
-Nothing errored. No failure is recorded. Nothing looks broken. Codex CLI does not wake on its own: it has no
-heartbeat, no timer, and no mechanism that keeps asking "what should happen now" after you walk away. Send no
-message and there is no next turn. The Goal waits there patiently, and if you assume it is running, that
-misunderstanding can survive a whole day.
+## Why an active Goal differs from a background wake
 
-## Why "just add a timer" does not hold
+Suppose a fix is unfinished and you terminate its Codex process. No further work occurs before you restart it. The execution environment has exited; this does not mean a live native Goal needs a user message for every turn.
 
-The reflex is to give the CLI a heartbeat too and let it wake itself on a schedule. That tears out the reason
-this path exists.
+| Host state | Behavior on this path | What the user needs to establish |
+| --- | --- | --- |
+| TUI and native Goal running | Read quota, perform allowed work, settle, reassess, and continue | Whether the current Todo, Gate, and authority allow the next step |
+| Native Goal blocked | Stop automatic progress under the Host blocked/resume contract | Whether the blocker is resolved and explicit `/goal resume` is needed |
+| Executing process exited | Setting `/goal` earlier does not create timed wakes | Restart and resume the existing Goal, or select a qualified external scheduling path |
 
-The defining constraint of the CLI path is **visible and interruptible**: work happens in the TUI in front of
-you, and silently switching to a hidden headless worker for the sake of automation is exactly what it
-refuses. That constraint has a real price. The previous chapter established that a wake must be able to prove
-it did not waste itself; in the CLI, you personally supply that proof, so it only holds while you are
-present.
+Active Goal continuation and periodically starting work are separate capabilities. App heartbeat suits timed waking; the visible CLI path does not create an App automation or hidden worker by default.
 
-The second instinct is to let the Goal body loop on its own by pushing the whole decision into the prompt.
-That fails elsewhere: the `/goal` body is **stable protocol**, and it does not know which Todos exist, which
-Gate is blocking, or when a monitor comes due. Writing those judgments into the body maintains a second copy
-of state inside the TUI, and that copy starts expiring the moment it is written.
+## Boundary: the Host continues execution, LoopX keeps reassessing
 
-Neither route works, because the CLI's answer is genuinely different: it does not pretend to self-drive.
-It hands "when should this move" entirely back to the LoopX decision, triggered by you while you are there.
+A stable body does not copy dynamic Todos, Gates, or monitor state. Each iteration reads the complete current decision, follows its `interaction_contract`, and settles. It then rechecks quota and continues or follows current wait/block guidance.
 
-## The boundary: the CLI owns visible interaction, the LoopX decision owns the next step
-
-The split looks like this:
-
-```text
-Codex CLI  -- provides the visible TUI, carries /goal continuation, is triggered by the user or a visible loop
-LoopX      -- decides whether this invocation should work, which Todo, when to wait or block
-```
-
-The CLI is an **on-demand** Host. It supplies visibility, not persistence. What this path buys is that every
-step is in front of you, interruptible at any moment, with a readable state at any point. What it gives up is
-advancement while nobody is watching.
-
-That is a deliberate choice, not a capability gap. Some task shapes specifically need visibility: you are
-debugging behavior you do not yet understand, you are waiting on your own judgment, or you need to change
-direction midway. In those cases a quietly spinning timer is the more dangerous option.
+The native Goal stays visible and interruptible while durable control information remains in LoopX. Users need not send a fresh task every turn, but continued Goal execution does not preserve a stale selected Todo or authorization.
 
 ## Start the visible TUI
 
@@ -150,45 +126,21 @@ A proper handoff is:
 
 ## Cost and boundary
 
-**Cost one: no external trigger means no progress.** If you do not invoke it, it does not move. That is the
-definition of this path, not a configuration problem. Expecting it to advance overnight projects a
-capability from the App onto a surface that explicitly does not have it.
+**Continuation depends on an executable Host state.** An active native Goal can progress autonomously; process exit and blocked state have separate boundaries. Automatic wakes across those boundaries require the corresponding scheduling integration and readback.
 
-**Cost two: visibility depends on you being present.** The visible TUI pays off while you are watching it.
-The longer you are away, the longer that stretch of no advancement runs, and it leaves no anomaly in the log.
+**Visibility does not replace validation.** A TUI shows activity; success still needs validation, writeback, and settlement. Whether someone watches the screen does not change those conditions.
 
-**Cost three: stability rests on process, not on mechanism.** The `/goal` body must stay stable, setup and
-delivery must stay separate, and handoff must run in order. All of that depends on operating correctly; the
-CLI will not enforce it for you. The App side at least has the physical fact of an automation to read back,
-whereas here you check the registry, identity, and history.
-
-**Boundary one: native Goal continuation is not the LoopX frontier.** The Goal guarantees you can keep going
-inside the same TUI; it does not guarantee that this Todo is the one to do. Advance when the two agree.
-
-**Boundary two: a visible Goal is not automation.** Setting `/goal` makes the work visible and resumable. It
-creates no timed wake and cannot replace the decision.
-
-**Boundary three: the two Hosts may read the same Goal but share no execution right.** With App and CLI both
-active, inspect claim, lease, and scheduler ownership. An effectful Todo can have only one legal executor.
+**Handoff requires current authority checks.** App and CLI can read the same Goal. Check claim, lease, worktree, and applicable writer-fence mode when changing executors to avoid concurrent submission of the same effectful work.
 
 ## When to choose CLI, and when to choose App
 
-Both face the same frontier; they differ in how they wake:
+| Need | Candidate path | Conditions to check |
+| --- | --- | --- |
+| Sustained work in the current execution session, with observation or intervention | Visible CLI native Goal | Active Goal, live Host, current admission allows work |
+| Check again on cadence after a long wait | App heartbeat or a qualified scheduler integration | Actual automation, cadence, and ACK/readback |
+| Continue after process exit | Resume the existing Goal or use a path supporting that boundary | An old prompt is not a new execution environment |
 
-| Task shape | Better fit | Why |
-|---|---|---|
-| You need to watch intermediate results and step in | CLI visible TUI | Every step is in front of you, interruptible at any time |
-| A short focused session with the user present | CLI visible TUI | No need to keep waking after the session ends |
-| External state is changing and you must wait for it | App heartbeat | Still woken while you are away |
-| A steady pace of advancement is available | App heartbeat | A timer matches step-by-step progress |
-
-Two rules of thumb:
-
-- **Choose CLI when you need to watch the process**, and App when you need attempts to continue while you
-  are away. The first buys visibility at the cost of self-driving; the second buys persistence at the cost of
-  timer overhead and the ACK convergence chain.
-- **Either way, the LoopX decision owns whether the next step is legal.** The CLI does not produce that
-  judgment; it hands the question to LoopX when you invoke it.
+Select the wake mechanism you need. Visible execution does not mean manually triggering every turn. Both paths must read the current LoopX decision.
 
 ## Recovery paths
 
@@ -216,13 +168,11 @@ makes one round of work look like several of progress.
 
 ### App and CLI are both active
 
-Inspect claim, lease, and scheduler ownership. Both Hosts may read the same Goal, but an effectful Todo can
-have only one legal executor.
+Inspect the old instance, claims, leases, scheduler ownership, and current writer-fence mode. Both Hosts may read one Goal; write takeover still needs the corresponding lifecycle conditions.
 
 ## Invariants
 
-1. **No invocation, no turn.** The CLI does not self-drive; any assumption that it is running in the
-   background needs separate evidence.
+1. **Distinguish active, blocked, and exited.** An active native Goal can continue; blocked state follows the Host resume contract, and process exit does not imply a timed wake.
 2. **The setup turn only establishes connection.** Merging connection with delivery puts every later step on
    an unreviewed plan.
 3. **The `/goal` body stays stable.** Dynamic Todos, Gates, and capabilities come from the current decision
@@ -231,7 +181,7 @@ have only one legal executor.
    this Todo the right one.
 5. **Identity is always explicit.** A missing or mismatched identity fails closed rather than falling back to
    "the only Agent."
-6. **One effectful Todo has one legal executor.** Two Hosts may coexist; execution right may not.
+6. **Coexisting Hosts need explicit work ownership.** Check claims, leases, and fences in the current mode; shared Goal reads do not authorize concurrent writes to the same work.
 
 ## After project onboarding
 

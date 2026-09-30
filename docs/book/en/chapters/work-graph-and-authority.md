@@ -1,10 +1,12 @@
 # Work graphs, authority, and peer collaboration
 
-This chapter hangs on **requirement three: one accountable actor**. A Todo may be visible to many peers at once, but at any single moment only one execution instance should hold the authority to advance it. The problem starts where that requirement breaks.
+Multiple peers may see one Todo. Work ownership, current write authority, and execution-instance identity need separate checks so a stale instance cannot submit after handoff.
+
+This chapter explains how the work graph represents collaboration and where claims, leases, and fences constrain writes.
 
 ## Start from a bad ending
 
-Consider this timeline. It needs nobody to lie:
+The following teaching counterexample assumes no commit fence. It is not a trace of the current protected path.
 
 ```text
 09:00  agent-a selects Todo T, acquires a lease, version=1, ttl=600s.
@@ -242,7 +244,11 @@ Every rule above buys one property and charges for it, and the charges decide wh
 
 **Boundary two: the work graph is a read-only projection.** The relations rendered by `task_graph_projection_v0` cannot be used to change state; seeing an edge does not license editing a Todo.
 
-**Boundary three: automatic orchestration is not promised today.** The product does not promise "point LoopX at a root folder and four Goals run in parallel," nor a cloud coordinator that picks devices and claims work. Bounded multi-agent orchestration can enable child-agent planning, but peer identity, claim, workspace guard, Gate, and writeback stay per-Todo contracts, and cross-device online authority remains a Draft design boundary.
+**Boundary three: automatic orchestration is not promised today.** The product does not promise "point LoopX at a root folder and four Goals run in parallel," nor a cloud coordinator that picks devices and claims work. Bounded multi-agent orchestration can enable child-agent planning, but peer identity, claim, workspace guard, Gate, and writeback stay per-Todo contracts, and cross-device online authority still needs separate service and runtime qualification; local collaboration does not establish its delivery.
+
+The current `handoff_mode` selects ownership rules. Default `legacy` retains compatibility paths for soft claims and hard leases; `soft_claim` and `hard_lease` have distinct constraints. Some legacy terminal paths allow `terminal_fence_not_required`.
+
+Stale-instance protection therefore belongs to a specific writer, mode, and lease/fence check. Enabling one mechanism does not cover every write entrypoint. The following tests prove named boundaries, not system-wide exclusivity.
 
 ## Named failures: what these constraints stop
 
@@ -254,7 +260,7 @@ Talking abstractly about concurrency safety convinces nobody. Each of the four s
 
 **The fence must land on the effective root.** `test_split_root_todo_writeback_fence.py` covers split roots: when the registry source is fenced, the original fence still applies even through an override that shares the same source state, and state bytes stay unchanged, while an unfenced override writes its receipt normally. Without this, a fence would be decoratively bypassable.
 
-**Missing cross-repository identity fails closed.** When `pr_merged:#123` lacks a repository prefix, the implementation refuses outright rather than guessing a repository by number. This guards a mismatch that is famously hard to diagnose: two pull requests that happen to share a number.
+**Fail closed when repository identity cannot be resolved.** `pr_merged:#123` can resolve through the Todo's GitHub `task_repository`; an explicit `owner/repo#123` binds the target directly. Refuse when neither source resolves the repository.
 
 Corresponding tests: `tests/control_plane/test_canonical_lease_acquire.py`, `tests/control_plane/test_canonical_lease_renew.py`, `tests/control_plane/test_canonical_lease_lifecycle.py`, `tests/control_plane/test_legacy_coordination_writer_fence.py`, and `tests/control_plane/test_split_root_todo_writeback_fence.py`. These assertions serve as the executable evidence for the design, and are far more than illustration.
 
@@ -288,7 +294,7 @@ What unites these six is that "every Todo is done" can mask all of them.
 
 Six claims you can check yourself.
 
-1. **A Todo has exactly one execution instance holding authority at any moment.** If you see two "successful" writebacks pointing at one result, that is a fence failure, not acceptable concurrency.
+1. **Check whether this write is protected by an instance or lease fence.** `hard_lease` and default legacy paths differ; a claim does not prove that every writer enforces instance exclusivity.
 2. **A write is judged legal at commit, not at preparation.** A writeback carrying a stale version must be refused rather than written and reconciled later.
 3. **Replay safety does not license key reuse.** Replaying the same logical write under one `idempotency_key` is idempotent; reusing that key with different semantics is refused as `idempotency_key_reuse`.
 4. **A failed renewal is a legal outcome.** Interrupting work when the holder cannot prove it still holds authority beats letting a stale holder finish; size TTL for the worst-case task.

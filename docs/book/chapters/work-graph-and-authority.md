@@ -1,10 +1,10 @@
 # 工作图、权限与 Peer 协作
 
-本章挂在**要求三：唯一可问责的行动者**上。一条 Todo 可以同时被多个 peer 看见，但在任何一个时刻，只应有一个执行实例有权推进它。下面的问题就从这条要求被破坏开始。
+一条 Todo 可以同时被多个 peer 看见。它的归属、当前写权限与执行实例需要分别核对，才能避免接管后的旧实例继续提交。本章说明工作图如何表达协作，以及 claim、lease 和 fence 在哪些边界上约束写入。
 
 ## 从一个坏的结局开始
 
-看一条时间线。它不需要任何一方说谎：
+下面是缺少提交围栏时的教学反例，并非当前受保护路径的执行记录：
 
 ```text
 09:00  agent-a 选中 Todo T，acquire 到 lease，version=1，ttl=600s。
@@ -242,7 +242,11 @@ A、B、C 可以并行，但 D 不能从自然语言"它们应该完成了"推�
 
 **边界二：工作图是只读投影。** `task_graph_projection_v0` 渲染出的关系图不能用来改状态；能看到一条边不等于可以据此改动 Todo。
 
-**边界三：当前不承诺自动编排。** 产品不承诺"给一个 root 目录就自动并行四个 Goal"，也不承诺云端 coordinator 自动选择设备并 claim。bounded multi-agent orchestration 可以启用 child-agent planning，但 peer identity、claim、workspace guard、Gate 和 writeback 仍逐 Todo 生效；跨设备在线 authority 仍属于 Draft 设计边界。
+**边界三：当前不承诺自动编排。** 产品不承诺"给一个 root 目录就自动并行四个 Goal"，也不承诺云端 coordinator 自动选择设备并 claim。bounded multi-agent orchestration 可以启用 child-agent planning，但 peer identity、claim、workspace guard、Gate 和 writeback 仍逐 Todo 生效；跨设备在线 authority 仍须单独满足服务与运行时资格，不能从本地协作推定已交付。
+
+当前 `handoff_mode` 决定归属规则：默认 `legacy` 保留 soft claim 与 hard lease 的兼容路径；`soft_claim` 和 `hard_lease` 各有专门约束。某些 legacy terminal 路径可返回 `terminal_fence_not_required`。
+
+因此，“防止过期实例提交”要落到具体 writer、mode 和 lease/fence 检查上。开启一种机制不代表所有写入口已被它覆盖。下面的测试分别验证命名边界，不能合并成全系统的独占保证。
 
 ## 具名失败：这些约束拦住了什么
 
@@ -254,7 +258,7 @@ A、B、C 可以并行，但 D 不能从自然语言"它们应该完成了"推�
 
 **围栏必须落在生效的 root 上。** `test_split_root_todo_writeback_fence.py` 覆盖分离 root 的场景：registry source 被围栏时，即使通过 override 走同一份 source state，原围栏依然生效，state 字节不变；而未被围栏的 override 可以正常写出 receipt。缺了这条，围栏会变成可以绕开的摆设。
 
-**跨仓库 identity 缺失时 fail closed。** `pr_merged:#123` 缺少 repository 前缀时，实现不会按编号猜仓库，而是直接拒绝。这条防的是"两条 PR 恰好编号相同"这种极难排查的错配。
+**跨仓库 identity 无法解析时 fail closed。** `pr_merged:#123` 可以从 Todo 的 GitHub `task_repository` 解析仓库；显式 `owner/repo#123` 则直接绑定目标。两种来源都不可用时才拒绝，不能仅凭相同 PR 编号猜仓库。
 
 对应测试：`tests/control_plane/test_canonical_lease_acquire.py`、`tests/control_plane/test_canonical_lease_renew.py`、`tests/control_plane/test_canonical_lease_lifecycle.py`、`tests/control_plane/test_legacy_coordination_writer_fence.py`、`tests/control_plane/test_split_root_todo_writeback_fence.py`。这些断言本身就充当这套设计的可执行证据，而远不止是文档插图。
 
@@ -288,7 +292,7 @@ A、B、C 可以并行，但 D 不能从自然语言"它们应该完成了"推�
 
 读完这一章，你应该能带走六句可以自己检查的话。
 
-1. **一条 Todo 在任一时刻只有一个持有权威的执行实例。** 见到两份都"成功"的写回指向同一结果，那是 fence 失效，而非可接受的并发结果。
+1. **先确认当前写入是否受实例或 lease 围栏保护。** `hard_lease` 与默认 legacy 的要求不同；不能从一条 claim 推断所有 writer 都强制唯一实例。
 2. **写入的合法性在提交那一刻判定，不在准备阶段判定。** 拿旧 version 的写回必须被拒绝，而非先写后纠正。
 3. **重放安全不等于可以复用 key。** 同一个 `idempotency_key` 重放同一逻辑写入是幂等的；换了语义再复用同一个 key，会被拒成 `idempotency_key_reuse`。
 4. **续期失败是合法结局。** 持有者没能证明自己仍持有权威时中断工作，比让过期持有者写完更可接受；TTL 因此要按最坏任务时长设置。

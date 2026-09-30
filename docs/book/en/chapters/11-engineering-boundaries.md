@@ -86,8 +86,12 @@ responses satisfy their JSON Schema, and fixtures can be reset from scratch. The
 
 ```bash
 python3 -m pip install -r docs/requirements-docs.txt
-python3 examples/dev-book-publication-smoke.py
-mkdocs build --strict
+book_site_dir="$PWD/output/dev-book-validation"
+mkdocs build --strict --site-dir "$book_site_dir/docs"
+mkdocs build --strict --config-file docs/book/mkdocs.zh.yaml --site-dir "$book_site_dir/docs/book"
+mkdocs build --strict --config-file docs/book/mkdocs.en.yaml --site-dir "$book_site_dir/docs/book/en"
+python3 examples/dev-book-publication-smoke.py --site-dir "$book_site_dir/docs/book"
+python3 examples/dev-book-welcome-wagon-smoke.py --site-dir "$book_site_dir/docs/book"
 ```
 
 Do not stop at parsing Markdown in isolation. Verify discoverability through the unified
@@ -98,18 +102,14 @@ bilingual routes, official homepage entrypoints, and the no-Labs boundary. After
 change, rerun `python3 -m pip check` and `mkdocs build --strict`. Before changing any UI or
 documentation visual, read `docs/development/design.md`.
 
-The book's companion standalone Extension example reproduces independently like this (run it from a
-workspace containing `standalone-extension/`):
+The [scaffold chapter](09-extension-scaffold.md) supplies setup and two explicit contract tests. The official generator has no `[test]` extra. After implementing the domain changes and creating those tests, reuse its environment:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e './standalone-extension[test]'
-python3 -m pytest standalone-extension
+. .venv-extension/bin/activate
+python3 -m pytest standalone-extension/tests
 ```
 
-Those four steps are the minimum proof that the code in the docs actually runs; checking Markdown
-syntax alone proves nothing of the kind.
+Then follow the [lifecycle chapter](10-extension-lifecycle.md) using an isolated state file to validate activation, invocation, disable, upgrade, and rollback. Markdown parsing alone cannot establish that user journey.
 
 ### Rung 2: product-surface validation
 

@@ -20,7 +20,7 @@ If you already have a term or command name, skip the routing: cross-cutting word
 [Core command quick index](#core-command-quick-index). The protocol index is organized by developer job,
 not by directory order.
 
-## Requirement one: state outlives context
+## Requirement one: state outlives context {#requirement-one-state-outlives-context}
 
 **Test: information that lives only in the prompt does not count as remembered.**
 
@@ -32,7 +32,7 @@ not by directory order.
 | Projection | Read model derived from canonical state |
 | Kernel | Core that accepts transitions and owns durable control-plane state |
 
-## Requirement two: interruption stops at identifiable points
+## Requirement two: interruption stops at identifiable points {#requirement-two-interruption-stops-at-identifiable-points}
 
 **Test: if interruption is normal, "complete" has to be decidable.**
 
@@ -42,7 +42,7 @@ not by directory order.
 | Frontier | Todos currently runnable after dependency, Gate, capability, and boundary checks |
 | Receipt | Durable record of an accepted action or lifecycle transition |
 
-## Requirement three: one accountable actor
+## Requirement three: one accountable actor {#requirement-three-one-accountable-actor}
 
 **Test: authority cannot be self-asserted; a shared authority grants it and can revoke it.**
 
@@ -56,20 +56,20 @@ not by directory order.
 | Gate | Blocking decision with explicit scope and authority |
 | Host | Product or runtime that owns sessions, model turns, and wake-up surfaces |
 
-## Requirement four: bounded, externally observable spend
+## Requirement four: bounded, externally observable spend {#requirement-four-bounded-externally-observable-spend}
 
-**Test: no delta means no spend, and a system with no external observation degrades into human polling.**
+**Test: unchanged observations incur no delivery quota spend, but may still use model, tool, and network resources.**
 
 | Term | Meaning in this book |
 | --- | --- |
 | Quota | Contract that decides whether a turn may run and records validated spend |
 | Monitor | Todo that observes an external condition on a cadence and advances only on material change |
 
-## Words outside the four requirements
+## Words outside the four requirements {#words-outside-the-four-requirements}
 
 These do not hang off one requirement alone, and every requirement depends on them: Capability says what a
 caller may rely on, while Provider and Extension say where an implementation comes from and how it
-upgrades. Which layer they belong to is the placement rule in chapter 08.
+upgrades. Which layer they belong to is the placement rule in [placement rules](08-extension-placement.md).
 
 | Term | Meaning in this book |
 | --- | --- |
@@ -86,7 +86,7 @@ Choose a protocol from the developer job rather than reading the full directory 
 | `/loopx <goal text>`, Goal selection, fresh Agent identity, and Host activation | [`loopx_goal_command_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-goal-command-v0.md) |
 | Long-running Agent sources, projections, concurrent lanes, and lifecycle | [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md) |
 | Agent-scoped chronology before replan or handoff | [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md) |
-| Canonical events, replay, and privacy | [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md) |
+| Retirement boundary of the former Todo event API | [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md) |
 | Typed read model over the active-state workbench | [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md) |
 | Todo, Gate, dependency, and handoff graph | [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md) |
 | Gate coverage and scoped authority | [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md) |
@@ -262,7 +262,7 @@ loopx extension rollback <extension-id>
 Lifecycle commands normally preview by default. Inspect current `--help` and add `--execute` only when you
 intend to mutate state or invoke the Provider.
 
-## Core command quick index
+## Core command quick index {#core-command-quick-index}
 
 Grouped by the kind of problem; verify arguments with `loopx <command> --help`.
 

@@ -300,8 +300,7 @@ core 内置就要处理已有用户的升级路径。
 doctor；core 内置的能力随安装即用。一份 manifest 被声明进 catalog read 时状态是
 `declared=true, installed=false, enabled=false, ready=false`，它不会因为存在就可用。
 
-**代价三：等待真实 caller 会推迟抽象。** 坚持"没有第二个 Provider 就不建 Capability"意味着在
-那之前代码停在 Extension 或 helper 里，未来合并时要付出一次搬迁成本。
+**代价三：公开合同需要维护。** 新 Capability 应有稳定的调用者 outcome、真实入口和验证；一个 Provider 也可以满足这些条件。独立安装需求本身不足以建立新 Capability，provider 数量也不是准入门槛。
 
 **边界一：这条决策管的是 LoopX 产品面的归属，不覆盖别人自己的仓库结构。** 独立的 provider 发行
 放在自己的 package 或 repository，LoopX 只要求 manifest 与生命周期合同。

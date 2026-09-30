@@ -3,27 +3,11 @@
 本章从 LoopX 官方 scaffold 创建 `loopx-text-stats`。官方 scaffold 提供完整可运行基线；本章
 给出需要收窄的 manifest、request/response 合同、核心函数与验证步骤，不依赖配套练习仓库。
 
-## 从一个坏的结局开始
+## 为什么先从完整协议基线开始
 
-有人要接一个内部统计需求，判断 loopx 自带的能力太"重"，于是手写了一个更小的目录：一个
-`extension.toml`、一个 `cli.py`，直接读 stdin、打印结果。`loopx extension install --manifest <path> --execute`
-通过了，`run` 也能跑。
+考虑一个未经完整验证的 provider：它能接收 stdin 并返回 JSON，但新增的 `path` 字段被当成了文件读取请求，response 又没有清楚的版本边界。进程能启动，仍不足以证明它的输入、输出和权限合同成立。
 
-两周后审计发现：
-
-```text
-request  containspath 字段 -> provider 顺手当文件路径读了
-response 无 schema_version -> 下游无法判断兼容版本
-doctor   未实现           -> ready 只能证明进程能启动
-version  写在 manifest 之外 -> upgrade 无法判定 revision
-```
-
-每一项单独看都是小疏漏，合起来是同一件事：**这个 provider 没有可校验的合同，因此 LoopX 无法
-判断它是否被合法调用。** 它"能跑"证明的只是进程能启动。
-
-脚手架存在的意义正是让这条路径默认完整：先拿到一份所有合同字段都在的基线，再往下删，而不是
-从空目录往上补。删掉一个不需要的领域字段有明确后果；漏掉一个 schema 或 doctor，后果要到审计
-时才出现。
+官方 scaffold 提供可运行的零权限基线。下面把它改成文本统计示例；领域函数与 schema 需要一起修改。Doctor 只承担有界 readiness 检查，业务语义由 request/response 验证和测试证明。
 
 ## 1. 生成官方 scaffold 与它的边界
 
@@ -38,16 +22,7 @@ loopx extension init loopx-text-stats \
 用 `--destination` 可以指定别处。目标目录必须不存在，即使空目录也会被拒绝，没有 force 或 merge
 模式。
 
-关键是这条命令的边界：它不 build、不 install、不 register、也不 enable。三个动作各有归属，
-必须分开执行，否则包管理器状态与 LoopX activation state 会一起漂移：
-
-```bash
-python3 -m pip install ./standalone-extension
-loopx extension install \
-  --manifest standalone-extension/extension.toml \
-  --execute \
-  --format json
-```
+这一步只生成源码，不 build、安装 package 或激活 Extension。本章先修改并验证 provider；下一章再执行一次 LoopX activation。这样顺序阅读不会重复安装同一个 id。
 
 生成结构：
 
@@ -139,7 +114,7 @@ provider 必须拒绝，而不是擅自把 `path` 理解为文件读取授权。
 
 ## 4. 实现纯计算
 
-示例的核心函数：
+下面是需要加入 `src/loopx_text_stats/cli.py` 的领域函数，文件顶部同时添加 `import re`：
 
 ```python
 def analyze_text(text: str) -> dict[str, int]:
@@ -162,7 +137,14 @@ def analyze_text(text: str) -> dict[str, int]:
 - 不写外部系统；
 - 不依赖 LoopX project state。
 
-provider 在计算前完成结构验证，错误也通过 versioned response object 返回：
+函数片段还不是完整 provider。保留 scaffold 的 `_emit`、`main` 和 doctor 路径，在 `run` 中完成以下改动：
+
+1. 允许字段从 `schema_version`、`message` 改为 `schema_version`、`text`；
+2. 读取并检查非空 `text`，未知字段继续拒绝；
+3. 成功 response 的 `result` 改为 `analyze_text(text)`，保留版本与 extension identity；
+4. 同步更新两份 JSON Schema 与 `examples/request.json`。
+
+错误仍通过 versioned response object 返回：
 
 ```json
 {
@@ -218,20 +200,54 @@ if args.doctor:
 真实 Provider 可以做必要的只读依赖检查，但 readiness probe 仍应有界、可重复、无 effect。
 doctor receipt 始终报告 `external_writes_performed: false`，这条断言本身就是合同的一部分。
 
-## 7. 安装 package 并运行 tests
+## 7. 明确添加测试，再安装 package
 
-在同一个 Python environment 中：
+Scaffold 不生成 `tests/` 或 `[test]` extra。完成上述领域改动后，创建 `standalone-extension/tests/test_contract.py`，加入正常输入与越界输入测试：
 
-```bash
-cd standalone-extension
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e '.[test]'
-python3 -m pytest
+```python
+# standalone-extension/tests/test_contract.py
+import json
+import subprocess
+import sys
+
+
+def invoke(payload):
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx_text_stats.cli"],
+        input=json.dumps(payload), text=True, capture_output=True, check=False,
+    )
+    return result.returncode, json.loads(result.stdout)
+
+
+def test_text_statistics():
+    code, result = invoke({
+        "schema_version": "loopx_text_stats_request_v0", "text": "hello world\n",
+    })
+    assert code == 0 and result["ok"] is True
+    assert result["result"] == {
+        "characters": 12, "non_whitespace_characters": 10,
+        "words": 2, "lines": 1,
+    }
+
+
+def test_unknown_field_is_rejected():
+    code, result = invoke({
+        "schema_version": "loopx_text_stats_request_v0", "text": "hello",
+        "path": "input.txt",
+    })
+    assert code != 0 and result["ok"] is False
 ```
 
-同环境要求源于 LoopX 通过已安装 console entrypoint 定位 provider。package 装在另一个 venv 时，
-正确结果是 `entrypoint_missing`，而不是静默搜索任意源码路径。
+从 `standalone-extension` 的父目录运行。以下环境供本章和下一章复用：
+
+```bash
+python3 -m venv .venv-extension
+. .venv-extension/bin/activate
+python3 -m pip install loopx pytest -e ./standalone-extension
+python3 -m pytest standalone-extension/tests
+```
+
+这一步安装 Python package，不写 LoopX activation state。只有测试通过、示例 request 与协议一致后，才进入下一章的激活流程。LoopX 与 provider 使用同一环境，以便解析 console entrypoint。
 
 ## 代价与边界
 
@@ -294,8 +310,7 @@ effectful provider，不要为了展示 manifest 字段制造假的权限合同�
 
 ## 不变式
 
-1. **脚手架产出的目录里，每个合同字段都必须先存在再被删。** 空目录起手一定会漏掉某项，
-   而漏掉的后果只在审计时暴露。
+1. **Scaffold 提供协议基线，领域改动仍需验证。** 生成文件存在不证明它们已正确表达你的业务输入和结果。
 2. **`extension init` 只生成 standalone path。** 它不认领 capability，也不推断
    `[[provides]]` 或 `[[implements]]` 所需的 authority。
 3. **一次 provider 调用必须带上可校验的 `schema_version`。** 缺少它的 receipt 无法判定兼容版本。

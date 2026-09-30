@@ -2,41 +2,23 @@
 
 本章回答一个问题：一轮 Agent 工作从"该不该动"到"可以算做完"，中间发生了什么，以及为什么这些步骤的**顺序本身**就是安全边界。
 
-## 从一个坏的结局开始
+## 写回完成后，进程停了
 
-先看一个场景。它在没有治理的 agent 系统里很常见：
+考虑一个教学情境：Agent 为一项兼容性修复生成了代码，验证通过，结果已经写回；随后 quota 结算超时，进程退出。重新启动时，CLI 没有返回成功，但代码和部分持久记录已经存在。
 
-```text
-09:00  Agent 第 40 轮。读 Todo 列表，选中一条，开始改文件。
-09:04  改完了。回执已经写下：代码改动 + 验证输出。
-09:04  机器重启（或进程被杀、或用户按停止、或模型超时）。
-09:06  Agent 重启，读状态：Todo 仍是 pending，看不到已完成工作的证据。
-09:06  它判断这轮没做过，于是重做一遍。
-09:09  第二轮也"成功"了。quota 收了两次，Todo 上出现两条指向同一结果的记录。
-```
+此时整轮重做可能重复副作用，直接宣告完成又会掩盖尚未完成的结算。需要先回答：**哪些步骤已提交，哪些确认未执行，哪些结果仍未知？**
 
-这个过程里没有任何一步在说谎。Agent 没有虚报，回执真的写了，Todo 状态当时也确实是对的。
+## 为什么需要可恢复的提交边界
 
-问题在于**它们没有一个共同的提交点**：回执落在会消失的地方，收费记在不会消失的地方，而"这轮完成了"这个判断，在重启后的读模型里重建不出来。
+只在最后保存一条“成功”记录很简单，却无法区分执行途中留下的结果。逐步记录有助于恢复，但外部操作和本地 checkpoint 之间仍可能中断。
 
-这就是长程运行和一次会话的根本差别。会话里，"我说过"约等于"发生过"，因为上下文还在。长程里，**上下文是会被冲掉的工作内存**，"发生过什么"必须由一个不依赖上下文的机制回答。
-
-## 为什么"重试前先检查"不足以解决
-
-自然的反应是：让它重试前先检查一下。但检查本身要读状态，而状态可能正好停在"回执写了、收费没写"的中间，这时两个选择都是错的：
-
-- **跳过**：改动可能真的落盘了，但没被记录，于是它永远无法被验收、交接或审计；
-- **重做**：可能对同一份文件改两遍、对同一个外部资源请求两次、对同一份预算扣两次。
-
-真正的难点在于**能不能判断出它当时做到哪一步**。判断不出，重试的每个分支都只能靠猜。
-
-所以设计目标是让**每次失败停在一个可辨识的位置**。失败的数量并不重要。
+LoopX 为受治理的 Turn 记录身份、阶段和回执，并对未决操作保留读回路径。恢复的目标是保留已完成工作、确认不确定结果，再决定能否继续；证据不足时可以安全地停住。
 
 ## 尺度一：一轮内部的事务
 
-### 七个阶段，只承认合法前缀
+### 七个阶段描述已确认的进展
 
-LoopX 把一轮拆成七个有序阶段，写在一份可校验的契约里：
+LoopX Turn 的事务契约给出七个有序阶段：
 
 ```text
 host_execute → typed_result → validation
@@ -44,43 +26,25 @@ host_execute → typed_result → validation
              → scheduler_apply → scheduler_ack
 ```
 
-一轮只会停在这七个阶段构成的某个**前缀**上。第 4 阶段做完就崩，已完成的就是前 4 个；第 6 阶段做完就崩，就是前 6 个。不存在"跳过第 3 阶段但做了第 4 阶段"的状态。
+回执中的 `completed_phases` 必须是这条序列的合法前缀。它约束的是**可以声称已完成什么**；并不保证进程只能在阶段之间崩溃，也不证明未记录的副作用没有发生。
 
-这个约束由校验规则维持，不靠约定。一份事务计划声称自己完成了若干阶段时，LoopX 会检查它是否正好等于某个前缀：
+例如 provider 已完成写回，但进程来不及保存 checkpoint，journal 里仍可能只有 `prepared` 意图。恢复需要按同一 settlement identity 和 effect 引用读回：
 
-```python
-# loopx/control_plane/turn_driver/transaction.py
-expected = list(TRANSACTION_PHASES[: len(phases)])
-if phases != expected:
-    errors.append("completed_phases must be an ordered transaction prefix")
-```
+| 读回结果 | 处理方式 | 仍需满足的条件 |
+| --- | --- | --- |
+| `committed`，且回执有效 | 记录已有结果，跳过该副作用 | 身份、payload 与阶段匹配 |
+| `absent` | 可以执行尚未提交的步骤 | 当前恢复判定与授权允许 |
+| `unknown`，或读回不可用 | 停止这条恢复路径，保留待确认状态 | 获取有效读回或由对应 owner 修复 |
 
-**这就是恢复能成立的机制**：可能崩溃的位置从"任意时刻的任意状态"收缩成"七个前缀之一"。恢复不需要猜，只要读最后完成的阶段，从下一个继续。重启四十三次和重启一次走的是同一条路径。
+因此，合法前缀只是恢复条件之一。当前 executor 还检查 journal 身份、绑定关系、失败类型和恢复许可。已保存 Host result 时可能从 validation 继续；需要重新调用 Host 的失败还有显式 retry 和预算限制。
 
-### 收费为什么必须在写回之后
+### 配额记账为什么跟在写回之后
 
-顺着顺序约束能推出一个反直觉的结论。注意这两个阶段的相对位置：
+`durable_writeback → quota_spend` 让交付配额记录能够关联已经验证并持久化的结果。这里的 spend 是 LoopX 的预算 slot 记账；模型 API 或外部服务的实际费用可能在执行时已经发生，不能据此推断真实账单。
 
-```text
-durable_writeback  →  quota_spend
-```
+写回成功而 spend 失败时，**已有写回会保留**。系统记录尚未完成的结算，恢复时复用已确认的结果，避免重新调用 Host 或重复写回。它既没有丢弃工作，也没有让整轮跨外部系统变成一个原子事务。
 
-先写回、再扣费，意味着"钱花了但结果没落盘"这个状态不可能出现。代价是扣费失败时这一轮白做——LoopX 接受这个损失，因为**一次白做的成本，远低于一次"收了钱却说不清结果在哪"的不可审计状态**。
-
-失败同样有约束。每种失败必须声明停在哪个阶段：
-
-```python
-# loopx/control_plane/turn_driver/transaction.py
-FAILURE_PHASES = {
-    LoopXTurnResultKind.HOST_FAILURE:        "host_execute",
-    LoopXTurnResultKind.VALIDATION_FAILED:   "validation",
-    LoopXTurnResultKind.WRITEBACK_FAILED:    "durable_writeback",
-    LoopXTurnResultKind.QUOTA_SPEND_FAILED:  "quota_spend",
-    LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED: "terminal_closeout",
-}
-```
-
-一份声明 `QUOTA_SPEND_FAILED` 却说自己停在 `validation` 的计划会被拒绝。失败不能随意归因，**因为它决定了恢复从哪里开始**。
+失败类型帮助定位后续动作，例如 `HOST_FAILURE` 对应 `host_execute`，`WRITEBACK_FAILED` 对应 `durable_writeback`，`QUOTA_SPEND_FAILED` 对应 `quota_spend`。这些字段须与回执一致；仅知道失败阶段还不足以授权重试。
 
 ### 五段闭环：一次正常交付的形状
 
@@ -266,37 +230,37 @@ Python 仍然负责当前 CLI transport、明确的外部 Provider/Host effect�
 
 当前 `main` 的 [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md) 把后续工作定义为 transaction-payoff：一次迁移应当切走一个完整 transaction，并删除被替代的 Python semantic path。只增加 leaf handler、DTO 或 bridge call 不算迁移进展。
 
-这条边界对读者有实际意义：**当你发现两侧行为不一致时，canonical 答案在 TypeScript 侧**，Python 侧是适配或兼容投影。判断一处逻辑归谁，看它是否已经是一个 domain-owned decision 或 effect receipt。
+遇到两侧行为不一致时，先查这条规则当前的 contract owner。已迁移的 Turn settlement 由 TypeScript 拥有；部分 Todo 读规则仍由 Python 拥有。实现语言本身不能决定哪边正确，迁移 RFC 的交付边界和真实调用路径才是依据。
 
-## 代价与边界：这套设计放弃了什么
+## 代价与边界：恢复需要哪些条件
 
-上面每条规则都换来一个性质，代价需要说清楚，它们决定你什么时候不该指望这套机制。
+**要维护可读的恢复记录。** journal、绑定身份和 provider 回执带来存储、校验和迁移成本。它们损坏或不可用时，恢复可能被阻塞，不能把缺失记录当成未执行。
 
-**代价一：每轮必须先读状态。** 不能沿用一个多小时前 prompt 里的判断直接动手。这比"接着干"慢，而且读到的状态可能在你读完时就已经失效。
+**结果未知时可能需要等待。** 保留已完成工作减少重复执行，但也要求 provider 能读回未决结果。一个只支持写、不支持查询或幂等标识的外部 API，需要单独设计恢复策略。
 
-**代价二：阶段数固定。** 一轮里不能临时插入新步骤，比如"改完文件顺手清一下缓存"。这种灵活性被换成可枚举性，而可枚举性是恢复的前提。
+**阶段约束结算协议。** `host_execute` 内部可以包含多个工具调用；固定结算阶段没有禁止“修改文件后清理缓存”。新增外部副作用仍须满足权限和自身的幂等、读回边界。
 
-**代价三：白做的可能。** 写回后扣费失败，这轮工作不产生任何记账，系统选择丢弃它而不是留下说不清状态的部分结果。
+TurnEnvelope 是显式启用的 bounded projection；LoopX Turn 提供 experimental protocol 与可执行的 `turn plan` / `turn run-once` 路径。它们支持显式 opt-in 集成，不能据此宣称每个 Host 的每次工具调用都获得相同的恢复保证。
 
-**代价四：不能凭直觉跳步。** 九个阶段的顺序意味着一个看起来显然的判断——"用户没投诉，所以可以继续"——在 pipeline 里没有位置。想加快决策，只能改进 source facts 的质量，不能压缩顺序。
+## 怎样判断能否恢复
 
-**边界一：这七个阶段只描述"一次受治理的 Turn"，不覆盖"Agent 的全部行为"。** 模型在 `host_execute` 内部的推理、工具调用的具体顺序，不受这七个阶段约束，那属于 harness 的职责。LoopX 管的是**跨进程边界、会被中断、需要被记账的那部分**。
+从原 Turn 的标识开始，不因一次 CLI 超时创建新任务重新执行。需要诊断时，可读取 journal：
 
-**边界二：TurnEnvelope 和 LoopX Turn 不是默认路径。** TurnEnvelope 目前是显式启用的 bounded projection，不是默认 quota 输出；LoopX Turn 是 experimental protocol，但当前版本提供可执行的 `turn plan` / `turn run-once` 路径与 Host adapter。它们适合理解边界和做显式 opt-in 集成，不该被描述成所有 Host 都默认采用的 recurring runtime。
+```bash
+loopx turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-key <turn-key> --format markdown
+```
 
-**边界三：Python 仍在负责真实职责。** Python 承担当前 CLI transport、明确的外部 Provider/Host effect、legacy projection 和尚未迁移的 Markdown/event 写回。迁移不是"Python 已被移除"，也不能在 Python facade 里重新实现同一条规则——那会制造第二个事实来源。
+检查 `recorded_effects` 与 `recovery_decision`。`null` 表示未知；诊断命令不会执行恢复，也不授予重试权限。随后依当前 executor 判定和 provider 读回处理，保留原有身份。
 
-## 具名失败：这些约束拦住了什么
+| 主张 | 证据入口 | 证据边界 |
+| --- | --- | --- |
+| 完成阶段必须构成合法前缀 | `turn_driver/transaction.py`、`test_effect_program_fault_replay_matrix.py` | 校验记录形状；测试使用受控回执，不穷尽现实崩溃 |
+| 未知 prepared effect 不能盲目执行 | `turn_driver/settlement.ts`、`tests/control_plane_ts/turn_settlement.test.ts` | 仍依赖 provider 提供可信 readback |
+| spend 失败保留 writeback | `tests/test_loopx_turn_executor.py` 的 spend 拒绝与恢复用例 | 合成 provider 验证 executor 分支，不验证外部账单 |
 
-抽象地谈"可恢复性"没有说服力。下面三个场景各有对应测试，可以直接运行，看约束如何生效。
-
-**合法前缀重放不产生重复效果。** 对每一个合法前缀，重放都必须收敛到同一结果：不会因为重放多扣一次费、多写一条记录。测试覆盖全部前缀组合，无一抽样。核心断言是重放时 `replay_calls == []`，且 `combined_calls` 里 `DURABLE_WRITEBACK` 与 `QUOTA_SPEND` 各不超过一次。
-
-**没有写回的扣费必须 fail closed。** 一份计划声称要扣费却没有对应的 `durable_writeback`，必须被拒绝，而不是先扣了再说。这防的正是开头那个 09:04 的状态：钱花了，但不知道落在哪。
-
-**一次失败短路所有后续效果。** 第 3 阶段失败后，第 4 到第 7 阶段都不执行。否则会出现"验证没过但写回成功"这种内部矛盾的状态。
-
-对应测试：`tests/control_plane/test_effect_program_fault_replay_matrix.py`。这些是这套设计在每个崩溃点上的可执行证据，用途远不止演示。
+完整字段与恢复条件见 [LoopX Turn 协议](/loopx/docs/reference/protocols/loopx-turn-v0/)。这些证据支持特定边界内的保证；它们不承诺任意外部操作的 exactly-once。
 
 ## 一轮如何结束
 
@@ -312,20 +276,13 @@ Python 仍然负责当前 CLI transport、明确的外部 Provider/Host effect�
 
 **"没有写代码"不一定是失败**——Gate、wait 和 quiet no-op 可能正是协议要求的正确结果。反过来，写了很多代码也不代表这轮有效，如果它绕过了 selected Todo、authority、workspace 或 validation。
 
-## 不变式
+## 使用时守住的边界
 
-读完这一章，你应该能带走六句可以自己检查的话。
+1. 完成阶段是已确认结果的合法前缀；未记录的副作用可能仍需读回。
+2. 保留同一 settlement identity 下的有效回执；spend 失败不撤销已完成的写回。
+3. 结果未知时先确认，不能用新 identity 绕过原 Turn 的恢复检查。
+4. user、agent 与 CLI 三个 channel 可以同时有义务，按各自 scope 执行。
+5. 优化读取与执行成本时，仍须保持准入优先级和提交前的授权检查。
+6. 按当前 settlement contract 记账；Gate 通知、dry-run 和未变化的 poll 不冒充 delivery spend。
 
-**关于单轮事务：**
-
-1. **一次 Turn 的完成状态只能是七个阶段中的某个前缀。** 观察到"做了扣费但没做写回"，那不是恢复边界，是缺陷。
-2. **同一轮 Turn 的重放不产生额外效果。** 重放幂等，所以重试是安全的，但重试不掩盖"当时做到哪"这个事实。
-3. **失败必须声明它停在哪。** 一个说不出自己停在哪个阶段的失败，无法被恢复，也就无法被交接。
-
-**关于跨轮准入：**
-
-4. **三个 channel 可以同时为真。** 把任一个压成全局布尔，都会丢失合法的并行工作或必要的人工介入。
-5. **决策顺序不可压缩。** 想加快决策，只能提高 source facts 的质量。
-6. **没有 delta 就不该 spend。** Gate notification、dry-run、未变化的 poll 都不是交付。
-
-这六条回答的其实是同一个问题：**当没人记得刚才发生了什么、也没人盯着的时候，系统凭什么知道该不该动、动到哪了？** 本章给的是 LoopX 在单轮尺度上的答案。下一章把尺度拉长——当一个目标需要几十上百轮、跨越多次中断和交接时，这套约束如何继续成立。
+下一章讨论这些规则在多轮运行中的作用：什么时候重试，什么时候重新规划，以及何时必须交还给人。

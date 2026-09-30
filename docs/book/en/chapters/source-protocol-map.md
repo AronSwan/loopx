@@ -2,26 +2,9 @@
 
 ## Start from a rejected PR
 
-A real failure first. It did not come from inexperience; it came from a very natural sequence of actions:
+Consider a teaching scenario: a contributor wants nonblocking notices not to alter publication authority. They search related text, change an operator-summary renderer, and add a passing test. The typed scope/authority owner still makes the old decision.
 
-```text
-Tue 10:12  An external contributor wants to change one rule:
-           "a nonblocking user notice must not clear publication authority."
-Tue 10:20  grep -rn "waiting for user" loopx/ -- six hits.
-Tue 10:31  He picks a helper under loopx/control_plane/quota/ that reads status
-           text, adds a string check ahead of the branch that decides publish
-           permission, and writes a regression test. Everything is green
-           locally. 11:40 he opens the PR.
-Wed 09:05  A maintainer replies: this branch is not an authority decision, it is
-           a wording template for an operator-facing summary. The real scope
-           coverage is owned by a typed gate requirement over in todos.
-           Changing this file leaves two interpretations of the same rule.
-Wed 09:20  PR closed, unmerged.
-```
-
-The code he changed really is related to the problem. It reads the same field. But "reads this field" and "owns this rule" are different claims. His slice changed no protected invariant, and it added a second place that interprets status text.
-
-The decisive test: **the owner of a rule is the module that decides which transitions are legal, not the module that happens to print words about it.** Code search finds the second kind. It does not find the first.
+The mistake is equating a reader of a field with the owner of its rule. Search helps locate candidates; follow callers to distinguish the module deciding legal transitions from display-only consumers.
 
 ## Why "search harder, then edit" does not hold
 

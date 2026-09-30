@@ -307,8 +307,7 @@ enables, and runs doctor themselves. A core built-in works as soon as LoopX is i
 declared into a catalog read reports `declared=true, installed=false, enabled=false, ready=false`; it
 does not become usable merely by existing.
 
-**Cost three: waiting for a real caller delays abstraction.** Insisting on "no second Provider, no
-Capability" leaves code in an Extension or helper, and merging it later costs one migration.
+**Cost three: a public contract needs maintenance.** A new Capability needs a stable caller outcome, a real entrypoint, and validation. One Provider can satisfy these conditions. Independent installation alone is insufficient, and provider count is not a gate.
 
 **Boundary one: this decision governs ownership inside the LoopX product surface, not someone else's
 repository layout.** An independently distributed provider lives in its own package or repository;

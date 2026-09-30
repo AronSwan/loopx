@@ -5,7 +5,7 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
 
 ## 你会完成什么
 
-全书先用六个编号章节和一张状态机地图建立控制面心智模型，再进入两条实践主线：
+全书先用八个编号章节和一张状态机地图建立架构模型，再进入项目接入与开发者贡献两条实践主线：
 
 ```text
 控制面基础
@@ -18,14 +18,16 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
 
 基础篇依次覆盖：
 
-1. 为什么一次 Session 不足以承载长程任务；
-2. 普通会话、Host Goal 与 LoopX 分别拥有哪一层状态；
-3. canonical state、workbench、event 与 read-only projection；
-4. Todo 工作图、Gate、claim、lease、authority 与 Peer 协作；
-   读完后用[主要状态机与状态流转](./core-state-machines.md)把 source state、derived decision、
-   projection 与九组状态机连成一张图；
-5. 一轮受治理的 Turn 如何决定、执行、验证和写回；
-6. retry、replan、self-repair、terminal closure 与运行边界。
+1. [从一次会话到长程任务](01-from-session-to-loop.md)：为什么需要会话外的控制信息；
+2. [会话、Host Goal 与 LoopX](02-session-goal-loopx.md)：各自拥有的状态与任务资格；
+3. [长程运行提出的四个要求](02b-long-horizon-requirements.md)：整本书的问题框架；
+4. [持久状态与只读投影](state-substrate.md)：事实源、历史与当前视图；
+5. [工作图、权限与 Peer 协作](work-graph-and-authority.md)：工作归属与提交边界；
+6. [一轮受治理的工作](03-one-turn.md)：执行、验证、写回与可恢复结算；
+7. [恢复、自修复与运行边界](04-runtime-boundaries.md)：多轮推进、重新规划与停止；
+8. [预算、准入与观察](04b-budget-and-admission.md)：何时运行、等待和再次观察。
+
+[主要状态机与状态流转](core-state-machines.md)是一张可回查的专题地图。可以先读完一次 Turn，再回来把各机制连成整体，不必首次阅读就记住全部枚举。
 
 ## Dev Book 与 Control-Plane Course 如何配合
 
@@ -42,26 +44,26 @@ LoopX Kernel 源码，也不需要理解所有 CLI 子命令。
 准备深入 Kernel 的开发者也可以直接进入
 [Control-Plane Course 独立章节](./12-control-plane-course.md)。
 
-- **多个短 Session 怎样组成长程任务？** 先读第 1、2 章，再下钻
+- **多个短 Session 怎样组成长程任务？** 先读[会话到长程任务](01-from-session-to-loop.md)与[任务资格](02-session-goal-loopx.md)，再下钻
   [概念导读](/loopx/docs/development/control-plane-course/00-concept-primer/)、
   [第 1 讲：Harness 是 effectful program](/loopx/docs/development/control-plane-course/01-agent-loop-effectful-program/)与
   [第 2 讲](/loopx/docs/development/control-plane-course/02-goal-control-plane-architecture/)，
   再用[第 3 讲](/loopx/docs/development/control-plane-course/03-first-real-loop/)走一遍真实 Loop。
-- **状态、工作图与权限分别由谁拥有？** 先读第 4、5 章和
+- **状态、工作图与权限分别由谁拥有？** 先读[状态底座](state-substrate.md)、[工作图](work-graph-and-authority.md)和
   [主要状态机与状态流转](./core-state-machines.md)，再下钻
   [第 4 讲](/loopx/docs/development/control-plane-course/04-state-substrate/)与
   [第 5 讲](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/)。
 - **Gate、Monitor、Replan 同时出现时哪条规则优先？** 先读
-  [主要状态机与状态流转](./core-state-machines.md)和第 6 章，再下钻
+  [主要状态机与状态流转](./core-state-machines.md)和[一轮受治理的工作](03-one-turn.md)，再下钻
   [第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)与
   [第 7 讲](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/)。
-- **长程任务怎样防止目标漂移与局部空转？** 先读第 7 章，再下钻
+- **长程任务怎样防止目标漂移与局部空转？** 先读[恢复与运行边界](04-runtime-boundaries.md)，再下钻
   [长程收敛专题](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/)与
   [第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
-- **怎样修改规则并证明它可交付？** 先读第 11 至 14 章，再下钻
+- **怎样修改规则并证明它可交付？** 先读[贡献地图](source-protocol-map.md)、[规则修改](source-change-control-plane-rule.md)与[验证到 PR](source-validation-to-pr.md)，再下钻
   [第 9 讲](/loopx/docs/development/control-plane-course/09-engineering-a-control-plane-rule/)与
   [第 10 讲](/loopx/docs/development/control-plane-course/10-autonomous-agent-quality-gates/)。
-- **Extension、领域能力与 Kernel 怎样组合？** 先读第 14 至 16 章，再下钻
+- **Extension、领域能力与 Kernel 怎样组合？** 先读[放置位置](08-extension-placement.md)、[scaffold](09-extension-scaffold.md)与[生命周期](10-extension-lifecycle.md)，再下钻
   [第 11 讲](/loopx/docs/development/control-plane-course/11-extension-layer/)。
 
 完成基础篇后：
@@ -77,20 +79,16 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 ## 这本书的主线
 
-本书不是 LoopX 的功能导览。它围绕一个更基础的问题展开：**运行时间足够长之后，系统必须满足哪些要求？**
+正文围绕“LoopX 为什么这样设计”展开，落点是如何使用、何时等待、怎样恢复及边界在哪里。四个问题帮助串联架构：
 
-这些要求来自"长时间运行"这件事本身，任何跨天、跨会话、跨进程的系统都会遇到：
-
-| 要求 | 如果不管 | 谁来回答 |
+| 问题 | 架构解释 | 使用落点 |
 | --- | --- | --- |
-| 状态必须能脱离上下文存在 | 记忆一断，工作就重复或漂移 | 第 4 章、第 13 章 |
-| 每次中断必须停在可辨识位置 | 半成品状态无法判断，重试只能靠猜 | 第 6 章、第 7 章 |
-| 同一时刻必须唯一可问责的行动者 | 丢失更新、过期持有者继续写 | 第 5 章、第 15 章 |
-| 消耗必须有上限且可被外部观察 | 空转、重复计费、人被迫一直盯着 | 第 8 章、第 9 章 |
+| 上下文中断后凭什么接着做？ | 持久状态与投影 | 找当前 authority 与有效 evidence |
+| 半轮工作如何处理？ | journal、回执、恢复判定 | 复用已提交结果，确认未知副作用 |
+| 多个执行者怎样协作？ | 工作图、scope、lease 与围栏 | 核对当前 writer 的模式与权限 |
+| 没有变化时如何少消耗？ | 预算、准入、观察与退避 | 检查等待对象、due 与唤醒能力 |
 
-第 3 章会把四条要求讲清楚。之后每一章都挂在其中一条上，并回答同一组问题：**遇到了什么具体问题、选择了什么设计、这个设计付出了什么代价、读者可以带走哪条可检查的不变式。**
-
-"代价与边界"是本书刻意保留的部分。多数技术说明只讲机制怎么工作；而"为什么这么设计"的答案，恰恰在这个设计放弃了什么里面。
+每章从一个具体问题进入设计，再说明成立条件、实际代价和下一步操作。源码与 RFC 用来验证这些解释；深入实现时再进入贡献路线和 Course。
 
 ## 章节如何组织
 
@@ -107,6 +105,17 @@ lifecycle 选择，不是所有贡献的默认终点。
 - **基于官方 scaffold：** 示例只给出完成当前任务所需的领域改动、协议和验证，不依赖单独的
   配套练习仓库；
 - **为解释而简化：** 用于说明状态关系，不应直接写入生产配置。
+
+## 怎样理解书中的证据
+
+| 文字类型 | 应怎样阅读 |
+| --- | --- |
+| 当前实现的行为 | 对照本书版本、实际入口、authority mode 与回执；不要扩展到所有 Host/provider |
+| RFC 的设计目标 | 查看 milestone、ledger 与交付边界；Accepted 不表示每项能力已发布 |
+| 教学情境或使用建议 | 用来解释取舍，不作为真实事故或机器强制规则 |
+| 测试与 smoke | 只证明实际覆盖的输入和断言；标题/表格对齐、路径存在与构建通过不证明语义正确 |
+
+修订章节时，优先核对会影响操作的强断言与中英义务句。没有证据支持的保证应收窄，已退役的模型应退出当前路径；不能为了保留原文字数继续教授旧行为。
 
 ## 权威来源
 

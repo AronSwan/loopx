@@ -51,7 +51,9 @@ So what is needed is not a ceiling but three cooperating mechanisms: **admission
 
 The first mechanism is admission. Before deciding what to do, it answers what is permitted now — and the answer cannot come from the executor itself.
 
-Quota's model is already covered as a decision compiler in [One governed turn](03-one-turn.md); what matters here is its budget meaning: **admission replaces "how much is left" with "how many spends and which actions this round allows."** What enters the decision is the precedence among source facts, and a balance figure is not among them.
+[One governed turn](03-one-turn.md) introduces quota as a decision compiler. Balance remains an input: `spent_slots >= allowed_slots` in the current window makes ordinary work `throttled`.
+
+Available budget still requires Gate, capability, workspace, and frontier checks. Balance answers whether budget is available; full admission answers what this Agent may do now. Both matter.
 
 The forbidden shortcuts share one shape: mistaking a local signal for global authority.
 
@@ -63,7 +65,11 @@ The forbidden shortcuts share one shape: mistaking a local signal for global aut
 | Whether this round already has a settlement identity | One heartbeat turn has exactly one settlement Todo; another monitor cannot replace it |
 | Whether the delivery type permits spend | A writeback with no validation, a dry-run, and an unchanged poll produce no delivery spend |
 
-The last row deserves its own sentence, because it is the part a ceiling most easily misses: **the thing that must be spent must be spent, and the thing that must not be spent must not be.** The protocol states that Gate notifications, dry-runs, failed preflights, unchanged monitor polls, scheduler cadence changes, and duplicate writebacks must not impersonate delivery spend. So "consumption has a ceiling" constrains **which class of action deserves a charge**, and the charge count only secondarily.
+**Required accounting must happen; ineligible actions must not be charged as delivery.** Follow the current settlement contract for valid delivery.
+
+Gate notifications, dry-runs, failed preflights, unchanged monitor polls, scheduler cadence changes, and duplicate writebacks do not count as delivery spend.
+
+The quantity limit and accounting classification address different risks. Quota units are not an external model bill; a no-spend observation may still use tools, network resources, or a model.
 
 Another product shape of admission is that waiting gets registered. When an admitted advancement turn discovers a real dependency, it registers a `monitor_changed:<todo_id>` or `todo_done:<todo_id>` wait while keeping an independently runnable successor. Settlement returns `typed_blocked_writeback_no_spend`: validation and durable-writeback receipts, no debit and no delivery credit. The old turn is therefore not stuck, and independent work stays selectable.
 
@@ -78,9 +84,9 @@ The second mechanism is backoff, which answers "given that nothing changed, how 
 
 The scheduler hint projects the current state into a cadence, including the unchanged-poll policy: a backoff multiplier (2 in the current implementation), an unchanged-poll limit per execution surface, and a max interval. Consecutive unchanged rounds stretch the interval step by step until it hits the ceiling.
 
-The more decisive question is **what resets it**. Scheduler state is bound to a `reset_token` and an `identity_signature`; user feedback, a new Todo, reassignment, Gate resolution, or a material evidence transition all change the identity and restore the cadence to the current profile's initial value. Only consecutive unchanged polls continue the backoff.
+Scheduler state is bound to `reset_token` and `identity_signature`. Changed identity or decision inputs, once read, can return cadence to the profile's initial value. Consecutive unchanged polls follow the backoff policy.
 
-The effect is this: **what retreat buys is an observation cost matched to "nothing really changed."** When the world does change, the reset condition fires, the interval returns to its initial value immediately, and response speed is unaffected by how far it had backed off.
+External change can precede its observation. Without a separate event-wake channel, it is detected at a later due poll. Backoff reduces repeated observation cost but may increase response latency; reset cannot recover the time already spent waiting.
 
 The same retreat logic has a much stronger version for a monitor that observes without progress for a long time. Once a monitor-only lane's unchanged count reaches a threshold, the goal frontier stops waiting quietly and requires an autonomous replan:
 
@@ -101,10 +107,12 @@ When the frontier holds nothing but an external condition, create a `continuous_
 - **cadence and next due**: how often to look, and when the next look is;
 - a **bounded observation handle**: a readable handle so "we looked" has evidence, not just a self-report;
 - a **material-change predicate**: what counts as a change;
-- an **expiry or termination condition**: when this monitor stops being meaningful and must be stoppable;
+- an **observation boundary**: the current contract accepts `expires_at`, `resume_when`, or explicit `watch_only=true`;
 - a **no-change accounting policy**: how repeated no-change is recorded, and where.
 
-The last two are the easiest to omit and the most expensive. A monitor with no expiry stays due forever; a monitor with no no-change policy cannot participate in retreat. The protocol turns both into fields: `expires_at`, `last_checked_at`, `result_hash`, `consecutive_no_change`, and `material_change` all live in monitor metadata.
+Cadence determines the next observation; expiry determines time-based termination. They are different conditions. A monitor without expiry can validly use `resume_when` or `watch_only` and still have a next due time.
+
+`last_checked_at`, `result_hash`, `consecutive_no_change`, and `material_change` record observations for later decisions. The monitor metadata contract validates boundedness and state transitions.
 
 When an observation is written, the unchanged one and the changed one take different paths. The counter increments only on no-change with an unchanged hash; a material change or a changed hash zeroes it:
 
@@ -152,27 +160,25 @@ By the same logic, three wake-related actions produce no delivery spend: cadence
 
 ## Cost and boundary
 
-Each of the three mechanisms buys one property. The costs need stating.
+**Admission needs usable facts.** Unresolved identity, unclear Gate scope, or stale evidence may hold related work for repair. This avoids guessed authority while adding preparation cost.
 
-**Cost one: admission delays work that should happen.** The price of failing closed is slowness. An identity briefly unresolved, a Gate being routed, evidence that must be refreshed first — each turns a round that could have started into a wait. The system chooses to establish permission before acting.
+**Observation frequency affects detection latency.** Longer cadence saves queries but cannot promise immediate discovery. A monitor's no-change replan threshold and polling interval are separate parameters, each tied to the observed process's time scale.
 
-**Cost two: a wrong backoff threshold ignores real change.** Set it low and slow external sources get replan demanded repeatedly, creating churn; set it high and a dead lane goes unattended for a long time. There is no "correct" value in the middle, only one matched to the time scale of the observed object.
+**Material-change predicates need domain knowledge.** Comparing selected fields may miss facts omitted from a fingerprint; including irrelevant timestamps may treat noise as progress. Choose facts relevant to the wait and bind their source and freshness.
 
-**Cost three: the material-change predicate is a human choice.** This is the most important honesty in the chapter. What counts as change is decided by people: comparing only the result hash may miss a case where the hash matches but the content truly differs; a richer predicate introduces false positives and triggers pointless successors. Getting it wrong pays both ways — a miss lets a real change pass as no-change and keeps waiting, a false positive builds Todos around noise.
+**An unobservable condition needs an explicit handoff.** Record a Gate or blocker for the person who can supply evidence. Do not promise automatic observation of an external condition without a query path.
 
-**Cost four: external conditions with no monitor capability cannot use this machinery.** If a condition has neither a readable handle nor any way to be registered as a cadence, a human has to look. The system does not degrade into polling here; it degrades into **a person**. That is not an acceptable default, it is the applicability boundary of this design.
+Quota consumption is not completed workload, and `monitor_quiet_skip` alone does not establish health. Inspect the target, next due, expiry where applicable, streak, and recovery owner.
 
-**Boundary one: the ceiling constrains consumption, and says nothing about workload.** A system running well may spend very little quota over a whole day, or spend across many consecutive rounds when it genuinely must. Treating low consumption as a health metric is as unfounded as treating high consumption as diligence.
-
-**Boundary two: a quiet monitor is not proof of a healthy system.** `monitor_quiet_skip` is one of the correct outcomes, and it looks exactly like silent stagnation. The only way to tell them apart is to read the monitor's state: whether there is a next due, whether there is an expiry, and how far the streak has gone. "Is anything moving right now" cannot distinguish them.
-
-**Boundary three: admission grants no execution right.** An observation or a lease conclusion grants no new mutation permission. The protocol is blunt: a receipt proves a historical outcome, never permission for a new mutation; and being selected by the scheduler is not itself a lease grant. Admission and execution are two chains, and neither implies the other.
+Scheduler selection does not grant an execution lease or external write authority. The current interaction contract, lease, and operation-specific authority checks still apply.
 
 ## Named failures: what these constraints stop
 
 Three scenarios below each have a corresponding test or protocol anchor you can run or read.
 
-**Interleaved monitors do not clear each other's streaks.** With four lanes interleaved, only the one genuinely on a no-change streak triggers replan; the other lanes' counters are unaffected, and a peer Agent's lane does not enter the current Agent's obligation. Corresponding test: `tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks`. It guards exactly the timetable from the opening: if counting were global, this test could not simultaneously yield "one fires, two stay quiet, one is not mine."
+**Select replan by lane.** `tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks` supplies prepopulated counters and checks which eligible lane of the current Agent is selected.
+
+It does not execute the opening observation timeline or scheduler backoff. Counter transitions belong to `monitor_metadata.ts` and its tests; cadence belongs to the scheduler.
 
 **Auxiliary observations must be no-spend, and must not replace the settlement identity.** When an advancement is already bound to this turn's settlement Todo, a newly due monitor may write an auxiliary observation in the same turn, but it cannot replace the settlement identity and cannot produce a second debit. Replay must be idempotent. Corresponding test: `tests/control_plane/test_monitor_observation_admission.py`, plus the protocol `docs/reference/protocols/quota-monitor-observation-receipt-v0.md`, which states plainly that a receipt proves a historical outcome and does not authorize a new mutation.
 
@@ -190,7 +196,7 @@ Six claims you can check yourself.
 
 **On observation:**
 
-4. **A wait that was never registered equals silent stagnation.** The test is whether it has a stable target key, a next due, and an expiry.
+4. **Waiting needs a readable boundary.** Inspect the target, cadence/next due, and applicable `expires_at`, `resume_when`, or `watch_only` constraint. Missing expiry alone does not establish stagnation.
 5. **The material-change predicate decides who drives subsequent work.** It is a human choice, which means it can be chosen wrongly.
 6. **An external condition with no observable handle cannot use this machinery.** The fallback is then a person, and a person has a cost.
 

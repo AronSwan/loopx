@@ -197,29 +197,20 @@ to do. With no runnable candidate, enter wait or monitor and let the cadence slo
 the automation prompt, and do not let it resolve runnable Todos on its own. The stable prompt carries
 protocol; the judgment belongs to the packet read on each wake.
 
-**Boundary three: switching Hosts moves no Goal and shares no execution right.** App and CLI may read the
-same registry and active state, but an effectful Todo can have only one legal executor. Before switching,
-confirm that two Agents are not claiming the same Todo; work under a hard lease must wait for the lease to
-expire or be handed over explicitly through the lifecycle.
+**Boundary three: switching Hosts requires ownership checks.** App and CLI may read one Goal. Check the old instance, current claims/leases, and writer-fence mode. Use lifecycle handoff where required; a newly started Host does not authorize concurrent work on the same item.
 
 ## When to choose App, and when to choose CLI
 
-Both Hosts face the same frontier; they differ in how they wake:
+The main difference is the execution and wake boundary. An active CLI native Goal can continue allowed work in a visible TUI without a user message every turn. App heartbeat additionally provides a configured, verified timed-wake path.
 
-| Task shape | Better fit | Why |
-|---|---|---|
-| External state is changing and you must wait for it | App heartbeat with a slower cadence | Still woken while you are away, and checks when due |
-| A steady pace of advancement is available | App heartbeat | A timer matches step-by-step progress |
-| You need to watch intermediate results and step in | CLI visible TUI | Every step is in front of you and can be interrupted |
-| A short focused session with the user present | CLI visible TUI | No need to keep waking after the session ends |
+| Need | Candidate path | Checks |
+| --- | --- | --- |
+| Wait for an external condition and check again on cadence | App heartbeat | Automation exists; cadence and ACK/readback agree |
+| Sustained work in the current session with visible intermediate results | CLI native Goal | Live Host, active Goal, current admission permits work |
+| Continue a blocked native Goal | Explicit Host resume path | Recheck quota after resolving the blocker |
+| Continue after the executing process exits | Resume the existing Goal or use qualified external scheduling | Do not infer a background service from an old Goal body |
 
-Two rules of thumb:
-
-- **Choose App when you need attempts to continue while you are not watching**, and CLI when you need to
-  watch the process yourself. The first buys persistence at the cost of timer overhead; the second buys
-  visibility at the cost of self-driving.
-- **Either way, the LoopX decision owns whether the next step is legal.** Neither App nor CLI produces that
-  judgment; they hand the question to LoopX at different moments.
+Check continuation and timed waking separately. Whichever Host you select, new work follows the current LoopX decision.
 
 ## Recovery paths
 
@@ -268,8 +259,7 @@ notification.
 4. **A cadence change needs all four steps**: proposal, host apply, host readback, ACK.
 5. **A local ACK ledger does not prove Host state.** Only a Host readback that matches the target closes the
    loop; a mismatch is repaired as `drift_detected`.
-6. **Switching Hosts moves no Goal and shares no execution right.** One effectful Todo has one legal
-   executor.
+6. **Switching Hosts needs explicit handoff.** Shared Goal reads do not replace current authority, claim/lease, and fence checks.
 
 Those six point at the same thing: a periodic wake buys the **ability to keep trying**, not the **fact of
 continued progress**. Telling those apart is the whole of requirement four in this chapter.

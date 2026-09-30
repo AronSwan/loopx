@@ -230,13 +230,13 @@ detect mismatch
   -> rerun quota
 ```
 
-例如 active-state Markdown 中 Todo 已完成，而 event projection 仍 open：
+例如工作台显示 Todo 已完成，而 status 仍显示 open：
 
-1. 检查完成动作是否通过 lifecycle command 形成 event；
-2. 如果只是手工改 Markdown，把有效 evidence 转成规范 transition；
-3. 如果 event 已存在，修 projection head 或 sequence；
-4. 重新运行 status 与 quota；
-5. 在一致前不执行依赖该 Todo 的 successor。
+1. 先确认这个 Goal 使用 legacy Markdown 还是已选择的 canonical provider；
+2. 检查当前 source 的 Todo 与完成 evidence，排除 scope、版本和列表裁剪差异；
+3. 若只有手工编辑，按原 lifecycle owner 修复缺失的验收或回执，不把勾选当成有效交付；
+4. 若 source 已提交，修复对应 projection，再读 status 与 quota；
+5. 一致性问题解决前，不执行依赖该结果的 successor。
 
 不要同时手工修改 Markdown、dashboard fixture 和 status cache 来"让页面看起来一致"。
 

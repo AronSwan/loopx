@@ -25,7 +25,7 @@ Next day, 09:31  The Agent does not know what it did yesterday, rereads the
                  --format json?"
 ```
 
-Worth noticing: **nothing in that sequence went wrong.** The Agent did not misreport, the tests really passed, CI really went green. The only problem is that **the answer to "what state is this project in" lived inside a window that is now closed.**
+The code and tests in this scenario may be correct; the handoff failed to carry readable wait targets, acceptance ownership, and recovery entrypoints. Even if the Host persists chat history, the next executor needs current PR, CI, and work state.
 
 ## Why this is structural
 
@@ -37,7 +37,7 @@ The obvious reaction is "just don't close the window." But that depends on a pre
 - another Agent takes over, starting from an empty context;
 - an external dependency moves, and yesterday's judgment no longer holds.
 
-None of these is an accident; over long enough work they necessarily occur. The problem is **state was kept somewhere that disappears** — not that this time someone forgot to write it down.
+Long-running work needs to prepare for these situations. Control information intelligible only within the current context makes handoff depend on manual reconstruction; durable records and clear read entrypoints reduce that dependency.
 
 ## Session context is working memory
 
@@ -58,7 +58,7 @@ It is a poor home for the *only* copy of these facts:
 | Which Agent owns the current task | After a restart or handoff, ownership cannot be recovered from memory |
 | The current state of the outside world | Yesterday's CI status may already be stale |
 
-**The test is simple: if a piece of information exists only in the prompt, closing the window deletes it.** Whether the model *can* remember is beside the point; what matters is whether the information was recorded at all.
+A Host can persist transcripts, but old conversation alone does not establish current authority, acceptance, or recovery state. The test is whether the next executor can recheck those facts without depending on the original session's implicit understanding.
 
 ## Execution plane and control plane
 
@@ -145,13 +145,13 @@ Externalized state carries costs. Naming them is what lets you judge when it pay
 
 **Boundary two: the control plane does not own domain judgment.** It does not decide whether an issue is worth fixing or whether an experiment's metric is significant; that belongs to Capability.
 
-**Boundary three: what is externalized is facts, not a train of thought.** The next chapter explains why that distinction matters.
+**Boundary three: recovery needs current conditions for action.** See [recovery and boundaries](04-runtime-boundaries.md).
 
 ## Invariants
 
-1. **Information that exists only in a prompt has not been remembered.** The test is whether it survives closing the window.
+1. **Prompt content alone does not prove durable writeback.** Inspect addressable records, identity, and revision rather than whether a window is open.
 2. **The execution plane and control plane cannot substitute for each other.** The control plane does not write code; the execution plane does not decide whether it is allowed.
 3. **What is reused is lifecycle invariants, not a prompt.** That is what lets three different domains share one control plane.
 4. **The next executor does not need to trust the previous one's account.** If it does, the state was not externalized far enough.
 
-These four point at one question: **when the window closes, the person leaves, and memory is wiped, what remains that work can continue from?** The next chapter expands those four demands in full.
+Next, use [sessions, Host Goals, and LoopX](02-session-goal-loopx.md) to decide which state layer the task needs, then read the [four demands](02b-long-horizon-requirements.md) for the architectural framework.

@@ -6,30 +6,13 @@ eligible for spend.
 
 ## Start with a bad outcome
 
-Here is a real contribution chain:
+Consider a teaching scenario: an open User Gate has no usable scope relation, and the old handling treats it as a global block. To resume independent work, a contributor changes unknown scope into granted authority.
 
-```text
-2026-03-02 21:30  An open User Gate has no usable scope relation.
-                  Implementation treats it as a global block, so all work stops.
-21:52  A contributor reads this as one wrong cell in policy.
-21:58  They add a branch in quota policy: no scope means already authorized.
-22:04  The test that started the work turns green.
-22:10  Commit, push, open a PR. Three validation steps, a clear description.
-Next day  Review offers a counterexample: a Gate unrelated to the current Agent
-          now freezes the frontier that Agent could safely advance.
-```
+The independent-work test passes, but another case fails: publication that depends on the Gate is also allowed. Repairing overblocking has crossed the authorization boundary.
 
-The change fixed over-blocking and introduced the opposite error: reading missing authority as granted
-authority. The original bug was conservative. The new one lets actions run that should not.
+The rule needs an unknown-relation repair state, followed by a distinction between covered and independent work once scope is known.
 
-There is a second error in that branch, and no test on the branch will find it. The canonical
-implementation of `decision_scope_v0` has already moved to TypeScript; the contributor edited an
-apparently equivalent condition in the Python facade. The two implementations now disagree about what
-missing scope means, and the Python side has become a second source of truth. The next chapter shows
-that this kind of fork only surfaces under real-path validation.
-
-Both errors have one root: **the contributor treated the rule as a condition, so they repaired the
-symptom and left the rule alone.**
+The same example tests ownership. If TypeScript already owns this decision, adding another implementation in a Python facade duplicates semantics. Repair the existing owner and verify that real callers consume the same decision.
 
 The safe sequence is not "find the `if` and change it." It is:
 
@@ -453,8 +436,7 @@ semantic design.
 
 **Boundary two: when the real path is unavailable, report the evidence gap.** If a change affecting
 PostgreSQL authority cannot get a safe isolated instance, skipping that suite is not a pass. Hold
-delivery and name the gap rather than substituting the layers that do run. A skipped test and a failing
-test both produce zero evidence; only one of them leaves a clean-looking log.
+delivery and name the gap rather than substituting other layers. A skipped test leaves that layer unverified; a failed test supplies a counterexample to diagnose. Neither establishes a pass.
 
 **Boundary three: some obligations cannot be checked automatically.** Whether a default behavior change
 was disclosed, whether the oracle is genuinely independent of implementation, and whether the PR
@@ -473,7 +455,7 @@ test or command you can run.
 
 **Testing only the new result, not the suppression case.** Changing ambiguous Gates to typed repair
 without a negative case for "an unrelated Gate does not block" freezes another Agent's safe frontier.
-This is exactly the second review comment on the PR at the top of the chapter.
+Together with the opening teaching scenario, this requires coverage of both unauthorized admission and wrongly blocked independent work.
 
 **Treating characterization as correctness.** Running current implementation, saving its output, and
 asserting that output as expected only proves what the system did. When a fixture conflicts with the
@@ -529,8 +511,7 @@ quality requirements here, and the next chapter shows the exact form.
 
 Five sentences you can check yourself.
 
-1. **A rule has exactly one owner.** When the two sides disagree, the canonical answer is on the
-   TypeScript side; Python adapts or projects it compatibly.
+1. **Identify the rule's current owner.** Migrated transactions belong to their TypeScript owner; some Todo read rules still belong to Python. Follow the current contract and caller path instead of duplicating semantics in a facade.
 2. **The expected value must be derivable before the implementation runs.** If it is not, that is
    characterization, not an oracle.
 3. **The invariant decides the change surface, not the location of the error.** Inside the first broken

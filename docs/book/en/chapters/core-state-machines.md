@@ -213,7 +213,7 @@ LoopX 1.0 does **not** expose one `GoalState` object that may be replaced wholes
 `objective`, non-goals, acceptance, permissions, and terminal conditions do not yet have unified typed
 canonical storage. The `intent` block above is a target model; it must not be presented as an implemented
 authoritative envelope. Today's shared Goal alignment is a read-only aggregate: it obtains a source basis
-from the event log, Markdown active state, or canonical Todo snapshot; identifies the Todo/lease snapshot
+from the selected Markdown active state or canonical Todo snapshot, with history supplied by its own owner; the former Todo event API is retired. It identifies the Todo/lease snapshot
 through a separate `todo_basis`; and then projects drift and conflict:
 
 | Common abstract field | Actual LoopX expression |

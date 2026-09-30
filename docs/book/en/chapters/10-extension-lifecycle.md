@@ -3,38 +3,27 @@
 Installing a package and activating it in LoopX are separate stages. LoopX does not download arbitrary
 packages or execute a caller-selected binary. It manages a doctor-validated Provider revision.
 
-## Start from a bad ending
+## Why a successful upgrade still needs consumer checks
 
-After one provider upgrade, support receives this report: "The upgrade succeeded, but we can no longer read
-the output."
+Suppose a provider changes `result` from an object to a string. Even a passing readiness probe for `loopx extension upgrade --manifest standalone-extension/extension.toml --execute` cannot prove that all consumers understand it.
 
-The reproduction path is concrete. The old response carried `result` as an object; the new one turns it
-into a string and moves the version to `0.2.0`. `loopx extension upgrade <extension-id> --execute` passes, because the new
-revision's doctor genuinely passed its readiness probe. Doctor only proves the entrypoint starts; it does
-not tell you that downstream parsing code is now out of date.
+Validate request/response compatibility and historical receipt readers before upgrading. The package in the Python environment and LoopX's recorded active revision are separate state; they do not commit atomically.
 
-The caller has two reactions available, and both are wrong:
-
-- **Parse the new shape:** historical receipts become unreadable immediately, and they carry nothing beyond
-  a schema_version to help;
-- **Roll back:** `rollback` probes the previous revision, but the replaced package is no longer in the
-  environment, so the probe fails and rollback is unavailable.
-
-The fault lies in the upgrade sequence itself: **the upgrade action changes two things at once** — the
-active revision LoopX records, and the executable in the Python environment. The lifecycle governs the
-first. Aligning the environment stays a human step. This chapter is about where exactly that boundary
-falls.
+If the new package replaced old files, a failed activation probe preserves the old activation record but cannot restore those files. Restore a matching package before lifecycle readback can establish availability.
 
 ## 1. Install the Python package, and the line it does not cross
 
+Reuse the environment prepared in the [previous chapter](09-extension-scaffold.md), from the parent of `standalone-extension`:
+
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e './standalone-extension[test]'
+. .venv-extension/bin/activate
+extension_state_dir="$(mktemp -d)"
+extension_state="$extension_state_dir/state.json"
 ```
 
-This puts the `loopx-text-stats` console entrypoint in the active environment. It does not change LoopX
-activation state.
+Every lifecycle command below uses this state file. Keep it throughout the exercise; create a fresh directory only for a new exercise.
+
+The previous chapter installed the `loopx-text-stats` console entrypoint but did not activate it in LoopX. If starting here, complete that environment, implementation, and test setup first.
 
 Inspect the Provider directly during development:
 
@@ -52,7 +41,7 @@ the managed runtime fixes.
 Preview:
 
 ```bash
-loopx extension install \
+loopx extension install --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --format json
 ```
@@ -60,7 +49,7 @@ loopx extension install \
 Execute:
 
 ```bash
-loopx extension install \
+loopx extension install --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --execute \
   --format json
@@ -93,8 +82,8 @@ already-active revision as an upgrade fails with "revision is already active".
 ## 3. Inspect readiness
 
 ```bash
-loopx extension list --format json
-loopx extension doctor loopx-text-stats --execute --format json
+loopx extension list --format json --state-file "$extension_state"
+loopx extension doctor loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 `doctor --execute` runs the actual probe. Readiness binds the active manifest revision and the resolved
@@ -122,7 +111,7 @@ and a new probe.
 Preview:
 
 ```bash
-loopx extension run loopx-text-stats \
+loopx extension run loopx-text-stats --state-file "$extension_state" \
   --input-json standalone-extension/examples/request.json \
   --format json
 ```
@@ -130,7 +119,7 @@ loopx extension run loopx-text-stats \
 Execute:
 
 ```bash
-loopx extension run loopx-text-stats \
+loopx extension run loopx-text-stats --state-file "$extension_state" \
   --input-json standalone-extension/examples/request.json \
   --execute \
   --format json
@@ -156,7 +145,7 @@ receives an explicit `--execute`. Every other case should fail closed.
 ## 5. Disable and enable
 
 ```bash
-loopx extension disable loopx-text-stats --execute --format json
+loopx extension disable loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 A disabled Extension remains visible in lifecycle state but is not a dispatch candidate. `extension run`
@@ -165,7 +154,7 @@ must fail.
 Enable it again:
 
 ```bash
-loopx extension enable loopx-text-stats --execute --format json
+loopx extension enable loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 Enable does not trust old readiness. It reruns doctor before setting the enabled bit. On failure it stays
@@ -179,7 +168,7 @@ environment.
 Preview:
 
 ```bash
-loopx extension upgrade \
+loopx extension upgrade --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --format json
 ```
@@ -187,47 +176,38 @@ loopx extension upgrade \
 Execute:
 
 ```bash
-loopx extension upgrade \
+loopx extension upgrade --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --execute \
   --format json
 ```
 
-Upgrade validates and probes the new manifest before changing the active revision. A failed probe leaves the
-current revision active, so there is no half-state where the upgrade failed and the old version is also
-unusable.
+Upgrade validates and probes before changing the active revision. A failed probe preserves that activation record but does not roll back replaced packages. Changed entrypoint identity may invalidate old readiness; restore a matching environment and recheck it.
 
 Rollback:
 
 ```bash
-loopx extension rollback loopx-text-stats --execute --format json
+loopx extension rollback loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 Rollback probes the previous validated revision before switching. It is a lifecycle transition over
 activation state, not an arbitrary Git checkout. Activation state retains a bounded number of validated
 revision snapshots (five today).
 
-That also explains why the second reaction at the start of this chapter fails: rollback switches the
-revision LoopX recorded. It does not reinstall the previous package version into the Python environment for
-you. When `rollback_available` is false, the correct action is to repair the environment, not to look for a
-way around activation state.
+`rollback_available=false` means no rollback revision is recorded, as after a first install. It is not a diagnosis of a damaged environment.
 
-## 7. Isolate example state
+If a target exists but its doctor fails, inspect or reinstall the matching package before rollback and doctor readback. Without a historical target, choose an explicit version and prepare an installation/upgrade path; repairing the environment cannot create history.
 
-CI and tutorials can use `--state-file` to avoid modifying the user's default runtime state:
+## 7. Inspect the exercise state and finish
+
+Rerun `loopx extension list --state-file "$extension_state" --format json` and verify the active revision, enabled state, and doctor result. Disable the exercise provider and leave the environment when finished:
 
 ```bash
-state_file="$(mktemp)"
-rm -f "$state_file"
-
-loopx extension install \
-  --state-file "$state_file" \
-  --manifest standalone-extension/extension.toml \
-  --execute \
-  --format json
+loopx extension disable loopx-text-stats --execute --format json --state-file "$extension_state"
+deactivate
 ```
 
-The temporary file may contain local runtime identity and must not be committed to any public repository.
+The temporary directory can contain local runtime identity. Keep it private and delete only this exercise directory once its rollback evidence is no longer needed. Do not delete default user runtime state.
 
 ## When standalone `run` is not valid
 
@@ -287,10 +267,9 @@ and asserts a marker file was never written: the rejection precedes the provider
 `failure_kind == "timeout"` and `exit_code is None`, and that a grandchild's marker file does not exist
 after the kill.
 
-**A failed upgrade keeps the active revision.** `test_failed_upgrade_keeps_the_active_revision` and
-`test_failed_enable_remains_disabled_and_clears_old_proof` assert the failure path changes no revision and
-leaves no stale proof behind. `test_enabled_extension_doctor_batch_keeps_failed_provider_closed` asserts
-that the failing member of a doctor batch stays blocked with `probe_nonzero_exit`.
+**Failed upgrade and failed enable write different state.** `test_failed_upgrade_keeps_the_active_revision` checks that a failed new-version probe preserves the original activation revision/history. It fails before activation-state mutation and does not clear the old proof fields.
+
+`test_failed_enable_remains_disabled_and_clears_old_proof` checks that failed enable stays disabled and clears old proof. Batch doctor failure/readiness handling is covered separately by `test_enabled_extension_doctor_batch_keeps_failed_provider_closed`.
 
 Corresponding tests: `tests/extensions/test_extension_runtime.py`.
 
@@ -317,8 +296,7 @@ Fix the contract or environment. Do not bypass managed runtime and pretend the P
    read-only; only `--execute` writes state.
 3. **Readiness binds a revision and a runtime identity.** Swap the executable or the interpreter and the
    old proof is void.
-4. **A failed probe changes no revision.** Upgrade, enable, and rollback all follow this rule; no half-state
-   is allowed.
+4. **A failed activation probe preserves the original revision record.** It does not undo package-manager changes or alone guarantee that the old executable works.
 5. **Standalone `run` serves zero-permission providers only.** Once a permission is declared, the correct
    path is a Capability or a domain command.
 6. **Rollback switches a recorded revision, not the package on disk.** Restoring availability requires a

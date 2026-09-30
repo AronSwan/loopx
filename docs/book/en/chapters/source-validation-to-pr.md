@@ -6,33 +6,11 @@ projection, scheduling, or writeback.
 
 ## Start with a bad outcome
 
-Here is another common contribution chain. It differs from the error in the previous chapter because
-every step looks correct:
+Consider another teaching scenario: an authority-write change passes unit tests and static checks, so the PR says validated. The affected PostgreSQL path has not run against an isolated instance; durability, isolation, and concurrency evidence is missing.
 
-```text
-2026-04-07 14:20  A contributor changes a claim-related state-write rule on both sides.
-14:35  Unit tests for the touched modules run. All green.
-14:40  pytest -q runs. All green.
-14:46  git diff --check runs. Clean.
-14:50  git commit -s, push, open a PR. Description says "validated: pytest green".
-Next day  A reviewer sees the change lands on the PostgreSQL authority store and asks:
-          "Did the isolated-instance suite run? Where is the evidence?"
-```
+A changed default may also pass updated assertions while test names and documentation still describe the old default. Passing assertions establish what they check; they cannot replace an unrun backend test or disclosure of the contract change.
 
-Unit tests and real behavior on PostgreSQL are two different things. This rule involves durable writes,
-transaction boundaries, and revision conflicts under concurrency, and an in-memory fake smooths all of
-them away. The contributor did not lie; they ran every command they knew about. What was missing is **a
-layer they did not know they had to run**, and that layer covered exactly the part of the change most
-likely to break.
-
-There is a second problem on the same timeline, and it is quieter. The change moved a default behavior
-from "reject unclaimed paths" to "self-heal first, then write". The smoke that encoded the old default
-had `rejects-unclaimed-...` in its name; it now asserts the new behavior while its name still describes
-the old contract. No release note mentions the change. CI is green, because the symptom here is
-**documents and names that lie, not code that fails.**
-
-Both problems share a root: **the contributor treated "the commands I ran" as "this change has been
-proven".**
+Both problems require recording which checks ran separately from the scope of their conclusions.
 
 This chapter turns the decision-scope repair into a public evidence packet:
 
@@ -59,11 +37,9 @@ and takes minutes to a quarter of an hour. Making every PR wait for the widest m
 contributors.
 
 **More commands is not better coverage.** A hundred commands that all land on the same layer still
-produce a one-layer conclusion. The PR above ran three command groups covering one thing: pure logic in
-memory.
+produce a one-layer conclusion. The opening scenario covers in-memory rules and static constraints, leaving the affected backend unverified.
 
-**Some obligations have no command at all.** "Was this default behavior change disclosed" cannot be
-asserted by any test. Review is the only place it can be found.
+**Some conclusions require judgment.** Automated checks can look for disclosure of a changed default, but review must still assess whether the explanation is accurate and the evidence covers its actual impact.
 
 So the order is: derive which evidence the risk requires, then decide what to run.
 
@@ -286,9 +262,7 @@ breaks most easily.
 
 ### Why a fake cannot prove authority writes
 
-Durable writes, transaction boundaries, revision conflicts under concurrency, and cross-process lease
-semantics all flatten inside an in-memory store: no real commit semantics, no real race, no schema-level
-failure. A fake always agrees with your assumptions, which is exactly why it is cheap.
+An in-memory fake can validate state rules and call order. It cannot alone qualify the real backend's durability, isolation, schema failures, or cross-process races. Exercise those boundaries on that backend before extending the conclusion to its storage path.
 
 The gate for this class of change is explicit: refactors must exercise the affected production entrypoint
 and real backend before delivery. For changes affecting PostgreSQL authority, point `LOOPX_TEST_POSTGRES_URL`
@@ -312,10 +286,9 @@ and raw output stay out of Git and out of public review. Stop the temporary serv
 If no safe isolated instance exists, the correct result is to **hold delivery and report the evidence
 gap**, not to skip the layer and continue.
 
-A skipped test is not a passing test. Both produce zero evidence. The difference is that the skipped one
-leaves clean-looking output, which is why it so easily becomes "validated" in a PR description. That is
-precisely the mistake made by the 14:50 PR at the top of this chapter: the description did not lie, it
-said "pytest green", but a reader takes that sentence to mean "the behavior is verified".
+A passing test supplies evidence for the inputs, implementation path, and assertions it exercised. A skipped real-backend test supplies no validation of that backend. Green unit tests cannot replace the missing database integration run.
+
+List passed, failed, and skipped results separately, with each layer's scope. A successful exit, test count, or green summary cannot broaden what the evidence establishes.
 
 The honest version states which environment the layer needs, why it is unavailable now, which conclusions
 therefore remain unverified, and who can unblock it.

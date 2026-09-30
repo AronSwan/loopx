@@ -61,22 +61,24 @@ uv run --extra test python examples/control_plane/cli-output-budget-regression-s
 
 ```bash
 python3 -m pip install -r docs/requirements-docs.txt
-python3 examples/dev-book-publication-smoke.py
-mkdocs build --strict
+book_site_dir="$PWD/output/dev-book-validation"
+mkdocs build --strict --site-dir "$book_site_dir/docs"
+mkdocs build --strict --config-file docs/book/mkdocs.zh.yaml --site-dir "$book_site_dir/docs/book"
+mkdocs build --strict --config-file docs/book/mkdocs.en.yaml --site-dir "$book_site_dir/docs/book/en"
+python3 examples/dev-book-publication-smoke.py --site-dir "$book_site_dir/docs/book"
+python3 examples/dev-book-welcome-wagon-smoke.py --site-dir "$book_site_dir/docs/book"
 ```
 
 不要只验证 Markdown 能被单独解析，还要验证它在 LoopX 的统一 `mkdocs.yaml` 导航、GitHub Pages base path 和首页 Learn 路径中可发现。站点由 LoopX monorepo 的 MkDocs Material 发布链路构建，依赖范围以 `docs/requirements-docs.txt` 为准，book 导航、双语路由、官方首页入口与 Labs 排除边界由 `examples/dev-book-publication-smoke.py` 守护。依赖变更后补跑 `python3 -m pip check` 与 `mkdocs build --strict`。改动任何 UI 或文档视觉之前，先读 `docs/development/design.md`。
 
-本书配套的 standalone Extension 示例可以这样独立复现（在一个含 `standalone-extension/` 的工作区里执行）：
+Standalone Extension 的完整准备与两个合同测试见[scaffold 章节](09-extension-scaffold.md)。官方生成器没有 `[test]` extra；完成领域改动并显式创建测试后，复用该章环境：
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e './standalone-extension[test]'
-python3 -m pytest standalone-extension
+. .venv-extension/bin/activate
+python3 -m pytest standalone-extension/tests
 ```
 
-这四步是"文档里的代码确实可运行"的最小证明；只在 Markdown 层面检查语法，证明不了这一点。
+随后按[生命周期章节](10-extension-lifecycle.md)在独立 state file 中验证激活、调用、disable、upgrade 和 rollback。单独解析 Markdown 不能证明这条用户路径。
 
 ### 二层：product-surface validation
 

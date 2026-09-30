@@ -51,7 +51,9 @@
 
 第一个机制是准入。它在"决定做什么"之前先回答"现在允许做什么"，并且答案不能由执行者自己给出。
 
-Quota 的模型在 [一轮受治理的工作](03-one-turn.md) 里已经作为 decision compiler 讲过，这里只补它的预算含义：**准入把"还剩多少"换成"这一轮允许几次 spend、允许哪些行为"**。进入决策的是 source facts 之间的优先级，余额数字不在其中。
+Quota 的模型在[一轮受治理的工作](03-one-turn.md)中作为 decision compiler 介绍。预算余额仍是准入输入：当前窗口的 `spent_slots >= allowed_slots` 会使正常工作进入 `throttled`；有剩余额度也仍须通过 Gate、能力、工作区和 frontier 检查。
+
+因此，余额回答“预算够不够”，完整准入回答“这个 Agent 现在可以做什么”。两者缺一不可。
 
 被禁止的捷径有一致的形状：把局部信号当成全局授权。
 
@@ -63,7 +65,9 @@ Quota 的模型在 [一轮受治理的工作](03-one-turn.md) 里已经作为 de
 | 本轮是否已有结算身份 | 一个 heartbeat Turn 只有一个 settlement Todo，不能被另一个 monitor 替换 |
 | 交付类型是否允许 spend | 无 validation 的 writeback、dry-run、未变化的 poll 都不产生 delivery spend |
 
-最后一行的形状值得单独说，因为它是"上限"最容易漏掉的部分：**该花的不花、不该花的必须不花**。协议规定 Gate notification、dry-run、失败 preflight、未变化的 monitor poll、scheduler cadence change 和重复 writeback 都不冒充 delivery spend。所以"消耗有上限"真正约束的是**哪一类动作才配得上一次扣费**，扣费次数还在其次。
+**该记账的必须记，不该记的不能记。** 合法交付按当前 settlement contract 记账；Gate notification、dry-run、失败 preflight、未变化的 monitor poll、scheduler cadence change 和重复 writeback 不冒充 delivery spend。
+
+总量上限与记账分类分别防止超额消耗和错误归因。这里的配额单位不是外部模型账单；一次 no-spend 观察仍可能消耗工具、网络或模型资源。
 
 准入的另一个产品形态是等待被登记。一个已准入的 advancement Turn 发现真实依赖时，会登记 `monitor_changed:<todo_id>` 或 `todo_done:<todo_id>`，同时保留一个独立可运行的 successor。结算返回 `typed_blocked_writeback_no_spend`：有 validation 与 durable writeback 回执，不扣额、不计交付进展。旧 Turn 因此不会被卡住，独立工作照常可选。
 
@@ -78,9 +82,9 @@ loopx task-lease inspect --goal-id "$GOAL" --todo-id "$MONITOR" # 读 monitor �
 
 Scheduler hint 把当前状态投影成一个 cadence，其中包含 unchanged-poll 的策略：一个 backoff multiplier（当前实现取 2）、每个执行面的 unchanged poll limit，以及一个 max interval。连续的无变化轮次会把间隔逐步拉长，直到触达上限为止。
 
-更关键的是**什么会重置它**。Scheduler state 绑定 `reset_token` 与 `identity_signature`；用户反馈、新 Todo、reassignment、Gate resolution 或 material evidence transition 都会改变 identity，并把 cadence 恢复到当前 profile 的初始值。只有连续 unchanged polls 才继续 backoff。
+Scheduler state 绑定 `reset_token` 与 `identity_signature`。重新读取到的身份或决策输入变化时，cadence 可以回到当前 profile 的初始值；连续 unchanged polls 则按相应策略退避。
 
-这条设计的效果是：**退让换来的效果，是把观察成本降到与"确实没有变化"相称。** 一旦世界真的变了，重置条件触发，间隔立刻回到初始值，响应速度不受之前退让的影响。
+外部世界改变和系统观察到改变之间仍有延迟。如果没有单独的事件唤醒通道，变化要等下一次 due poll 才能被发现。因此退避降低重复观察成本，也可能增加响应时间；reset 不会追回已经等待的时间。
 
 同一条退让逻辑还有一个强得多的版本，用于 monitor 长时间观察而无进展时。当一条 monitor-only lane 的连续无变化次数到达阈值，Goal frontier 不再安静等待，而是要求一次 autonomous replan：
 
@@ -101,10 +105,12 @@ threshold: 5
 - **cadence 与 next due**：期望多久看一次，以及下次什么时候看；
 - **bounded observation handle**：可读回的观察句柄，让"看过了"有证据可查，不停留在自述；
 - **material-change 判据**：什么才算变化；
-- **expiry 或终止条件**：这条 monitor 什么时候不再有意义，必须能被停掉；
+- **观察边界**：当前合同要求 `expires_at`、`resume_when` 或显式 `watch_only=true` 至少一种；
 - **no-change accounting policy**：连续无变化怎么记账、记在哪。
 
-后两条容易被省略，代价却最高。没有 expiry 的 monitor 会永远保持到期；没有 no-change 策略的 monitor 无法参与退让。协议把这两条落成字段：`expires_at`、`last_checked_at`、`result_hash`、`consecutive_no_change` 与 `material_change` 同在 monitor metadata 里。
+Cadence 决定下一次观察时间，expiry 决定到期终止，它们不是同一个条件。没有 expiry 的 monitor 仍可按 `resume_when` 或 `watch_only` 合法存在，并有自己的 next due。
+
+观察记录通过 `last_checked_at`、`result_hash`、`consecutive_no_change` 与 `material_change` 参与后续判断；具体 boundedness 与状态转移由 monitor metadata 合同校验。
 
 写入观察时，不变的那次和变了的那次走的是不同的路径。计数器只在无变化且 hash 未变时递增；material change 或 hash 变化把它归零：
 
@@ -152,27 +158,23 @@ Scheduler hint 把当前状态投影成 Host cadence：现在运行、等待 fre
 
 ## 代价与边界
 
-上面三个机制都换来了一个性质，代价需要说清楚。
+**准入需要可用的事实。** 身份未解析、Gate scope 不明或 evidence 过期时，相关工作可能等待修复。这能避免猜测授权，也会增加一次工作的准备成本。
 
-**代价一：准入会让该做的事被推迟。** fail closed 的代价是慢。一个身份解析暂时不明、一个 Gate 正在路由、一份 evidence 需要先刷新，都会让本来可以动手的一轮变成等待。系统选择先弄清楚权限，再决定动不动手。
+**观察频率影响发现延迟。** 拉长 cadence 节省查询，但不能保证立刻看到变化。monitor 无变化的 replan 阈值与 poll 间隔是不同参数，需要分别按观察对象的时间尺度判断。
 
-**代价二：backoff 阈值设错会忽略真实变化。** 阈值设得太低，安静的慢速外部源会被反复要求 replan，制造 churn；阈值设得太高，一条已经死掉的 lane 会长时间没人管。中间那个数不存在"正确"取值，只有与观察对象的时间尺度相称的取值。
+**Material-change 判据需要领域知识。** 只比较选定字段可能漏掉未纳入指纹的变化；加入无关时间戳又可能把噪音当成进展。应选择与等待条件相关的事实，并给它们绑定来源和 freshness。
 
-**代价三：material-change 判据是人为选择的。** 这是本章最需要诚实交代的一条。什么算变化由人决定：只比对 result hash，可能漏掉"hash 没变但内容其实已经不同"的变化；加入更丰富的判据，又会引入误报并触发无谓的 successor。判错了两条路都要付：漏报让真实变化被当成无变化继续等待，误报让系统围绕噪音建 Todo。
+**缺少可读回对象时，需要明确的接手者。** 可以记录需要人提供证据的 Gate 或 blocker，不能承诺自动观察一个没有查询入口的外部条件。
 
-**代价四：没有 monitor 能力的外部条件用不上这套机制。** 如果一个条件既没有可读回的 handle，也无法被登记成 cadence，那它就只能靠人看。这时系统不会退化成轮询，它会退化成**人**。这不是可接受的默认值，而是这套设计的适用边界。
+配额使用量不等于完成工作量，`monitor_quiet_skip` 也不独自证明系统健康。判断等待是否合理，应检查目标、next due、expiry（如适用）、streak 和恢复 owner。
 
-**边界一：上限约束的是消耗，和工作量无关。** 一个从容运行的系统可能一整天只花很少的额度，也可能在真正需要时连续多轮 spend。把"消耗低"当成健康指标，和把"消耗高"当成勤奋指标一样没有依据。
-
-**边界二：monitor 的安静不等于系统健康。** `monitor_quiet_skip` 是正确结果之一，但它与"静默停滞"在表面上完全一样。区分它们的唯一办法是读 monitor 的状态：有没有 next due、有没有 expiry、streak 走到哪了。只看"当前有没有在动"，两者无法分辨。
-
-**边界三：准入不授予执行权。** 一次观察或一条租约结论都不授予新的 mutation 权限。协议对此的措辞是直接的：回执证明历史结果，不授权新的 mutation；被调度选中本身不授予执行租约。准入与执行是两条不能互相推导的链条。
+调度选中一项工作并不自动授予执行租约或外部写权限。当前 interaction contract、lease 与相应操作的 authority 检查仍各自生效。
 
 ## 具名失败：这些约束拦住了什么
 
 下面三个场景各有对应测试或协议锚点，可以直接运行或查阅。
 
-**交错 monitor 不会互相清零 streak。** 四条 lane 交错时，只有真正连续无变化的那一条触发 replan，其余 lane 的计数不受影响；peer Agent 的 lane 不进入当前 Agent 的义务。对应测试：`tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks`。它守住的正是开头那张时间表：如果计数是全局的，这个测试无法同时得到"一条触发、两条安静、一条不属于我"的结果。
+**按 lane 选择 replan。** `tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks` 预置多条 lane 的计数，验证满足阈值的当前 Agent lane 被选入 replan。它不执行逐次观察或 scheduler backoff；计数更新由 `monitor_metadata.ts` 及其测试验证，cadence 属于 scheduler。
 
 **辅助观察必须不计费，且不能替换结算身份。** 当 advancement 已绑定本 Turn 的 settlement Todo 时，新到期的 monitor 可以在同一 Turn 写入辅助观察，但它不能替换结算身份，也不能产生第二次扣费。重放必须幂等。对应测试：`tests/control_plane/test_monitor_observation_admission.py`，以及协议 `docs/reference/protocols/quota-monitor-observation-receipt-v0.md`（其中明确"回执证明历史结果，不授权新 mutation"）。
 
@@ -190,7 +192,7 @@ Scheduler hint 把当前状态投影成 Host cadence：现在运行、等待 fre
 
 **关于观察：**
 
-4. **没有被登记的等待，等于静默停滞。** 判断依据是它有没有 stable target key、next due 与 expiry。
+4. **等待需要可读的边界。** 检查 target、cadence/next due，以及 `expires_at`、`resume_when` 或 `watch_only` 中适用的约束；不能仅因没有 expiry 判成停滞。
 5. **material-change 判据决定谁在驱动后续工作。** 它是人为选择的，所以也是可以选错的。
 6. **没有可观察 handle 的外部条件用不上这套机制。** 这时系统的兜底是人，而人是有成本的。
 

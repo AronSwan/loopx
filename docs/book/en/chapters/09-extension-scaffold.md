@@ -4,28 +4,11 @@ This chapter creates `loopx-text-stats` from the official LoopX scaffold. The of
 the complete runnable baseline; this chapter provides the narrowed manifest, request and response
 contracts, core function, and validation steps without a separate exercise repository.
 
-## Start from a bad ending
+## Why start from a complete protocol baseline
 
-Someone needs to connect an internal statistics task, decides the capabilities shipped with LoopX look
-too heavy, and hand-writes a smaller directory instead: one `extension.toml`, one `cli.py`, reading stdin
-and printing a result. `loopx extension install --manifest <path> --execute` accepts it, and `run` works.
+Consider an insufficiently validated provider: stdin and JSON output work, but a new `path` field is interpreted as file-read permission and the response lacks a clear version boundary. Process startup does not establish those contracts.
 
-Two weeks later an audit finds:
-
-```text
-request  carries a path field  -> the provider quietly read it as a file
-response has no schema_version -> downstream cannot tell the protocol version
-doctor   not implemented       -> ready only proves the process starts
-version  written outside the manifest -> upgrade cannot resolve a revision
-```
-
-Each item looks like a small omission. Together they are one thing: **this provider has no checkable
-contract, so LoopX cannot judge whether it was called legally.** That it "works" proves only that the
-process starts.
-
-The scaffold exists to make the path complete by default: obtain a baseline with every contract field
-present, then delete from it, rather than building up from an empty directory. Deleting a domain field you
-do not need has a visible consequence; omitting a schema or a doctor fails only at audit time.
+The official scaffold supplies a runnable zero-permission baseline. This chapter adapts it into text statistics. Change the domain function and schemas together; bounded doctor probes establish readiness, while validation and tests establish business semantics.
 
 ## 1. Generate the official scaffold and its boundary
 
@@ -40,17 +23,7 @@ loopx extension init loopx-text-stats \
 `packages/<extension-id>`, and `--destination` targets somewhere else. The destination must not already
 exist, even as an empty directory; there is no force or merge mode.
 
-The important part is the command's boundary: it does not build, install, register, or enable. Those are
-three separate actions with three owners, and running them separately keeps the package manager and the
-LoopX activation state from drifting together:
-
-```bash
-python3 -m pip install ./standalone-extension
-loopx extension install \
-  --manifest standalone-extension/extension.toml \
-  --execute \
-  --format json
-```
+This command generates source only: it does not build, install the package, or activate the Extension. Complete and validate the provider here; perform LoopX activation once in the next chapter.
 
 The generated path is:
 
@@ -145,7 +118,7 @@ the bounded request.
 
 ## 4. Implement pure computation
 
-The example's core function is:
+Add this function to `src/loopx_text_stats/cli.py` and add `import re` at the top:
 
 ```python
 def analyze_text(text: str) -> dict[str, int]:
@@ -162,7 +135,14 @@ def analyze_text(text: str) -> dict[str, int]:
 It is a good first standalone Extension because it is deterministic, reads no environment or files, uses
 no network, modifies no external system, and does not depend on LoopX project state.
 
-The Provider validates structure before computation and returns errors through a versioned response:
+The function alone is not the complete provider. Keep the scaffold's `_emit`, `main`, and doctor path, then update `run`:
+
+1. Allow `schema_version` and `text` instead of `schema_version` and `message`.
+2. Read and validate nonempty `text`; keep rejecting unknown fields.
+3. Use `analyze_text(text)` as the successful `result`, retaining version and extension identity.
+4. Update both JSON Schemas and `examples/request.json`.
+
+Errors still return a versioned response object:
 
 ```json
 {
@@ -220,21 +200,54 @@ A real Provider may perform bounded read-only dependency checks. Readiness still
 effect-free. The doctor receipt always reports `external_writes_performed: false`, and that assertion is
 itself part of the contract.
 
-## 7. Install the package and run tests
+## 7. Add tests explicitly, then install the package
 
-Use one Python environment for the Provider and LoopX:
+The scaffold generates neither `tests/` nor a `[test]` extra. After the domain changes above, create `standalone-extension/tests/test_contract.py` with valid and out-of-scope input cases:
 
-```bash
-cd standalone-extension
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e '.[test]'
-python3 -m pytest
+```python
+# standalone-extension/tests/test_contract.py
+import json
+import subprocess
+import sys
+
+
+def invoke(payload):
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx_text_stats.cli"],
+        input=json.dumps(payload), text=True, capture_output=True, check=False,
+    )
+    return result.returncode, json.loads(result.stdout)
+
+
+def test_text_statistics():
+    code, result = invoke({
+        "schema_version": "loopx_text_stats_request_v0", "text": "hello world\n",
+    })
+    assert code == 0 and result["ok"] is True
+    assert result["result"] == {
+        "characters": 12, "non_whitespace_characters": 10,
+        "words": 2, "lines": 1,
+    }
+
+
+def test_unknown_field_is_rejected():
+    code, result = invoke({
+        "schema_version": "loopx_text_stats_request_v0", "text": "hello",
+        "path": "input.txt",
+    })
+    assert code != 0 and result["ok"] is False
 ```
 
-The single-environment requirement follows from how LoopX locates a provider: through its installed
-console entrypoint. If the package lives in another virtual environment, `entrypoint_missing` is the
-correct result; LoopX must not search arbitrary source directories.
+Run from the parent of `standalone-extension`. Reuse this environment in the next chapter:
+
+```bash
+python3 -m venv .venv-extension
+. .venv-extension/bin/activate
+python3 -m pip install loopx pytest -e ./standalone-extension
+python3 -m pytest standalone-extension/tests
+```
+
+This installs the Python package without writing LoopX activation state. Continue to activation only after tests pass and the example request matches the contract. LoopX and the provider share one environment so the console entrypoint is discoverable.
 
 ## Cost and boundary
 
@@ -301,8 +314,7 @@ before building an effectful Provider.
 
 ## Invariants
 
-1. **Every contract field in a scaffolded directory exists before you delete it.** Starting from an empty
-   directory guarantees a missing one, and a missing field surfaces only at audit time.
+1. **The scaffold supplies a protocol baseline; domain changes still need validation.** Generated files do not prove the business input and result are correct.
 2. **`extension init` generates only the standalone path.** It claims no capability and infers no
    authority for `[[provides]]` or `[[implements]]`.
 3. **A provider call carries a checkable `schema_version`.** Without it, a receipt cannot be matched to a

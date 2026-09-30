@@ -10,15 +10,15 @@
 
 | 你手上是哪种问题 | 症状 | 跳到 |
 | --- | --- | --- |
-| 状态、记忆、投影 | 重启后重做已完成的轮次，或读到的判断已经过期 | [要求一词汇](#要求一状态能脱离上下文) |
-| 中断、恢复、续跑 | 说不清它停在哪，只能整段重做 | [要求二词汇](#要求二中断停在可辨识位置) |
-| 权限、写入、接管 | 两个执行者都认为自己是负责人 | [要求三词汇](#要求三唯一可问责的行动者) |
-| 消耗、配额、唤醒 | 没人看时不动，有人看时反复检查 | [要求四词汇](#要求四消耗有上限且可外部观察) |
+| 状态、记忆、投影 | 重启后重做已完成的轮次，或读到的判断已经过期 | [要求一词汇](#requirement-one-state-outlives-context) |
+| 中断、恢复、续跑 | 说不清它停在哪，只能整段重做 | [要求二词汇](#requirement-two-interruption-stops-at-identifiable-points) |
+| 权限、写入、接管 | 两个执行者都认为自己是负责人 | [要求三词汇](#requirement-three-one-accountable-actor) |
+| 消耗、配额、唤醒 | 没人看时不动，有人看时反复检查 | [要求四词汇](#requirement-four-bounded-externally-observable-spend) |
 
-已有明确术语或命令名时跳过后面的路由：横切词汇在[四个要求之外的词](#四个要求之外的词)，
-命令速查见[核心命令速查](#核心命令速查)。协议索引按开发任务组织，不按目录顺序组织。
+已有明确术语或命令名时跳过后面的路由：横切词汇在[四个要求之外的词](#words-outside-the-four-requirements)，
+命令速查见[核心命令速查](#core-command-quick-index)。协议索引按开发任务组织，不按目录顺序组织。
 
-## 要求一：状态能脱离上下文
+## 要求一：状态能脱离上下文 {#requirement-one-state-outlives-context}
 
 **判据：如果一条信息只存在于 prompt 里，它就不算被记住。**
 
@@ -30,7 +30,7 @@
 | Projection | 从 canonical state 生成的读模型 |
 | Kernel | 接受状态转换并拥有 durable control-plane state 的核心 |
 
-## 要求二：中断停在可辨识位置
+## 要求二：中断停在可辨识位置 {#requirement-two-interruption-stops-at-identifiable-points}
 
 **判据：如果中断是常态，"完成"就必须可判定。**
 
@@ -40,7 +40,7 @@
 | Frontier | 当前满足依赖、Gate、能力与边界后可推进的 Todo 集合 |
 | Receipt | 已接受动作或 lifecycle transition 的持久记录 |
 
-## 要求三：唯一可问责的行动者
+## 要求三：唯一可问责的行动者 {#requirement-three-one-accountable-actor}
 
 **判据：权限不能自证，必须由共享权威授予，并且可以被撤销。**
 
@@ -54,19 +54,19 @@
 | Gate | 带 scope 与 authority 的阻塞决定 |
 | Host | 承载 session、模型 Turn 与唤醒表面的产品或 runtime |
 
-## 要求四：消耗有上限且可外部观察
+## 要求四：消耗有上限且可外部观察 {#requirement-four-bounded-externally-observable-spend}
 
-**判据：没有 delta 就不该消耗；没有外部观察机制的系统会退化成人的轮询。**
+**判据：未变化的观察不记 delivery quota spend，但仍可能消耗模型、工具和网络资源。**
 
 | 术语 | 本书中的含义 |
 | --- | --- |
 | Quota | 决定当前是否允许一轮工作并记录已验证消耗的合同 |
 | Monitor | 按 cadence 观察外部条件、仅在 material change 时推进的 Todo |
 
-## 四个要求之外的词
+## 四个要求之外的词 {#words-outside-the-four-requirements}
 
 这些词不挂在单独一条要求上，但每条都要求它们：Capability 描述调用者能依赖什么，Provider 与
-Extension 描述实现从哪来、怎么升级，它们落在哪一层由 08 章的放置规则决定。
+Extension 描述实现从哪来、怎么升级，它们的归属见[放置规则](08-extension-placement.md)。
 
 | 术语 | 本书中的含义 |
 | --- | --- |
@@ -83,7 +83,7 @@ Extension 描述实现从哪来、怎么升级，它们落在哪一层由 08 章
 | `/loopx <goal text>`、Goal selection、fresh Agent identity 与 Host activation | [`loopx_goal_command_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-goal-command-v0.md) |
 | 长程 Agent source/projection、并发 lane 与 lifecycle | [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md) |
 | Replan/handoff 前的 Agent-scoped chronology | [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md) |
-| Canonical event、replay 与 privacy | [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md) |
+| 旧 Todo event API 的退役边界 | [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md) |
 | Active-state workbench 的 typed read model | [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md) |
 | Todo、Gate、dependency 与 handoff 图 | [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md) |
 | Gate coverage 与 scoped authority | [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md) |
@@ -249,7 +249,7 @@ loopx extension rollback <extension-id>
 除 list 外，生命周期命令通常默认 preview。执行 mutation 或 provider invocation 前显式检查当前
 `--help`，并只在确认后添加 `--execute`。
 
-## 核心命令速查
+## 核心命令速查 {#core-command-quick-index}
 
 按问题类型分组；命令名可通过 `loopx <command> --help` 复核参数。
 

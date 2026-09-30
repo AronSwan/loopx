@@ -2,44 +2,27 @@
 
 This chapter answers one question: across a single round of agent work, what happens between "should this move at all" and "this counts as done" — and why the **ordering itself** is a safety boundary.
 
-## Start from a bad ending
+## The process stops after writeback
 
-Consider a scenario that is common in agent systems without governance:
+Consider a teaching scenario: an Agent produces a compatibility fix, validation passes, and the result is written back. Quota settlement then times out and the process exits.
 
-```text
-09:00  Agent turn 40. It reads the Todo list, picks one, starts editing files.
-09:04  Done. A receipt is already written: code change + validation output.
-09:04  The machine reboots (or the process is killed, or the user hits stop,
-       or the model times out).
-09:06  The Agent restarts and reads state: the Todo is still pending, and no
-       evidence of the completed work is visible.
-09:06  It concludes the round never happened, and does it again.
-09:09  The second round "succeeds" too. Quota is charged twice, and the Todo
-       list now carries two records pointing at the same result.
-```
+The CLI did not return success, yet code and some durable records already exist. Repeating the whole turn may duplicate effects; declaring completion may hide unfinished settlement.
 
-Nothing in that sequence is a lie. The agent did not misreport, the receipt really was written, and the Todo state was accurate at the time.
+The first question is: **which steps committed, which are confirmed absent, and which outcomes remain unknown?**
 
-The problem is that **these facts share no common commit point**: the receipt lands somewhere that disappears, the charge lands somewhere that does not, and "this round finished" cannot be reconstructed from the read model after a restart.
+## Why recoverable commit boundaries matter
 
-That gap is what separates long-running work from a single session. In a session, "I said it" is roughly equivalent to "it happened," because the context is still there. In long-running work, **context is working memory that will be flushed**, so "what happened" has to be answerable by something that does not depend on it.
+Saving only a final success record is simple, but cannot explain partial execution. Recording each step helps, although interruption can still occur between an external effect and its local checkpoint.
 
-## Why "check before retrying" is not the fix
+LoopX records identity, phases, and receipts for a governed Turn and provides readback for unresolved operations. Recovery preserves completed work, resolves uncertainty, and then decides whether continuation is legal.
 
-The obvious reaction is to have the agent check first. But checking requires reading state, and state may sit exactly in the middle — receipt written, charge not written — where both choices are wrong:
-
-- **Skip it:** the change may genuinely be on disk but unrecorded, so it can never be accepted, handed off, or audited.
-- **Redo it:** you may edit the same file twice, call the same external resource twice, or charge the same budget twice.
-
-The hard problem is **whether you can tell how far it got.** Without that, every retry branch is a guess.
-
-So the design goal is **every failure stopping at an identifiable position**. Fewer failures is a different, weaker goal.
+When the evidence is insufficient, stopping safely is a valid recovery outcome.
 
 ## Scale one: the transaction inside one turn
 
-### Seven phases, and only legal prefixes
+### Seven phases describe confirmed progress
 
-LoopX splits one turn into seven ordered phases, recorded in a checkable contract:
+The LoopX Turn transaction contract defines seven ordered phases:
 
 ```text
 host_execute → typed_result → validation
@@ -47,43 +30,31 @@ host_execute → typed_result → validation
              → scheduler_apply → scheduler_ack
 ```
 
-A turn only ever stops on some **prefix** of those seven. If it dies after phase 4, the completed set is the first four; after phase 6, the first six. There is no state in which phase 3 was skipped while phase 4 ran.
+A receipt's `completed_phases` must be a legal prefix of this sequence. This constrains **what may be claimed as complete**. It does not restrict crashes to phase boundaries or prove that an unrecorded effect never happened.
 
-A validation rule maintains that constraint, not convention. When a transaction plan claims a set of completed phases, LoopX checks that the set is exactly a prefix:
+A provider may commit writeback before the process saves its checkpoint, leaving a `prepared` intent in the journal. Recovery reads back the same settlement identity and effect reference:
 
-```python
-# loopx/control_plane/turn_driver/transaction.py
-expected = list(TRANSACTION_PHASES[: len(phases)])
-if phases != expected:
-    errors.append("completed_phases must be an ordered transaction prefix")
-```
+| Readback | Action | Remaining conditions |
+| --- | --- | --- |
+| `committed`, with a valid receipt | Record the existing result and skip that effect | Identity, payload, and phase match |
+| `absent` | May execute the uncommitted step | Current recovery decision and authority allow it |
+| `unknown`, or unavailable readback | Stop this recovery path and retain uncertainty | Obtain valid readback or repair through the responsible owner |
 
-**That is the mechanism that makes recovery work.** The set of possible crash positions collapses from "any state at any moment" to "one of seven prefixes." Recovery does not guess; it reads the last completed phase and continues from the next one. Forty-three restarts and one restart take the same path.
+A legal prefix is only one recovery condition. The executor also checks journal identity, bindings, failure kind, and recovery permission. A saved Host result may allow continuation from validation.
 
-### Why the charge must come after the writeback
+Failures that require another Host invocation also have explicit retry and budget constraints.
 
-The ordering constraint yields a counterintuitive conclusion. Notice the relative position of these two phases:
+### Why quota accounting follows writeback
 
-```text
-durable_writeback  →  quota_spend
-```
+`durable_writeback → quota_spend` connects delivery accounting to a validated, durable result. Spend here means LoopX budget slots. Model API or external-service costs may already have occurred during execution.
 
-Writing back before charging means the state "money spent, result not recorded" cannot occur. The cost is that a failed charge wastes the round. LoopX accepts that loss, because **one wasted round is far cheaper than an unauditable "we charged you and cannot say where the result is."**
+If writeback succeeds and spend fails, **the writeback is retained**. Recovery reuses confirmed results while completing outstanding settlement, avoiding a repeated Host call or writeback.
 
-Failure carries its own constraint. Every failure kind must declare which phase it stopped at:
+This preserves completed work without making the whole turn, including external systems, one atomic transaction.
 
-```python
-# loopx/control_plane/turn_driver/transaction.py
-FAILURE_PHASES = {
-    LoopXTurnResultKind.HOST_FAILURE:        "host_execute",
-    LoopXTurnResultKind.VALIDATION_FAILED:   "validation",
-    LoopXTurnResultKind.WRITEBACK_FAILED:    "durable_writeback",
-    LoopXTurnResultKind.QUOTA_SPEND_FAILED:  "quota_spend",
-    LoopXTurnResultKind.TERMINAL_CLOSEOUT_FAILED: "terminal_closeout",
-}
-```
+Failure kinds locate the next investigation: `HOST_FAILURE` at `host_execute`, `WRITEBACK_FAILED` at `durable_writeback`, and `QUOTA_SPEND_FAILED` at `quota_spend`.
 
-A plan that declares `QUOTA_SPEND_FAILED` while claiming it stopped at `validation` is rejected. Failures cannot be attributed loosely, **because the attribution decides where recovery resumes.**
+These fields must agree with the receipt. Knowing the failed phase alone does not authorize a retry.
 
 ### The five-stage closed loop: the shape of a normal delivery
 
@@ -269,37 +240,41 @@ Python still carries the current CLI transport, explicit external Provider/Host 
 
 The [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md) on current `main` defines the remaining work as transaction-payoff: one migration should move a complete transaction and delete the Python semantic path it replaced. Adding only leaf handlers, DTOs, or bridge calls does not count as migration progress.
 
-This boundary has a practical consequence for readers: **when the two sides disagree, the canonical answer lives on the TypeScript side**, and the Python side is adaptation or compatibility projection. To tell where a piece of logic belongs, ask whether it is already a domain-owned decision or an effect receipt.
+When the two sides disagree, locate the current contract owner. TypeScript owns migrated Turn settlement, while Python still owns some Todo read rules.
 
-## Cost and boundary: what this design gives up
+Language alone does not decide correctness; use the migration RFC delivery boundary and actual caller path.
 
-Every rule above buys one property by paying elsewhere. The costs matter, because they determine when you should not expect this machinery to help.
+## Cost and boundary: what recovery requires
 
-**Cost one: every turn reads state first.** You cannot act on a judgment embedded in a prompt from an hour ago. That is slower than "keep going," and the state you read may already be stale when you finish reading it.
+**Recovery records must remain readable.** Journals, identity bindings, and provider receipts add storage, validation, and migration costs. Missing or corrupt records may block recovery; absence of evidence is not proof of nonexecution.
 
-**Cost two: the phase count is fixed.** You cannot slip an extra step into a round — "edit the file and clear the cache while we're here." That flexibility is traded for enumerability, and enumerability is what recovery requires.
+**Unknown outcomes may require waiting.** Retaining completed work reduces duplicate execution but requires provider readback. An external API without queries or idempotency identifiers needs its own recovery strategy.
 
-**Cost three: wasted work is possible.** If the charge fails after writeback, the round produces no accounting at all. The system discards it rather than keep an unclassifiable partial result.
+**Phases constrain settlement.** `host_execute` may include multiple tool calls. Fixed settlement phases do not forbid editing a file and clearing a cache. Any added external effect still needs its own authority, idempotency, and readback boundary.
 
-**Cost four: you cannot skip stages on intuition.** The nine stages mean an obvious-looking judgment — "the user hasn't complained, so continue" — has no place in the pipeline. To speed up decisions you improve the quality of source facts; you do not compress the order.
+TurnEnvelope is an explicitly enabled bounded projection. LoopX Turn has an experimental protocol and runnable `turn plan` / `turn run-once` paths for explicit opt-in integrations.
 
-**Boundary one: these seven phases describe a governed turn only; they do not cover everything an agent does.** The model's reasoning inside `host_execute`, and the order of its tool calls, are not governed by these phases — that belongs to the harness. LoopX governs **the part that crosses process boundaries, can be interrupted, and must be accounted for.**
+These boundaries do not give every tool call in every Host the same recovery guarantees.
 
-**Boundary two: TurnEnvelope and LoopX Turn are not default paths.** TurnEnvelope is an explicitly enabled bounded projection, not the default quota output. LoopX Turn is an experimental protocol, though the current release ships a runnable `turn plan` / `turn run-once` path and a Host adapter. Both suit understanding boundaries and explicit opt-in integrations; neither should be described as a recurring runtime every Host adopts by default.
+## How to judge whether recovery can proceed
 
-**Boundary three: Python still owns real responsibilities.** Python carries the current CLI transport, explicit external Provider/Host effects, legacy projection, and the Markdown/event writeback not yet migrated. The migration does not mean "Python was removed," and the same rule must never be reimplemented in a Python facade — that creates a second source of truth.
+Start from the original Turn identity. A CLI timeout does not justify creating a new task to repeat the work. For diagnosis, inspect its journal:
 
-## Named failures: what these constraints stop
+```bash
+loopx turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-key <turn-key> --format markdown
+```
 
-Talking abstractly about "recoverability" convinces nobody. Three scenarios below each have a corresponding test you can run to watch the constraints take effect.
+Read `recorded_effects` and `recovery_decision`. `null` means unknown. Inspection neither performs recovery nor grants retry permission; follow the current executor decision and provider readback while preserving the original identity.
 
-**Replaying a legal prefix produces no duplicate effect.** For every legal prefix, a replay must converge on the same result — no second charge, no extra record. The tests cover every prefix combination; none of them sample. The decisive assertions are that `replay_calls == []` and that `combined_calls` contains at most one `DURABLE_WRITEBACK` and at most one `QUOTA_SPEND`.
+| Claim | Evidence entry | Evidence boundary |
+| --- | --- | --- |
+| Completed phases must form a legal prefix | `turn_driver/transaction.py`, `test_effect_program_fault_replay_matrix.py` | Checks record shape; controlled receipts do not exhaust real crashes |
+| Unknown prepared effects cannot be blindly executed | `turn_driver/settlement.ts`, `tests/control_plane_ts/turn_settlement.test.ts` | Still depends on trustworthy provider readback |
+| Failed spend preserves writeback | Spend rejection and recovery cases in `tests/test_loopx_turn_executor.py` | Synthetic providers verify executor branches, not external billing |
 
-**A charge without a writeback must fail closed.** A plan claiming it will charge while carrying no corresponding `durable_writeback` must be rejected rather than charged first and reconciled later. This guards precisely the 09:04 state from the opening: money spent, landing site unknown.
-
-**One failure short-circuits every later effect.** After phase 3 fails, phases 4 through 7 do not run. Otherwise you get internally contradictory states like "validation failed but writeback succeeded."
-
-Corresponding tests: `tests/control_plane/test_effect_program_fault_replay_matrix.py`. They serve as executable evidence for this design at each crash point, well beyond demonstration.
+See the [LoopX Turn protocol](/loopx/docs/reference/protocols/loopx-turn-v0/) for complete fields and recovery conditions. This evidence supports guarantees within named boundaries, not exactly-once behavior for arbitrary external operations.
 
 ## How a turn ends
 
@@ -315,20 +290,13 @@ A turn can end in several ways, and all of them are legal:
 
 **Writing no code is not necessarily a failure** — a Gate, a wait, and a quiet no-op may be exactly what the protocol requires. Conversely, writing a lot of code does not make a turn effective if it bypassed the selected Todo, authority, workspace, or validation.
 
-## Invariants
+## Boundaries to preserve in use
 
-Six claims you can check yourself.
+1. Completed phases describe a legal prefix of confirmed results; unrecorded effects may still require readback.
+2. Retain valid receipts under the same settlement identity; a spend failure does not undo completed writeback.
+3. Resolve unknown results before proceeding; do not use a new identity to bypass the original Turn's recovery checks.
+4. User, agent, and CLI channels may all carry obligations; apply each within its scope.
+5. Cost optimizations must preserve admission precedence and authority checks at commit time.
+6. Account according to the current settlement contract; Gate notifications, dry-runs, and unchanged polls are not delivery spend.
 
-**On the single-turn transaction:**
-
-1. **A turn's completion state is always some prefix of the seven phases.** If you observe spend performed without writeback, that is not a recovery boundary — it is a defect.
-2. **Replaying the same turn adds no effect.** Replay is idempotent, so retrying is safe — but retrying does not erase the question of how far it got.
-3. **A failure must declare where it stopped.** A failure that cannot name its phase cannot be recovered, and therefore cannot be handed off.
-
-**On cross-turn admission:**
-
-4. **The three channels can hold at once.** Collapsing any one of them into a global boolean loses either legal parallel work or a required human decision.
-5. **The decision order cannot be compressed.** To speed up decisions, improve the quality of source facts.
-6. **No delta means no spend.** Gate notifications, dry-runs, and unchanged polls are not deliveries.
-
-These six answer one question: **when nobody remembers what just happened and nobody is watching, what lets the system know whether to move and how far it got?** This chapter gave LoopX's answer at the single-turn scale. The next chapter stretches the scale — when a goal takes dozens or hundreds of turns across interruptions and handoffs, how these constraints continue to hold.
+The next chapter follows these rules across multiple turns: when to retry, when to replan, and when a human must take over.

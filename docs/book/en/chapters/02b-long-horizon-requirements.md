@@ -1,114 +1,89 @@
 # The four demands of long-running work
 
-The previous chapter established which tasks require moving control information out of the current prompt. This chapter answers a more basic question: **once it is out, what must the system satisfy?** These four demands come from the fact of running long enough, not from any design preference inside LoopX. Every system that spans days, sessions, or processes meets them. Some systems choose not to acknowledge them.
+A fix may involve editing code, testing it, waiting for PR checks, responding to review, and handing it to another Agent. Each step may fit one session; the whole task crosses sessions, processes, and human decisions.
 
-## The four demands
+This chapter uses that example to introduce four architectural questions. They form a reading framework for LoopX, not a claim that every LoopX path already provides the same guarantees. Other systems may choose different mechanisms.
 
-| # | Demand | If ignored | Typical symptom |
-|---|---|---|---|
-| 1 | State must outlive the context | Work repeats or drifts the moment memory breaks | Completed rounds redone after a restart |
-| 2 | Every interruption must stop at an identifiable position | A half-finished state cannot be judged; retries become guesswork | Charged, but no one can say where the result landed |
-| 3 | Exactly one accountable actor may write | Two actors write the same state at once | Lost updates; a stale holder keeps editing |
-| 4 | Consumption must be bounded and externally observable | Idle spinning, double charging, a human forced to watch | Nothing advances unwatched; hot polling when watched |
+## Four demands
 
-Each one below gets the same treatment: why it is unavoidable, and what happens when a designer does not face it.
+| Question | What must be retained or decided | LoopX's main approach |
+| --- | --- | --- |
+| How does another session continue? | Objective, work items, evidence, and next action | Durable state and rebuildable projections |
+| How does interrupted work avoid repetition? | Committed, absent, and unknown effects | Turn identity, journals, receipts, and provider readback |
+| What if two executors arrive together? | Scope, write ownership, and current revision | Claims, leases, fences, and commit checks |
+| How does an unchanged situation cost less? | Budget, runnable work, wait target, and next observation | Quota admission, monitors, backoff, and external scheduling |
 
-## Demand one: state must outlive the context
+Together these mechanisms support continued progress, including legitimate waits and stops. Long-running work does not require an always-live process or a delivery on every wake.
 
-Inside a single session, "I said it," "I remember," and "we decided this earlier" are trustworthy, because the transcript is still there. In long-running work all three fail:
+## Demand one: state must outlive the current context
 
-- the context gets compacted, and early content yields to recent content;
-- the session ends when the user closes the window;
-- the Host switches — a Codex App heartbeat and a CLI invocation share no memory;
-- time passes, and yesterday's judgment may already be stale.
+The fix is submitted and the Agent changes session. The new session needs the exact PR, commit, passed checks, and outstanding decisions. A statement that the fix is done cannot reconstruct those relations.
 
-So **anything "remembered" must live somewhere that does not depend on the transcript**.
+Chat history may persist and help explain the past. It may still lack structure, refer to stale inputs, or be compressed. Facts governing the next action need an addressable owner, revision, and read entrypoint.
 
-Ignoring this shows up first as duplicated work: the agent restarts, finds no evidence of the completed round, and does it again. The second symptom is drift — it stops working toward the original goal, because the goal itself was compacted out of the context.
+LoopX externalizes Goal, Todo, Gate, and receipt state, then projects it for people, Agents, and schedulers. Maintaining and reading records costs work, but lets another session reassess the conditions for action.
 
-LoopX's answer is the separation of durable state from read-only projections, which later chapters cover. For now the criterion is enough: **if a piece of information exists only in a prompt, it has not been remembered.**
+**Usage question:** can the next executor identify the objective, unfinished work, and recovery conditions from current sources? Information present only in a prompt cannot by itself prove durable writeback.
 
-## Demand two: interruption is normal, not exceptional
+## Demand two: retain both known facts and uncertainty after interruption
 
-Many systems assume the run will finish normally and only exceptions need handling. Long-running work inverts that assumption:
+Suppose a PR push succeeds, but the process exits before saving its local receipt. Missing local evidence cannot establish that nothing happened remotely. A blind retry may repeat an effect; skipping may leave settlement unfinished.
 
-- processes get killed (deploys, OOM, the user hitting stop);
-- networks drop (model APIs, external services, the Git remote);
-- humans intervene (the direction looks wrong, the requirement changed);
-- external conditions suspend progress (PR checks unfinished, a dependency unreleased).
+A governed LoopX Turn uses phases, identity, and receipts for confirmed progress. Prepared effects also require provider readback. Confirmed commits are reused; confirmed absence may allow execution; unknown outcomes retain a block and recovery owner.
 
-These are not edge cases. Over a long enough run they **happen necessarily**, and they happen repeatedly. Recovery is therefore part of the main path, not an error handler.
+Legal phase prefixes constrain recorded progress. They do not eliminate the gap between an external effect and a local checkpoint. Continuation also depends on bound identity, authority, and external observability.
 
-Ignoring this leaves the system in an intermediate state that **nobody can locate**. Was it "edited but not accounted for," or "accounted for but not finished"? Without an answer, every retry branch is a guess.
+**Usage question:** after a timeout, inspect the original Turn and recovery decision. Do not create a new identity simply to repeat work, or translate `unknown` into `false`.
 
-One consequence is easy to miss: **if interruption is normal, then "done" must be decidable.** A work unit whose completion cannot be determined can never safely resume after being cut in half. That is why LoopX cuts a turn into a finite set of phases — phases can be enumerated, and only then does recovery stop being guesswork.
+## Demand three: parallel work needs explicit write boundaries
 
-## Demand three: the actor must be unique and accountable
+Two Agents can fix different modules or contend for one Todo. After a restart, an old instance may still hold a stale decision. Work ownership and the legality of the current write therefore need separate answers.
 
-Run long enough and several potential writers coexist:
+LoopX uses claims for ownership and leases, revisions, and fences to constrain applicable write paths. Checks belong at the relevant commit boundary; old display state or a takeover declaration cannot replace current authority.
 
-- multiple Agents on the same Goal;
-- several process instances of one Agent (the old process has not exited during a restart);
-- human operations and automation at the same time;
-- after a Host switch, the old Host still holding an old judgment.
+These mechanisms have configuration and migration boundaries. Default legacy handoff differs from `hard_lease`, and legacy writers do not all enforce the same instance fence. Multiple peers also do not imply one executor for the entire Goal.
 
-The counterintuitive part: **the problem is not who works faster, but who is permitted to write.**
+**Usage question:** identify the current authority, handoff mode, and writer checks before relying on takeover safety. A design target does not qualify a path where enforcement is not enabled.
 
-Ignoring this means two actors each believing they are the current owner, writing the same state simultaneously. The outcome depends on timing — sometimes a lost update (the later write overwrites the earlier one), sometimes a duplicate effect (both executed). The subtler case is the **stale holder**: an actor that no longer holds authority keeps advancing on an expired judgment.
+## Demand four: budget and observation must bound unproductive repetition
 
-LoopX's response separates "I think I should do this" from "I am authorized to do this": claim, lease, and writer fence exist so that being permitted to write is a state that can be refused, rather than a default that holds.
+While PR checks are pending, repeatedly asking a model to look again may return the same answer. A budget bounds quantity but cannot alone decide whether another turn is useful. Available budget can still mean waiting.
 
-The key criterion: **permission cannot be self-declared. A shared authority grants it, and can revoke it.**
+LoopX admission combines budget, Gates, frontier, capabilities, and workspace facts. Exhaustion restricts ordinary delivery. Monitors organize observations by cadence and material change; unchanged conditions can trigger backoff or replanning.
 
-## Demand four: consumption must be bounded and externally observable
+A monitor may use governed polling. An additional event channel can wake work sooner; without one, backoff increases detection latency. That is a real tradeoff between observation cost and response time.
 
-Long-running work consumes two kinds of resource, and both misbehave.
+Delivery quota is separate from actual token, network, and tool costs. A poll that consumes no delivery spend can still consume resources.
 
-**Compute and budget.** "Quota remaining" suggests subtraction, but a legal round may need no spend at all (monitor poll, dry-run), and a spend does not imply effective delivery. More importantly, **an autonomous system without a ceiling will eventually spin** — trying again, retrying, "checking once more."
+**Usage question:** are the wait target, next observation, budget limit, and release condition visible? Can the current Host or scheduler actually trigger work while no person is watching?
 
-**Human attention.** This is the more easily overlooked resource. A long-running system that needs a person watching continuously has not been automated; it merely moved the work from executing to supervising. And when the person stops watching, such a system often neither advances nor halts — it quietly idles.
+## How the four demands form one system
 
-Ignoring this produces two opposite failures. Either **hot polling**, where the system rechecks with no substantive change and burns external resources and budget; or **silent stagnation**, where nothing advances unwatched until someone returns and finds that nothing happened.
-
-LoopX meets this with three mechanisms together: **admission** (should this turn move at all), **backoff** (how to yield when a monitor sees no change), and **monitors instead of polling** (waking on external conditions rather than an Agent repeatedly asking). The criterion: **no delta means no spend — and a system with no external observation mechanism necessarily degrades into a human polling loop.**
-
-## How the four relate
-
-These are not a flat list. They have a dependency order:
+Follow the opening repair task:
 
 ```text
-State can persist              (demand one, the premise)
-  → interruption is detectable (demand two; otherwise no recovery point)
-  → actors can be constrained  (demand three; otherwise recovery may have two writers)
-  → consumption can be limited (demand four; otherwise the system burns itself down)
+Persist Goal / Todo / acceptance conditions
+  → select runnable work and check authority from current facts
+  → Host execution, validation, durable writeback, and settlement
+  → wait for PR checks; observe on cadence or an available event
+  → reread facts, identity, and recovery conditions after session change or handoff
 ```
 
-The order matters. **Without demand one, demand two is meaningless** — if state is not durable, "which position it stopped at" has no referent. And without demand three, recovery creates a new problem: two instances attempting to recover the same turn at once.
+This is a workflow illustration, not another state machine or mandatory API order. State enables handoff; authority constrains continuation; receipts help interpret effects; budget and observation govern the next attempt.
 
-This is also why the mechanisms stack in implementation: projections build on durable state, recovery builds on phase boundaries, leases build on a shared authority, and admission builds on readable state.
+No single mechanism guarantees that the objective succeeds.
 
-## Where these demands can be verified
+## Reading routes and evidence
 
-These four are not claims unique to LoopX; they are general constraints on long-running systems. You can use them to examine any proposal claiming long-horizon support, by asking four questions:
+Read [durable state and projections](state-substrate.md), then [work graphs, authority, and peers](work-graph-and-authority.md) for facts and writers. [One governed turn](03-one-turn.md) connects them.
 
-1. **Memory:** kill the process and reopen it. Can it say what it just did, and on what evidence?
-2. **Interruption:** kill it at any moment. After restart, can it tell where it stopped, or can it only redo the work?
-3. **Ownership:** if two instances start at once, which one may write? Is the other refused, and on what basis?
-4. **Consumption:** does it advance while nobody watches? Does it stop trying when nothing changed?
+[Recovery and boundaries](04-runtime-boundaries.md) covers repeated turns; [budget, admission, and observation](04b-budget-and-admission.md) covers waiting and cost. Onboarding chapters apply these boundaries to a selected Host.
 
-These four have observable answers, rather than requiring you to trust a design document.
+| Boundary to inspect | Evidence entry | What it does not prove alone |
+| --- | --- | --- |
+| Source versus projection | [Long-horizon state protocol](/loopx/docs/reference/protocols/long-horizon-agent-state-protocol-v0/) | Every reader is real-time |
+| Turn recovery | [LoopX Turn protocol](/loopx/docs/reference/protocols/loopx-turn-v0/) | Every external effect can be retried automatically |
+| Ownership and handoff | [Peer runtime protocol](/loopx/docs/reference/protocols/peer-agent-runtime-v1/) | Every mode enforces exclusive instances |
+| Budget and waking | [Quota contract](/loopx/docs/quota-allocation/) | A Host without event integration immediately detects external changes |
 
-## How the book proceeds
-
-The remaining chapters are organized by these four demands. Each explains what concrete problem LoopX faced, what design it chose, what that design costs, and which checkable invariant the reader can take away.
-
-The order goes through demand one and two first (state and recovery), since they are the premise; then demand three (ownership); then demand four (consumption and observation). Part III returns to how you should use it and where its boundaries are.
-
-## Invariants
-
-1. **Information that exists only in a prompt has not been remembered.** The test is whether it survives a process restart.
-2. **If interruption is normal, completion must be decidable.** A work unit whose completion cannot be decided cannot safely resume after being cut in half.
-3. **Permission cannot be self-declared.** A permission an executor claims for itself is, over a long run, no permission at all.
-4. **No delta means no spend.** Conversely, a system without an external observation mechanism degrades into a human polling loop.
-
-Together these four are four ways of asking one question: **when nobody remembers, nobody is watching, and there may be two of you working, why should anyone believe the system is still making progress?**
+Carry three questions into each chapter: where does this guarantee apply, which conditions does this environment satisfy, and who owns the next action after failure?

@@ -191,7 +191,7 @@ GoalControlSnapshot:                 # desired read model，不是当前唯一�
 LoopX 1.0 **没有一个可以整体覆盖的 `GoalState` 大对象**。更重要的是，`objective`、non-goals、
 acceptance、permissions 和 terminal conditions 目前还没有统一的 typed canonical storage；上面的
 `intent` 是目标模型，不应被描述成已经落地的 authoritative envelope。当前 shared Goal alignment 是
-只读聚合：它从 event log、Markdown active state 或 canonical Todo snapshot 取得 source basis，并用
+只读聚合：Todo basis 来自当前选定的 Markdown active state 或 canonical Todo snapshot，历史记录按其 owner 补充证据；旧 Todo event API 已退役。聚合使用
 独立 `todo_basis` 标识 Todo/lease snapshot，再投影 drift 与 conflict：
 
 | 常见抽象字段 | LoopX 的实际表达 |

@@ -3,35 +3,27 @@
 package 安装与 LoopX activation 是两个独立阶段。LoopX 不负责下载任意 package，也不允许 caller
 传入任意 executable；它管理一个经过 doctor、绑定 revision 的 provider lifecycle。
 
-## 从一个坏的结局开始
+## 升级成功，为什么仍要检查调用方
 
-一个 provider 升级后，支持收到这样的报告："升级成功了，但现在的输出我们读不懂。"
+假设 provider 的新版本把 `result` 从对象改成字符串。命令 `loopx extension upgrade --manifest standalone-extension/extension.toml --execute` 的 readiness probe 即使通过，也不能证明每个消费者都理解了新结果。
 
-复现路径很具体。旧版本 response 里 `result` 是对象；新版本把它换成了字符串，版本号也进了
-`0.2.0`。`loopx extension upgrade <extension-id> --execute` 通过，因为新 revision 的 doctor 确实通过了 readiness
-probe。但 doctor 只证明 entrypoint 能启动，它不会告诉你下游的解析代码已经过时。
+升级前需要验证新旧 request/response 的兼容边界，保留历史 receipt 的读取方式。同时区分 Python environment 中的 package 与 LoopX 记录的 active revision；二者不是一个原子提交。
 
-此时调用方手上只有两个反应，而两个都错：
-
-- **按新格式解析**：旧的历史 receipt 立刻读不回来，而它们没有 schema_version 之外的信息可以
-  帮忙；
-- **回滚**：`rollback` 会探测 previous revision，但被替换掉的 package 已经不在环境里，探测失败，
-  回滚不可用。
-
-问题出在升级序列本身：**升级动作把两样东西同时变了**——LoopX 记录的 active revision，和
-Python environment 里那份 executable。生命周期能管住前者，环境那一半要靠人来对齐。本章讲的
-就是这条边界具体落在哪里。
+如果新 package 已替换旧文件，activation probe 失败只能保持旧的 activation 记录，不能把磁盘文件自动还原。恢复可用性需要先恢复匹配 package，再按生命周期读回。
 
 ## 1. 安装 Python package 与激活的分界
 
+继续使用[上一章](09-extension-scaffold.md)已安装 LoopX 与 provider 的环境，从 `standalone-extension` 的父目录执行：
+
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e './standalone-extension[test]'
+. .venv-extension/bin/activate
+extension_state_dir="$(mktemp -d)"
+extension_state="$extension_state_dir/state.json"
 ```
 
-这一步使 `loopx-text-stats` console entrypoint 出现在当前 environment。它不改变 LoopX extension
-activation state。
+本章所有 lifecycle 命令都使用这个独立 state file。不要在后续小节重新创建它；只在开始一次全新练习时创建新目录。
+
+上一章的 package 安装已让 `loopx-text-stats` 出现在该环境中，尚未进行 LoopX activation。首次跳读到这里时，先完成上一章的环境、实现和测试步骤。
 
 直接检查 provider 自身：
 
@@ -48,7 +40,7 @@ entrypoint 会绕过 managed runtime 固定的 timeout、input limit 与 output 
 先预览：
 
 ```bash
-loopx extension install \
+loopx extension install --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --format json
 ```
@@ -56,7 +48,7 @@ loopx extension install \
 再执行：
 
 ```bash
-loopx extension install \
+loopx extension install --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --execute \
   --format json
@@ -93,8 +85,8 @@ upgrade 提交会以 "revision is already active" 失败。
 ## 3. 查看与复查 readiness
 
 ```bash
-loopx extension list --format json
-loopx extension doctor loopx-text-stats --execute --format json
+loopx extension list --format json --state-file "$extension_state"
+loopx extension doctor loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 `doctor --execute` 会真实运行 probe。readiness 绑定 active manifest revision 与 resolved runtime
@@ -120,7 +112,7 @@ ready                       -> 可用
 先预览：
 
 ```bash
-loopx extension run loopx-text-stats \
+loopx extension run loopx-text-stats --state-file "$extension_state" \
   --input-json standalone-extension/examples/request.json \
   --format json
 ```
@@ -128,7 +120,7 @@ loopx extension run loopx-text-stats \
 执行：
 
 ```bash
-loopx extension run loopx-text-stats \
+loopx extension run loopx-text-stats --state-file "$extension_state" \
   --input-json standalone-extension/examples/request.json \
   --execute \
   --format json
@@ -162,7 +154,7 @@ group，避免子进程在 LoopX 报告停止后继续运行。
 ## 5. Disable 与 enable
 
 ```bash
-loopx extension disable loopx-text-stats --execute --format json
+loopx extension disable loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 disabled Extension 仍可在 lifecycle state 中观察，但不是 dispatch candidate。此时 `extension run`
@@ -171,7 +163,7 @@ disabled Extension 仍可在 lifecycle state 中观察，但不是 dispatch cand
 重新启用：
 
 ```bash
-loopx extension enable loopx-text-stats --execute --format json
+loopx extension enable loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 enable 不会信任旧 readiness；它会重新运行 doctor，成功后才设置 enabled bit。失败时它保持
@@ -182,7 +174,7 @@ disabled，并清掉旧的 doctor proof，避免留下"已启用且看似 ready"
 升级前先修改 package 与 manifest version，并把新 package 安装到同一 environment。然后预览：
 
 ```bash
-loopx extension upgrade \
+loopx extension upgrade --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --format json
 ```
@@ -190,45 +182,38 @@ loopx extension upgrade \
 执行：
 
 ```bash
-loopx extension upgrade \
+loopx extension upgrade --state-file "$extension_state" \
   --manifest standalone-extension/extension.toml \
   --execute \
   --format json
 ```
 
-upgrade 在切换 active revision 前验证并 probe 新 manifest。失败 probe 保持当前 revision，不应出现
-"升级失败但旧版本也不可用"的半状态。
+upgrade 在切换 active revision 前验证并 probe 新 manifest。失败 probe 保留当前 activation revision，但不回滚已经替换的 package。旧 entrypoint identity 改变时，旧 readiness 也可能失效，需恢复匹配环境并重新检查。
 
 回滚：
 
 ```bash
-loopx extension rollback loopx-text-stats --execute --format json
+loopx extension rollback loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
 rollback 同样先 probe previous revision，再切换。它不是任意 Git checkout 回退，而是 activation
 state 中已验证 revision 的生命周期转换。activation state 保留最近的 validated revision 快照，
 数量有限（当前保留 5 个）。
 
-这也解释了开头的第二条反应为什么会失败：rollback 切换的是 LoopX 记录的 revision，它不会替你
-把上一个 package 版本重新安装回 Python environment。当 `rollback_available` 为 false 时，正确的
-动作是修复环境，而不是寻找绕过激活状态的捷径。
+`rollback_available=false` 表示没有记录可回滚的 revision，例如首次安装后。它不能诊断环境是否损坏。
 
-## 7. 隔离示例状态
+如果存在 rollback target，但其 doctor 失败，才需要检查或重新安装与目标匹配的 package，再执行 rollback 和 doctor。若没有历史 target，需要按明确选定的版本准备新的安装/升级方案；修复环境本身不会生成回滚历史。
 
-在 CI 或教程中，可以使用 `--state-file` 指向临时文件，避免污染用户的默认 runtime state：
+## 7. 检查练习状态并清理
+
+再次运行 `loopx extension list --state-file "$extension_state" --format json`，确认 active revision、enabled 和 doctor 状态与预期一致。停止练习时可以 disable，并退出虚拟环境：
 
 ```bash
-state_file="$(mktemp)"
-rm -f "$state_file"
-
-loopx extension install \
-  --state-file "$state_file" \
-  --manifest standalone-extension/extension.toml \
-  --execute \
-  --format json
+loopx extension disable loopx-text-stats --execute --format json --state-file "$extension_state"
+deactivate
 ```
 
-临时文件可能包含本机 runtime identity，不应提交到任何公开仓库。
+临时目录可能包含本机 runtime identity，应保留在本地。确认不再需要回滚证据后，由你删除本次练习目录；不要删除默认用户 runtime state。
 
 ## 何时不能使用 standalone `run`
 
@@ -282,10 +267,9 @@ scope 变宽、request 改变或 revision 不匹配都必须 fail closed。
 **超时会终止整个进程组。** `test_extension_run_terminates_provider_on_timeout` 断言
 `failure_kind == "timeout"`、`exit_code is None`，并且孙进程的标记文件在 kill 之后不存在。
 
-**失败的升级保持当前 revision。** `test_failed_upgrade_keeps_the_active_revision` 与
-`test_failed_enable_remains_disabled_and_clears_old_proof` 断言失败路径既不改 revision，也不留下
-旧 proof。`test_enabled_extension_doctor_batch_keeps_failed_provider_closed` 断言批量 doctor 中
-失败的那一个保持 blocked 并给出 `probe_nonzero_exit`。
+**失败 upgrade 与失败 enable 的写入不同。** `test_failed_upgrade_keeps_the_active_revision` 验证 upgrade 的新版本 probe 失败时保留原 activation revision/history；该失败在修改 activation state 之前发生，不清除原 proof 字段。
+
+`test_failed_enable_remains_disabled_and_clears_old_proof` 验证失败 enable 保持 disabled 并清除旧 proof。批量 doctor 的失败与 readiness 清理另由 `test_enabled_extension_doctor_batch_keeps_failed_provider_closed` 覆盖。
 
 对应测试：`tests/extensions/test_extension_runtime.py`。
 
@@ -311,7 +295,7 @@ scope 变宽、request 改变或 revision 不匹配都必须 fail closed。
 2. **没有显式 `--execute` 就不生效。** 预览、声明和 doctor 都只读；只有 `--execute` 写状态。
 3. **readiness 绑定 revision 与 runtime identity。** executable 或 interpreter 一换，旧 proof
    立刻失效。
-4. **失败的 probe 不改 revision。** 升级、启用与回滚都遵循这一条，不允许出现半状态。
+4. **失败的 activation probe 保留原 revision 记录。** 它不恢复被 package manager 改动的文件，不能独自保证旧程序可用。
 5. **standalone `run` 只服务零权限 provider。** 一旦声明 permission，正确路径是 Capability 或
    domain command。
 6. **rollback 切换的是记录中的 revision，而非磁盘上的 package。** 恢复可用性需要人把环境对齐到
