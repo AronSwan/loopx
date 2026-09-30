@@ -79,6 +79,11 @@ _PASSWORD_WORD = "pass" + "word"
 _SECRET_WORD = "sec" + "ret"
 _TOKEN_WORD = "tok" + "en"
 
+# The two spellings both owners must share, assembled for the same reason as the
+# words above so this file carries no literal credential label.
+SHARED_CONNECTOR = r"(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*"
+SHARED_LABELS = "(?:" + "Bear" + "er|tok" + "en|pass" + "word|sec" + "ret)"
+
 
 def _publication_rejects(value: str) -> bool:
     """Recognized by the full category set, the repository-publication tier."""
@@ -519,6 +524,23 @@ def test_documented_residual_is_a_short_letter_run_behind_a_prose_connector() ->
     # appears, so the residual cannot travel with an unlabeled token.
     raw_token = "ghp_" + "a" * 36
     assert _internal_rejects(raw_token) and _publication_rejects(raw_token)
+
+
+def test_the_two_runtimes_read_the_same_contract_spelling() -> None:
+    # The connector, the label list and the letter-run ceiling are the three pieces
+    # of spelling the two owners must share. Drift in one of them changes behavior
+    # on one side of the corpus only, which the parity sweep would catch late and
+    # noisily; this names the drifted piece instead of the failing sample.
+    typescript = (REPOSITORY_ROOT / "loopx/control_plane/goals/vision_checkpoint.ts").read_text(
+        encoding="utf-8"
+    )
+    assert SHARED_CONNECTOR in typescript, "TypeScript connector drifted"
+    assert SHARED_LABELS in typescript, "TypeScript label list drifted"
+    assert f"[A-Za-z]{{{OPAQUE_VALUE_MIN_LENGTH},}}" in typescript, "TypeScript ceiling drifted"
+    assert SHARED_CONNECTOR in CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.pattern
+    assert SHARED_CONNECTOR in QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.pattern
+    assert SHARED_LABELS in CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.pattern
+    assert SHARED_LABELS in QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.pattern
 
 
 def test_each_contract_signal_is_wired_to_its_own_arm() -> None:
