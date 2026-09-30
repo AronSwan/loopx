@@ -495,3 +495,28 @@ def test_claim_audit_json_regex_nested_and_escape():
                    'x {"verdict":"支持","reason":"引{Art. 13}原文"} y')
     assert json.loads(m.group(0))["verdict"] == "支持"
     assert ca.esc("a|b") == "a\\|b"  # 管道符真转义,引文逐字
+
+
+# ==== 整改批二测试钉(2026-10-01): 乙席测试盲区两项 ====
+def test_mid_gate_excludes_finalizer_checks_and_repair_target(tmp_path):
+    """include_final=False: finalizer检查不进报告,_failing_phases拉不到finalizer(乙席#14)。"""
+    root = make_root(tmp_path, n=2)
+    ok_mid = r2.gate(root, include_final=False)
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    names = [c["check"] for c in rep["checks"]]
+    assert ok_mid and not any("final-plan" in n for n in names), names
+    # 做坏finalizer也不该被中检报告点名(它不在中检范围)
+    (root / "agents/finalizer/outputs/final-plan.md").write_text("空", encoding="utf-8")
+    ok_mid2 = r2.gate(root, include_final=False)
+    rep2 = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert ok_mid2 and "finalizer" not in r2._failing_phases(rep2)
+
+
+def test_verdict_diagnose_covers_position_and_borrow_branches():
+    """diagnose六分支钉全(乙席#13): 位置规则分支与借词分支此前零覆盖。"""
+    long_doc = "\n".join(f"第{i}行填充内容。" for i in range(12))
+    d_pos = r2.verdict_diagnose("裁决:采纳\n" + long_doc)  # 标签行在第0行<1/3
+    assert "前1/3" in d_pos, d_pos
+    body = long_doc + "\n结论:有条件通过(等同修改后采纳)\n"
+    d_borrow = r2.verdict_diagnose(body)
+    assert "借词" in d_borrow, d_borrow
