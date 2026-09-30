@@ -725,7 +725,13 @@ def gate_with_repair(root, include_final, max_rounds=2):
                 "- 写完后重读全文,确认门禁失败点已消除再结束回合。\n",
                 encoding="utf-8")
             print(f">>> 门禁修复(round {rnd + 1}): 重跑 {ph}: {det[:100]}", flush=True)
-            run_phase(root, ph)
+            try:
+                run_phase(root, ph)
+            except (Exception, SystemExit) as exc:
+                # 修复轮内CLI失败不再SystemExit直穿控制器(第五场事故:宿主杀shell后
+                # cli()报错让整个auto死亡)——落账后继续下一轮,由门禁自然重验。
+                print(f">>> 修复轮 {ph} 执行异常(已落账,继续): "
+                      f"{type(exc).__name__}: {str(exc)[:120]}", flush=True)
     return False
 
 

@@ -271,3 +271,17 @@ def test_gate_repair_bounded_call_count(tmp_path, monkeypatch):  # M6: 修复轮
     monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: called.append(p) or {})
     assert r2.gate_with_repair(root, include_final=True, max_rounds=2) is False
     assert len(called) == 2
+
+
+# ==== v2批次1: 修复轮异常保护(第五场事故回归) ====
+def test_gate_repair_survives_cli_failure(tmp_path, monkeypatch):
+    """修复轮内 run_phase 抛异常不再直穿 auto——落账后继续,最终 False 而非 SystemExit。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    def boom(r, p, *a, **k):
+        raise SystemExit("CLI failed; inspect last-cli-failure.log")
+    monkeypatch.setattr(r2, "run_phase", boom)
+    try:
+        ok = r2.gate_with_repair(root, include_final=True, max_rounds=2)
+        assert ok is False  # 正常耗尽返回False,不抛
+    except SystemExit:
+        pytest.fail("修复轮异常直穿控制器(第五场事故回归)")
