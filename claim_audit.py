@@ -77,13 +77,17 @@ def split_units(text):
 
 
 def claim_candidates(lines):
-    """含数字特征的行(15-300字)。排除表格行(处理清单流水账+邻格借URL全是错配)
-    与参考文献条目行(门一#4: "- [1] https://…(罚2000万欧)"形态曾绕过进强池)。"""
+    """含数字特征的行(15-300字)。排除表格行/参考文献条目行,以及**引用载体行**
+    (第八场实测miss: "来源:https://…"/"1. https://…"整行就是链接本身——类别级判据:
+    URL字符占全行≥40%即载体不是主张,主张行是"句子含引用"而非"引用带句子")。"""
     out = []
     for i, ln in lines:
         if ln.startswith("|") or ln.startswith("#") or _CITE_ENTRY.match(ln):
             continue
         if _CLAIM_PAT.search(ln) and 15 <= len(ln) <= 300:
+            url_chars = sum(len(m.group(0)) for m in _URL.finditer(ln))
+            if url_chars >= len(ln) * 0.4:
+                continue
             out.append((i, ln))
     return out
 

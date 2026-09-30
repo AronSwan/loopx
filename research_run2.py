@@ -289,6 +289,8 @@ RESEARCHER_TASK = (
     "(complete addresses starting with https://, never bare domains or partial paths); "
     "cite the SPECIFIC page that contains the fact (the statute section, the case, the pricing "
     "page), never a portal/search/index/homepage page (P2抽查实测: 门户页引用=核查必盲); "
+    "put the source URL ON THE SAME LINE as the fact it supports (第八场实测: 主张列条+"
+    "来源集中列节尾的写法,让抽查工具配不上对——同行引用才可核); "
     "IF the brief's 引用规范 line allows standard literature identifiers, then 1 full URL "
     "plus well-formed identifiers (DOI/PMID/arXiv/ISO) totaling 3 is acceptable. "
     "Mark uncertain items as 待核实 explicitly. "
