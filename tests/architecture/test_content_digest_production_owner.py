@@ -1,0 +1,342 @@
+"""The production half of the digest owner (Refs #5336).
+
+`tests/architecture/test_content_digest_single_owner.py` pins who may *state* the
+shape of a stored SHA-256. Its own docstring names the other half and leaves it
+open: "producers that concatenate `\"sha256:\"` by hand are the other half of the
+decision and are deliberately unchanged." This file starts changing them, one
+surface at a time, and guards what it has converted.
+
+Two layers, mirroring the existing guard's discipline:
+
+1. a **production scan**: inside a converted surface, no module may build the
+   envelope except through `loopx.control_plane.digest_envelope`. It judges the
+   value a node denotes, so a module-level constant holding the prefix is the
+   same offender as a literal;
+2. **behavioural cases** that enter through the migrated helpers themselves and
+   compare each one against the expression it replaced, so a migration that
+   silently changed a digest fails here rather than in a reader's comparison.
+
+A surface is only added to `CONVERTED_SURFACES` once every file in it is either
+converted or recorded in that surface's deferred list. A deferred file is an
+admitted gap, not a passing check: `test_deferred_sites_are_still_building_by_hand`
+fails if one of them quietly converts itself, so the list cannot rot.
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from loopx.capabilities.periodic_report import (
+    archive,
+    audience,
+    bindings,
+    cadence_journal,
+    incremental,
+    machine_defaults,
+    runtime_producer,
+    workspace,
+)
+from loopx.control_plane import digest_envelope
+from loopx.control_plane.content_digest import (
+    BARE_SHA256_PATTERN,
+    ENVELOPED_SHA256_PATTERN,
+)
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PRODUCTION_OWNER = "loopx/control_plane/digest_envelope.py"
+ENVELOPE = "sha256:"
+
+# Each entry is a package directory plus the files inside it still building the
+# envelope by hand, with the reason they are not converted yet.
+CONVERTED_SURFACES: dict[str, dict[str, str]] = {
+    "loopx/capabilities/periodic_report": {
+        "loopx/capabilities/periodic_report/pending_intent.py": (
+            "import line is pinned by row number in the project-registry I/O "
+            "manifest; convert with a regenerated manifest"
+        ),
+        "loopx/capabilities/periodic_report/post_writeback_hook.py": (
+            "same census-host constraint, and it builds the envelope twice"
+        ),
+        "loopx/capabilities/periodic_report/request_action.py": (
+            "same census-host constraint"
+        ),
+    },
+}
+
+
+def _string_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level `NAME = "..."` bindings, so a folded value is judged."""
+
+    found: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found[target.id] = value.value
+    return found
+
+
+def _denotes_prefix(node: ast.expr, constants: dict[str, str]) -> bool:
+    if isinstance(node, ast.Constant):
+        return node.value == ENVELOPE
+    if isinstance(node, ast.Name):
+        return constants.get(node.id) == ENVELOPE
+    return False
+
+
+def _begins_with_envelope(node: ast.expr, constants: dict[str, str]) -> bool:
+    """A `%` template that opens with the envelope, e.g. ``"sha256:%s" % digest``."""
+
+    value = (
+        node.value
+        if isinstance(node, ast.Constant)
+        else constants.get(node.id)
+        if isinstance(node, ast.Name)
+        else None
+    )
+    return isinstance(value, str) and value.startswith(ENVELOPE) and value != ENVELOPE
+
+
+def _hand_built_envelopes(source: str) -> list[str]:
+    tree = ast.parse(source)
+    constants = _string_constants(tree)
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    if part.value == ENVELOPE:
+                        hits.append(f"f-string envelope at line {node.lineno}")
+        elif isinstance(node, ast.BinOp):
+            if isinstance(node.op, ast.Add) and _denotes_prefix(node.left, constants):
+                hits.append(f"concatenated envelope at line {node.lineno}")
+            elif isinstance(node.op, ast.Mod) and _begins_with_envelope(
+                node.left, constants
+            ):
+                hits.append(f"percent-formatted envelope at line {node.lineno}")
+    return hits
+
+
+def _scan_surface(directory: str, deferred: dict[str, str]) -> dict[str, list[str]]:
+    offenders: dict[str, list[str]] = {}
+    root = REPOSITORY_ROOT / directory
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        if relative == PRODUCTION_OWNER or relative in deferred:
+            continue
+        hits = _hand_built_envelopes(path.read_text(encoding="utf-8"))
+        if hits:
+            offenders[relative] = hits
+    return offenders
+
+
+def test_converted_surfaces_build_the_envelope_only_through_the_owner() -> None:
+    for directory, deferred in CONVERTED_SURFACES.items():
+        offenders = _scan_surface(directory, deferred)
+        assert not offenders, f"hand-built digest envelope remains: {offenders}"
+
+
+def test_deferred_sites_are_still_building_by_hand() -> None:
+    # The allowlist is only honest while every entry still has the defect.
+    for directory, deferred in CONVERTED_SURFACES.items():
+        for relative, reason in deferred.items():
+            assert reason, relative
+            path = REPOSITORY_ROOT / relative
+            assert path.exists(), f"{relative} moved or vanished; update the allowlist"
+            assert _hand_built_envelopes(path.read_text(encoding="utf-8")), (
+                f"{relative} no longer builds the envelope by hand; drop it from "
+                "the allowlist so the scan covers it"
+            )
+
+
+# Each case is (label, source, expected). A scan that only matches one spelling is
+# the failure mode the existing guard already documents, so the bypass forms are
+# asserted here rather than assumed away.
+BYPASS_CORPUS = (
+    (
+        "literal concatenation, the obvious form",
+        'import hashlib\n\ndef d(v):\n    return "sha256:" + hashlib.sha256(v).hexdigest()\n',
+        1,
+    ),
+    (
+        "f-string interpolation",
+        'import hashlib\n\ndef d(v):\n    return f"sha256:{hashlib.sha256(v).hexdigest()}"\n',
+        1,
+    ),
+    (
+        "prefix moved into a module constant first",
+        'import hashlib\n\nP = "sha256:"\n\n\ndef d(v):\n    return P + hashlib.sha256(v).hexdigest()\n',
+        1,
+    ),
+    (
+        "percent formatting",
+        'import hashlib\n\ndef d(v):\n    return "sha256:%s" % hashlib.sha256(v).hexdigest()\n',
+        1,
+    ),
+    (
+        "reading an existing digest is not producing one",
+        'def strip(value):\n    return value.removeprefix("sha256:")\n',
+        0,
+    ),
+    (
+        "stating the shape is the other guard's question",
+        'import re\n\nP = re.compile("^sha256:[0-9a-f]{64}$")\n',
+        0,
+    ),
+    (
+        "an unrelated constant with the prefix inside prose",
+        'MESSAGE = "artifact digest must use sha256:<64 lowercase hex>"\n',
+        0,
+    ),
+    (
+        "the production owner itself",
+        'PREFIX = "sha256:"\n\n\ndef build(digest_hex):\n    return f"{PREFIX}{digest_hex}"\n',
+        0,
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "label,source,expected", BYPASS_CORPUS, ids=[case[0] for case in BYPASS_CORPUS]
+)
+def test_the_production_scan_names_every_form_and_leaves_the_others(
+    label: str, source: str, expected: int
+) -> None:
+    assert len(_hand_built_envelopes(source)) == expected, label
+
+
+def test_the_owner_is_the_only_module_that_states_the_prefix_rule() -> None:
+    # The scan above is per-surface; this one is the whole-tree fact that makes
+    # the staging meaningful: the prefix literal lives in exactly two modules,
+    # the generated shape owner and the production owner.
+    holders: dict[str, list[str]] = {}
+    for path in sorted((REPOSITORY_ROOT / "loopx").rglob("*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        if relative in {PRODUCTION_OWNER, "loopx/control_plane/content_digest.py"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        prefixed = [
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == ENVELOPE
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        ]
+        if prefixed:
+            holders[relative] = prefixed
+    assert not holders, f"a second module binds the digest prefix: {holders}"
+
+
+# --- layer 2: the migrated helpers still emit what they emitted before ------------------
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _reference(data: bytes) -> str:
+    # The expression each migrated site used, kept here so the comparison is
+    # against the previous spelling rather than against the new builder.
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+SAMPLE = {"goal_id": "goal-7", "route": ["a", "b"], "count": 3}
+
+
+@pytest.mark.parametrize(
+    "helper,expected",
+    [
+        (bindings._sha256, _reference(_canonical(SAMPLE))),
+        (audience._digest, _reference(_canonical(SAMPLE))),
+        (machine_defaults._digest, _reference(_canonical(SAMPLE))),
+        (workspace._canonical_digest, _reference(_canonical(SAMPLE))),
+        (incremental._canonical_digest, _reference(_canonical(SAMPLE))),
+        (cadence_journal._digest, _reference(_canonical(SAMPLE))),
+        (
+            archive._content_digest,
+            _reference("report body".encode("utf-8")),
+        ),
+    ],
+)
+def test_each_migrated_helper_returns_the_previous_digest(
+    helper: Any, expected: str
+) -> None:
+    value = "report body" if helper is archive._content_digest else SAMPLE
+    assert helper(value) == expected
+
+
+def test_the_event_digest_helper_keeps_its_own_canonicalization() -> None:
+    # runtime_producer sorts and uses ensure_ascii=True, unlike its neighbours; the
+    # envelope moved to the owner, the byte recipe did not, and this pins both.
+    event_ids = ["evt-2", "evt-1"]
+    encoded = json.dumps(
+        sorted(event_ids), ensure_ascii=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert runtime_producer._event_digest(event_ids) == _reference(encoded)
+
+
+def test_the_two_envelope_kinds_a_conversion_must_not_mix_up() -> None:
+    # A reader that accepts the bare shape and a writer that emits the enveloped
+    # one are different questions; the builder is only allowed the second.
+    data = _canonical({"blocks": [1, 2, 3]})
+    built = digest_envelope.sha256_envelope(data)
+    assert ENVELOPED_SHA256_PATTERN.fullmatch(built)
+    assert not BARE_SHA256_PATTERN.fullmatch(built)
+    assert BARE_SHA256_PATTERN.fullmatch(hashlib.sha256(data).hexdigest())
+
+
+# --- the builder's own contract ---------------------------------------------------------
+
+
+def test_the_builder_returns_the_owner_shape_and_borrows_its_pattern() -> None:
+    digest = hashlib.sha256(b"x").hexdigest()
+    assert digest_envelope.enveloped_sha256(digest) == f"sha256:{digest}"
+    # Not a restatement: the guard's `holds the owner object` rule applies here too.
+    assert digest_envelope.ENVELOPED_SHA256_PATTERN is ENVELOPED_SHA256_PATTERN
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "sha256:" + hashlib.sha256(b"x").hexdigest(),
+        hashlib.sha256(b"x").hexdigest().upper(),
+        hashlib.sha256(b"x").hexdigest()[:63],
+        hashlib.sha256(b"x").hexdigest()[:63] + "z",
+        " " + hashlib.sha256(b"x").hexdigest(),
+        64 * "0" + "\n",
+    ],
+    ids=[
+        "empty",
+        "already-enveloped",
+        "uppercase-hex",
+        "one-char-short",
+        "non-hex-last-char",
+        "leading-space",
+        "trailing-newline",
+    ],
+)
+def test_the_builder_refuses_a_value_the_owner_would_not_recognize(value: str) -> None:
+    with pytest.raises(ValueError, match="sha256:<64 lowercase hex"):
+        digest_envelope.enveloped_sha256(value)
+
+
+def test_a_valid_bare_digest_still_matches_the_bare_shape() -> None:
+    # Positive control: the rejection above is about the envelope, not about the
+    # digest alphabet being mis-validated.
+    digest = hashlib.sha256(b"x").hexdigest()
+    assert BARE_SHA256_PATTERN.fullmatch(digest)
+    assert digest_envelope.sha256_envelope(b"x") == f"sha256:{digest}"
