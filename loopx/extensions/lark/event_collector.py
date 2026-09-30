@@ -18,6 +18,7 @@ from .event_inbox import (
     inspect_lark_event_inbox,
     load_lark_event_inbox_config,
 )
+from .identity_shapes import LARK_CHAT_ID_PATTERN
 
 CONFIG_SCHEMA_VERSION_V0 = "lark_event_collector_config_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_collector_config_v1"
@@ -29,7 +30,6 @@ PLAN_SCHEMA_VERSION = "lark_event_collector_plan_v0"
 STATUS_SCHEMA_VERSION = "lark_event_collector_status_v0"
 INSTALL_SCHEMA_VERSION = "lark_event_collector_install_v0"
 SERVICE_RE = re.compile(r"^loopx-[a-z0-9][a-z0-9._-]{1,73}$")
-CHAT_RE = re.compile(r"^oc_[A-Za-z0-9_-]+$")
 TIMEOUT_RE = re.compile(r"^[1-9][0-9]*(?:s|m|h)$")
 SUPPORTED_SUPERVISORS = {"launchd", "systemd"}
 SUPPORTED_EVENT_KEY = "im.message.receive_v1"
@@ -214,7 +214,7 @@ def load_lark_event_collector_config(
                 "public-safe token"
             )
         chat_id = str(raw_route.get("chat_id") or "").strip()
-        if not CHAT_RE.fullmatch(chat_id):
+        if not LARK_CHAT_ID_PATTERN.fullmatch(chat_id):
             raise ValueError(
                 f"collector route {index + 1} chat_id must be a Lark oc_ chat id"
             )
