@@ -122,7 +122,7 @@ const BEARER_VALUE_SHAPE = new RegExp(
   String.raw`\bBearer\s+[A-Za-z0-9._~+/=-]{${BEARER_VALUE_MIN_LENGTH},}`,
   "i",
 );
-const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:token|password|secret)\s*[:=]/i;
+const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)\s*[:=]/i;
 // Ported from the Python owner's two in-policy shape detectors, so one corpus
 // yields one verdict in both runtimes (Refs #5136, direction 4). The third
 // Python detector -- a raw remote location -- is deliberately not ported: it is

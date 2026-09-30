@@ -102,13 +102,14 @@ BEARER_VALUE_SHAPE_PATTERN = re.compile(
     re.I,
 )
 
-# An assignment form of the three demoted words. It carries no value-length floor
-# on purpose: ``password=``/``secret=``/``token=`` is a credential statement
-# whatever follows it, and the previous behavior already rejected every one of
-# them (and every bare mention), so this arm alone cannot tighten a surface that
-# has kept ``credential_word`` out of its policy.
+# An assignment form of the demoted words. It carries no value-length floor on
+# purpose: ``password=``/``secret=``/``token=``/``bearer:`` states a credential
+# whatever follows it. For ``password`` and ``secret`` this arm is no tightening
+# -- the old word-only rule already rejected every mention, including these --
+# while ``token:`` and ``bearer:`` are the two spellings it did not know, and
+# direction 2 asks that an assignment never depend on a length accident.
 LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
-    r"\b(?:" + "tok" + r"en|pass" + r"word|sec" + r"ret)\s*[:=]",
+    r"\b(?:" + "Bear" + r"er|tok" + r"en|pass" + r"word|sec" + r"ret)\s*[:=]",
     re.I,
 )
 
@@ -257,8 +258,11 @@ _CATEGORIZED_PRIVATE_TEXT_PATTERNS: tuple[_CategorizedPattern, ...] = (
     ),
 )
 
-# Kept as the plain pattern tuple so `find_private_text_match` and every
-# existing importer see byte-identical behavior (same patterns, same order).
+# The publication-tier tuple, derived from the categorized list so the two can
+# never drift. It is not the pre-#5136 list: the two value arms were added and
+# the three word arms moved last, so a first match over an assignment form names
+# the shape rather than the word. `PRIVATE_TEXT_PATTERNS` stays byte-for-byte
+# what a surface rejects when it asks for every category.
 PRIVATE_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     entry.pattern for entry in _CATEGORIZED_PRIVATE_TEXT_PATTERNS
 )
@@ -313,8 +317,10 @@ class PrivateTextMatch:
 def find_private_text_match(value: str | None) -> re.Pattern[str] | None:
     """Return the first matching private-text pattern, or None when clean.
 
-    Preserved verbatim for the four text owners and the shared corpus parity
-    test; `classify_private_text` is the category-aware successor.
+    The publication tier: this recognizes every category, including a bare
+    credential word. The four internal-state owners ask the category-aware
+    `classify_private_text` for their narrower policy instead, so this helper is
+    what a repository-publication surface and the corpus parity test hold.
     """
 
     if not value:
