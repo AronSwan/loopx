@@ -226,14 +226,19 @@ than maintaining separate rules.
 states what was proven. The request is written beside the execution record
 (`<operation>.stop.json`), never into it, so a worker that is still holding the
 operation cannot overwrite it. A worker on this machine receives `SIGTERM` for
-its whole process group, which ends its Turn child and its host; it
-acknowledges from under its own lock, marks the record `stopped` and releases
-its hard task lease. When nobody holds the operation, the requester
+its whole process group, which ends its Turn child; the native host runs in
+its own process group, and its supervisor terminates that group once the Turn
+child is gone. The worker acknowledges from under its own lock, marks the
+record `stopped` and releases its hard task lease. When nobody holds the operation, the requester
 acknowledges itself. A worker on another machine is never signalled; it finds
 the request at its next checkpoint or at its next record write, which is
-refused. The receipt `phase` is `settled` only when an acknowledgement exists
-and both the operation lock and the member's Turn lane lock are free;
-`unknown` means the holder vanished before acknowledging, and `noop` means the
+refused. The receipt `phase` is `settled` only when an acknowledgement exists,
+the operation lock is free, the member's Turn lane holder record shows it
+released by the stopped worker (the lane is read, never taken), and the native
+host the Turn launched has exited together with every process in its group.
+If that host cannot be attributed, or its supervisor never finished cleaning
+up, the stop stays `acknowledged` and a later `stop` rereads it. `unknown`
+means the holder vanished before acknowledging, and `noop` means the
 work was already accepted, rejected or stopped. `requested` or `acknowledged`
 means it is still winding down: call `stop` again. A grace timeout never turns
 into a receipt. Stopped work is not resumed; `resume` refuses it and a new
@@ -244,11 +249,14 @@ member's Todo stays open, so the coordinator decides what happens next.
 中文：`stop --execute` 结束一个成员的有界工作，并返回一份只陈述已证明事实的
 回执。停止请求写在执行记录旁边的 `<operation>.stop.json`，从不写进记录本身，
 因此仍持有该 operation 的 worker 无法覆盖它。本机 worker 会收到整个进程组的
-`SIGTERM`，其 Turn 子进程和 host 一并结束；worker 在自己的锁下确认，把记录标为
+`SIGTERM`，其 Turn 子进程随之结束；原生 host 在自己的进程组中运行，Turn 子进程
+退出后由其 supervisor 终止整个 host 进程组。worker 在自己的锁下确认，把记录标为
 `stopped` 并释放硬任务租约。没有持有者时由请求方自行确认。另一台机器上的
 worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
-只有存在确认且 operation 锁与成员 Turn lane 锁都已释放时，`phase` 才是
-`settled`；`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
+只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
+worker 释放（只读 lane，从不获取），且该 Turn 启动的原生 host 及其进程组内所有进程
+都已退出时，`phase` 才是 `settled`。host 无法归属或其 supervisor 未完成清理时，
+停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
 rejected 或 stopped；`requested`/`acknowledged` 表示仍在收尾，再次调用 `stop`。
 宽限期超时永远不会变成回执。已停止的工作不能 `resume`，新范围需要新的
 operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会被改写成完成；
@@ -651,7 +659,7 @@ unchanged and cannot launch workers. With it, the Agent can:
    This cannot retarget the work or silently create a replacement Turn.
 5. Call `stop_delegation(operation_id)` to end one member. Read its `phase`:
    `settled` is the only receipt that the worker acknowledged and released its
-   locks; `unknown` means the holder vanished first; `noop` means the work had
+   locks and that the native host and its process group exited; `unknown` means the holder vanished first; `noop` means the work had
    already ended. Stopped work cannot be resumed; use a new operation id.
 
 Configure the member's host to expose its own identity-bound collaboration
@@ -693,7 +701,7 @@ concurrent executions still use the same kernel lock and original Turn journal.
 | Requesting MCP conversation closes | The detached bounded worker continues; another connection reads the original operation. |
 | Duplicate start/resume while work runs | Operation identity, task lock and Turn journal prevent another concurrent execution. |
 | Worker process or machine stops | Reconnect with the same operator configuration and credentials, then resume the original Turn. |
-| Member stopped on request | The worker acknowledges under its lock, its host and Turn child are ended, its lease is released; `settled` needs that acknowledgement plus free locks, `unknown` means the holder vanished first. The record is `stopped`; resume refuses it. |
+| Member stopped on request | The worker acknowledges under its lock, its Turn child is ended and the host supervisor terminates the host group, its lease is released; `settled` needs that acknowledgement, free locks and an exited host group, `unknown` means the holder vanished first. The record is `stopped`; resume refuses it. |
 | Ark is computing without local tools | The already-started cloud turn can continue. It is not dependent on the local conversation. |
 | Ark requests a local tool while the host is absent | It waits for the local tool result. Recovery observes the original input/session and executes only previously unstarted tool calls. |
 | Tool execution or send acknowledgement is uncertain | Do not repeat the effect. Preserve the receipt/session for explicit reconciliation. |

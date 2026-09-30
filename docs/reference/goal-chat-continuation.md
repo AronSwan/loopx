@@ -102,7 +102,8 @@ messages; images use the ordinary conversation after pausing.
   Disabling mode or deleting a binding does not cancel already admitted children;
   stop one with `loopx delegation stop --execute` (or `stop_delegation`), read
   its receipt, and retain its evidence. Only `settled` proves the worker
-  acknowledged and released its locks; stopped work needs a new operation id.
+  acknowledged and released its locks and its native host exited; stopped work
+  needs a new operation id.
 
 The ordinary native command path also remains available without delegation:
 
@@ -147,6 +148,6 @@ For a disposable mixed-team setup, use the
 或整个 Goal。额度是含历史用量的总量，正在执行的请求可能超额，成员另行计量。
 回滚旧版本前先暂停或关闭 Chat 服务；退出或撤销绑定不自动取消已启动的成员，
 用 `loopx delegation stop --execute`（或 `stop_delegation`）停止单个成员并阅读回执：
-只有 `settled` 证明 worker 已确认并释放锁；已停止的工作需要新的 operation id。
+只有 `settled` 证明 worker 已确认并释放锁且原生 host 已退出；已停止的工作需要新的 operation id。
 此按钮目前限本机 managed Codex Goal 对话，不宣称 Lark、挂接会话或其他主力
 驱动等价。可用下方示例准备一次隔离的本地 DSH＋云端 Ark 协作。
