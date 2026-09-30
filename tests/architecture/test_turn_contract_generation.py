@@ -260,12 +260,10 @@ def test_new_independent_twin_cannot_hide_behind_generated_pair(monkeypatch):
     )
     assert counts is not None
     raw, generated, maintained, budget = map(int, counts.groups())
-    # How many twin pairs are generated is owned by the generators
-    # (scripts/generate_turn_contract.py and generate_semantic_bindings.py), so
-    # adding one must not require editing this test. The obligation here is
-    # that the smoke recognizes at least one generated pair and keeps the raw
-    # count split between generated and independently maintained twins.
-    assert generated >= 1 and raw == maintained + generated
+    # Source-verified bindings may grow as decision owners converge. The
+    # independently maintained twin budget remains the frozen limit below.
+    assert generated >= 1
+    assert raw == maintained + generated
     from loopx.semantics.inventory import SourceFile
 
     target = smoke["check_dual_runtime_twins"].__globals__
