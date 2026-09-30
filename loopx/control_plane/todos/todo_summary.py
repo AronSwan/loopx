@@ -134,9 +134,10 @@ TASK_ORCHESTRATION_USER_BLOCKER_FIELDS = (
 )
 
 
-def normalize_todo_text(text: str, *, limit: int = 500) -> str:
+def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
+    """Normalize whitespace; source codecs explicitly opt out of display limits."""
     compact = " ".join(str(text or "").strip().split())
-    if len(compact) <= limit:
+    if limit is None or len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
 
@@ -301,8 +302,9 @@ def structured_todo_item(
     role: str | None,
     source_section: str | None,
     archive_state: str = "active",
+    text_limit: int | None = 500,
 ) -> dict[str, Any]:
-    text = normalize_todo_text(str(item.get("text") or ""))
+    text = normalize_todo_text(str(item.get("text") or ""), limit=text_limit)
     priority, title = todo_priority_parts(text)
     index = item.get("index")
     explicit_status = normalize_todo_status(item.get("status"))
@@ -425,7 +427,7 @@ def structured_todo_item(
         normalized["no_followup"] = no_followup
     if priority:
         normalized["priority"] = priority
-        normalized["title"] = normalize_todo_text(title)
+        normalized["title"] = normalize_todo_text(title, limit=text_limit)
     return normalized
 
 
@@ -710,9 +712,10 @@ def attach_dependency_blockers(
             item["dependency_blockers"] = blockers
 
 
-def apply_resume_conditions(
+def _apply_resume_conditions(
     items: list[dict[str, Any]],
     *,
+    source_section: str | None,
     resume_source_items: list[dict[str, Any]] | None = None,
     rollout_events: list[dict[str, Any]] | None = None,
     available_capabilities: Any = None,
@@ -725,7 +728,14 @@ def apply_resume_conditions(
     ]
     if not resume_items:
         return
-    source_items = [*(resume_source_items or []), *items]
+    # Only prepare history when at least one item needs the typed evaluator.
+    # Succession still receives the complete original lineage independently.
+    source_items = [
+        *_structured_resume_source_items(
+            resume_source_items, source_section=source_section,
+        ),
+        *items,
+    ]
     conditions = evaluate_todo_resume_conditions(
         resume_items,
         source_items=source_items,
@@ -964,12 +974,10 @@ def compact_todo_group(
         source_section=source_section,
         role=role,
     )
-    apply_resume_conditions(
+    _apply_resume_conditions(
         items,
-        resume_source_items=_structured_resume_source_items(
-            resume_source_items,
-            source_section=source_section,
-        ),
+        source_section=source_section,
+        resume_source_items=resume_source_items,
         rollout_events=rollout_events,
         available_capabilities=available_capabilities,
         evaluated_at=evaluated_at,

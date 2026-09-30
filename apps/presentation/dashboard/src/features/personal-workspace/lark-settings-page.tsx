@@ -30,7 +30,7 @@ import {
   type LarkIngressMode,
   type LarkReplyMode,
 } from "../../data/chat";
-import { useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
+import { useWorkspaceI18n, type WorkspaceMessageKey, type WorkspaceTranslate } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type Tab = "apps" | "connections";
@@ -95,16 +95,25 @@ function larkConnectionHealth(connection: LarkGoalConnection, t: WorkspaceTransl
     connection.last_event_status === "context_only_captured"
     || connection.last_event_status === "context_only_already_captured"
   ) {
+    const reason = connection.last_event_reason;
+    let detail: WorkspaceMessageKey = connection.turn_trigger === "human_messages"
+      ? "lark.health.directMessageEnabledDetail" : "lark.health.contextCapturedDetail";
+    switch (reason) {
+      case "historical_context_only": detail = "lark.health.historicalContextDetail"; break;
+      case "bot_message":
+      case "self_message": detail = "lark.health.botContextDetail"; break;
+      case "human_identity_unverified": detail = "lark.health.senderUnverifiedDetail"; break;
+    }
     return {
-      label: t("lark.health.contextCaptured"),
-      detail: t("lark.health.contextCapturedDetail"),
-      state: "ready",
+      label: t(reason === "human_identity_unverified" ? "lark.health.senderUnverified" : "lark.health.contextCaptured"),
+      detail: t(detail),
+      state: reason === "human_identity_unverified" ? "not_ready" : "ready",
     };
   }
   if (connection.last_event_status === "ignored" && connection.last_event_reason === "not_addressed") {
     return {
       label: t("lark.health.notAddressed"),
-      detail: t("lark.health.notAddressedDetail"),
+      detail: t(connection.turn_trigger === "human_messages" ? "lark.health.directMessageEnabledDetail" : "lark.health.notAddressedDetail"),
       state: "ready",
     };
   }
@@ -138,7 +147,8 @@ function larkConnectionHealth(connection: LarkGoalConnection, t: WorkspaceTransl
   if (connection.health_error_code === "lark_event_delivery_unverified" || connection.event_count === 0) {
     return {
       label: t("lark.health.eventUnverified"),
-      detail: t("lark.health.eventUnverifiedDetail"),
+      detail: t(connection.conversation_kind === "manager" && connection.turn_trigger === "human_messages"
+        ? "lark.health.directEventUnverifiedDetail" : "lark.health.eventUnverifiedDetail"),
       state: "unverified",
     };
   }
@@ -151,6 +161,14 @@ function larkConnectionHealth(connection: LarkGoalConnection, t: WorkspaceTransl
 
 function larkGroupHistoryPermissionUrl(connection: LarkGoalConnection): string | null {
   return connection.history_permission_guidance?.api_document_url ?? null;
+}
+
+// lark-cli is resolved once when the Chat service starts, so these codes stay
+// true until the operator installs it and restarts LoopX.
+const larkCliUnavailableCodes = new Set(["lark_cli_not_installed", "lark_cli_not_executable"]);
+
+function larkCliUnavailable(cause: unknown): boolean {
+  return cause instanceof ChatApiError && larkCliUnavailableCodes.has(String(cause.payload.error_code ?? ""));
 }
 
 function larkErrorMessage(cause: unknown, fallback: string, t: WorkspaceTranslate): string {
@@ -219,6 +237,7 @@ export function LarkSettingsPage({
   const [setupBrand, setSetupBrand] = useState<"feishu" | "lark">("feishu");
   const [setupSnapshot, setSetupSnapshot] = useState<LarkAppSetup | null>(null);
   const [setupStarting, setSetupStarting] = useState(false);
+  const [cliUnavailable, setCliUnavailable] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const setupPopup = useRef<Window | null>(null);
   const openedSetupUrl = useRef<string | null>(null);
@@ -234,8 +253,10 @@ export function LarkSettingsPage({
       ]);
       setApps(nextApps);
       setConnections(nextConnections);
+      setCliUnavailable(false);
       setAppRef((current) => current || nextApps.find((app) => app.reply_ready)?.app_ref || nextApps.find((app) => app.ready)?.app_ref || nextApps[0]?.app_ref || "");
     } catch (cause) {
+      setCliUnavailable(larkCliUnavailable(cause));
       setError(larkErrorMessage(cause, t("lark.error.configuration"), t));
     } finally {
       setLoading(false);
@@ -405,6 +426,9 @@ export function LarkSettingsPage({
   }
 
   function openSetup() {
+    // Every setup entry (toolbar, connection dialog) meets the same fact:
+    // without lark-cli the setup can only fail until LoopX restarts.
+    if (cliUnavailable) return;
     setSetupSnapshot(null);
     setSetupError(null);
     openedSetupUrl.current = null;
@@ -517,7 +541,7 @@ export function LarkSettingsPage({
 
       {!loading && tab === "apps" ? (
         <div className="personal-lark-apps">
-          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><button className="personal-primary-action" onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div>
+          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><button className="personal-primary-action" disabled={cliUnavailable} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div>
           <div className="personal-lark-app-grid">
             {apps.map((app) => (
               <article className="personal-lark-app-card" key={app.app_ref}>
@@ -549,7 +573,7 @@ export function LarkSettingsPage({
                 <span>
                   <strong>{connection.chat_name}</strong>
                   <small>{connection.app_label} · {health.label}</small>
-                  <small>{health.detail}</small>
+                  <small className="personal-lark-health-detail">{health.detail}</small>
                   {health.state === "unverified" ? (
                     <a href="https://open.feishu.cn/document/server-docs/im-v1/message/events/receive?lang=zh-CN" rel="noreferrer" target="_blank"><ExternalLink size={12} />{t("lark.openEventSettings")}</a>
                   ) : null}
@@ -583,7 +607,7 @@ export function LarkSettingsPage({
               <label><span>{t("lark.bindGoal")}</span><div>{editingConnection.goal_title}</div></label>
               <small>{t("lark.editPreservesIdentity")}</small>
             </> : <>
-            <label><span>{t("lark.appProfile")}</span><select aria-label={t("lark.appProfile")} disabled={loading} onChange={(event) => { if (event.target.value === "__register__") openSetup(); else { setAppRef(event.target.value); setAgentAppRefs({}); } }} value={appRef}>{loading ? <option value="">{t("lark.appLoading")}</option> : <>{apps.map((app) => <option disabled={!app.ready} key={app.app_ref} value={app.app_ref}>{app.label}{app.reply_ready ? "" : app.ready ? ` · ${t("lark.needsMessagePermissions")}` : ` · ${t("lark.needsSetup")}`}</option>)}<option value="__register__">{t("lark.registerAnother")}</option></>}</select><small>{t("lark.defaultAgentAppDescription")}</small></label>
+            <label><span>{t("lark.appProfile")}</span><select aria-label={t("lark.appProfile")} disabled={loading} onChange={(event) => { if (event.target.value === "__register__") openSetup(); else { setAppRef(event.target.value); setAgentAppRefs({}); } }} value={appRef}>{loading ? <option value="">{t("lark.appLoading")}</option> : <>{apps.map((app) => <option disabled={!app.ready} key={app.app_ref} value={app.app_ref}>{app.label}{app.reply_ready ? "" : app.ready ? ` · ${t("lark.needsMessagePermissions")}` : ` · ${t("lark.needsSetup")}`}</option>)}<option disabled={cliUnavailable} value="__register__">{t("lark.registerAnother")}</option></>}</select><small>{t("lark.defaultAgentAppDescription")}</small></label>
             {selectedApp?.ready && !selectedApp.reply_ready ? <div className="personal-lark-group-state is-error" role="alert">{t("lark.appPermissions")}</div> : null}
             <label>
               <span>{t("lark.groupChat")}</span>

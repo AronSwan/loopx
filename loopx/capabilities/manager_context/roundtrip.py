@@ -7,7 +7,6 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from contextlib import ExitStack
 from datetime import datetime, timezone, timedelta
@@ -34,8 +33,8 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 
 from ...control_plane.collaboration.inbox import (
     _request_lock,
-    needs_conclusion as needs_conclusion,
 )
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 PHASES = ("decision", "conclusion")
 DELIVERY_STATUSES = {
@@ -265,9 +264,17 @@ def reply_status(root, row):
         path = _root(root) / "replies" / row["request_id"] / (phase + ".json")
         if not path.exists():
             continue
-        reply = _read(path)
         state_path = path.with_name(phase + ".delivery.json")
-        state = _read(state_path) if state_path.exists() else {}
+        try:
+            reply = _read(path)
+            state = _read(state_path) if state_path.exists() else {}
+        except (OSError, ValueError):
+            result.append({
+                "phase": phase, "status": "explicit_unverified",
+                "created_at": None, "delivered_at": None,
+                "error": "delivery_state_unreadable",
+            })
+            continue
         status = state.get("status", "queued")
         error = state.get("error")
         if status not in DELIVERY_STATUSES:
@@ -310,7 +317,7 @@ def project_chat_return_deliveries(root, session_id, messages):
             if route.get("session_id") != session_id:
                 continue
             request_id = str(route.get("request_id") or "")
-            if path.stem != request_id or not re.fullmatch(r"[a-f0-9]{64}", request_id):
+            if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
             route_message_ids = {
                 "handoff." + _hash([request_id, phase]) for phase in PHASES
@@ -343,7 +350,7 @@ def project_chat_return_deliveries(root, session_id, messages):
     ]
 
 
-def project_chat_session_snapshot(root, store, session_id):
+def project_chat_session_snapshot(root, store, session_id, *, registry):
     """Project return delivery state into one existing Chat snapshot."""
 
     snapshot = store.session_snapshot(session_id)
@@ -351,7 +358,7 @@ def project_chat_session_snapshot(root, store, session_id):
         root, session_id, snapshot["messages"]
     )
     from .presentation import project_collaboration
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"])
+    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"], registry=registry)
     return snapshot
 
 

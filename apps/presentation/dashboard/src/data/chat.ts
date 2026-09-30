@@ -115,6 +115,7 @@ export const managerChannelBindingSchema = z.object({
   executor_kind: z.string(),
   model: z.string(),
   model_source: z.string(),
+  reasoning_effort: z.string().optional(),
   selection_policy: z.enum(["preferred", "pinned", "flexible"]).default("preferred"),
   allocation_reason: z.string().default(""),
   configured_endpoint: z.string().nullable().optional(),
@@ -642,6 +643,7 @@ export async function createChatSession(
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
   contextKind: "goal" | "manager" = "goal",
+  signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
@@ -651,7 +653,7 @@ export async function createChatSession(
     session_id: string;
     session: ChatSessionSummary;
   }>("/api/chat/sessions", {
-    method: "POST",
+    method: "POST", signal,
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.
@@ -866,23 +868,61 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
   }
 }
 
+// The Chat service sends an SSE heartbeat every 15 seconds while a Turn runs.
+// Three missed heartbeats mean the connection is stuck rather than slow, so the
+// reader reconnects from its cursor instead of waiting on a silent socket.
+export const CHAT_STREAM_STALL_TIMEOUT_MS = 45_000;
+
+// Resolves early when the caller aborts, so the next attempt sees the abort
+// instead of opening a connection the caller no longer wants.
+function waitForRetry(ms: number, signal?: AbortSignal) {
+  // A callback may abort while handling the reconnect phase, before this wait
+  // starts listening; that abort must not sit out the backoff.
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = globalThis.setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 export async function streamChatTurn(
   eventsUrl: string,
   onEvent: (event: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  options: { stallTimeoutMs?: number } = {},
 ) {
+  const stallTimeoutMs = options.stallTimeoutMs ?? CHAT_STREAM_STALL_TIMEOUT_MS;
   let cursor = "";
   let attempts = 0;
   let terminal = false;
   while (!terminal && attempts < 4) {
+    signal?.throwIfAborted();
     const origin = typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
     const url = new URL(chatApiUrl(eventsUrl), origin);
     if (cursor) url.searchParams.set("after", cursor);
+    const attempt = new AbortController();
+    const abortAttempt = () => attempt.abort();
+    signal?.addEventListener("abort", abortAttempt, { once: true });
+    let stalled = false;
+    let stallTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const armStallTimer = () => {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      stallTimer = globalThis.setTimeout(() => {
+        stalled = true;
+        attempt.abort();
+      }, stallTimeoutMs);
+    };
     try {
+      armStallTimer();
       const response = await fetch(url, {
         cache: "no-store",
         headers: { Accept: "text/event-stream" },
-        signal,
+        signal: attempt.signal,
       });
       if (!response.ok || !response.body) {
         throw new ChatApiError(`SSE HTTP ${response.status}`, { status: response.status });
@@ -891,6 +931,7 @@ export async function streamChatTurn(
       const decoder = new TextDecoder();
       let buffer = "";
       while (true) {
+        armStallTimer();
         const { done, value } = await reader.read();
         buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
         let boundary = buffer.indexOf("\n\n");
@@ -901,6 +942,7 @@ export async function streamChatTurn(
           if (event) {
             if (event.event_id) cursor = event.event_id;
             onEvent(event);
+            signal?.throwIfAborted();
             terminal = ["turn.completed", "turn.interrupted", "turn.failed"].includes(event.kind);
           }
           boundary = buffer.indexOf("\n\n");
@@ -911,8 +953,30 @@ export async function streamChatTurn(
     } catch (error) {
       if (signal?.aborted) throw error;
       attempts += 1;
-      if (attempts >= 4) throw error;
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 250 * 2 ** (attempts - 1)));
+      if (attempts >= 4) {
+        // A stalled connection is a transport failure, not a caller abort, so
+        // it ends with the same typed error as any other exhausted reconnect.
+        if (stalled) {
+          throw new ChatApiError("Agent 事件流连接已断开。", {
+            reconnect_attempts: attempts,
+            stall_timeout_ms: stallTimeoutMs,
+          });
+        }
+        throw error;
+      }
+      // A local phase keeps the pending reply honest while the reader resumes
+      // from its cursor. It carries no event id, so the cursor is unchanged.
+      onEvent({
+        created_at: new Date().toISOString(),
+        event_id: "",
+        kind: "agent.phase",
+        payload: { label: "连接中断，正在重连…", method: "client/reconnect" },
+        sequence: 0,
+      });
+      await waitForRetry(250 * 2 ** (attempts - 1), signal);
+    } finally {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      signal?.removeEventListener("abort", abortAttempt);
     }
   }
   if (!terminal) {
@@ -1959,6 +2023,9 @@ const larkTopicEventRejectionReasons = [
   "self_message",
   "invalid_routing_state",
   "not_addressed",
+  "historical_context_only",
+  "bot_message",
+  "human_identity_unverified",
 ] as const;
 export type LarkTopicEventRejectionReason = typeof larkTopicEventRejectionReasons[number];
 export type LarkPermissionGuidance = {

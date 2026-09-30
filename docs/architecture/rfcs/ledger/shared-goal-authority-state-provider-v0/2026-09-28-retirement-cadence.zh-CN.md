@@ -183,8 +183,18 @@ Todo 写入时的业务校验，也不重审完成／deferred 历史的授权。
 仍触及既有 `todo.succession.project` RPC 响应预算；修复后的合同 API 能读取该集合，
 不代表剩余整命令包体边界已完成验收。
 
-B 下一步仍是历史 artifact 查找和剩余公共包体／冷路径，保留文件变化 freshness、
-完整决策输入及损坏拒绝。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
+B 下一步聚焦冻结 source／runtime profile 下的 SQLite 准入：重新跑已有 reference
+容量轴，对齐并发／恢复／consumer lag 证据，并核对保留的自然时间 soak 适用性。
+比较 runner 原先要求历史重试返回 conflict，与已合并 #5169 矛盾：相同完整意图应
+返回原 applied revision／cursor。现在核对原结果，分别拒绝 projection／event／receipt
+漂移，在重试前后分页验证全部历史，不保留所有预期快照。不变量失败就不发布成功
+报告；这些检查放在既有计时窗口之外。这修复的是验证工具，不代表 provider 故障、
+D2 通过或默认切换。#4224 已报告在 `e98191faa` 上于 9 月 14 日开始 soak，仍需最终
+结果及对当前候选的适用性证据，不能称为未开始，也不能仅因无关 source 修订就重启计时。
+
+已有 TS 替代且真实受影响调用方验证完成的 Python 重复决策，可以按最后调用方独立
+退役；整条 Markdown writer 删除仍需 C 的新 Goal／升级／恢复出口。消费者完整
+metadata、freshness 和决策输入继续验收。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
 canonical Todo 快照。独立检查和下一次请求重新读取；租约与投影写回读取不参与。消费者修改
 不会污染保留输入，首次读取失败不会在请求中途恢复成功。这不代表 registry、Markdown、
 历史或多个 Goal 之间的原子快照。集成后继续核对安装态消费者，A/C 与 D2
@@ -197,6 +207,39 @@ canonical Todo 快照。独立检查和下一次请求重新读取；租约与�
 测得两种 provider 的 Python 峰值分配约 13.5→16.5 MB：为隔离消费者保留完整输入，
 以约 3 MB 峰值换取少读一次；返回后的保留分配仍约 2.1 MB。这是当前状态
 读取成本证据，不是历史重放、CLI 冷启动、D2 资格或默认 provider 对比。Python 仅管理请求
-传输输入的生命周期；TS 仍拥有校验、resume、succession、验收及选择规则。下一步减少既有
-类型化投影 owner 的重复准备，再协同改造整 Goal 前端摘要／列表／详情。Agent status 已有
-有界展示，仅压缩最终 JSON 不会消除完整来源计算。
+传输输入的生命周期；TS 仍拥有校验、resume、succession、验收及选择规则。
+Resume 输入现在仅在分组含等待条件时准备；succession 仍读取完整 lineage，等待条件仍能
+看到归档及跨角色依赖。在相同的 1,117 条隔离当前投影上，以已共享快照的版本为基线，
+结构化调用由 2,687 降为 1,570；原生读取仍为一次，TS effect 调用仍为 16 次。
+三个热样本中位数为 File 430→425 ms、SQLite 493→481 ms。这点延迟差异不能证明冷启动
+或默认 provider 已验收。实际 Agent／整 Goal CLI 输出除观测时间和时效字段外，大小和
+语义保持一致；整 Goal 输出仍约 2 MB。
+
+以 `b9a34c3e7` 为基线继续分解发现：共有读模型校验为了检查记录顺序，在已完成唯一 ID
+索引校验后仍将完整 Todo 数组序列化两遍。改为比较该索引的插入顺序和现有 Unicode
+排序 ID；完整内容摘要、记录校验及 provider 读取继续保留。隔离的 1,117 条 Todo／36 条
+租约当前投影中，每个 provider 取十个热 Node 样本，校验中位数由 42–43 ms 降至 27 ms。
+这是共有 TS 成本，不能据此给 provider 排名或改变默认值；没有增加权威缓存、遗漏租约、
+限制响应条数或改变前端合同。Unicode 顺序、重复 ID、非法 JSON、归档记录篡改及两种
+记录格式的拒绝规则均有回归覆盖。
+下一步以 `c57454e40` 为基线，在每次同步集合或 ownership 读取内部复用一份已校验的 Todo
+身份索引，去掉重复记录复制，保留各消费者的校验顺序及 Todo-only 对租约完整性的独立性。
+这尚未合并不同 RPC 的 provider 读取。在同一隔离投影上，每组交替取十个热样本，完整
+Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9→28.0 ms；包含 provider
+读取的 ownership 分别为 43.2→39.8 ms、62.9→61.4 ms，后者存在离群样本。完整 CLI status
+的记录和 metadata 保持不变，仅观测时间与读取时效不同；真实 File、SQLite、PostgreSQL
+测试通过。这些组件结果不能证明冷启动收益、持续运行验收或默认 provider 已达标。
+跨 RPC 的 ownership／status 读取及整 Goal 前端摘要／列表／详情仍未完成。Agent status
+已有有界展示，仅压缩最终 JSON 不会消除完整来源计算。
+
+### Succession 传输容量
+
+当前 5,000 条 Todo 的摘要复现了 B 阶段另一处边界：第一次整图 succession
+计算仍在预算内，但展示复核再次发送事实和评估时超过既有 2 MiB 请求限制。
+共同发布的内部 RPC 改用明确、严格核对的事实列和评估列，复用 summary adapter
+的列式传输模式；不丢弃记录、关系边、摘要哈希或 metadata，TS 整图与复核规则
+保持不变。旧内部线格式直接替换，不保留第二套解析；持久化 Todo 格式和公共
+响应不变。代表性复核请求从超过 2 MiB 降到约 0.96 MB，没有提高预算。
+真实 File/SQLite CLI 验证精确计数、跨远端记录的推断后继、metadata 保留与
+provider 状态不变。这只修复有界容量，不证明任意规模、稳定延迟、D2 验收，
+也不授予默认 provider 切换；整 Goal summary/list/detail 消费和持续观察仍待推进。
