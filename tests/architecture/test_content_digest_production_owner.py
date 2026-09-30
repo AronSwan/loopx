@@ -16,10 +16,8 @@ Two layers, mirroring the existing guard's discipline:
    compare each one against the expression it replaced, so a migration that
    silently changed a digest fails here rather than in a reader's comparison.
 
-A surface is only added to `CONVERTED_SURFACES` once every file in it is either
-converted or recorded in that surface's deferred list. A deferred file is an
-admitted gap, not a passing check: `test_deferred_sites_are_still_building_by_hand`
-fails if one of them quietly converts itself, so the list cannot rot.
+A surface is only added to `CONVERTED_SURFACES` after every producer in that
+package delegates envelope construction to the shared owner.
 """
 
 from __future__ import annotations
@@ -39,6 +37,9 @@ from loopx.capabilities.periodic_report import (
     cadence_journal,
     incremental,
     machine_defaults,
+    pending_intent,
+    post_writeback_hook,
+    request_action,
     runtime_producer,
     workspace,
 )
@@ -47,95 +48,63 @@ from loopx.control_plane.content_digest import (
     BARE_SHA256_PATTERN,
     ENVELOPED_SHA256_PATTERN,
 )
+from tests.architecture.test_content_digest_single_owner import (
+    _collect_scopes,
+    _fold_text,
+    _scope_of,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_OWNER = "loopx/control_plane/digest_envelope.py"
 ENVELOPE = "sha256:"
 
-# Each entry is a package directory plus the files inside it still building the
-# envelope by hand, with the reason they are not converted yet.
-CONVERTED_SURFACES: dict[str, dict[str, str]] = {
-    "loopx/capabilities/periodic_report": {
-        "loopx/capabilities/periodic_report/pending_intent.py": (
-            "import line is pinned by row number in the project-registry I/O "
-            "manifest; convert with a regenerated manifest"
-        ),
-        "loopx/capabilities/periodic_report/post_writeback_hook.py": (
-            "same census-host constraint, and it builds the envelope twice"
-        ),
-        "loopx/capabilities/periodic_report/request_action.py": (
-            "same census-host constraint"
-        ),
-    },
-}
-
-
-def _string_constants(tree: ast.Module) -> dict[str, str]:
-    """Every `NAME = "..."` binding in the module, so a folded value is judged.
-
-    Function-local on purpose: moving the prefix into a local name is the oldest
-    way to keep a literal while looking like you stopped using one.
-    """
-
-    found: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        value = node.value
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    found[target.id] = value.value
-    return found
-
-
-def _denotes_prefix(node: ast.expr, constants: dict[str, str]) -> bool:
-    if isinstance(node, ast.Constant):
-        return node.value == ENVELOPE
-    if isinstance(node, ast.Name):
-        return constants.get(node.id) == ENVELOPE
-    return False
-
-
-def _begins_with_envelope(node: ast.expr, constants: dict[str, str]) -> bool:
-    """A `%` template that opens with the envelope, e.g. ``"sha256:%s" % digest``."""
-
-    value = (
-        node.value
-        if isinstance(node, ast.Constant)
-        else constants.get(node.id)
-        if isinstance(node, ast.Name)
-        else None
-    )
-    return isinstance(value, str) and value.startswith(ENVELOPE) and value != ENVELOPE
+CONVERTED_SURFACES = ("loopx/capabilities/periodic_report",)
 
 
 def _hand_built_envelopes(source: str) -> list[str]:
     tree = ast.parse(source)
-    constants = _string_constants(tree)
+    root = _collect_scopes(tree)
     hits: list[str] = []
     for node in ast.walk(tree):
+        scope = _scope_of(node, root)
         if isinstance(node, ast.JoinedStr):
             for part in node.values:
                 if isinstance(part, ast.Constant) and isinstance(part.value, str):
                     if part.value == ENVELOPE:
                         hits.append(f"f-string envelope at line {node.lineno}")
         elif isinstance(node, ast.BinOp):
-            if isinstance(node.op, ast.Add) and _denotes_prefix(node.left, constants):
+            left = _fold_text(node.left, scope)
+            if isinstance(node.op, ast.Add) and left == ENVELOPE:
                 hits.append(f"concatenated envelope at line {node.lineno}")
-            elif isinstance(node.op, ast.Mod) and _begins_with_envelope(
-                node.left, constants
+            elif (
+                isinstance(node.op, ast.Mod)
+                and isinstance(left, str)
+                and left.startswith(ENVELOPE)
+                and left != ENVELOPE
             ):
                 hits.append(f"percent-formatted envelope at line {node.lineno}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            receiver = _fold_text(node.func.value, scope)
+            if (
+                node.func.attr == "format"
+                and isinstance(receiver, str)
+                and receiver.startswith(ENVELOPE)
+            ):
+                hits.append(f"format envelope at line {node.lineno}")
+            elif node.func.attr == "join" and receiver == "" and node.args:
+                values = node.args[0]
+                if isinstance(values, (ast.List, ast.Tuple)) and values.elts:
+                    if _fold_text(values.elts[0], scope) == ENVELOPE:
+                        hits.append(f"joined envelope at line {node.lineno}")
     return hits
 
 
-def _scan_surface(directory: str, deferred: dict[str, str]) -> dict[str, list[str]]:
+def _scan_surface(directory: str) -> dict[str, list[str]]:
     offenders: dict[str, list[str]] = {}
     root = REPOSITORY_ROOT / directory
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-        if relative == PRODUCTION_OWNER or relative in deferred:
+        if relative == PRODUCTION_OWNER:
             continue
         hits = _hand_built_envelopes(path.read_text(encoding="utf-8"))
         if hits:
@@ -144,22 +113,9 @@ def _scan_surface(directory: str, deferred: dict[str, str]) -> dict[str, list[st
 
 
 def test_converted_surfaces_build_the_envelope_only_through_the_owner() -> None:
-    for directory, deferred in CONVERTED_SURFACES.items():
-        offenders = _scan_surface(directory, deferred)
+    for directory in CONVERTED_SURFACES:
+        offenders = _scan_surface(directory)
         assert not offenders, f"hand-built digest envelope remains: {offenders}"
-
-
-def test_deferred_sites_are_still_building_by_hand() -> None:
-    # The allowlist is only honest while every entry still has the defect.
-    for directory, deferred in CONVERTED_SURFACES.items():
-        for relative, reason in deferred.items():
-            assert reason, relative
-            path = REPOSITORY_ROOT / relative
-            assert path.exists(), f"{relative} moved or vanished; update the allowlist"
-            assert _hand_built_envelopes(path.read_text(encoding="utf-8")), (
-                f"{relative} no longer builds the envelope by hand; drop it from "
-                "the allowlist so the scan covers it"
-            )
 
 
 # Each case is (label, source, expected). A scan that only matches one spelling is
@@ -187,8 +143,23 @@ BYPASS_CORPUS = (
         1,
     ),
     (
+        "annotated local prefix stays local to its function",
+        'def d(prefix):\n    return prefix + "value"\n\ndef other():\n    prefix: str = "sha256:"\n',
+        0,
+    ),
+    (
         "percent formatting",
         'import hashlib\n\ndef d(v):\n    return "sha256:%s" % hashlib.sha256(v).hexdigest()\n',
+        1,
+    ),
+    (
+        "format method",
+        'def d(value):\n    return "sha256:{}".format(value)\n',
+        1,
+    ),
+    (
+        "join method",
+        'def d(value):\n    return "".join(["sha256:", value])\n',
         1,
     ),
     (
@@ -274,6 +245,8 @@ SAMPLE = {"goal_id": "goal-7", "route": ["a", "b"], "count": 3}
         (workspace._canonical_digest, _reference(_canonical(SAMPLE))),
         (incremental._canonical_digest, _reference(_canonical(SAMPLE))),
         (cadence_journal._digest, _reference(_canonical(SAMPLE))),
+        (pending_intent._canonical_digest, _reference(_canonical(SAMPLE))),
+        (request_action._digest, _reference(_canonical(SAMPLE))),
         (
             archive._content_digest,
             _reference("report body".encode("utf-8")),
@@ -297,6 +270,13 @@ def test_the_event_digest_helper_keeps_its_own_canonicalization() -> None:
         sorted(event_ids), ensure_ascii=True, separators=(",", ":")
     ).encode("utf-8")
     assert runtime_producer._event_digest(event_ids) == _reference(encoded)
+
+
+def test_post_writeback_digest_recipes_keep_their_existing_bytes() -> None:
+    request = {"request_id": "request-1", "goal_id": "goal-7", "agent_id": "agent-a"}
+    assert post_writeback_hook.sha256_envelope(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    ) == _reference(json.dumps(request, sort_keys=True, separators=(",", ":")).encode())
 
 
 def test_the_two_envelope_kinds_a_conversion_must_not_mix_up() -> None:
