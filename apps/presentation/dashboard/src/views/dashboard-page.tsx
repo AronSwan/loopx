@@ -1,6 +1,6 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
-import { useConversationHistory } from "../data/use-conversation-history";
+import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -1654,7 +1654,7 @@ function PersonalGoalHome({
     if (readOnly) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
-    const history = conversationHistory.history;
+    const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
     const contextKind = selectedGoal ? "goal" : "manager";
@@ -1666,7 +1666,15 @@ function PersonalGoalHome({
     void (async () => {
       try {
         if (selectedAgent.agentId === "status-only") return;
-        const latest = conversationHistory.currentSession;
+        // A 409 handoff reports a Turn this page has not read, so the cached
+        // transcript cannot show it. Re-read the conversation before adopting
+        // that Turn; until the read returns, the handoff reply stays pending
+        // with its own Turn controls.
+        const history = turnHandoffs.current.has(targetContextId)
+          ? await conversationHistory.refresh()
+          : readHistory;
+        if (cancelled) return;
+        const latest = currentChannelSession(history, selectedAgent.agentId);
         latestDiscoveredSessionId = latest?.session_id ?? null;
         if (latest && !latest.resumable) {
           newSessionRequired.current.add(sessionKey);

@@ -402,12 +402,14 @@ export const chatRecoveryScenario = {
         await route.fulfill({ contentType: "application/json", status: 409,
           json: { ok: false, error: "another turn is already running for this session", active_turn_id: foreignTurnId } });
       });
-      // Hold the Session re-read that follows the 409, so the check covers
-      // the handoff before the recovery adopts the Turn, not only after.
+      // Hold the conversation's own Session re-read that follows the 409, so
+      // the check covers the handoff before the recovery adopts the Turn, not
+      // only after.
       const heldReads = [];
       let holdReads = false;
       await page.route("**/api/chat/sessions?*", async (route) => {
-        if (!holdReads || route.request().method() !== "GET") return route.fallback();
+        if (!holdReads || route.request().method() !== "GET"
+          || !new URL(route.request().url()).searchParams.has("channel_id")) return route.fallback();
         heldReads.push(route);
       });
       const draft = "这条消息在另一回合运行时发出";
@@ -467,7 +469,8 @@ export const chatRecoveryScenario = {
       const heldRetryReads = [];
       let failReads = false;
       await page.route("**/api/chat/sessions?*", async (route) => {
-        if (!failReads || route.request().method() !== "GET") return route.fallback();
+        if (!failReads || route.request().method() !== "GET"
+          || !new URL(route.request().url()).searchParams.has("channel_id")) return route.fallback();
         if (failedReads === 0) {
           failedReads += 1;
           return route.fulfill({ contentType: "application/json", status: 503, json: { ok: false, error: "chat store temporarily unavailable" } });
