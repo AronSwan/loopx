@@ -338,8 +338,25 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
-  if (to === "accepted" && from !== "accepted") return {status: to, wake_intent: delegationWakeIntent(params)};
+  if (to === "accepted" && from !== "accepted" && wakesItsConversation(params)) {
+    return {status: to, wake_intent: delegationWakeIntent(params)};
+  }
   return {status: to};
+}
+
+/** Whether an accepted result may produce a wake intent at all.
+ *
+ * Only an operation started from a conversation can be continued there. An
+ * ordinary CLI/MCP delegation has no conversation, so it keeps the transition it
+ * always had: no intent, no wake state, and no change to what a plain
+ * `wait`/`read` returns. Producing an intent and then refusing it in the pump
+ * would still widen a shared persistent projection for every caller who never
+ * enabled this capability.
+ */
+function wakesItsConversation(params: JsonObject): boolean {
+  if (params.requester == null) return false;
+  const requester = requireJsonObject(params.requester, "wake requester");
+  return requester.conversation != null;
 }
 
 /** The first transition to ``accepted`` is the one durable moment a requester

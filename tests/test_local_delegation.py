@@ -290,3 +290,20 @@ def test_rejected_operation_publishes_reason_with_terminal_state(service, monkey
     assert len(terminal_reads) == 1
     assert not demo.canonical_tasks(root)["todo_analyst-initial"]["done"]
     assert returns(runner.root, runner.goal_id, "lead")["items"] == []
+
+
+def test_an_ordinary_delegation_gains_no_wake_state(service):
+    """A delegation started outside a conversation is never a wake candidate.
+
+    The wake capability is opt-in and belongs to a Chat conversation. An
+    ordinary CLI/MCP delegation must keep the acceptance shape it always had: no
+    intent, no persisted wake, and no change to what a plain read returns.
+    """
+    root, runner = service
+    runner.start("analysis", "analysis-1", brief())
+    acceptance = wait(runner)
+    assert acceptance["status"] == "accepted"
+    recorded = _read(runner.path("analysis-1"))
+    assert "wake" not in recorded, "an ordinary delegation must not carry wake state"
+    # Nor does it gain a wake target it could be routed to later.
+    assert "conversation" not in recorded

@@ -106,42 +106,51 @@ test("message receipt and model return do not imply accepted work", () => {
   assert.equal(accepted.status, "accepted");
 });
 
-test("only the first transition to accepted leaves a wake intent for the exact requester and result", () => {
-  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+test("only a conversation-origin accepted result leaves a wake intent for the exact requester", () => {
+  // An ordinary CLI/MCP delegation has no conversation. It must keep the
+  // transition it always had: no intent, no wake state, no widened readback.
+  const conversationless = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
+  assert.deepEqual(conversationless, {status: "accepted"});
+  assert.equal(conversationless.wake_intent, undefined);
+
+  // With an originating conversation the intent is produced and pinned to it.
+  const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1", extra: "dropped"}}});
   const intent = accepted.wake_intent as Record<string, unknown>;
   assert.equal(intent.schema_version, "loopx_delegation_wake_intent_v0");
   assert.match(String(intent.intent_id), /^[a-f0-9]{64}$/);
   assert.deepEqual(intent.requester, {goal_id: "research", agent_id: "coordinator", goal_ref: null});
   assert.equal(intent.operation_id, "analysis-1");
   assert.equal(intent.request_id, "req-1");
-  assert.equal(intent.conversation, null);
-  // The originating conversation is pinned into the intent identity.
-  const pinned = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
-    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1", extra: "dropped"}}});
-  const pinnedIntent = pinned.wake_intent as Record<string, unknown>;
-  assert.deepEqual(pinnedIntent.conversation, {session_id: "s-1", turn_id: "t-1"});
-  assert.notEqual(pinnedIntent.intent_id, intent.intent_id);
+  assert.deepEqual(intent.conversation, {session_id: "s-1", turn_id: "t-1"});
+  // Another conversation of the same requester yields a different identity.
+  const pinned = accepted;
+  const pinnedIntent = intent;
   const elsewhere = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
     requester: {...acceptedRequester, conversation: {session_id: "s-2", turn_id: "t-1"}}});
   assert.notEqual((elsewhere.wake_intent as Record<string, unknown>).intent_id, pinnedIntent.intent_id);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
     requester: {...acceptedRequester, conversation: {session_id: "s-1"}}}), /conversation/);
   // Same requester and result: same intent, so a replayed transition cannot mint a second wake.
-  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts}), accepted);
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1"}}}), accepted);
   const changed = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
-    requester: {...acceptedRequester, artifacts: [{ref: "output.json", sha256: "b".repeat(64)}]}});
+    requester: {...acceptedRequester, conversation: {session_id: "s-1", turn_id: "t-1"},
+      artifacts: [{ref: "output.json", sha256: "b".repeat(64)}]}});
   assert.notEqual((changed.wake_intent as Record<string, unknown>).intent_id, intent.intent_id);
   // accepted -> accepted is an idempotent readback, never a new wake.
   assert.deepEqual(transitionDelegationObservation({from: "accepted", to: "accepted", ...acceptedFacts}), {status: "accepted"});
-  // A transition to accepted without the requester identity, or with a forged digest, has no wake to record.
-  assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted",
-    canonical_done: true, acceptance_ready: true, artifacts_current: true}), /wake requester/);
+  // A transition to accepted without any requester identity is not a wake, and a
+  // conversation-origin one with a forged digest is rejected.
+  assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted",
+    canonical_done: true, acceptance_ready: true, artifacts_current: true}), {status: "accepted"});
+  const conversation = {session_id: "s-1", turn_id: "t-1"};
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
-    requester: {...acceptedRequester, artifacts: [{ref: "output.json", sha256: "short"}]}}), /artifact/);
+    requester: {...acceptedRequester, conversation, artifacts: [{ref: "output.json", sha256: "short"}]}}), /artifact/);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
-    requester: {...acceptedRequester, artifacts: []}}), /artifacts/);
+    requester: {...acceptedRequester, conversation, artifacts: []}}), /artifacts/);
   assert.throws(() => transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts,
-    requester: {...acceptedRequester, goal_ref: ["not", "a", "reference"]}}), /goal reference/);
+    requester: {...acceptedRequester, conversation, goal_ref: ["not", "a", "reference"]}}), /goal reference/);
   // Rejection is terminal and wakes nobody.
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "rejected"}), {status: "rejected"});
 });
