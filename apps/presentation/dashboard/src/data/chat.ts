@@ -1111,6 +1111,9 @@ export function delegationStateLabel(row: {status: string; worker_active?: boole
   if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";
   if (row.status === "accepted") return zh ? "已通过当前验收" : "Currently accepted";
   if (row.status === "rejected") return zh ? "未通过验收" : "Rejected";
+  // The operation may be marked stopped before its Host group fully drains.
+  // Only the separate stop receipt proves that execution has been released.
+  if (row.status === "stopped") return zh ? "停止已登记" : "Stop recorded";
   if (row.recovery_required) return zh ? "需要恢复原执行" : "Original execution needs recovery";
   if (row.status === "running" && row.worker_active) return zh ? "执行中" : "Executing";
   if (row.status === "turn_returned" && row.worker_active) return zh ? "正在验收" : "Validating";
