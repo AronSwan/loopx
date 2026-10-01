@@ -7,7 +7,7 @@
 
 - PyPI 分发链（deepseek-harness-sdk / deepseek-harness-runtime-bin）最高只到 0.1.5rc1，0.2.0rc2 无官方轮子。
 - 官方仓库 deepseek-ai/deepseek-harness 把 Python SDK 与运行时的**构建链全开源**（python/sdk、python/sdk-runtime、scripts/build-exe-for-python-sdk.ts）。
-- LoopX 的 SDK 用面极小（`DeepSeekHarness(Config)` + `harness.run()`），两版本 Config 模型 673 行零差异。
+- LoopX 的 SDK 用面极小（`DeepSeekHarness(Config)` + `harness.run()`），两版本 Config 模型 673 字节/33 行零差异(Config类在api.py;乙席纠单位)。
 - 结论：克隆官方 tag **dsh-v0.2.0-rc.2**，用官方自己的构建链出官方代码的轮子——底座仍是官方的，我们只做了"官方构建在本地跑通"。
 
 ## 2. 构建链复现（五个坑已修，按序执行）
@@ -85,12 +85,12 @@ cd ../sdk && uv build --wheel                # 版本已手工stamp为0.2.0rc2(�
 
 ## 4b. 二轮审计补充语义（升级组二轮，2026-10-01）
 
-- SDK 默认 shutdown 超时 1 秒=每棒收尾硬杀运行时；适配器应显式传 10s（**排队待改，随 r9 后测试批**）
+- 运行时收尾 shutdown 窗口默认 1 秒(api.py:35/client.py:36)=每棒收尾硬杀运行时；适配器应显式传 10s（**排队待改，随 r9 后测试批**）
 - turn run-once 手工调用默认 115 秒请求预算——手工必显式传超时
 - SDK 轮路径曾指向 4GB 构建树（单点）——已修复为仓内 .local 双轮（uv sources）
 - DSH_HOME 全局 export=所有进程静默汇入同一 home（并发红线，见手册）
-- 流式首事件延迟=思考完成(实测~4.5秒)——任何看门狗判活阈值不得低于 5 秒
-- 401 三信封/工具id为 call_ 前缀/reasoning_content 迁移为 thinking 块——判据与解析器适配见 v2.2 编译席
+- 流式首事件延迟=思考完成(**升级组二轮转述~4.5秒,本机未复证**——乙席:全盘无实测留痕;看门狗阈值≥5秒系预防性取值非实证)
+- 401 三信封(**转述,无样本留盘**)/工具id前缀(本地fallback实为call-连字符,端点侧call_下划线系转述)/thinking块迁移(源码已证)——判据与解析器适配见 v2.2 编译席
 
 ## 5. 验证链（升级当日全绿）
 
