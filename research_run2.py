@@ -334,7 +334,7 @@ TASKS = {
         "does not need, (4) the three highest-value fixes, (5) the verdict as its OWN last line before any appendix, "
         "in EXACTLY this format: 裁决:采纳 / 裁决:修改后采纳 / 裁决:重做 — the 裁决: label prefix is REQUIRED "
         "(a bare verdict word without the label fails the gate; sample compliant line: 裁决:修改后采纳). "
-        "Judge against our real constraints, not generic best practice."
+        "When a cited source returns 403/401, record ONLY '存在性未验' — do NOT record it as 'verified' from memory (7-1-5: both reviewers endorsed a wrong URL from shared memory). Judge against our real constraints, not generic best practice."
     ),
     "reviewer-2": (
         "You are independent reviewer B. Read REQUIREMENTS.md, inputs/research-*.md and "
