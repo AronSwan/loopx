@@ -61,6 +61,31 @@ ENVELOPE = "sha256:"
 CONVERTED_SURFACES = ("loopx/capabilities/periodic_report",)
 
 
+def _fold_joined_prefix(node: ast.JoinedStr, scope: Any) -> str | None:
+    """Fold only the statically known leading portion of an f-string."""
+
+    prefix = ""
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            folded = part.value
+        elif (
+            isinstance(part, ast.FormattedValue)
+            and part.conversion == -1
+            and part.format_spec is None
+        ):
+            folded = _fold_text(part.value, scope)
+        else:
+            folded = None
+        if folded is None:
+            return None
+        prefix += folded
+        if prefix == ENVELOPE:
+            return prefix
+        if not ENVELOPE.startswith(prefix):
+            return None
+    return prefix
+
+
 def _hand_built_envelopes(source: str) -> list[str]:
     tree = ast.parse(source)
     root = _collect_scopes(tree)
@@ -68,10 +93,8 @@ def _hand_built_envelopes(source: str) -> list[str]:
     for node in ast.walk(tree):
         scope = _scope_of(node, root)
         if isinstance(node, ast.JoinedStr):
-            for part in node.values:
-                if isinstance(part, ast.Constant) and isinstance(part.value, str):
-                    if part.value == ENVELOPE:
-                        hits.append(f"f-string envelope at line {node.lineno}")
+            if _fold_joined_prefix(node, scope) == ENVELOPE:
+                hits.append(f"f-string envelope at line {node.lineno}")
         elif isinstance(node, ast.BinOp):
             left = _fold_text(node.left, scope)
             if isinstance(node.op, ast.Add) and left == ENVELOPE:
@@ -99,14 +122,18 @@ def _hand_built_envelopes(source: str) -> list[str]:
     return hits
 
 
+def _scan_source(relative: str, source: str) -> list[str]:
+    if relative == PRODUCTION_OWNER:
+        return []
+    return _hand_built_envelopes(source)
+
+
 def _scan_surface(directory: str) -> dict[str, list[str]]:
     offenders: dict[str, list[str]] = {}
     root = REPOSITORY_ROOT / directory
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-        if relative == PRODUCTION_OWNER:
-            continue
-        hits = _hand_built_envelopes(path.read_text(encoding="utf-8"))
+        hits = _scan_source(relative, path.read_text(encoding="utf-8"))
         if hits:
             offenders[relative] = hits
     return offenders
@@ -138,13 +165,38 @@ BYPASS_CORPUS = (
         1,
     ),
     (
+        "function-local prefix folded through an f-string",
+        'import hashlib\n\ndef d(v):\n    p = "sha256:"\n    return f"{p}{hashlib.sha256(v).hexdigest()}"\n',
+        1,
+    ),
+    (
+        "annotated function-local prefix folded through an f-string",
+        'import hashlib\n\ndef d(v):\n    p: str = "sha256:"\n    return f"{p}{hashlib.sha256(v).hexdigest()}"\n',
+        1,
+    ),
+    (
         "prefix moved into a module constant first",
         'import hashlib\n\nP = "sha256:"\n\n\ndef d(v):\n    return P + hashlib.sha256(v).hexdigest()\n',
         1,
     ),
     (
+        "annotated module prefix folded through an f-string",
+        'import hashlib\n\nP: str = "sha256:"\n\n\ndef d(v):\n    return f"{P}{hashlib.sha256(v).hexdigest()}"\n',
+        1,
+    ),
+    (
         "annotated local prefix stays local to its function",
         'def d(prefix):\n    return prefix + "value"\n\ndef other():\n    prefix: str = "sha256:"\n',
+        0,
+    ),
+    (
+        "an argument shadows a module prefix inside an f-string",
+        'P = "sha256:"\n\ndef d(P, value):\n    return f"{P}{value}"\n',
+        0,
+    ),
+    (
+        "a local f-string prefix does not leak into another function",
+        'def d(prefix, value):\n    return f"{prefix}{value}"\n\ndef other():\n    prefix = "sha256:"\n',
         0,
     ),
     (
@@ -180,7 +232,7 @@ BYPASS_CORPUS = (
     (
         "the production owner itself",
         'PREFIX = "sha256:"\n\n\ndef build(digest_hex):\n    return f"{PREFIX}{digest_hex}"\n',
-        0,
+        1,
     ),
 )
 
@@ -192,6 +244,12 @@ def test_the_production_scan_names_every_form_and_leaves_the_others(
     label: str, source: str, expected: int
 ) -> None:
     assert len(_hand_built_envelopes(source)) == expected, label
+
+
+def test_the_production_owner_exemption_is_bound_to_its_file() -> None:
+    source = 'PREFIX = "sha256:"\n\ndef build(value):\n    return f"{PREFIX}{value}"\n'
+    assert _scan_source(PRODUCTION_OWNER, source) == []
+    assert len(_scan_source("loopx/another_producer.py", source)) == 1
 
 
 def test_the_owner_is_the_only_module_that_states_the_prefix_rule() -> None:
