@@ -115,7 +115,9 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
+  type WorkspaceAgentTodo,
 } from "../features/personal-workspace/personal-workspace-model";
+import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
@@ -234,24 +236,7 @@ type TodoExplorerItem = {
   todo: TodoItem;
 };
 
-type PersonalAgentTodoItem = {
-  completedAt?: string | null;
-  resumeWhen?: string | null;
-  resumeReady?: boolean | null;
-  resumeReceiptId?: string | null;
-  claimedBy?: string | null;
-  done: boolean;
-  evidence?: string | null;
-  priority?: string | null;
-  status?: string | null;
-  taskClass?: string | null;
-  taskDomain?: string | null;
-  text: string;
-  todoId: string;
-  validationDigest?: string | null;
-  validationRevision?: number | null;
-  validationRevisionActor?: string | null;
-};
+type PersonalAgentTodoItem = WorkspaceAgentTodo;
 
 function inferLifecyclePhase(status?: string | null, run?: RunRecord) {
   if (run?.controller_readiness?.decision_advisor_ready || run?.controller_readiness?.write_controller_ready) {
@@ -723,6 +708,7 @@ function personalTodoResumeReceiptId(todo: TodoItem) {
 function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
   const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
   return {
+    ...monitorTodoReadback(todo),
     completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
