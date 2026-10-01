@@ -25,8 +25,8 @@
 | 组件 | 状态 | 证据 |
 |---|---|---|
 | 官方 CLI `@deepseek-ai/dsh@0.2.0-rc.2` | ✅ 全局安装可用 | `dsh --version` = 0.2.0-rc.2 |
-| **官方实验 agent-team 三件套**（agent-team/tool/ui） | ✅ **web profile 内置且激活**（捆绑依赖,配置树在册）——官方自己的团队层,零第三方依赖 | dump-config 三条目 |
-| 第三方 dsh-agent-teams 0.1.22（NanmiCoder） | ✅ 包已装入 web profile（node_modules+package.json）；**激活未完成**——plugin manager 内部 pnpm 调用自败（手动 pnpm 同命令成功），cordis.patch.yml 注册待补 | 备用：人在环/可视化交互场景首选官方三件套,第三方做对照 |
+| **官方实验 agent-team 三件套**（agent-team/tool/ui） | ⚠️ **内置但被版本门禁拒载**——捆绑件 peer 锁死 0.1.5-alpha 时代,在 0.2.0-rc.2 上启动即拒(须 allow-version 豁免才可载,官方尚未跟上自己的新版本) | 安装输出两条 warning 实证 |
+| 第三方 dsh-agent-teams 0.1.22（NanmiCoder） | ✅ **安装成功**（早前"失败"系 npmjs 网络窗口假象,全量日志复核 exit=0;profile .npmrc 已固化镜像）；**反而是当前唯一与 0.2.0-rc.2 官方兼容的团队件**（其兼容矩阵明载） | 人在环/可视化交互场景的现实首选 |
 | jobs 后台任务 | 一次性回合制工人用不上 | 工人出现长任务要并行推进的场景 |
 | read_image 视觉 | 信息源以文字页为主 | 出现图像为主的信息源（截图/扫描件） |
 | skill 技能市场 | 生态刚起，无对口技能 | 出现对口技能（如引用格式检查器） |

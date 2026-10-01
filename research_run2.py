@@ -607,6 +607,15 @@ def stage_route(root, phase, subtopics=None):
         "Runtime note: shell (pwsh) WORKS on the current runtime (0.1.5's '--profile' bug is fixed); "
         "prefer read/write/edit/glob for file edits, use pwsh for commands and Get-FileHash digests. "
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
+    if actor.startswith("reviewer"):
+        # 裁决契约双通道教学(r9复活轮反例: 任务书教了仍首试白词——同份合同在
+        # 工人第一眼读的OPERATING.md里再教一遍)
+        (ws / "OPERATING.md").write_text(
+            (ws / "OPERATING.md").read_text(encoding="utf-8")
+            + "\nVERDICT FORMAT (gate-checked): your review's LAST standalone line before any "
+            "appendix MUST be exactly `裁决:采纳` / `裁决:修改后采纳` / `裁决:重做` — the 裁决: "
+            "label prefix is REQUIRED; a bare verdict word without the label FAILS the gate.\n",
+            encoding="utf-8")
     fb = ws / "outputs" / "repair-feedback.md"
     art = ws / deliverable
     # 陈旧反馈不附(乙席#17): 反馈早于工件=已修好,再附"先读反馈"误导无关重跑的方向
@@ -894,7 +903,32 @@ def expected_endpoint(sdk_version: str) -> str:
     return "https://open.bigmodel.cn/api/coding/paas/v4"
 
 
+def live_pipeline_processes():
+    """一场一管的机械牙(r9事故: 首例中途死亡源于宿主与管线并发拉起effect runtime)。
+    扫描本机是否已有 research_run2.py auto 在跑(排除自身)。"""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -like '*research_run2.py*' -and $_.CommandLine -notlike '*Get-CimInstance*'} | "
+             "Select-Object -ExpandProperty ProcessId"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        if r.returncode != 0:
+            return None  # 探针失败: fail-closed由调用方决定
+        pids = {int(x) for x in (r.stdout or "").split() if x.isdigit()}
+        pids.discard(os.getpid())
+        pids.discard(os.getppid())
+        return pids or None
+    except Exception:
+        return None
+
+
 def auto(root):
+    # 并发防撞闸(r9事故机械牙): 已有编队管线在跑→拒绝启动,提示一场一管。
+    # 探针失败也拒绝(fail-closed)——宁可误拦一次,不再并发互杀一场。
+    live = live_pipeline_processes()
+    if live is not None:
+        raise SystemExit(f"已有编队管线在运行(pid={sorted(live)[:3]}): 一场一管——"
+                         "先收上一场(或确认其已死并清理),再启动新场")
     # 端点快查(丙席#14+端点打架加固): 端点必须与所装SDK版本配对——
     # 错配组合(0.2.0+旧端点)此处在发射前拦住,不烧到第一个模型调用才发现404
     from importlib.metadata import version as _pkg_version

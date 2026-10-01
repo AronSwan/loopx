@@ -120,6 +120,7 @@ def build_sdk_config(
         "cwd": str(workspace),
         "dsh_home": str(dsh_home),
         "initialize_timeout_seconds": 180.0,
+        "shutdown_timeout_seconds": 10.0,  # 官方旋钮(api.py:35);默认1s会把292MB运行时硬杀在收尾
     }
     if reasoning_effort is not None:
         config["reasoning_effort"] = reasoning_effort
