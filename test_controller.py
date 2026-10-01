@@ -564,3 +564,22 @@ def test_reviewer_tasks_state_label_prefix_contract():
     for who in ("reviewer-1", "reviewer-2"):
         assert "裁决:" in r2.TASKS[who], who
         assert "裁决:修改后采纳" in r2.TASKS[who], f"{who} 缺字面样例"
+
+
+# ==== 系统且正确批: 密封子进程的失败可观测(己方同病同修) ====
+def test_cli_failure_log_carries_redacted_env(tmp_path, monkeypatch):
+    """cli()失败日志必须带脱敏有效环境——密封环境(剥代理)的子进程失败时,
+    环境假设要能被证伪(插件管理器'最后一公里'教训的同病同修)。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "44c42af391b04a15a4118631451e3791.SPft")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+    import subprocess as sp
+    class FakeR:
+        returncode = 1; stdout = "out"; stderr = "err"
+    monkeypatch.setattr(sp, "run", lambda *a, **k: FakeR())
+    with pytest.raises(SystemExit):
+        r2.cli(tmp_path, "todo", "list")
+    log = (tmp_path / "last-cli-failure.log").read_text(encoding="utf-8")
+    assert "effective env" in log and "DEEPSEEK_BASE_URL=https://open.bigmodel.cn/api/anthropic" in log
+    assert "44c42af3" in log and ".SPft" not in log and "391b04a15" not in log  # 只留8位指纹,密钥全文不落盘
+    assert "NO_PROXY=*" in log and "HTTP_PROXY" not in log.replace("HTTP_PROXY=", "X")  # 代理已剥

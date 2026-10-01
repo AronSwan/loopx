@@ -393,6 +393,27 @@ def git(repo, *args):
          "-c", "user.email=research@example.invalid", *args], text=True).strip()
 
 
+def _redacted_env_snapshot(env: dict) -> str:
+    """失败诊断的有效环境快照(脱敏)。密封环境(剥代理等)的子进程失败时,排障者
+    须能看见密封罩里面到底是什么——否则环境假设无法证伪只能绕圈(插件管理器
+    "最后一公里"教训的己方同病同修)。密钥只留前8位指纹(考场门同款口径)。"""
+    keys = ("PATH", "NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+            "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DSH_MODEL", "DSH_EFFORT",
+            "DSH_RUNTIME_MODE")
+    out = []
+    for k in keys:
+        v = env.get(k)
+        if v is None:
+            continue
+        if "KEY" in k or "TOKEN" in k:
+            v = (v[:8] + "…(指纹)") if len(v) > 8 else "(过短,已脱敏)"
+        elif k == "PATH":
+            parts = v.split(";")
+            v = " | ".join(px.replace("\\", "/").split("/")[-1] for px in parts[:6]) + f" …(共{len(parts)}项)"
+        out.append(f"{k}={v}")
+    return "\n".join(out)
+
+
 def cli(root, *args, cwd=None):
     env = {k: v for k, v in os.environ.items()
            if k.lower() not in ("http_proxy", "https_proxy", "all_proxy")}
@@ -404,9 +425,11 @@ def cli(root, *args, cwd=None):
         capture_output=True, text=True, check=False, cwd=cwd, env=env,
         timeout=1500)  # 内核--timeout-seconds 1200是传参不是子进程超时(乙席#16);1500=1200+余量
     if result.returncode:
-        # 并发失败互覆只剩最后一份(乙席#11):至少让每份日志自述是哪条命令
+        # 并发失败互覆只剩最后一份(乙席#11):让每份日志自述命令+有效环境(脱敏)
         (root / "last-cli-failure.log").write_text(
-            f"args: {args}\n{result.stdout}\n{result.stderr}", encoding="utf-8")
+            f"args: {args}\n--- effective env (redacted) ---\n"
+            f"{_redacted_env_snapshot(env)}\n--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}", encoding="utf-8")
         raise SystemExit("CLI failed; inspect last-cli-failure.log")
     return json.loads(result.stdout)
 
