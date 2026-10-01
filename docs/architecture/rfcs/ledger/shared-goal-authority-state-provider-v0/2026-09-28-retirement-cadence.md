@@ -49,6 +49,26 @@ public CLI/import or serialized contracts. Retain public behavior tests; remove
 only characterization scaffolding whose retired implementation has no consumer.
 Deletion is code retirement, not deletion of users' state, receipts or backups.
 
+### Proposed T4 slice: unused Python lease/handoff facades
+
+Caller audit at `e240730ec` finds the following internal crossings unused by
+production. Native decision and transaction owners remain; this is independent
+of D2 qualification and default-entry adoption.
+
+| Removed boundary | Last caller / replacement | Compatibility and validation |
+| --- | --- | --- |
+| `authority_core.py` acquire/renew/transfer/release, owner-eligibility and handoff-transition command facades | Only the old core tests; real lease and handoff adapters already use whole native transactions | No persisted command format or public CLI schema changes. Retain independent native generation, replay, conflict, cleanup and quiescence tests; exercise real File/SQLite entrypoints. |
+| `task_lease.acquire.decide`, `task_lease.lifecycle.decide`, `coordination.handoff_mode.plan` RPC registrations | Only those retired facades / handler tests; native transactions call the same typed rules directly | Obsolete private RPCs now reject unsupported methods. Keep `task_lease.owner_eligibility` and write-scope overlap: actual Python callers remain. |
+| Lease-only `local_snapshot.py` normalization and error projection | No remaining caller; native executors own lease facts and errors | Keep `todo_snapshot_from_mapping`, used by live Todo mutation authorization. No store, receipt, backup or migration reader is removed. |
+
+`authority_core.py` is still a live Todo bridge. `LeaseAction` and
+`LeaseModeGateCommand` also remain because the semantic-vocabulary registry
+explicitly retains that input contract until its M4 review. This slice does not
+lower semantic coverage floors to discard a declared compatibility obligation.
+Old facade-only tests retire with their implementation; public/native behavior
+tests remain. Reverting this slice restores the internal crossing without a data
+conversion. Maintainer review is required; this proposal is not installed behavior.
+
 ## Next delivery order
 
 | Order | Complete outcome / owner | Concrete exit and deletion opportunity |
@@ -327,3 +347,29 @@ metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
 or permission to change the default provider. Full-Goal summary/list/detail
 adoption and sustained observation remain separate work.
+
+### Packaged-source fingerprint cost
+
+The B-lane increment overlaps source-byte reads through the existing bounded,
+ordered file reader. It preserves relative names, raw bytes, metadata
+invalidation, request-scoped memoization and failure/retry behavior. The Python
+filesystem adapter gains no state-policy owner or persistent cache.
+
+Current validation compared baseline `0538bf1631a7` with this implementation on
+macOS arm64, Python 3.13.13 and Node 24.21.0. Each arm ran nine alternating fresh
+CLI processes after one startup warm-up, against the same disposable synthetic
+File/SQLite fixtures. Effect processes were isolated; OS caches were not flushed.
+The source snapshot contained 249 TS/JSON files (3,065,799 bytes). Fingerprint
+stage medians were 123.5→53.8 ms for File and 111.3→48.0 ms for SQLite.
+Whole `status` medians were 1.032→1.054 s and 1.019→1.010 s; sampled p95 values
+were 1.745→1.104 s and 1.114→1.086 s (with nine samples, p95 is the maximum).
+Twenty full-response pairs differed only at explicitly enumerated observation
+timestamps; malformed-registry rejection was unchanged.
+
+This supports a bounded cold-caller cost improvement, not a general status
+speedup, provider throughput or D2/default qualification. A warm same-process
+microbenchmark with fingerprint memoization explicitly cleared regressed from
+6.7 to 12.8 ms; normal unchanged requests retain memoization. Thread scheduling
+costs more when all bytes are already hot. Neither workload establishes a fleet
+latency guarantee. Whole-Goal payload/consumer work and sustained operation
+remain open; this increment authorizes no legacy-writer deletion or UI truncation.

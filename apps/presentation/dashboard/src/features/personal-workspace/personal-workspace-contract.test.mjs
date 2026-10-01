@@ -78,11 +78,7 @@ assert.equal((i18n.match(/"header\.managerOutputTokenBudget"/g) ?? []).length, 2
 for (const view of ["Chat", "Tasks", "Files"]) {
   assert.match(header, new RegExp(`\"${view.toLowerCase()}\"|>${view}<`), `Goal header exposes ${view}`);
 }
-assert.match(
-  page,
-  /function selectGoal\(goalId: string \| null\)[\s\S]*?setSelectedGoalTab\("tasks"\)/,
-  "Selecting a Goal opens its Tasks view first",
-);
+// Task-first entry is exercised with reload/history in workspace-view-recovery.
 assert.match(model, /onOpenGoalView\??:/, "Goal detail can switch the center workspace view");
 for (const label of ["执行中", "已安排", "等待条件", "可继续"]) {
   assert.match(model + drawer + page, new RegExp(label), `Session and Run status language includes ${label}`);
@@ -111,7 +107,7 @@ for (const state of ["delivered", "verification_required", "explicit_unverified"
 assert.doesNotMatch(returnDelivery, /message_ref|provider_receipt|intent_digest/, "Provider-private locator facts never enter the return status badge");
 assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| \(operationFrame\?\.kind === "result" && operationFrame\.resultDeliveryVerified\)/, "An operation is not complete in the Dashboard until the current result delivery is verified");
 assert.match(page, /reviewPlan\.operationFrame/, "Dashboard operation details consume the shared TS review frame");
-assert.match(page, /operation\.execute" && proposal\.status === "applied"/, "Dashboard restores terminal operation receipts from the canonical action store");
+assert.match(page, /const restoreable = stored[\s\S]*\|\| proposal\.action_kind === "operation\.execute"/, "Canonical operation readback includes terminal and cancelled rows instead of retaining a stale gated card");
 assert.match(page, /proposal\.action_kind !== "operation\.execute"[\s\S]*reviewPlan\.interaction !== "completed"/, "Pending operation result-card readback remains visible instead of becoming a generic apply error");
 assert.match(page, /operationFrame\?\.kind === "result"[\s\S]*operationFrame\.resultKind === "unknown"/, "Unknown operations survive workspace restoration and generic error-card filtering");
 assert.match(styles, /\.personal-proposal-row\[data-action-kind="operation\.execute"\]\s*\{\s*grid-template-columns:\s*36px minmax\(0, 1fr\);/, "Operation safety labels cannot take an unbounded third column from the request terms");
@@ -194,7 +190,7 @@ assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\
 assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
 assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful Goal lifecycle apply reconciles the affected Goal without blocking the sidebar");
-assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, reuseSnapshots: true \}/, "Lifecycle reconciliation uses the non-fatal background status path");
+assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, readScope: "missing" \}/, "Lifecycle reconciliation uses the non-fatal background status path");
 assert.match(dashboard, /statusRequestCanCommit\(statusRequestFenceRef\.current, request\)/, "A stale background response cannot overwrite a newer optimistic transition");
 assert.match(sidebar, /Trash2/, "Stopped Goals expose a delete icon");
 assert.match(sidebar, /onRequestGoalLifecycle\(goal, "delete"\)/, "Goal deletion stays behind the lifecycle request boundary");

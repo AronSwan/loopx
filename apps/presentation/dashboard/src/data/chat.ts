@@ -498,13 +498,13 @@ const typedActionListEnvelopeSchema = z.object({
   proposals: z.array(typedActionProposalSchema),
 });
 
-export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}) {
+export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (filters.contextKind) query.set("context_kind", filters.contextKind);
   if (filters.goalId) query.set("goal_id", filters.goalId);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return typedActionListEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions${suffix}`),
+    await requestJson<unknown>(`/api/actions${suffix}`, { signal }),
   ).proposals;
 }
 
@@ -701,6 +701,11 @@ export type ChatSessionMode = "managed_runtime" | "attached_host";
  */
 export function chatSessionQueuesFollowUps(session: Pick<ChatSessionSummary, "session_mode">) {
   return session.session_mode === "attached_host";
+}
+
+/** Native steering is offered only by the managed Codex adapter; attached follow-ups keep their queue contract. */
+export function chatSessionSupportsSteering(session: Pick<ChatSessionSummary, "session_mode" | "adapter_kind">) {
+  return session.session_mode !== "attached_host" && session.adapter_kind === "codex_app_server";
 }
 
 export type ManagerRuntimeSessionReadback = {
@@ -1027,12 +1032,12 @@ export async function interruptChatTurn(sessionId: string, turnId: string) {
 }
 
 export async function steerChatTurn(sessionId: string, turnId: string, message: string, ingressId: string) {
-  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string }>(
+  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string; created: boolean }>(
     `/api/chat/sessions/${sessionId}/turns/${turnId}/steer`,
     { method: "POST", body: JSON.stringify({ message, client_ingress_id: ingressId }) },
   );
   if (receipt.ok !== true || receipt.session_id !== sessionId || receipt.turn_id !== turnId
-    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered") {
+    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered" || typeof receipt.created !== "boolean") {
     throw new ChatApiError("追加指令的回执不匹配，请保留草稿并检查当前状态。", { error_code: "steer_receipt_mismatch" });
   }
   return receipt;
@@ -2220,6 +2225,11 @@ const usageStatisticsSchema = z.object({
   notice: z.object({ version: z.number(), endpoint: z.string(), policy: z.string() }),
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
+  diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  identity_scope: z.string().optional(), delivery_history: z.array(z.object({
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    status: z.enum(["accepted", "rejected", "unavailable"]),
+  })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {

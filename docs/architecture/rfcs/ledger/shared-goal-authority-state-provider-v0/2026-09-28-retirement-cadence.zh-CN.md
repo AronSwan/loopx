@@ -44,6 +44,23 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 内部删除必要但不充分，不能忽略公开 CLI/import 和序列化契约。保留公共行为测试，
 只删没有消费者的旧实现专属 characterization。删的是代码，不是用户状态、回执和备份。
 
+### 提议的 T4 切片：已无调用方的 Python lease／handoff facade
+
+在 `e240730ec` 核对调用方后，下列内部跨界已无生产消费者。原生决策和事务 owner
+保留；这项删除不等待 D2 资格或默认入口接入，也不宣称完成它们。
+
+| 删除边界 | 最后调用方／替代 owner | 兼容与验证 |
+| --- | --- | --- |
+| `authority_core.py` 的 acquire／renew／transfer／release、owner eligibility、handoff transition command facade | 只剩旧 core 测试；真实 lease／handoff adapter 已直接使用完整 native 事务 | 不改持久化命令格式或公共 CLI schema。保留独立的原生 generation、重放、冲突、清理、静止规则测试，并走真实 File／SQLite 入口。 |
+| `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
+| `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
+
+`authority_core.py` 仍是活跃 Todo bridge。`LeaseAction`、`LeaseModeGateCommand`
+也保留：semantic-vocabulary 注册表明确将该输入契约保留到 M4 评审。本切片不通过
+降低语义覆盖下限丢弃已有兼容义务。仅服务旧 facade 的测试随实现退役，公共／原生
+行为测试保留。回退该切片可恢复内部跨界，无需转换数据。须由维护者评审；这是提议，
+不代表已安装行为。
+
 ## 下一轮交付顺序
 
 | 顺序 | 完整结果／owner | 具体出口与删除机会 |
@@ -243,3 +260,23 @@ Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9�
 真实 File/SQLite CLI 验证精确计数、跨远端记录的推断后继、metadata 保留与
 provider 状态不变。这只修复有界容量，不证明任意规模、稳定延迟、D2 验收，
 也不授予默认 provider 切换；整 Goal summary/list/detail 消费和持续观察仍待推进。
+
+### 打包源码指纹成本
+
+B 阶段增量复用已有的有界、有序文件读取器，并发读取源码字节。摘要保留全部
+相对文件名和原始字节、metadata 失效、请求内缓存及失败／重试行为；Python
+文件系统适配层不新增状态规则或持久缓存。
+
+当前复核对比基线 `0538bf1631a7` 与本实现，使用 macOS arm64、Python 3.13.13、
+Node 24.21.0。启动预热一次后，每组交替运行九个独立 CLI 进程，读取相同的可丢弃
+合成 File/SQLite fixture；Effect 进程隔离，没有清空 OS 缓存。源码快照包含
+249 个 TS/JSON 文件（3,065,799 字节）。指纹阶段中位数分别为 123.5→53.8 毫秒、
+111.3→48.0 毫秒。完整 `status` 中位数为 1.032→1.054 秒、1.019→1.010 秒；
+样本 p95 为 1.745→1.104 秒、1.114→1.086 秒（九个样本的 p95 就是最大值）。
+二十组完整响应仅明确列出的观测时间字段不同，畸形 registry 的拒绝结果不变。
+
+这支持有界的冷调用成本改善，不证明通用 status 提速、provider 吞吐或 D2／默认项
+验收。显式清除指纹缓存后，同进程热缓存微基准从 6.7 退化到 12.8 毫秒；正常未变更
+请求仍复用缓存。字节已经在热缓存中时，线程调度成本更高。两种负载都不能外推为
+用户群体的延迟保证。整 Goal 大包／消费者与持续运行仍待推进，本增量不授权删除
+旧 writer 或裁剪 UI 数据。

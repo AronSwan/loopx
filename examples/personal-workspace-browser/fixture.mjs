@@ -1506,7 +1506,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const resolvedAgentId = body.agent_id ?? managerChannelBinding?.executor_endpoint ?? state.machineNamespaces?.steward_executor?.executor_endpoint ?? "codex";
       const session_id = `session-${body.context_kind}-${resolvedGoalId}-${resolvedAgentId}`;
       const existing = body.mode === "resume_latest" ? sessions.get(session_id) : null;
-      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: resolvedAgentId, adapter_kind: resolvedAgentId, channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
+      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: resolvedAgentId, adapter_kind: resolvedAgentId === "codex" ? "codex_app_server" : resolvedAgentId === "claude-code" ? "claude_code_cli" : "acp", channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
       sessions.set(session_id, session);
       messages.set(session_id, messages.get(session_id) ?? []);
       await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: resolvedAgentId, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
@@ -1705,12 +1705,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft), status: 200 });
   });
-  await page.route("**/api/actions?**", async (route) => {
+  await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
     const matching = Array.from(actionProposals.values()).filter((proposal) => {
-      if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
     });
@@ -1828,7 +1827,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           session_id: sessionId,
           goal_id: preview.normalized_parameters.goal_id,
           agent_id: "codex",
-          adapter_kind: "codex",
+          adapter_kind: "codex_app_server",
           channel_id: `goal.${preview.normalized_parameters.goal_id}`,
           active_turn_id: null,
           status: "ready",
