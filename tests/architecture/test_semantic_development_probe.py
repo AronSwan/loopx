@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -344,6 +345,13 @@ def probe_cli(repository: Path) -> Path:
 
 
 def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
+    # This command runs copied sources in a disposable Git repository, not
+    # this checkout. Inherited pytest-cov subprocess instrumentation would
+    # record its temporary loopx files, which no longer exist at CI aggregation.
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("COV_CORE") and key != "COVERAGE_PROCESS_START"
+    }
     return subprocess.run(
         [
             sys.executable,
@@ -355,6 +363,7 @@ def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=environment,
     )
 
 
