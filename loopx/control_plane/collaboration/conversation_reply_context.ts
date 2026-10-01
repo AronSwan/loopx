@@ -45,7 +45,9 @@ function projectThread(input: JsonObject): JsonObject {
   const observation = raw as JsonObject;
   const room = input.conversation_id, root = input.root_id, thread = input.thread_id;
   if (typeof room !== "string" || !room || typeof root !== "string" || !root
-    || typeof thread !== "string" || !thread || input.message_id === root
+    || typeof thread !== "string" || !thread || room.length > 200 || root.length > 200
+    || thread.length > 200 || typeof input.message_id !== "string" || !input.message_id
+    || input.message_id.length > 200 || input.message_id === root
     || observation.conversation_id !== room || observation.root_message_id !== root
     || observation.thread_id !== thread || !Array.isArray(observation.messages)
     || observation.messages.length > 64) return {};
@@ -55,7 +57,7 @@ function projectThread(input: JsonObject): JsonObject {
     if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) return {};
     const m = rawMessage as JsonObject;
     if (m.conversation_id !== room || m.thread_id !== thread || typeof m.message_id !== "string"
-      || !m.message_id || typeof m.position !== "number" || !Number.isSafeInteger(m.position)
+      || !m.message_id || m.message_id.length > 200 || typeof m.position !== "number" || !Number.isSafeInteger(m.position)
       || m.position < -1 || typeof m.content !== "string" || ids.has(m.message_id)
       || positions.has(m.position)) return {};
     ids.add(m.message_id); positions.add(m.position);
@@ -73,12 +75,23 @@ function projectThread(input: JsonObject): JsonObject {
   if (!anchor || anchor.position < 0 || rootMessage?.position !== -1) return {};
   const preceding = messages.filter(m => m.position < anchor.position).sort((a, b) => b.position - a.position);
   const selected: ThreadMessage[] = [];
+  // Bound encoded rows, including identity, author/time and JSON escaping, so
+  // added context leaves room for the current request in the existing handoff.
   let remaining = 12000;
   for (const m of preceding) {
     if (selected.length === 12 || remaining === 0) break;
-    const content = m.content.slice(0, Math.min(4000, remaining));
-    selected.push({...m, content, content_truncated: m.content_truncated || content.length < m.content.length});
-    remaining -= content.length;
+    const row = (length: number): ThreadMessage => ({...m, content: m.content.slice(0, length),
+      content_truncated: m.content_truncated || length < m.content.length});
+    if (JSON.stringify(row(0)).length + 1 > remaining) break;
+    let low = 0, high = Math.min(4000, m.content.length);
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (JSON.stringify(row(middle)).length + 1 <= remaining) low = middle;
+      else high = middle - 1;
+    }
+    const excerpt = row(low);
+    selected.push(excerpt);
+    remaining -= JSON.stringify(excerpt).length + 1;
   }
   const omitted = preceding.length - selected.length;
   const truncated = omitted > 0 || selected.some(m => m.content_truncated) || observation.truncated === true;

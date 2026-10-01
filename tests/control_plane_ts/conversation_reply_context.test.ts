@@ -106,3 +106,17 @@ test("bounded thread excerpts keep the newest preceding version and disclose omi
   assert.doesNotMatch(String(result.context_text), /0: /);
   assert.match(String(result.context_text), /omitted_message_count/);
 });
+
+test("encoded metadata and escaped text share the thread budget before receiver handoff", () => {
+  const messages = [threadMessage("root", -1, "Root"),
+    ...Array.from({length: 12}, (_, position) => ({
+      ...threadMessage(`m${position}` + "x".repeat(195), position, `${position}: ` + "\u0000".repeat(4000)),
+      sender: {id: "x".repeat(200), kind: "app"}, created_at: "x".repeat(80),
+    })), threadMessage("current", 12, "Continue.")];
+  const result = project({...threadRequest, thread_context: {...threadRequest.thread_context, messages}});
+  assert.equal(result.status, "truncated");
+  assert.ok(String(result.context_text).length < 14000);
+  assert.match(String(result.context_text), /11: /);
+  assert.doesNotMatch(String(result.context_text), /0: /);
+  assert.match(String(result.context_text), /content_truncated.*true/);
+});
