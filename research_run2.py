@@ -594,7 +594,7 @@ def stage_route(root, phase, subtopics=None):
         "DELIVERABLE (validator checks this exact path; missing/empty = phase fails): "
         f"{deliverable}. Write it FIRST-complete, then stop. "
         "Host quirk: shell tools are BROKEN ('--profile <name> is required'); use read/write/edit/glob "
-        "and web_search/web_fetch instead. Use file_sha256 for digests. "
+        "and web_search/web_fetch instead. Compute digests with pwsh Get-FileHash (official tool). "
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
     fb = ws / "outputs" / "repair-feedback.md"
     art = ws / deliverable

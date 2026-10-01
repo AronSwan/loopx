@@ -57,14 +57,19 @@ cd ../sdk && uv build --wheel                # 版本已手工stamp为0.2.0rc2(�
 | pnpm-workspace/.npmrc 镜像与放宽 | 打包期 | 不进轮子 |
 | build-exe-for-python-sdk.ts 两处 LOCAL BUILD PATCH | 构建期 | 不进轮子；**运行时代码 100% 官方源** |
 
-### 3b. loopx-green 对官方 loopx/ 包的偏离（共 5 文件 33+/3-）
+### 3b. loopx-green 对官方 loopx/ 包的偏离（2026-10-01 瘦身后：3 文件 6 行）
 | 文件 | 偏离 | 回馈上游 | 回归官方条件 |
 |---|---|---|---|
-| loopx/file_lock.py | holder 侧车去 .json 后缀 | 协议文档已加 LOCAL DEVIATION 注记; 关联 issue #5397 | 上游修 #5397 后改回（改名 vs 扫描器跳过，以上游裁决为准） |
-| collaboration/inbox.py | 非 sha256 条目显式 continue | 同 #5397（扫描器跳过规则） | 同上 |
-| collaboration/peers.py | returns() glob 过滤 .lock | 同 #5397 | 同上 |
-| collaboration_mcp.py | 新增 file_sha256 工具（纯增量，官方无此工具） | 待提 PR | 上游合入后删本地副本 |
-| dsh_goal_mode/turn_host_adapter.py | initialize_timeout_seconds=180（慢环境兜底） | 待提 issue/PR | 上游提供官方旋钮后 |
+| loopx/file_lock.py | holder 侧车去 .json 后缀（1 行） | 协议文档已加 LOCAL DEVIATION 注记; 关联 issue #5397 | 上游修 #5397 后改回（改名 vs 扫描器跳过，以上游裁决为准） |
+| collaboration/inbox.py | 非 sha256 条目显式 continue（4 行） | 同 #5397（扫描器跳过规则） | 同上 |
+| collaboration/peers.py | returns() glob 过滤 .lock（1 行） | 同 #5397 | 同上 |
+
+**已瘦身两笔（2026-10-01"33行必要性"核查，官方对照后删/重分类）**：
+- ~~collaboration_mcp.py file_sha256 工具（27 行）~~ **已删**——官方 0.2.0 的 24 个原生工具无 hash 类，但 shell 已修复：
+  官方正路 `pwsh Get-FileHash`（实测模型算出的 SHA256 与期望逐位一致）。当年做此工具正是 shell 坏时代的
+  替代品；底座修好后回归官方。工人指引同步改为官方工具。
+- ~~turn_host_adapter.py initialize_timeout_seconds（1 行）~~ **重分类，不算偏离**——官方 0.2.0 SDK 原生字段
+  （api.py:33，默认 30.0）；我们的调用行只是给官方旋钮传值，与 patch 无关。不再回馈、无需回归。
 
 ### 3c. 我们的控制器（research_run2.py / test_controller.py / claim_audit.py）
 - 全部走官方接口：loopx.cli turn run-once + 官方 SDK。**不 patch 官方行为，只调用**。
