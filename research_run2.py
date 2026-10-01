@@ -352,6 +352,9 @@ RESEARCHER_TASK = (
     "Other squad members cover the other scopes; do NOT stray into theirs. "
     "Use web_search and web_fetch (bounded: at most 10 searches, 6 fetches) for 2025-2026 primary "
     "sources (official regulator/vendor pages outrank blogs; the brief's domain decides which). "
+    "PARALLEL FETCH (Top-5 #3): when you have multiple independent URLs to fetch, use "
+    "run_in_background for each fetch, then collect results with job_output — parallel fetching "
+    "is significantly faster than sequential. "
     "Read REQUIREMENTS.md and reference/ background materials (see the 背景资料清单 section of REQUIREMENTS.md) for our real context first. "
     "Write outputs/research-{k}.md IN CHINESE: findings each with source (official URL or article "
     "number), what it means for OUR operation as described in the brief, and a short 'if we do nothing' "
@@ -683,16 +686,32 @@ def stage_route(root, phase, subtopics=None):
     else:
         source = None
     if source:
+        # Top-5 #2: peer请求带工件sha256+operation_id含重试轮次(官方差距席:
+        # 修复环重跑后账本无法区分对哪版inputs发的;官方demo每个input带sha256)
+        staged_hashes = {}
+        for src_actor, src_ref, dst_ref in (routing.get(phase) or []):
+            if dst_ref is None:
+                continue
+            src = root / "agents" / src_actor / src_ref
+            if src.exists():
+                shutil.copy(src, ws / dst_ref)
+                staged_hashes[dst_ref] = hashlib.sha256(src.read_bytes()).hexdigest()
+        # operation_id含重试计数(修复轮换新id=不把旧批准用到变了的工件上)
+        _n_homes = len(list(root.glob(f"home-{phase}*")))
+        _op_id = f"{phase}-handoff" if _n_homes == 0 else f"{phase}-handoff-r{_n_homes}"
+        input_entries = [{"ref": "REQUIREMENTS.md", "description": "Research brief"}]
+        for dst_ref, h in staged_hashes.items():
+            input_entries.append({"ref": f"inputs/{dst_ref}", "sha256": h})
         _peers.request(
             root / "runtime", root / "registry.json", GOAL,
             source_agent_id=source, target_agent_id=actor,
-            operation_id=f"{phase}-handoff",
+            operation_id=_op_id,
             brief={
                 "schema_version": "collaboration_brief_v0",
                 "purpose": f"Phase handoff: perform {phase}. See tasks/{phase}.md and staged inputs/.",
                 "context": "Controller-routed adaptive research DAG; artifacts staged under inputs/.",
                 "constraints": ["Chinese deliverables", "Cite sources"],
-                "inputs": [{"ref": "REQUIREMENTS.md", "description": "Research brief"}],
+                "inputs": input_entries,
                 "acceptance": ["The phase output file named in tasks/"],
                 "return_requirement": "Return actual documents and remaining gaps",
             })
@@ -704,9 +723,26 @@ def stage_route(root, phase, subtopics=None):
         f"Your identity is {actor}. Scoped loopx_collaboration MCP tools are available. "
         "DELIVERABLE (validator checks this exact path; missing/empty = phase fails): "
         f"{deliverable}. Write it FIRST-complete, then stop. "
-        "Runtime note: shell (pwsh) WORKS on the current runtime (0.1.5's '--profile' bug is fixed); "
+        "Runtime note: shell (pwsh) WORKS on the current runtime; "
         "prefer read/write/edit/glob for file edits, use pwsh for commands and Get-FileHash digests. "
+        "PARALLEL FETCH: for multiple independent web_fetch calls, use run_in_background + job_output "
+        "to parallelize — much faster than sequential fetching. "
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
+    # Top-5 #4: 格式检查前置——门禁要什么格式,OPERATING.md就先教什么(2bf9d6c模式推广)
+    if phase.startswith("researcher"):
+        (ws / "OPERATING.md").write_text(
+            (ws / "OPERATING.md").read_text(encoding="utf-8")
+            + "\nCITATION FORMAT (gate-checked): cite at least 3 COMPLETE https:// URLs "
+            "(bare domains or partial paths FAIL). Put the source URL on the SAME LINE as the fact "
+            "it supports. If the brief allows literature identifiers, still include ≥1 full URL.\n",
+            encoding="utf-8")
+    elif phase == "finalizer":
+        (ws / "OPERATING.md").write_text(
+            (ws / "OPERATING.md").read_text(encoding="utf-8")
+            + "\nSTRUCTURE (gate-checked): the final plan MUST contain 决策摘要(10行内), "
+            "行动清单(可打勾), 两轮评审处理说明(采纳与驳回逐条), and reference both "
+            "review-1/review-2 (or 评审A/评审B).\n",
+            encoding="utf-8")
     if actor.startswith("reviewer"):
         # 裁决契约双通道教学(r9复活轮反例: 任务书教了仍首试白词——同份合同在
         # 工人第一眼读的OPERATING.md里再教一遍)
@@ -1140,6 +1176,45 @@ def auto(root):
     if not gate_with_repair(root, include_final=True):
         raise SystemExit("终局门禁 FAIL(修复轮耗尽)")
     stamp("finalizer+终局门禁")
+
+    # Top-5 #1: drain回传激活(官方差距席: 终稿结论回流管家对话,协议闭环)
+    try:
+        from loopx.capabilities.manager_context.roundtrip import drain
+        from loopx.control_plane import chat_store as _cs
+        _store = _cs.ChatStore(root / "runtime")
+        _reply = (f"研究终案已产出并过终局门禁。终稿路径: "
+                  f"agents/finalizer/outputs/final-plan.md (交付链{6 + plan['N']}件齐, "
+                  f"首试率{len(attempts_ledger(root, plan['N']).get('first_pass', []))}/{plan['N'] + 5})。"
+                  f"详见 gate-report.json。")
+        drain(root / "runtime", root / "registry.json", store=_store, reply=_reply)
+        print(">>> drain回传: 终稿结论已回流管家对话", flush=True)
+    except Exception as e:
+        print(f">>> drain回传跳过({type(e).__name__}: {str(e)[:80]})——不影响交付", flush=True)
+
+    # Top-5 #5: tokenUsage采集(数据席: 数据藏session_projcache,入gate-report)
+    try:
+        token_totals = {}
+        for hp in root.glob("home-*/storages/session_projcache/sessions/*.json"):
+            try:
+                sd = json.loads(hp.read_text(encoding="utf-8"))
+                for row in sd.get("record", {}).get("rows", []):
+                    tu = row.get("val", {}).get("tokenUsage", {}).get("totals", {})
+                    if tu:
+                        key = hp.parent.parent.parent.parent.name  # home-{phase}
+                        agg = token_totals.setdefault(key, {"in": 0, "out": 0, "cacheRead": 0})
+                        agg["in"] += tu.get("uncachedInput", 0)
+                        agg["out"] += tu.get("output", 0)
+                        agg["cacheRead"] += tu.get("cacheRead", 0)
+            except (json.JSONDecodeError, KeyError):
+                continue
+        if token_totals:
+            gr = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+            gr["tokenUsage"] = token_totals
+            write(root / "gate-report.json", gr)
+            total_out = sum(v["out"] for v in token_totals.values())
+            print(f">>> token采集: {len(token_totals)}棒, output合计{total_out // 1000}K", flush=True)
+    except Exception as e:
+        print(f">>> token采集跳过({type(e).__name__})——不影响交付", flush=True)
 
     write(root / "stage-timing.json", timing)
     print(json.dumps({"一路绿灯": True, "总耗时秒": round(time.time() - t_all, 1),
