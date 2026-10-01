@@ -490,6 +490,18 @@ Artifact continuity is part of semantic continuity. Reuse the artifact owner to 
 Long-running work must remain legible in the existing conversation: what is being attempted, who owns the next step, what is actually blocking, and what conclusion is owed. Provide expandable tool/artifact activity and current semantic context in the frontend; Lark gets a concise equivalent and actionable results. Distinguish a queued worker, unavailable host, permission refusal, website login and undelivered answer. Do not expose raw protocol envelopes or claim fine-grained tool activity on adapters that cannot supply it.
 
 The App must also preserve the user's chosen work view across reload and browser history. Manager conversation and Goal overview/tasks/conversation/artifacts use the existing typed workspace route; source loading must not insert duplicate history entries. Preserve the source and Goal identity, retain an unsent draft under its existing owner, and never start or replay a Turn merely to restore navigation. Fresh-entry defaults remain distinct from restoring an explicit view. Packaged navigation recovery qualifies this presentation boundary only; actual receiver adoption, steering and owed-result return retain their independent acceptance requirements.
+The shared App activity control preserves an unsent or unconfirmed adjustment
+across view changes and reload. Composer and inline controls use one TS client
+cache; each inline draft is bound to its original session and Turn. Restoring a
+draft dispatches nothing. Retries of unchanged text retain the same ingress
+identity after unknown delivery or mismatched receipts; confirmed non-delivery
+allows a fresh identity. Editing the instruction starts a distinct request.
+Accepted delivery retires that exact entry without erasing another draft. An
+ended Turn keeps its unsent draft readable and cannot redirect it to newer work.
+Unavailable browser storage preserves page-memory recovery only, not reload
+recovery. Packaged browser transport and the real Chat steering/store tests
+qualify this bounded recovery behavior; live executor adoption, installed App
+readback and Lark steering remain separate acceptance.
 
 Reuse existing capability instructions, context hooks, memory and scheduling owners. Reusable methods may inform planning and handoff, with their source/version visible; remembered lessons do not replace accepted task state or current verification. Stable recurring work may use the existing schedule/event path after its task and replay behavior are understood. This RFC does not add a routine engine, compulsory method learning, a new hook family or business-specific automation.
 

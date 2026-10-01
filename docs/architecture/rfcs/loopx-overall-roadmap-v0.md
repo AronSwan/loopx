@@ -625,6 +625,13 @@ Current status is design proposal; no G1 or default-screen promotion.
 - **Exit:** actual manager→worker and worker→worker callers; follow-up messages, lost source session, oversized answer, duplicate callback, successful send with lost ACK and transport restart. CLI, packaged frontend and Lark read back the same result with audience isolation. Ordinary already-authorized work gains no second confirmation.
 - **Migration/rollback:** characterize first, record old writer/reader mappings and deletion payoff; disabling new production must leave old requests drainable. Do not retain two writable lifecycles.
 
+The GQ08 App correction path now retains inline adjustments and ingress identity
+across view changes/reload through the same TS client cache as the composer.
+Restoration never dispatches work, and a terminal Turn cannot inherit a new
+Turn's target. Packaged recovery, blocked storage, coexisting drafts and real
+Chat ingress/store regression are bounded evidence; live recipient adoption,
+installed readback and Lark correction still belong to R3 qualification.
+
 R3 also qualifies the handoff RFC's hierarchical A6/A8/A13 extension: a managed
 worker requests, validates and integrates another peer's artifact before returning
 to the lead. Reuse the same request and work owners at each level. The ingress
