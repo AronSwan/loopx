@@ -53,7 +53,8 @@ def make_root(tmp_path, n=2, bad=()):
     f = root / "agents/finalizer/outputs"
     f.mkdir(parents=True, exist_ok=True)
     (f / "final-plan.md").write_text(
-        "# 测试课题终案\n决策摘要\n" + FILLER * 10 + "\n决策与行动清单(可打勾)\n", encoding="utf-8")  # 只含'清单'不含'检查表'(门三#3: 双关键词曾致any-of回归测试恒真)
+        "# 测试课题终案\n决策摘要\n评审A(review-1)与评审B(review-2)处理:采纳2条驳回1条\n"
+        + FILLER * 10 + "\n决策与行动清单(可打勾)\n", encoding="utf-8")  # 含双评审引用+处理说明(7-1-2门禁)
     return root
 
 
@@ -584,3 +585,20 @@ def test_cli_failure_log_carries_redacted_env(tmp_path, monkeypatch):
     assert "effective env" in log and "DEEPSEEK_BASE_URL=https://open.bigmodel.cn/api/anthropic" in log
     assert "deadbeef" in log and ".FAKE" not in log and "deadbeefdeadbeef" not in log  # 8位指纹,全文不落盘
     assert "NO_PROXY=*" in log and "HTTP_PROXY" not in log.replace("HTTP_PROXY=", "X")  # 代理已剥
+
+
+# ==== 7-1-2终稿↔评审一致性门禁(结构最小版) ====
+def test_final_plan_must_reference_both_reviews(tmp_path):
+    """终稿须引用双评审+含处理说明——finalizer不可无视评审(7-1-2结构性最小版)。"""
+    root = make_root(tmp_path, n=2)
+    # 正常: 终案含评审A/B+处理说明
+    ok1 = r2.gate(root, include_final=True)
+    rep1 = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep1["ok"]  # make_root的终案本身合格(含"评审"字样+清单)
+    # 破坏: 删掉评审引用
+    (root / "agents/finalizer/outputs/final-plan.md").write_text(
+        "# 终案\n决策摘要\n" + FILLER * 10 + "\n清单 检查表\n", encoding="utf-8")
+    ok2 = r2.gate(root, include_final=True)
+    rep2 = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    failed = [c["check"] for c in rep2["checks"] if not c["pass"]]
+    assert not ok2 and "终稿引用双评审" in failed

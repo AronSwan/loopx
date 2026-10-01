@@ -787,6 +787,19 @@ def gate(root, include_final=True):
     for a, b in (("reviewer-1", "reviewer-2"), ("reviewer-2", "reviewer-1")):
         leaked = list((root / "agents" / a / "inputs").glob(f"review-{b[-1]}.md"))
         chk(f"盲评隔离({a}不见{b})", not leaked)
+    # 7-1-2终稿↔评审一致性(结构性最小版): 终稿须引用两轮评审并含处理说明
+    # (语义级方向反转是评审B的DIRECTION CONSISTENCY检查的职责,门禁只做结构性覆盖)
+    if include_final:
+        fp = root / "agents/finalizer/outputs/final-plan.md"
+        if fp.exists():
+            ft = fp.read_text(encoding="utf-8", errors="replace")
+            refs_both = (("review-1" in ft or "评审A" in ft or "评审-1" in ft) and
+                         ("review-2" in ft or "评审B" in ft or "评审-2" in ft))
+            has_handling = any(w in ft for w in ("采纳", "驳回", "处理说明", "incorporat", "reject"))
+            chk("终稿引用双评审", refs_both,
+                "终稿须引用review-1和review-2(或评审A/B)——finalizer不可无视评审" if not refs_both else "")
+            chk("终稿含评审处理", has_handling,
+                "终稿须含评审处理说明(采纳/驳回逐条)" if not has_handling else "")
     led = attempts_ledger(root, plan["N"])
     first = sorted(p for p, a in led.items() if a == 1)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
