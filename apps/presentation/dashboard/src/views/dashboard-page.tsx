@@ -493,6 +493,7 @@ type PersonalGoalItem = {
 
 type PersonalNeedsYouItem = {
   details?: AttentionDetails;
+  decisionSource?: "todo" | "run_operator_gate";
   actionKind?: string | null;
   blocking: boolean;
   goalId: string;
@@ -1032,6 +1033,7 @@ function buildPersonalHomeModel(
       details: attentionDetails({ task_class: "user_gate", status: "open", note: row.latestRun?.operator_gate?.reason_summary }),
       actionKind: "gate.resolve",
       blocking: true,
+      decisionSource: "run_operator_gate",
       goalId: row.goal.id,
       sourceOrder: payload.attention_queue.items.length + rowOrder,
       taskClass: "user_gate",
