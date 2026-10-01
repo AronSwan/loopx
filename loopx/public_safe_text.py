@@ -108,7 +108,7 @@ CREDENTIAL_LABEL_PATTERN_SOURCE = (
 # them, so leaving them here would give one spelling two owners and make the named
 # reason depend on list order.
 CREDENTIAL_VALUE_CONNECTOR_PATTERN_SOURCE = (
-    r"(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*"
+    r"(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*"
 )
 # A run that carries a digit or a base64-only character. The signal has no
 # length floor: a one-character value still carries a credential value, and the

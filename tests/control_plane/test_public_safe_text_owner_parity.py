@@ -182,6 +182,9 @@ def test_corpus_covers_the_reviewed_credential_shapes() -> None:
         "token_space_digit_value",
         "copula_password_digit_value",
         "copula_token_single_digit_value",
+        "composite_copula_password_digit_value",
+        "composite_copula_secret_quoted_value",
+        "composite_copula_bearer_opaque_value",
         "space_secret_opaque_value",
         "comma_bearer_opaque_value",
         "dash_secret_opaque_value",
@@ -198,6 +201,7 @@ def test_corpus_covers_the_reviewed_credential_shapes() -> None:
         "bearer_word_in_prose",
         "bearer_before_long_ordinary_word",
         "password_copula_ordinary_word",
+        "password_composite_copula_ordinary_word",
         "disclosed_residual_short_letter_value",
     } <= prose_ids
 

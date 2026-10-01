@@ -169,7 +169,10 @@ test("the narrower tier still rejects every value and assignment shape", () => {
     `${bearer} ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH + 24)}`,
     `${password}=hunter2`,
     `${password} is hunter2`,
+    `${password} set to hunter2`,
     `${password} is "a"`,
+    `${password} set to "a"`,
+    `${bearer} set to ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH)}`,
     `${password} is "${"a".repeat(8)}"`,
     `${secret}: env`,
     `${secret} - Qz8m2Xp7`,
@@ -186,6 +189,7 @@ test("the narrower tier still rejects every value and assignment shape", () => {
     `read the ${secret} from the environment`,
     `${bearer} authentication is required here`,
     `the ${password} is configured per environment`,
+    `the ${password} set to rotate after expiry`,
     `${secret} is ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH - 1)}`,
   ];
   for (const value of accepted) {

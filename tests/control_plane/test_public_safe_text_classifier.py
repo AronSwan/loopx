@@ -81,7 +81,9 @@ _TOKEN_WORD = "tok" + "en"
 
 # The two spellings both owners must share, assembled for the same reason as the
 # words above so this file carries no literal credential label.
-SHARED_CONNECTOR = r"(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*"
+SHARED_CONNECTOR = (
+    r"(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*"
+)
 SHARED_LABELS = "(?:" + "Bear" + "er|tok" + "en|pass" + "word|sec" + "ret)"
 
 
@@ -373,9 +375,10 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
         "password_word_in_prose",
         "secret_word_in_prose",
         "rotation_note_names_two_schemes",
-        "bearer_before_long_ordinary_word",
-        "password_copula_ordinary_word",
-        "disclosed_residual_short_letter_value",
+            "bearer_before_long_ordinary_word",
+            "password_copula_ordinary_word",
+            "password_composite_copula_ordinary_word",
+            "disclosed_residual_short_letter_value",
     ]
     assert newly_rejected == [
         "token_space_digit_value",
@@ -415,6 +418,7 @@ _SEPARATORS = (
     (" are ", "value_connector"),
     (" set ", "value_connector"),
     (" to ", "value_connector"),
+    (" set to ", "value_connector"),
     (" of ", "value_connector"),
     (" with ", "value_connector"),
     (". ", "foreign"),
@@ -486,7 +490,7 @@ def test_contract_biconditional_over_the_whole_form_class() -> None:
     # there. The publication tier is pinned in the same sweep so the only
     # difference between the two is the credential-word class.
     forms = _forms()
-    assert len(forms) == 4_032, len(forms)
+    assert len(forms) == 4_256, len(forms)
     word_labels = {word.lower() for word in _WORD_ONLY_LABELS}
     disagreements: list[str] = []
     for text, label, separator, value, kind, value_kind in forms:
@@ -553,8 +557,10 @@ def test_each_contract_signal_is_wired_to_its_own_arm() -> None:
     assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(f"{bearer}:")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} abc123")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} is abc123")
+    assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} set to abc123")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer}, abc123")
     assert QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f'{bearer} is "abc123"')
+    assert QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f'{bearer} set to "abc123"')
     assert not CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} authentication")
     assert not QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} authentication")
 

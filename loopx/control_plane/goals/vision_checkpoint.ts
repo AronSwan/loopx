@@ -131,9 +131,9 @@ const BASIC_CREDENTIAL_VALUE =
 // value shape. The tie between the quantifier and OPAQUE_VALUE_MIN_LENGTH is
 // asserted in the corpus test instead of built into the pattern here.
 export const CONNECTED_CREDENTIAL_VALUE_SHAPE =
-  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
 export const QUOTED_CREDENTIAL_VALUE_SHAPE =
-  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]+["']/i;
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]+["']/i;
 const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)\s*[:=]/i;
 // Ported from the Python owner's two in-policy shape detectors, so one corpus
 // yields one verdict in both runtimes (Refs #5136, direction 4). The third

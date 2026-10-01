@@ -208,6 +208,22 @@
       "note": "The token-shape signal has no length floor: a one-character digit is still a credential value."
     },
     {
+      "id": "composite_copula_password_digit_value",
+      "template": "{PASSWORD_LOWER} set to {DIGIT_VALUE}",
+      "shape": "shaped_value_token",
+      "note": "The composite copula is one connector; matching only 'set' or 'to' would strand the value behind the other word."
+    },
+    {
+      "id": "composite_copula_secret_quoted_value",
+      "template": "{SECRET_LOWER} set to \"{ONE_LETTER}\"",
+      "shape": "quoted_value"
+    },
+    {
+      "id": "composite_copula_bearer_opaque_value",
+      "template": "{BEARER} set to {LONG_LETTER_RUN}",
+      "shape": "opaque_value_run"
+    },
+    {
       "id": "space_secret_opaque_value",
       "template": "{SECRET_LOWER} {OPAQUE_VALUE}",
       "shape": "shaped_value_token"
@@ -313,6 +329,12 @@
       "id": "password_copula_ordinary_word",
       "template": "the {PASSWORD_LOWER} is configured per environment",
       "shape": "credential_word_only"
+    },
+    {
+      "id": "password_composite_copula_ordinary_word",
+      "template": "the {PASSWORD_LOWER} set to rotate after expiry",
+      "shape": "credential_word_only",
+      "note": "Recognizing the complete composite connector must not turn a short ordinary word into a value."
     },
     {
       "id": "disclosed_residual_short_letter_value",
