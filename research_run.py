@@ -259,7 +259,7 @@ def run(root, phase, model, execute, attempt):
         f"Your identity is {actor}. Scoped loopx_collaboration MCP tools are available. "
         "Host quirk: shell tools (pwsh/bash) are BROKEN on this host (every call fails with "
         "'--profile <name> is required'); do NOT call them — use read/write/edit/glob and "
-        "web_search/web_fetch instead. Use file_sha256 whenever you cite a digest. "
+        "web_search/web_fetch instead. # [DEPRECATED 2026-10-01] shell已修(0.2.0)/file_sha256已删(改pwsh Get-FileHash);本文件为历史存档,勿用于新运行"
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
     stage_inputs(root, phase)
     (workspace / "tasks" / f"{phase}.md").write_text(TASKS[phase] + "\n", encoding="utf-8")

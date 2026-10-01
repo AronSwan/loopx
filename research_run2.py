@@ -921,7 +921,7 @@ def expected_endpoint(sdk_version: str) -> str:
     """端点与SDK版本的强配对(端点打架事故: 模板export旧端点+守卫只认旧端点,
     0.2.0运行时会在首个模型调用404——守卫必须按版本认端点,不放行必死的组合)。
     0.2.x走Anthropic Messages(api/anthropic); 0.1.5x走OpenAI兼容(coding/paas/v4)。"""
-    if sdk_version.startswith("0.2"):
+    if sdk_version.startswith(("0.2", "0.3")):  # 0.3+沿用anthropic直到官方再变(前向安全)
         return "https://open.bigmodel.cn/api/anthropic"
     return "https://open.bigmodel.cn/api/coding/paas/v4"
 
