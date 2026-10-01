@@ -236,7 +236,7 @@ import { decideCollaborationLifecycle } from "./collaboration/goal_instance_life
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
 import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
-import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
+import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "./collaboration/semantic_request.ts";
 import {
   evaluateExternalEvidenceAdmission,
   planExternalEvidenceRequest,
@@ -759,6 +759,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
     ],
+    ["collaboration.source_context.normalize", normalizeCollaborationSourceContext],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [
