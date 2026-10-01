@@ -2020,3 +2020,8 @@ This advances T3/L5; it does not replace D2/D3 or flip a provider default.
 2026-09-24: [Leased continuation and remaining local-default packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.md).
 
 Event replay and the reconciled cutover inventory: [2026-09-25](ledger/shared-goal-authority-state-provider-v0/2026-09-25-event-replay.md).
+
+### Settlement-addressed Turn journal readback
+
+The native query now owns recovery lookup and completion capability evidence,
+with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
