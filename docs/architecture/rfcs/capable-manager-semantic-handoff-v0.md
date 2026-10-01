@@ -464,22 +464,34 @@ For shell/Git/API effects outside Core, use an effect-intent ID and the provider
 
 ### 5.11 Long-horizon continuation as a product contract
 
-Concise replies must carry their actual source message before unrelated recent
-context. The shared TS conversation projection joins the captured parent ID and
-conversation ID, bounds quoted text and exposes missing or truncated context.
-The Lark collector preserves its existing parent lookup as a private inbox
-observation; manager and ordinary Goal Topic Turns consume the same projection.
-A parent-bearing mention also requires lookup. No extra history sweep, text
-classifier or execution grant is introduced. A captured quote is not approval,
-fresh fact verification or a new instruction. Unknown ancestry stays unknown;
-recent material cannot silently substitute for it.
+Conversation context is shared by manager and ordinary Agent Turns. Preserve
+explicit references and the authenticated event's ancestry when a formatted
+provider lookup omits it. A thread root is not a direct reply target. Its
+provider-expanded messages supply a separate ordered excerpt, with message
+identities, observed authors/times and coverage omissions; the shared TS owner
+checks conversation/thread/root/current identity, excludes current and later
+messages, and bounds the excerpt. This supplies information for natural
+reasoning rather than classifying “approve”, “continue” or “use the new version”.
+A missing reference does not establish delivery failure. Quoted/history text is
+context, not a new instruction or grant, and thread context does not silently
+replace an unknown explicit referent.
 
-This qualifies collector→inbox→real Chat store/protocol ingress with synthetic
-provider/model fixtures, including replay. It does not qualify live referent
-reasoning, deployed group adoption or the whole handoff. App conversation history
-continues through its existing owner; no App input or opening layout changes in
-this adapter slice. R3 next qualifies installed source readback and the receiver's
-actual interpretation/return, together with current-work recovery and R2 cycles.
+The Lark adapter transports the observation through the immutable inbox; Chat
+and receiver handoff consume the same projection. Keep unrelated recent
+materials and provider operating prompts out of the forwarded source. Reuse
+request identity, receiver assessment and original-return owners; no new
+workflow, trigger policy or execution grant is introduced. Root expansion reuses
+the existing exact-message lookup; it is not a group-history sweep. Excerpts are
+not complete history; oversized or unavailable provider observations remain a
+gap rather than an inferred parent. App history remains with its existing owner,
+so no frontend setting or opening layout changes in this adapter repair.
+
+Synthetic provider/model fixtures qualify collector→inbox→real Chat
+store/protocol→receiver assessment→original return, including replay and invalid
+lineage. Read-only live-provider validation separately checks context recovery;
+it does not certify model interpretation, deployed adoption or full R2/R3.
+Qualify the natural short follow-up and owner action through the installed path
+before advertising the golden query as passed.
 
 A persistent conversation is useful, but work must also survive losing that conversation's executable session. At each supported continuation point, compose the current accepted work state with unresolved request obligations, relevant decisions and changed evidence. Distinguish a dated research conclusion from a current fact. When a correction contradicts an accepted constraint, preserve both revisions and record the receiver's resolution before the affected effect. Do not replay an earlier rejected approach merely because its rejection fell out of the prompt.
 
