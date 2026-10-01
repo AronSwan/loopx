@@ -50,3 +50,12 @@ does not hide or delay the typed timeout.
 An absent PID or stale metadata is evidence to investigate, not permission to
 remove a lock file. The kernel releases `flock` or `msvcrt` ownership when its
 process or file descriptor exits.
+
+
+> **LOCAL DEVIATION (2026-10-01, 调查庭裁决)**: 本机 clone 将 Windows 边车命名为
+> `<lock>.holder`(无 .json 后缀; file_lock.py lock_holder_path 单点改动), 偏离本协议 v0 的
+> `*.lock.holder.json` 明文契约。理由: 遗留边车(进程被杀)混入 *.json 通配扫描致
+> peers.returns()/inbox.pending() 崩溃(复现取证: tmp-holder-exp/run_case.py)。
+> 改名经全树核实无运行时破坏(所有读取方走 lock_holder_path(), TS 侧零字面引用)。
+> 代价自负: 上游未来若在函数外新增字面量引用, 本地须跟改; 旧 .holder.json 残留对本机
+> liveness 判为 absent。上游若修此 bug, 优先采纳其方案并删除本偏离。
