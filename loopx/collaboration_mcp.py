@@ -325,8 +325,6 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
 
-
-
 class Delegations:
     """Host IO for bound peer work; typed grants and observations stay in TS.
 
