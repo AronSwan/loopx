@@ -103,6 +103,33 @@ test("missing File receipt batches stay read-only", async t => {
   await assert.rejects(readFile(store.identityPath), {code: "ENOENT"});
 });
 
+test("file receipt batches reject array holes before reading storage", async t => {
+  const {root, store} = await fixture(t);
+  const first = await store.commitAuthority(commit(null, "present", 1, 1));
+  assert.equal(first.status, "applied");
+  const original = await readFile(store.path);
+  // Sparse arrays are valid string[] values in TypeScript. Every request slot
+  // must be validated, even when an array method would skip an absent property.
+  const empty = new Array<string>(1);
+  const mixed = ["present", "hole", "absent", "present"];
+  delete mixed[1];
+  const masked = new Array<string>(1);
+  masked[Symbol.iterator] = () => ["present"].values();
+  const unreadable = new FileAuthorityStore(root, "unreadable");
+  await mkdir(unreadable.path);
+  assert.equal((await unreadable.readReceipts(["present"])).status, "unavailable");
+  for (const ids of [empty, mixed, masked]) {
+    for (const provider of [store, unreadable]) {
+      for (const result of [await provider.readReceipts(ids),
+        await readAuthorityReceipts(provider, ids)]) {
+        assert.equal(result.status, "failed", "holes cannot produce successful undefined receipt items");
+        if (result.status === "failed") assert.equal(result.reason_code, "provider_protocol_violation");
+      }
+    }
+  }
+  assert.deepEqual(await readFile(store.path), original);
+});
+
 test("file provider persists object keys in deterministic Unicode order", async (t) => {
   const { store } = await fixture(t);
   const ordered = commit(null, "operation-order", 1, 1);

@@ -480,7 +480,8 @@ export class FileAuthorityStore implements AuthorityStore {
       if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 64) {
         throw new AuthorityStoreProtocolError("receipt batch requires 1..64 operations");
       }
-      const normalized = operationIds.map(id => requireAuthorityStoreId(id, "operation id"));
+      const normalized = Array.from({length: operationIds.length}, (_, i) =>
+        requireAuthorityStoreId(operationIds[i], "operation id"));
       const verified = await this.readVerified();
       return {status: "receipts", results: normalized.map((id): AuthorityStoreReceiptResult => {
         const transaction = verified?.receipts.get(id);

@@ -384,7 +384,8 @@ receipt batch contract. File now implements that contract with one exact-byte
 and store-identity proof per batch instead of rereading its envelope for each
 receipt. Caller order, duplicates, missing results and original receipt bodies
 remain intact; each returned body is detached. Invalid input or corrupt retained
-history rejects the batch. Single-receipt error projection stays unchanged.
+history rejects the batch. Array holes are rejected before storage access,
+including through the shared helper. Single-receipt error projection stays unchanged.
 
 On the same detached, restored 1,287-commit history, nine warm samples per arm
 on macOS arm64 / Node 24.21.0 reduce a 16-receipt File batch median from
