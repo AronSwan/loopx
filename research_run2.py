@@ -222,37 +222,73 @@ def url_set(txt):
             for u in URL_ASCII.findall(txt)}
 
 
-# 终稿方向自洽(审计九轮: r9§4.8弹孔的机械堵法; 乙席实证后三轮加固)
-# 窗口禁跨句([^\n。；;]): 乙席10b实测60字窗口跨句号吞并下一句目标
+# 终稿方向自洽(审计九轮: r9§4.8弹孔的机械堵法; 甲乙席交叉实证后四轮加固)
+# 甲席致命发现: 按(主语)分桶不区分转换方向→勘误后的正确r9终稿也会被拦
+# (挂件 人审→自动=生成版 vs 挂件 自动→人审=a式——逻辑自洽但旧法判冲突)
+# 修法: 分桶键改(主语,转换方向),方向从上下文提取"从X转/改Y"或"→Y"
 _DIRECTION_PAT = re.compile(
     r"(挂件|WhatsApp|邮件|widget|表单|email|chat)"
     r"[^\n。；;]{0,60}?(?:转|切|switch|→)[^\n。；;]{0,20}?"
     r"(a式|b式|生成版|辅助版|「生成」|「辅助」|AI生成|AI辅助)", re.I)
-# 乙席7b假阳性: 终稿引用评审被驳回建议时,被驳回的方向词会误判为冲突
-# → 命中前20字含驳回类词则跳过该命中(驳回的引用不是指令)
 _REJECTED_CONTEXT = re.compile(r"驳回|不采纳|已否|拒绝|维持原|已废弃")
+# 方向提取: 从匹配处前后找"从X转/改Y"或"X→Y"模式
+_DIR_FROM_TO = re.compile(r"从['\"\u201c]?（?(人审|自动|human|auto)）?['\"\u201d]?[^\n。；;]{0,20}?(?:转|改|切|switch)[^\n。；;]{0,10}?(人审|自动|human|auto)", re.I)
+_DIR_ARROW = re.compile(r"(人审|自动|human|auto)\s*(?:→|->)\s*(人审|自动|human|auto)", re.I)
+_DIR_TO_ONLY = re.compile(r"(?:转|切|switch\s+to)\s*['\"\u201c]?(人审|自动|human|auto)", re.I)
+
+
+def _extract_direction(txt, match_start, match_end):
+    """从匹配所在句(非±80字窗口——甲席四轮: 邻近句方向会串桶)提取转换方向.
+    句子边界=\\n。；;; 返回方向键(如'人审→自动');提取不到返回'(方向不明)'."""
+    sent_start = match_start
+    while sent_start > 0 and txt[sent_start - 1] not in "\n。；;":
+        sent_start -= 1
+    sent_end = match_end
+    while sent_end < len(txt) and txt[sent_end] not in "\n。；;":
+        sent_end += 1
+    sentence = txt[sent_start:sent_end]
+    m = _DIR_FROM_TO.search(sentence)
+    if m:
+        return f"{m.group(1)}→{m.group(2)}"
+    m = _DIR_ARROW.search(sentence)
+    if m:
+        return f"{m.group(1)}→{m.group(2)}"
+    m = _DIR_TO_ONLY.search(sentence)
+    if m:
+        return f"?→{m.group(1)}"
+    return "(方向不明)"
 
 
 def _direction_conflicts(txt):
-    """同一主语的同一转换方向,文档内不允许绑定矛盾的目标话术.
-    r9实例: '挂件转自动发送→切a式'与'挂件→切生成版'——机械可判.
-    边界(乙席实测): 封闭主语/目标表,窗口内不跨句,驳回引用不算指令;
-    盲区=列表外主语与近义目标逃逸(漏报方向,偏松不偏严,作兜底可用)."""
+    """同一主语+同一转换方向,文档内不允许绑定矛盾的目标话术.
+    甲席四轮修: 分桶键=(主语,方向)——'挂件 人审→自动 切生成版'与
+    '挂件 自动→人审 切a式'方向相反、逻辑自洽,不再误判冲突.
+    r9病句实例: '挂件→自动 切a式'与'挂件→自动 切生成版'——同方向双目标,检出."""
     from collections import defaultdict
-    by_subject = defaultdict(set)
+    by_key = defaultdict(set)
     for m in _DIRECTION_PAT.finditer(txt):
-        # 乙席7b: 回看匹配起点前20字,含驳回类词=引用被驳回的建议,跳过
         prefix = txt[max(0, m.start() - 20):m.start()]
         if _REJECTED_CONTEXT.search(prefix):
             continue
         subject = m.group(1).lower()
         target = m.group(2)
+        direction = _extract_direction(txt, m.start(), m.end())
         if any(w in target for w in ("a式", "辅助", "「辅助」", "AI辅助")):
-            by_subject[subject].add("A档(人审)")
+            by_key[(subject, direction)].add("A档(人审)")
         elif any(w in target for w in ("b式", "生成", "「生成」", "AI生成")):
-            by_subject[subject].add("B档(自动)")
-    conflicts = {s: t for s, t in by_subject.items() if len(t) > 1}
-    return "; ".join(f"{s}→{sorted(t)}" for s, t in conflicts.items())
+            by_key[(subject, direction)].add("B档(自动)")
+    # 方向不明=通配符: 与同主语所有已知方向合并(保守——宁多拦不漏拦,
+    # 修复环可解;甲席四轮修: 不合并则r9病句逃逸)
+    subjects = {s for s, d in by_key}
+    for subj in subjects:
+        dirs = [d for s, d in by_key if s == subj]
+        if "(方向不明)" in dirs and len(dirs) > 1:
+            wildcard = set(by_key[(subj, "(方向不明)")])
+            for d in dirs:
+                if d != "(方向不明)":
+                    by_key[(subj, d)] |= wildcard
+    conflicts = {k: t for k, t in by_key.items() if len(t) > 1}
+    return "; ".join(f"{k[0]}[{k[1]}]→{sorted(t)}" for k, t in conflicts.items())
 
 
 def homog_report(root, n):
