@@ -100,7 +100,8 @@ for (const [action_kind, operation] of [["todo.update", "complete"], ["monitor.u
     "A receipt for another decision cannot confirm this one");
   check(applied({...verified, unblock_resume_state: "a_future_state"})?.dependentEffect === "unknown", "Unrecognized effects stay unknown");
   check(applied({...verified})?.dependentEffect === "unknown", "A receipt without the effect fact makes no claim");
-  check(applied({...verified, unblock_resume_state: null})?.dependentEffect === "no_waiting_work", "No linked work is stated, not guessed");
+  check(applied({...verified, unblock_resume_state: null})?.dependentEffect === "unknown", "An absent resume receipt does not prove no waiting work");
+  check(applied({...verified, unblock_resume_state: "target_or_decision_scope_not_found"})?.dependentEffect === "unknown", "A missing decision scope does not prove no waiting work");
   check(applied({...verified, projection_verified: false, unblock_resume_state: "resumed"})?.dependentEffect === undefined,
     "An unverified readback reports no effect");
   check(compileActionReviewPlan({...decision, normalized_parameters: {...decision.normalized_parameters, decision: "defer"}}).decisionFrame === undefined

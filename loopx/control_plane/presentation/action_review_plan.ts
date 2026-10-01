@@ -1,3 +1,5 @@
+import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
+
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
   proposalId: string;
@@ -74,7 +76,7 @@ type ActionReviewState =
 
 /** An owner decision on one User request, recorded by the canonical User completion owner. */
 export type DecisionReviewFrame = {
-  decision: "approve" | "reject" | "cancel";
+  decision: DecisionOutcome;
   /**
    * What the canonical receipt says happened to the work waiting on it. Only
    * present after a verified apply; an unrecognized or mismatched receipt is
@@ -399,7 +401,7 @@ export function compileOperationReviewFrame(proposalValue: unknown, nowMs?: numb
 }
 
 // Presentation buckets over `ResumeState` in control_plane/todos/user_completion.ts.
-const DEPENDENT_EFFECTS: Readonly<Record<string, NonNullable<DecisionReviewFrame["dependentEffect"]>>> = {
+const DEPENDENT_EFFECTS = {
   resumed: "resumed",
   decision_requirements_remaining: "still_waiting",
   other_user_blockers_active: "still_waiting",
@@ -409,8 +411,8 @@ const DEPENDENT_EFFECTS: Readonly<Record<string, NonNullable<DecisionReviewFrame
   target_not_blocked: "no_waiting_work",
   target_not_active: "no_waiting_work",
   target_not_found: "no_waiting_work",
-  target_or_decision_scope_not_found: "no_waiting_work",
-};
+  target_or_decision_scope_not_found: "unknown",
+} as const satisfies Readonly<Record<ResumeState, NonNullable<DecisionReviewFrame["dependentEffect"]>>>;
 
 function compileDecisionReviewFrame(proposal: Record<string, unknown>): DecisionReviewFrame | undefined {
   if (proposal.action_kind !== "gate.resolve") return undefined;
@@ -421,8 +423,8 @@ function compileDecisionReviewFrame(proposal: Record<string, unknown>): Decision
   if (receipt.outcome !== "gate_resolved" || receipt.decision_outcome !== decision
       || !Object.hasOwn(receipt, "unblock_resume_state")) return { decision, dependentEffect: "unknown" };
   const state = receipt.unblock_resume_state;
-  return { decision, dependentEffect: state === null ? "no_waiting_work"
-    : typeof state === "string" && Object.hasOwn(DEPENDENT_EFFECTS, state) ? DEPENDENT_EFFECTS[state] : "unknown" };
+  return { decision, dependentEffect: typeof state === "string" && Object.hasOwn(DEPENDENT_EFFECTS, state)
+    ? DEPENDENT_EFFECTS[state as keyof typeof DEPENDENT_EFFECTS] : "unknown" };
 }
 
 /**

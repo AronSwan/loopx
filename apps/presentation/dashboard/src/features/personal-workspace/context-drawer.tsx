@@ -1,5 +1,6 @@
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionDetailCard } from "./attention-detail-card";
+import type {DecisionOutcome} from "../../../../../../loopx/control_plane/todos/user_completion_types.js";
 import { attentionSuccessor, canDecideAttention, canReviewAttention } from "./attention-details";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -80,8 +81,6 @@ const todoTransitions = [
   { key: "drawer.taskBlock", operation: "block" },
   { key: "drawer.taskSuccessor", operation: "successor_create" },
 ] as const satisfies readonly { key: "drawer.taskBlock" | "drawer.taskSuccessor"; operation: TodoOperation }[];
-
-type AttentionDecision = "approve" | "reject" | "cancel";
 
 const subagentChildLimits = Array.from({ length: 32 }, (_, index) => index + 1);
 const subagentDomainPattern = /^[a-z][a-z0-9_.-]{0,63}$/u;
@@ -397,7 +396,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     });
   }
 
-  async function previewDecision(attention: WorkspaceAttention, decision: AttentionDecision) {
+  async function previewDecision(attention: WorkspaceAttention, decision: DecisionOutcome) {
     if (readOnly || !canDecideAttention(attention)) return;
     await callbacks.onPreviewAction?.({
       actionKind: "gate.resolve",
