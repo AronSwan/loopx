@@ -602,3 +602,47 @@ def test_final_plan_must_reference_both_reviews(tmp_path):
     rep2 = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
     failed = [c["check"] for c in rep2["checks"] if not c["pass"]]
     assert not ok2 and "final-plan.md 引用双评审" in failed
+
+
+# ==== 升级组严评终报处方: r9两版真稿固化进回归(第四次同族病根治) ====
+def test_structural_gate_on_r9_real_documents(tmp_path):
+    """r9勘误后健康终稿必须过结构级门禁(引用双评审+含处理)——真工件当考卷.
+    自造样本永远不许自证验收(升级组9-2-2纪律,第四次同族病根治)."""
+    import shutil
+    real = Path(r"C:\Users\Administrator\ZCodeProject\loopx-green\.local\research9-run")
+    if not (real / "agents/finalizer/outputs/final-plan.md").exists():
+        pytest.skip("r9运行根不在本机")
+    root = tmp_path / "r9-real"
+    shutil.copytree(real / "agents", root / "agents")
+    shutil.copytree(real / "project", root / "project")
+    shutil.copy(real / "demo.json", root / "demo.json")
+    ok = r2.gate(root, include_final=True)
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    failed = [c["check"] for c in rep["checks"] if not c["pass"]]
+    # r9健康终稿: 结构级门禁必须全过(引用了双评审+含处理说明)
+    assert ok, f"r9健康真稿应过门禁,实得FAIL: {failed}"
+    assert not any("引用双评审" in f for f in failed)
+    assert not any("含评审处理" in f for f in failed)
+
+
+def test_structural_gate_catches_ignored_reviews(tmp_path):
+    """终稿删掉评审引用后必须被拦——结构级门禁的核心职责(finalizer不可无视评审)."""
+    import shutil
+    real = Path(r"C:\Users\Administrator\ZCodeProject\loopx-green\.local\research9-run")
+    if not (real / "agents/finalizer/outputs/final-plan.md").exists():
+        pytest.skip("r9运行根不在本机")
+    root = tmp_path / "r9-no-refs"
+    shutil.copytree(real / "agents", root / "agents")
+    shutil.copytree(real / "project", root / "project")
+    shutil.copy(real / "demo.json", root / "demo.json")
+    # 删掉终稿中所有评审引用(模拟finalizer无视评审)
+    fp = root / "agents/finalizer/outputs/final-plan.md"
+    t = fp.read_text(encoding="utf-8")
+    t = t.replace("review-1", "xxx-1").replace("review-2", "xxx-2")
+    t = t.replace("评审A", "xxx-A").replace("评审B", "xxx-B")
+    fp.write_text(t, encoding="utf-8")
+    ok = r2.gate(root, include_final=True)
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    failed = [c["check"] for c in rep["checks"] if not c["pass"]]
+    assert not ok and any("引用双评审" in f for f in failed), \
+        f"删掉评审引用的终稿应被拦: {failed}"
