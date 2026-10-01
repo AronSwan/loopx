@@ -120,8 +120,15 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   </div>;
 
   const items = page?.items ?? [];
-  const boundAgents = new Set(members.map(member => member.agent_id));
-  const unboundRecords = items.filter(row => !row.agent_id || !boundAgents.has(row.agent_id));
+  const memberRecords = new Map(members.map(member => [member.id, [] as DelegationRecord[]]));
+  const unboundRecords: DelegationRecord[] = [];
+  for (const row of items) {
+    // Inventory has no binding id. Only a unique Agent/Todo match establishes
+    // ownership; historical, incomplete and ambiguous records remain visible.
+    const matches = members.filter(member => member.agent_id === row.agent_id && member.todo_id === row.todo_id);
+    if (matches.length === 1) memberRecords.get(matches[0].id)!.push(row);
+    else unboundRecords.push(row);
+  }
   const pulse = items.reduce((counts, row) => {counts[PULSE_BUCKETS[delegationState(row)]] += 1; return counts;},
     {executing: 0, validating: 0, accepted: 0, attention: 0, dispatched: 0, unknown: 0} as Record<PulseBucket, number>);
   const visibleBuckets = (Object.keys(PULSE_LABELS) as PulseBucket[]).filter(bucket => bucket !== "unknown" || pulse.unknown > 0);
@@ -131,6 +138,9 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
     return <li key={row.record_id} className="goal-team-record" data-state={state}>
       <span className="goal-team-record-state"><StateIcon state={state}/>{showAgent
         ? `${row.agent_id ?? (zh ? "记录不可读" : "Unreadable record")} · ${delegationStateLabel(row, zh)}` : delegationStateLabel(row, zh)}</span>
+      {showAgent ? <details><summary>{zh ? "执行标识" : "Execution identifier"}</summary>
+        <code>{row.operation_id ?? row.record_id}</code>{row.todo_id ? <code>{row.todo_id}</code> : null}
+      </details> : null}
       {row.operation_id ? <button ref={row.operation_id === lastSelection.current ? selectedTrigger : undefined} type="button" onClick={() => {
         lastSelection.current = row.operation_id; setSelected(row.operation_id);
       }}>{zh ? "查看证据与反馈" : "Evidence and feedback"}</button> : null}
@@ -153,7 +163,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
         : `${inspectionTotal ? "Checking" : "Last check"} ${checked}/${members.length}: ${ready} meet local launch prerequisites, ${unverified} runtimes unverified, ${blocked} blocked or unreadable. Inspection does not mean execution.`}</p> : null}
       <ul className="goal-team-bindings">{members.map(member => {
         const tone = checkTone(checks[member.id], Boolean(checkErrors[member.id]));
-        const records = items.filter(row => row.agent_id === member.agent_id);
+        const records = memberRecords.get(member.id)!;
         return <li key={member.id} data-check={tone}>
           <div className="goal-team-member-head">
             <span className="goal-team-avatar" aria-hidden="true">{member.agent_id.slice(0, 1).toUpperCase()}</span>
