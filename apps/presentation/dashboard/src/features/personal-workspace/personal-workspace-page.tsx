@@ -42,6 +42,7 @@ import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
 import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
+import { monitorScheduleReadback } from "./monitor-readback";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
 import { GoalOverview } from "./goal-overview";
@@ -456,7 +457,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
     id: `schedule:${goal.goalId}:${todo.todoId}`,
     kind: "schedule",
     schedule: {
-      agentId: goal.agentId,
+      ...monitorScheduleReadback(todo),
       executionHistory: monitorRun ? [{
         label: monitorRun.run.latestActivity || monitorRun.run.title,
         runId: monitorRun.run.runId,
@@ -465,14 +466,11 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
       }] : [],
       goalId: goal.goalId,
       label: todo.text,
-      schedule: todo.evidence ?? t("schedule.summary"),
       scheduleId: todo.todoId,
       scheduleKind: "monitor",
       sessionId: monitorRun?.run.sessionId,
       status: todo.done || todo.status === "paused" ? "paused" : "active",
-      stopCondition: t("drawer.scheduleDefaultStop"),
-      target: todo.text,
-      timezone: "Asia/Shanghai",
+      target: todo.targetKey || todo.text,
     },
     });
   });
