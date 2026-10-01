@@ -220,13 +220,14 @@ its explicit gate contract. Cancelling a reminder is not cancelling an order,
 withdrawing an external message or authorizing a trade; expiry is not detected
 or acted on automatically by this change.
 
-Compatibility tightening: canonical `todo complete` previously accepted a
-`user_gate` without `--decision-outcome` and closed it without a decision.
-It now rejects that input before any state or dependent effect, matching the
-existing legacy explicit-completion contract. Callers must supply
-`approve|reject|cancel`. The separate `todo update --status done` closure remains
-valid and grants no decision authority; required scopes and blocked dependents
-are preserved. Historical successful receipts remain replayable as recorded.
+Compatibility: canonical `todo complete` continues to accept a `user_gate`
+without `--decision-outcome` as closure only, not approval, rejection or
+cancellation. Its required scopes, scope outcomes and blocked dependents remain
+unchanged, just as for `todo update --status done`. To record a decision and its
+linked effects, explicitly supply `approve|reject|cancel`. The legacy Markdown
+explicit-completion adapter keeps its pre-existing requirement for a decision;
+that adapter's stricter input rule is not imposed on native callers. Historical
+successful receipts remain replayable as recorded.
 
 The delivered cancellation entry point is CLI/managed CLI. Existing Chat
 completion continues through the shared terminal owner, and frontend/Lark
@@ -248,11 +249,12 @@ are replayed as recorded, not reinterpreted as a new cancellation.
 用户 gate 的批准、拒绝和取消仍遵循原契约。取消提醒不等于撤单、撤回外部消息或
 交易授权，本改动也不自动检测到期。
 
-兼容收紧：此前 canonical `todo complete` 接受未带 `--decision-outcome` 的
-`user_gate` 并只关闭事项；现在在任何状态或下游写入前拒绝，与旧路径的显式完成
-契约对齐。调用方须明确传入 `approve|reject|cancel`。独立的
-`todo update --status done` 仍可记录关闭，但不产生决定或批准，保留关联任务的
-阻塞和范围要求。历史成功回执仍按原记录重放。
+保持兼容：canonical `todo complete` 继续接受未带 `--decision-outcome` 的
+`user_gate`，仅关闭事项，不视为批准、拒绝或取消决定；关联任务的阻塞、范围要求
+和范围结果保持不变，与 `todo update --status done` 一样。如需记录决定及关联
+效果，须显式传入 `approve|reject|cancel`。旧 Markdown 显式完成适配器保留原有的
+决定必填规则，不将该适配器更严格的输入规则强加给原生调用方。历史成功回执仍
+按原记录重放。
 
 本交付的取消入口是 CLI/managed CLI；既有 Chat 完成入口复用同一终结权威，前端和
 Lark 读取 canonical 完成状态，但不新增取消按钮、配置或独立聊天权威。直接前端/

@@ -32,11 +32,12 @@ const unavailableSource = (todo: JsonObject): boolean => {
     !["open", "blocked", "deferred"].includes(status);
 };
 
-/** One input rule for native completion and the locked Markdown adapter.
+/** Shared outcome semantics with each caller's existing presence contract.
  * Cancelling a reminder is not an owner approval or a decision-scope outcome.
+ * Native Gate closure may omit a decision; the legacy explicit bridge cannot.
  */
 export function requireCompletionDecisionOutcome(
-  source: JsonObject, outcome: DecisionOutcome | null, materialized = true,
+  source: JsonObject, outcome: DecisionOutcome | null, materialized = true, gateOutcomeRequired = false,
 ): DecisionOutcome | null {
   if (source.role !== "user" || source.task_class !== "user_gate") {
     if (outcome !== null && !(source.role === "user" &&
@@ -45,7 +46,10 @@ export function requireCompletionDecisionOutcome(
     }
     return outcome;
   }
-  if (outcome === null) throw new EffectRuntimeRequestError("user_gate completion requires decision_outcome=approve, reject, or cancel");
+  if (outcome === null) {
+    if (gateOutcomeRequired) throw new EffectRuntimeRequestError("user_gate completion requires decision_outcome=approve, reject, or cancel");
+    return null;
+  }
   if (!materialized) throw new EffectRuntimeRequestError("event-projected user_gate completion must first materialize the gate in active state so its decision outcome is durable");
   return outcome;
 }
@@ -128,6 +132,6 @@ export function evaluateUserCompletion(value: unknown): UserCompletionPlan {
   const outcome = request.decision_outcome == null ? null :
     requireStringLiteral(request.decision_outcome, ["approve", "reject", "cancel"] as const, "decision_outcome");
   requireCompletionDecisionOutcome(source, outcome, request.materialized === undefined
-    ? true : requireBoolean(request.materialized, "materialized"));
+    ? true : requireBoolean(request.materialized, "materialized"), true);
   return planUserCompletion(source, request.todos.map(row => requireJsonObject(row, "todo")), outcome);
 }

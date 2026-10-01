@@ -116,8 +116,9 @@ def test_public_action_closure_and_cli_cancel(tmp_path: Path, monkeypatch, provi
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
-def test_public_gate_requires_decision_but_update_closure_grants_none(
-    tmp_path: Path, monkeypatch, provider,
+@pytest.mark.parametrize("method", ["complete", "update"])
+def test_public_gate_closure_without_decision_preserves_existing_contract(
+    tmp_path: Path, monkeypatch, provider, method,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     repo, state, registry = _write_fixture(tmp_path)
@@ -139,18 +140,29 @@ def test_public_gate_requires_decision_but_update_closure_grants_none(
     before = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
     cli = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry), "todo"]
     identity = ["--goal-id", GOAL_ID, "--todo-id", gate["todo_id"], "--agent-id", AGENT_ID]
-    missing = subprocess.run([*cli, "complete", *identity, "--role", "user"],
-                             capture_output=True, text=True, timeout=45, cwd=repo)
-    assert missing.returncode != 0, missing.stdout
-    assert "user_gate completion requires decision_outcome" in json.loads(missing.stdout)["error"]
-    assert "handler failed unexpectedly" not in missing.stdout
-    assert list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"] == before
-    # Update-done records closure, not a decision; it must not approve the target.
-    closed = subprocess.run([*cli, "update", *identity, "--status", "done", "--no-follow-up",
-                             "--note", "Record closure without a decision"],
-                            capture_output=True, text=True, timeout=45, cwd=repo)
+    command = [*cli, method, *identity]
+    if method == "complete":
+        command += ["--role", "user", "--evidence", "Record closure without a decision"]
+    else:
+        command += ["--status", "done", "--no-follow-up", "--note", "Record closure without a decision"]
+    closed = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=repo)
+    if provider == "legacy" and method == "complete":
+        # Preserve this older adapter's explicit-decision rule, not impose it on native callers.
+        assert closed.returncode != 0, closed.stdout
+        assert "user_gate completion requires decision_outcome" in json.loads(closed.stdout)["error"]
+        assert "handler failed unexpectedly" not in closed.stdout
+        assert list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"] == before
+        return
     assert closed.returncode == 0, closed.stdout + closed.stderr
+    payload = json.loads(closed.stdout)
+    assert payload.get("decision_outcome") is None
+    assert payload.get("decision_scope_resolution") is None
+    assert payload.get("unblock_resume") is None
     after = {row["todo_id"]: row for row in list_goal_todos(
         registry_path=registry, goal_id=GOAL_ID)["todos"]}
     assert after[gate["todo_id"]]["status"] == "done"
     assert after[target["todo_id"]] == next(row for row in before if row["todo_id"] == target["todo_id"])
+    replay = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=repo)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert after == {row["todo_id"]: row for row in list_goal_todos(
+        registry_path=registry, goal_id=GOAL_ID)["todos"]}

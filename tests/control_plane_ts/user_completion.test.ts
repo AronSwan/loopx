@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {evaluateUserCompletion, planUserCompletion} from "../../loopx/control_plane/todos/user_completion.ts";
+import {evaluateUserCompletion, planUserCompletion, requireCompletionDecisionOutcome} from "../../loopx/control_plane/todos/user_completion.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "publish"};
@@ -102,4 +102,13 @@ test("shared completion bridge permits action cancellation but not invented appr
     /user_gate completion requires/);
   assert.throws(() => evaluateUserCompletion({...request, source: gate, materialized: false}),
     /must first materialize/);
+});
+
+test("native Gate closure without a decision preserves requirements and grants no approval", () => {
+  const before = structuredClone(target);
+  assert.equal(requireCompletionDecisionOutcome(gate, null), null);
+  assert.deepEqual(planUserCompletion(gate, [target, gate], null), {
+    updates: {}, unblock_resume: null, decision_scope_resolution: null,
+  });
+  assert.deepEqual(target, before);
 });

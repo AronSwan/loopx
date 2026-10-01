@@ -80,8 +80,8 @@ export function registerUserCompletionFollowthroughConformance(provider: string,
           "coordination_operation_identity_mismatch");
       });
     }
-    for (const outcome of ["approve", "reject", "cancel"] as const) {
-      test(`${provider}: linked User ${outcome} is atomic and replay-safe (${schema})`, async t => {
+    for (const outcome of [null, "approve", "reject", "cancel"] as const) {
+      test(`${provider}: linked User ${outcome ?? "closure without decision"} is atomic and replay-safe (${schema})`, async t => {
         const {store, contender} = await factory(t);
         const goal = "user-decision-followthrough";
         const fixture = productionScaleUserCompletionFixture(goal, schema, outcome === "approve");
@@ -134,7 +134,12 @@ export function registerUserCompletionFollowthroughConformance(provider: string,
         assert.equal(rows.find(row => row.todo_id === fixture.source)!.status, "done");
         assert.equal(dependent.status, "blocked");
         assert.equal(dependent.claimed_by, "agent-a");
-        if (outcome === "approve") {
+        if (outcome === null) {
+          assert.deepEqual(dependent, (before.head.todos as JsonObject[]).find(row => row.todo_id === fixture.target),
+            "Gate closure without a decision must not change dependent authority or state");
+          assert.equal(applied.unblock_resume == null, true);
+          assert.equal(applied.decision_scope_resolution == null, true);
+        } else if (outcome === "approve") {
           assert.deepEqual(dependent.required_decision_scopes, []);
           assert.equal((applied.unblock_resume as JsonObject).state, "other_user_blockers_active");
         } else {
