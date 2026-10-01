@@ -928,11 +928,15 @@ def expected_endpoint(sdk_version: str) -> str:
 
 def live_pipeline_processes():
     """一场一管的机械牙(r9事故: 首例中途死亡源于宿主与管线并发拉起effect runtime)。
-    扫描本机是否已有 research_run2.py auto 在跑(排除自身)。"""
+    只认 python.exe 进程且命令行同时含 research_run2.py + auto——
+    bash包装器/powershell探针/conhost的命令行也含文件名但不是管线(首战假阳性教训)。"""
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -like '*research_run2.py*' -and $_.CommandLine -notlike '*Get-CimInstance*'} | "
+             "Get-CimInstance Win32_Process | Where-Object "
+             "{$_.Name -like 'python*' -and $_.CommandLine -like '*research_run2.py*' "
+             "-and $_.CommandLine -like '*auto*' "
+             "-and $_.CommandLine -notlike '*Get-CimInstance*'} | "
              "Select-Object -ExpandProperty ProcessId"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         if r.returncode != 0:
