@@ -7,6 +7,7 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -99,7 +100,7 @@ export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
   };
   const transaction = requireJsonObject(plan.transaction, "Turn plan transaction");
   requireThat(typeof transaction.turn_key === "string"
-    && /^sha256:[a-f0-9]{64}$/.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
+    && ENVELOPED_SHA256_PATTERN.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
   return {
     schema_version: "loopx_delegation_turn_plan_decision_v0",
     state: "planned",
@@ -136,6 +137,30 @@ export function delegationRuntimeFacts(executor: JsonObject): JsonObject {
   return facts;
 }
 
+const todoValidationReasons = new Set([
+  "independent_delegation_validation_required", "completion_validation_declaration_unavailable",
+  "completion_validation_declaration_mismatch",
+]);
+
+/** Project the existing validation owner's facts, never its commands or private
+ * errors. Matching identity and file readiness retain the original admission. */
+function delegationAcceptanceFacts(todoId: unknown, acceptance: JsonObject | null, filesCurrent: unknown) {
+  const matching = acceptance?.todo_id === todoId;
+  const ready = matching && acceptance?.state === "ready" && filesCurrent === true;
+  if (ready) return {acceptance_ready: true, acceptance_reason_code: null, acceptance_next_action: "none"};
+  if (matching && acceptance?.state === "unbound" && typeof acceptance.reason === "string"
+      && todoValidationReasons.has(acceptance.reason)) {
+    return {acceptance_ready: false, acceptance_reason_code: acceptance.reason,
+      acceptance_next_action: "review_original_todo_validation"};
+  }
+  if (matching && acceptance?.state === "ready" && filesCurrent === false) {
+    return {acceptance_ready: false, acceptance_reason_code: "validation_files_unavailable",
+      acceptance_next_action: "restore_original_validation_files"};
+  }
+  return {acceptance_ready: false, acceptance_reason_code: "acceptance_binding_unavailable",
+    acceptance_next_action: "review_original_task_acceptance"};
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
@@ -157,6 +182,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
         state: "workspace_unavailable", workspace_state: workspace.state,
         workspace_next_action: "review_operator_workspace_binding",
         turn_eligible: false, turn_route: null, acceptance_ready: false,
+        acceptance_reason_code: null, acceptance_next_action: "none",
         authority_ready: null, authority_reason: null, authority_state: "uninspected",
         authority_next_action: "none", promotion_from_surface_allowed: false,
         executor: null,
@@ -189,6 +215,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       schema_version: "loopx_delegation_preflight_v0", binding,
       state: "authority_unavailable", turn_eligible: false, turn_route: null,
       acceptance_ready: false, authority_ready: false,
+      acceptance_reason_code: null, acceptance_next_action: "none",
       authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
       authority_state: authorityState, authority_next_action: authorityNextAction,
       promotion_from_surface_allowed: false,
@@ -213,8 +240,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     return {
       schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
       turn_eligible: false, turn_route: null, turn_blocker: refusal,
-      acceptance_ready: acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready"
-        && params.validation_files_current === true,
+      ...delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current),
       authority_ready: true, authority_reason: null, authority_state: "promoted",
       authority_next_action: "none", promotion_from_surface_allowed: false,
       executor: null, effects,
@@ -230,18 +256,20 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   requireThat(typeof route.would_invoke_host === "boolean", "Turn admission observation required");
   const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
-  const pinned = acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready" && params.validation_files_current === true;
+  const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
+  const pinned = acceptanceFacts.acceptance_ready;
   const state = !eligible ? "turn_blocked" : !pinned ? "acceptance_unavailable"
     : executor.available === false ? "runtime_unavailable"
     : executor.available === null ? "runtime_unverified" : "launchable";
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
     state, turn_eligible: eligible, turn_route: route.kind,
-    acceptance_ready: pinned, authority_ready: true, authority_reason: null,
+    ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile,
+      ...(executor.operation_transport ? {operation_transport: executor.operation_transport} : {}),
       ...delegationRuntimeFacts(executor)},
     effects,
     note: "Point-in-time preflight, not an execution permit or evidence of running work. "
@@ -260,7 +288,7 @@ export function delegationInventoryQuery(params: JsonObject): JsonObject {
   const cursor = params.cursor ?? null;
   requireThat(Number.isInteger(limit) && Number(limit) >= 1 && Number(limit) <= 50,
     "delegation inventory limit must be between 1 and 50");
-  requireThat(cursor === null || (typeof cursor === "string" && /^[a-f0-9]{64}$/.test(cursor)),
+  requireThat(cursor === null || (typeof cursor === "string" && BARE_SHA256_PATTERN.test(cursor)),
     "invalid delegation inventory cursor");
   return {limit, cursor};
 }
@@ -268,7 +296,7 @@ export function delegationInventoryQuery(params: JsonObject): JsonObject {
 /** The host supplies a fresh Delegations.read result, never a saved status. */
 export function delegationInventoryItem(params: JsonObject): JsonObject {
   const record = requireJsonObject(params.record, "delegation inventory record");
-  requireThat(typeof record.record_id === "string" && /^[a-f0-9]{64}$/.test(record.record_id),
+  requireThat(typeof record.record_id === "string" && BARE_SHA256_PATTERN.test(record.record_id),
     "invalid delegation record address");
   requireThat(record.operation_id === null || (typeof record.operation_id === "string"
     && /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(record.operation_id)), "invalid delegation operation identity");
@@ -297,7 +325,7 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
     result.artifacts = observation.artifacts.map(value => {
       const artifact = requireJsonObject(value, "accepted artifact");
       requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
-        && /^[a-f0-9]{64}$/.test(artifact.sha256), "invalid accepted artifact reference");
+        && BARE_SHA256_PATTERN.test(artifact.sha256), "invalid accepted artifact reference");
       return {ref: artifact.ref, sha256: artifact.sha256};
     });
   }

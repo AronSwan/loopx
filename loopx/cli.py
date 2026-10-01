@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+# Source-tree invocations must use the same bounded entrypoint as the console
+# script. Keep the full parser below importable for compatibility callers; the
+# entrypoint can still import this module by name when a full-parser fallback is
+# required, without executing this module-entry branch a second time.
+if __name__ == "__main__":
+    from .entrypoint import main as _entrypoint_main
+
+    raise SystemExit(_entrypoint_main())
+
 from .cli_commands.automation_cadence import (
     register_automation_cadence_command, handle_automation_cadence_command,
 )
@@ -15,7 +24,7 @@ from .capabilities.multi_subagent.cli import (
 )
 from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
 from .cli_commands.manager_inbox import register_manager_inbox, handle_manager_inbox
-from .cli_commands.delegation import register_delegation, handle_delegation
+from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
     handle_content_ops_command,
     register_content_ops_commands,
@@ -84,17 +93,13 @@ from .capabilities.external_research.cli import (
     register_external_evidence_commands,
 )
 from .cli_commands import (
-    handle_turn_command,
     handle_benchmark_command,
     handle_bootstrap_connect_command,
     handle_canary_command,
     handle_coordination_shadow_command,
-    handle_authority_archive_command,
     handle_capability_command,
-    handle_doctor_command,
     handle_dreaming_command,
     handle_evidence_log_command,
-    handle_extension_command,
     handle_explore_command,
     handle_first_run_report_command,
     handle_goal_channel_command,
@@ -112,7 +117,6 @@ from .cli_commands import (
     handle_ready_score_command,
     handle_review_batch_command,
     handle_registry_admin_command,
-    handle_slash_commands_command,
     handle_starter_command,
     handle_summary_all_command,
     handle_support_control_command,
@@ -199,8 +203,7 @@ from .extensions.lark.periodic_report_cli import (
     register_lark_periodic_report_commands,
 )
 from .help_surface import (
-    build_command_reference_payload,
-    render_command_reference_markdown,
+    register_command_reference,
     render_concise_help,
     top_level_help_requested,
 )
@@ -263,11 +266,7 @@ def build_parser() -> LoopXArgumentParser:
 
     register_version_command(sub, add_subcommand_format)
 
-    commands_parser = sub.add_parser(
-        "commands",
-        help="Show grouped LoopX command reference for operators and contributors.",
-    )
-    add_subcommand_format(commands_parser)
+    register_command_reference(sub)
 
     register_bootstrap_connect_command(sub)
 
@@ -398,6 +397,8 @@ def main(argv: list[str] | None = None) -> int:
         pass  # demo package absent in installed builds; no question rewrite
     parser = build_parser()
     args = parser.parse_args(raw_argv)
+    from .usage_ping import select_operation
+    select_operation(args)
     args.format = resolve_global_output_format(args)
     guard_result = enforce_native_controller_guard(args)
     if guard_result is not None:
@@ -416,14 +417,6 @@ def main(argv: list[str] | None = None) -> int:
     if version_result is not None:
         return version_result
 
-    if args.command == "commands":
-        print_payload(
-            build_command_reference_payload(),
-            output_format(args),
-            render_command_reference_markdown,
-        )
-        return 0
-
     bootstrap_connect_result = handle_bootstrap_connect_command(
         args,
         registry_path=registry_path,
@@ -435,9 +428,6 @@ def main(argv: list[str] | None = None) -> int:
     starter_result = handle_starter_command(args, print_payload)
     if starter_result is not None:
         return starter_result
-
-    if args.command == "doctor":
-        return handle_doctor_command(args, print_payload)
 
     workflow_skills_result = handle_workflow_skills_command(
         args,
@@ -505,15 +495,6 @@ def main(argv: list[str] | None = None) -> int:
     if reliability_diagnostics_result is not None:
         return reliability_diagnostics_result
 
-    extension_result = handle_extension_command(
-        args,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if extension_result is not None:
-        return extension_result
-
     change_quality_result = handle_change_quality_command(
         args,
         registry_path=registry_path,
@@ -544,16 +525,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ml-experiment":
         return handle_ml_experiment_command(args, output_format=output_format, print_payload=print_payload)
-
-    turn_result = handle_turn_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if turn_result is not None:
-        return turn_result
 
     host_mode_plan_result = handle_host_mode_plan_command(
         args,
@@ -706,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
 
     semantic_preference_result = handle_semantic_preference_command(
         args,
+        registry_path=registry_path,
         runtime_root_arg=args.runtime_root,
         output_format=output_format,
         print_payload=print_payload,
@@ -827,10 +799,18 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "manager-inbox":
-        return handle_manager_inbox(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
-    if args.command == "delegation":
-        return handle_delegation(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
+        from .control_plane.projects.registry_codec import load_project_registry
+        from .paths import resolve_runtime_root
 
+        return handle_manager_inbox(
+            args,
+            registry_path,
+            resolve_runtime_root(
+                load_project_registry(registry_path),
+                args.runtime_root,
+                registry_path=registry_path,
+            ),
+        )
     lark_inbox_result = handle_lark_inbox_command(
         args,
         registry_path=registry_path,
@@ -858,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
         print_payload=print_payload,
         runtime_root=(
             effective_runtime_root(registry_path, args.runtime_root)
-            if registry_path.exists()
+            if args.command == "pr-review" and registry_path.exists()
             else None
         ),
     )
@@ -872,14 +852,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if deepresearch_result is not None:
         return deepresearch_result
-
-    slash_commands_result = handle_slash_commands_command(
-        args,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if slash_commands_result is not None:
-        return slash_commands_result
 
     if args.command == "dreaming":
         return handle_dreaming_command(
@@ -917,13 +889,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if cadence_result is not None:
         return cadence_result
-    authority_archive_result = handle_authority_archive_command(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if authority_archive_result is not None:
-        return authority_archive_result
-
     coordination_shadow_result = handle_coordination_shadow_command(
         args,
         registry_path=registry_path,
@@ -1029,7 +994,3 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

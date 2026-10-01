@@ -102,7 +102,7 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section }: { section: "steward" | "other" }) {
+export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "other"; onChanged?: () => void }) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
@@ -279,6 +279,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setNotice(result.status === "applied"
         ? t(operation === "remove" ? "machine.removed" : "machine.applied")
         : t("machine.unchanged"));
+      onChanged?.();
     } catch (cause) {
       setPreview(null);
       setPreviewOperation("upsert");
@@ -312,6 +313,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setPreview(null);
       await reload();
       setNotice(t("machine.rolledBack"));
+      onChanged?.();
     } catch (cause) {
       setRollbackPlan(null);
       setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
@@ -363,6 +365,15 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
             source={selected.available_scopes.includes("machine") ? configured ? "machine_default" : "capability_default" : undefined} />
           <CapabilityEditorStatus available={editorAvailable} t={t} description={!selected.available_scopes.includes("machine") ? t("machine.goalOnly")
               : t("machine.editorUnavailableDescription")} />
+
+          {selected.capability_id === "goal_storage" ? (
+            <section className="personal-capability-behavior-note">
+              <ShieldCheck aria-hidden size={18} />
+              <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><p>{locale === "zh-CN"
+                ? "创建时固定选择，审核晋升后生效。已有 Goal 不变；迁移需单独备份、停止写入并结算租约。"
+                : "Fixed at creation and used after reviewed promotion. Existing Goals are unchanged; migration requires a separate backup, stopped writers and settled leases."}</p></div>
+            </section>
+          ) : null}
 
           {selected.capability_id === "periodic_report" ? (
             <section className="personal-capability-behavior-note">

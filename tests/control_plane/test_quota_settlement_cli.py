@@ -25,6 +25,10 @@ from loopx.control_plane.quota.settlement_validation import (
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    load_scheduler_state,
+)
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.rollout_event_log import build_rollout_event
 
@@ -2371,9 +2375,20 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         runtime,
         *settled_ack_hint["cli_args"],
     )
-    assert ack_rc == 0, ack
-    assert ack["scheduler_state_mutated"] is True
-    assert ack["already_applied"] is False
+    # The intervening fresh_guard superseded this Turn for host writeback,
+    # even though its original delivery settlement still replays correctly.
+    assert ack_rc == 1, ack
+    assert ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+    assert ack["scheduler_state_mutated"] is False
+    assert ack["write_performed"] is False
+    assert ack["appended"] is False
+    assert load_scheduler_state(
+        runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    ) is None
+    assert _spend_run_count(runtime) == 1
 
     fresh_turn_rc, fresh_turn = _run_cli(
         registry_path,
@@ -2392,6 +2407,19 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert fresh_turn_rc == 0, fresh_turn
     assert fresh_turn["selected_todo"]["todo_id"] == successor_id
+    fresh_ack_args = fresh_turn["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+    fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert fresh_ack_rc == 0, fresh_ack
+    assert fresh_ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert fresh_ack["mode"] == "scheduler-ack"
+    assert fresh_ack["scheduler_commit"]["written"] is True
+    scheduler_bytes = Path(fresh_ack["scheduler_state_path"]).read_bytes()
+    replay_ack_rc, replay_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert replay_ack_rc == 0, replay_ack
+    assert replay_ack["scheduler_commit"]["replayed"] is True
+    assert replay_ack["scheduler_commit"]["written"] is False
+    assert Path(fresh_ack["scheduler_state_path"]).read_bytes() == scheduler_bytes
+    assert _spend_run_count(runtime) == 1
 
 
 def _assert_material_monitor_writeback_can_add_workspace_before_spend(
@@ -3087,6 +3115,77 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     assert spend["settlement_identity"] == identity
     assert spend["delivery_workspace_causality"]["todo_id"] == TODO_ID
     assert spend["delivery_workspace_causality"]["requirement"] == "not_required"
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "expected_source"),
+    (
+        # Kiro CLI drives an in-session `/goal` loop and settles as a visible Goal.
+        ("kiro-cli", "visible-goal"),
+        # Hosts that stay on generic_cli keep the heartbeat spend unchanged.
+        ("opencode", "heartbeat"),
+    ),
+)
+def test_host_runtime_profile_selects_spend_source_through_real_settlement(
+    tmp_path: Path,
+    agent_type: str,
+    expected_source: str,
+) -> None:
+    from loopx.host_loop_activation import scheduler_command_binding_for_agent_type
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)[
+        "runtime_profile"
+    ]
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile=runtime_profile,
+        thin=True,
+    )
+    turn_instance_id = f"{agent_type}-iteration-1"
+    # The thin body tells the agent to mint LOOPX_TURN per iteration.
+    guard_command = (
+        prompt["quota_guard_command"]
+        .replace("$HOME/.codex/loopx/registry.global.json", str(registry_path))
+        .replace('"${LOOPX_TURN:?}"', turn_instance_id)
+    )
+    assert f"--runtime-profile {runtime_profile}" in guard_command
+    guard_rc, guard = _run_generated_cli(guard_command, registry_path=registry_path)
+    assert guard_rc == 0, guard
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"]["turn_instance_id"] == turn_instance_id
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "visible_goal_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    command = refresh["settlement_owed"]["command"]
+    assert f"--source {expected_source}" in command
+    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(command)[1:])
+    assert spend_rc == 0, spend
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == plan["identity"]
     assert _spend_run_count(runtime) == 1
 
 
@@ -5018,13 +5117,21 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     )
     assert ack_rc == 0, ack
     assert ack["ok"] is True
-    assert ack["mode"] == "scheduler-ack-current"
-    assert ack["status"] == "heartbeat_settled_skip"
-    assert ack["idempotent_replay"] is True
-    assert ack["write_performed"] is False
-    assert ack["scheduler_state_mutated"] is False
-    assert ack["quota_spend_performed"] is False
+    # Host handoff is outside delivery settlement. Its current receipt still
+    # permits the first ACK; replay must preserve bytes and the single debit.
+    assert ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert ack["mode"] == "scheduler-ack"
+    assert ack["scheduler_commit"]["written"] is True
+    assert ack["scheduler_state_mutated"] is True
     assert ack["appended"] is False
+    scheduler_bytes = Path(ack["scheduler_state_path"]).read_bytes()
+    ack_replay_rc, ack_replay = _run_cli(
+        registry_path, runtime, *original_scheduler_ack_args
+    )
+    assert ack_replay_rc == 0, ack_replay
+    assert ack_replay["scheduler_commit"]["replayed"] is True
+    assert ack_replay["scheduler_commit"]["written"] is False
+    assert Path(ack["scheduler_state_path"]).read_bytes() == scheduler_bytes
     assert _spend_run_count(runtime) == 1
 
     fresh_turn_id = "turn-autonomous-replan-settlement-2"
@@ -5438,7 +5545,7 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert _classification_count(runtime, "replan_noop") == 0
 
 
-def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_explicit_conflict(
+def test_runtime_capability_reentry_replays_bound_receipt_after_rejected_rebind(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -5497,7 +5604,10 @@ def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_exp
     assert conflict_rc == 1, conflict
     assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     assert "explicitly requested Todo" in conflict["reason"]
-    assert conflict["heartbeat_receipt"]["status"] == "write_failed"
+    assert conflict["heartbeat_receipt"]["status"] == "replayed"
+    assert conflict["heartbeat_receipt"]["event_id"] == first["heartbeat_receipt"]["event_id"]
+    assert conflict["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert conflict["effective_action"] == "quota_skip"
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
 
 

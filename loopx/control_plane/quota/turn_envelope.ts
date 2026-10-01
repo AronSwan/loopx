@@ -6,7 +6,7 @@ import {
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { turnStartPromptBudgetBytes } from "../capability_hooks.ts";
+import { projectTurnStartUnavailableContext, turnStartPromptBudgetBytes } from "../capability_hooks.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
 import { measureTurnEnvelope, turnEnvelopeBudgetBytes, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
@@ -255,7 +255,7 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
   if (Object.keys(source).length === 0) return null;
   const compact = compactFields(source, [
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
-    "required_outcome", "allowed_terminal", "bounded_frontier",
+    "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id",
   ]);
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.
@@ -299,11 +299,13 @@ function requiredReads(interaction: JsonObject, payload: JsonObject): JsonObject
   const raw = interaction.required_reads || payload.required_reads;
   if (!Array.isArray(raw)) return [];
   const result: JsonObject[] = [];
-  for (const value of raw.slice(0, 5)) {
+  for (const value of raw) {
     const item = object(value);
     const promptBudget = item.source === "turn_start_capability_hook"
       ? turnStartPromptBudgetBytes(item.prompt_budget_bytes) : 0;
-    const command = text(item.command, promptBudget || 360);
+    // Required reads are executable obligations, not display summaries. Keep
+    // every admitted command byte-for-byte, including quoted path whitespace.
+    const command = scalarString(item.command, "required read command");
     if (!command) continue;
     const compact: JsonObject = { command };
     if (promptBudget) compact.prompt_budget_bytes = promptBudget;
@@ -517,6 +519,8 @@ function contractCapsule(
     );
     if (Object.keys(compact).length > 0) capsule[sourceKey] = compact;
   }
+  const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
+  if (unavailableContext) capsule.unavailable_context = unavailableContext;
   // Preserve the bounded source diagnosis; the generic capsule list path is
   // for scalar lists and must not stringify structured component checks.
   const diagnostics = object(payload.vision_continuation_audit).outcome_checkpoint_diagnostics;
@@ -602,15 +606,18 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   // A governed capability action has already won the live decision. Stale
   // replan/host-reentry projections must not replace its exact command.
   const replanPacket = capabilityIntent ? null : replanActionPacket(payload);
+  const replanSettlementOnly = object(payload.replan_action_packet).settlement_only === true;
   const recommendedAction = replanPacket
-    ? "apply replan_action_packet and emit one required semantic outcome"
+    ? replanSettlementOnly
+      ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
+      : "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
   // The signed host action is executable authority, not a display summary.
   // Budget diagnostics may warn on long commands but must not cut them.
   const primaryAction = scalarString(agentChannel.primary_action, "agent_channel.primary_action").trim();
   const action: JsonObject = {
     recommended_action: recommendedAction,
-    primary_action: replanPacket
+    primary_action: replanPacket && !replanSettlementOnly
       ? "produce one required semantic outcome"
       : primaryAction || null,
     must_attempt: Boolean(agentChannel.must_attempt),
@@ -633,10 +640,12 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   if (nextCliActions.length === 0 && Array.isArray(cliChannel.next_cli_actions)) {
     nextCliActions = [...cliChannel.next_cli_actions].map(pythonString);
   }
-  if (replanPacket) {
+  let preserveBoundReplanCommands = replanSettlementOnly;
+  if (replanPacket && !replanSettlementOnly) {
     const writebackContract = object(object(payload.replan_action_packet).writeback_contract);
     const successorCommand = writebackContract.successor_command;
     const refreshCommand = nextCliActions.find((item) => item.includes("refresh-state"));
+    const closeoutGuard = nextCliActions.find((item) => item.includes("quota should-run"));
     nextCliActions = [];
     if (successorCommand) {
       nextCliActions.push(
@@ -644,6 +653,8 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
       );
     }
     if (refreshCommand) nextCliActions.push(refreshCommand);
+    else if (closeoutGuard) nextCliActions.push(closeoutGuard);
+    preserveBoundReplanCommands = Boolean(closeoutGuard);
   }
   const selectionRequired = cliChannel.selection_required === true;
   const writeback: JsonObject = {
@@ -662,7 +673,11 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
     writeback.selection_command_ref =
       "full_decision.interaction_contract.cli_channel.selection_command";
   } else {
-    writeback.next_cli_actions = textList(nextCliActions, 5, 420);
+    // Original-Turn identities often follow an absolute runtime path. Cutting
+    // a closeout command into display text can erase its binding or execute flag.
+    writeback.next_cli_actions = preserveBoundReplanCommands
+      ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
+      : textList(nextCliActions, 5, 420);
   }
   for (const field of ["replan_settlement_contract", "delivery_workspace_causality"]) {
     const value = object(cliChannel[field]);

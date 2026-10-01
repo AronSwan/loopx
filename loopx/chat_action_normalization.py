@@ -7,12 +7,12 @@ import re
 from typing import Any, Mapping
 
 from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.content_digest import BARE_SHA256_PATTERN
 from .control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
 from .control_plane.todos.contract import require_supported_todo_resume_when
 from .registry import registry_goals
 
 
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,200}$")
 
 
@@ -65,7 +65,7 @@ class ChatActionNormalizationMixin:
             if not isinstance(payload, Mapping):
                 raise ValueError("operation payload must be an object")
             payload_digest = str(values.get("payload_digest") or "").strip()
-            if not _SHA256.fullmatch(payload_digest):
+            if not BARE_SHA256_PATTERN.fullmatch(payload_digest):
                 raise ValueError("operation payload_digest must be lowercase SHA-256")
             if _digest(payload) != payload_digest:
                 raise ValueError("operation payload_digest does not match payload")
@@ -147,22 +147,112 @@ class ChatActionNormalizationMixin:
             normalized_projection["fields"] = normalized_fields
 
             raw_executor = values.get("executor")
-            if not isinstance(raw_executor, Mapping) or set(raw_executor) != {
+            origin_goal_ref = None
+            if isinstance(raw_executor, Mapping) and raw_executor.get("kind") in {
+                "agent_session",
+                "managed_turn",
+            }:
+                from .control_plane.collaboration.goal_instance_scope import (
+                    collaboration_goal_scope,
+                )
+                from .control_plane.effect_runtime import (
+                    EffectRuntimeRejected,
+                    effect_runtime_result,
+                )
+                from .control_plane.goals.activation import goal_is_stopped
+                from .thread_agent_binding import resolve_registry_thread_agent_binding
+
+                try:
+                    executor = dict(
+                        effect_runtime_result(
+                            "operation.agent_executor.normalize",
+                            {"executor": dict(raw_executor)},
+                        )
+                    )
+                except EffectRuntimeRejected as exc:
+                    raise ValueError(str(exc)) from exc
+                binding = (
+                    resolve_registry_thread_agent_binding(
+                        registry_path=self.registry_path,
+                        host_surface=str(executor.get("host_surface", "")),
+                        thread_id=str(executor.get("thread_id", "")),
+                    )
+                    if executor["kind"] == "agent_session"
+                    else None
+                )
+                if executor["kind"] == "agent_session" and (
+                    binding.get("status") != "bound"
+                    or (
+                        binding.get("goal_id"),
+                        binding.get("agent_id"),
+                    )
+                    != (goal_id, agent_id)
+                ):
+                    raise ValueError(
+                        "agent operation requires the original registered session"
+                    )
+                if normalized_projection["simulated"] is not False:
+                    raise ValueError(
+                        "agent execution handoff cannot masquerade as simulation"
+                    )
+                with collaboration_goal_scope(
+                    self.registry_path,
+                    goal_id=goal_id,
+                    agents=(agent_id,),
+                    require_active=True,
+                ) as scope:
+                    if goal_is_stopped(scope.goal):
+                        raise ValueError("agent operation Goal is stopped")
+                    origin_goal_ref = scope.current_goal_ref
+                    if executor["kind"] == "managed_turn":
+                        from .control_plane.collaboration.operation_handoff import (
+                            managed_operation_binding_current,
+                        )
+
+                        if not managed_operation_binding_current(
+                            self.store.root.parent.parent,
+                            {
+                                "goal_id": goal_id,
+                                "agent_id": agent_id,
+                                "executor": executor,
+                                "origin_goal_ref": origin_goal_ref,
+                            },
+                        ):
+                            raise ValueError(
+                                "managed operation requires its current Turn session and profile"
+                            )
+            elif not isinstance(raw_executor, Mapping) or set(raw_executor) != {
                 "extension_id",
                 "protocol",
                 "permission",
                 "revision",
             }:
                 raise ValueError("operation executor binding is invalid")
-            executor = {
-                field: _opaque(raw_executor.get(field), field=f"executor.{field}")
-                for field in (
-                    "extension_id",
-                    "protocol",
-                    "permission",
-                    "revision",
+            else:
+                executor = {
+                    field: _opaque(raw_executor.get(field), field=f"executor.{field}")
+                    for field in ("extension_id", "protocol", "permission", "revision")
+                }
+            source_routes = [
+                route
+                for route in (goal.get("coordination") or {}).get(
+                    "thread_agent_bindings", []
                 )
-            }
+                if isinstance(route, Mapping) and route.get("agent_id") == agent_id
+                and all(isinstance(route.get(key), str) and route[key]
+                        for key in ("host_surface", "thread_id"))
+            ]
+            source_route = (
+                {
+                    "goal_id": goal_id,
+                    **{
+                        key: source_routes[0][key]
+                        for key in ("agent_id", "host_surface", "thread_id")
+                    },
+                }
+                if len(source_routes) == 1
+                else None
+            )
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
             )
@@ -211,6 +301,16 @@ class ChatActionNormalizationMixin:
                 "expires_at": utc_isoformat(expires_at),
                 "authorized_principals": principals,
                 "executor": executor,
+                **(
+                    {"source_route": source_route}
+                    if executor.get("kind") == "managed_turn"
+                    else {}
+                ),
+                **(
+                    {"origin_goal_ref": origin_goal_ref}
+                    if origin_goal_ref is not None
+                    else {}
+                ),
             }
         if action_kind == "todo.create":
             values = self._allowed_parameters(

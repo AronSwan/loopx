@@ -2,11 +2,19 @@
 
 - Status: Accepted
 - Supersedes / closes: none
-- Scope baseline: 2026-09-16, `0aa6179de`; steward reproduction baseline is preserved separately in Section 8.
+- Scope baseline: architecture audit at 2026-09-16, `0aa6179de`; RFC inventory
+  updated through 2026-09-28, `6643f3670`; steward reproduction baseline is
+  preserved separately in Section 8.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
 **Local authority retirement checkpoint (2026-09-28).** R5/T4 now use the [reconciled deletion and qualification cadence](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md). Reviewed local cutover and native drain are merged; whole-Goal execution/consumer closure, profile qualification and default-entry adoption still have separate exits. Delete a replaced writer with its last caller; retain necessary migration/receipt readers. Existing GoalRef/Turn PRs own their affected consumers. R6 PostgreSQL service qualification is separate, and the historical PR-count estimates are not current forecasts.
+
+Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
+is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
+creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#conversational-goal-preparation-integrating-the-team-workspace-proposal).
+Its separate workspace/executor is not adopted. This entry improvement does not
+close GQ01 execution/return or R2 small-team acceptance.
 
 ## 1. Overall Objective and Product Routes
 
@@ -211,6 +219,13 @@ onboarding time (including prerequisites/login) and the post-readiness interval;
 authentication or environment failures stay in the funnel. A small pilot is
 feedback, not statistical reliability or product-market fit.
 
+The [independent App first-use/repeat-use protocol](../../product/use-cases/steward/first-use-evaluation.md)
+prepares the five-slot freeze sheet, ordinary GQ01 handout, independent oracle
+and separate onboarding/result/attention/cost observations. It reuses existing
+optional first-run/usage-story intake and keeps failed or absent trials in the
+denominator. This is preparation only: execution waits for a qualified pinned
+package and consenting participants; no cohort result or recruitment is claimed.
+
 The critical path is usable evidence presentation → a reproducible real episode →
 packaged first-use repair → independent reproduction. As of 2026-09-21, #4762 and
 #4811 are merged; #4811 records native Codex MCP execution and a real-model
@@ -279,7 +294,12 @@ is not evidence that long-history status and quota admission meet G4 SLOs.
 
 ## 4. Every RFC: Ownership and Next Step
 
-This maps **all 30 primary RFCs** at the scope baseline, counting language mirrors once; this roadmap is the new 31st entry. Accepted, partial, research and Held directions remain visible without making every row active work. Status is based on RFC/reference inspection and selected source checks; full runtime qualification of every subsystem was not performed. Section 8 records the focused audit.
+This maps the primary RFC inventory through the date in the header, counting
+language mirrors once. The architecture status still uses the separately named
+audit baseline. Accepted, partial, research and Held directions remain visible
+without making every row active work. Status is based on RFC/reference
+inspection and selected source checks; full runtime qualification of every
+subsystem was not performed. Section 8 records the focused audit.
 
 | RFC | Stream | Current boundary | Next slice / acceptance |
 | --- | --- | --- | --- |
@@ -302,11 +322,12 @@ This maps **all 30 primary RFCs** at the scope baseline, counting language mirro
 | [Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md) | S3/S8 | Accepted; first periodic-report vertical implemented | P1: R3 return/successors reuse durable intent; isolate hook failure, no primary-transaction coupling/direct effects |
 | [Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | S3/S6/S8 | Accepted; three-owner integration unqualified | P1/P2: separate IM delivery, LoopX work authority and OV context; reconnect/revoke/source-loss cases |
 | [External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | S8/S11 | Accepted; typed Core plan/admission/retirement and CLI slice implemented | P1: qualify one host-method and one connector execution with the same provenance receipt; then add frontend/Lark projection companions |
-| [Automatic Execution Admission v0](automatic-execution-admission-v0.md) | S7/S2/S4 | Accepted; local candidate, host promotion pending | P0: App recommendation floor first; M2 atomic launch/hook qualification, M3 settings acceptance |
+| [Automatic Execution Admission v0](automatic-execution-admission-v0.md) | S7/S2/S4 | Accepted; typed local policy/admission and M3 settings candidate, host promotion pending | P0: App floor/schedule readback; M3 ordinary single-Save settings with optional notes, inheritance/conflict/readback acceptance; next-eligible/wait parity and M2 host/hook qualification remain separate |
 | [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | S7/S5 | Accepted; Codex aggregate/cost display slice exists | P0 observation→P1 provider coverage: unknown is not zero, deduplicate accounting, price source/freshness; usage grants no budget |
 | [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | S5 | Accepted; action/attention verticals and local delivery-chain/acceptance review implemented | P1: cross-channel disclosure and governed amendment/settlement review; local visibility does not qualify G2 |
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.md) | S5/S11 | Accepted; Held | P3: reopen only on repeated second real need; sidecar cannot alter gates/quota/scheduling |
-| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 | Accepted; proposal only | P2: simulated immutable confirmation→effect→reconciliation→return; finance provider separate, no broader coordination grant |
+| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 + R2/R3 | Accepted; canonical operation seam exists, managed native transport under owner review | Qualify source-context vs admitted-executor separation, exact human approval→one-shot consumption→domain evidence→original-route return; owned Turn/delegation need not await Desktop authentication. Live approval/effect/wakeup remain unqualified; finance provider stays separate |
+| [Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | S8/S9, supporting S2/S4 | Accepted design only; no runtime integration or qualified provider | M1: controlled provider and deterministic revoke/crash/replay conformance; strict production wiring remains gated by exact Goal lifetime, receipt retention and independent provider qualification |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor | P1: independently verify observation/write-time gate/closure basis; defer inferred triggers and model selection |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 read-only observation | P2: matched shadow stride experiment with costs/events; no direct production cadence change |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Accepted; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
@@ -630,6 +651,17 @@ deduplication and return. App settings select and read back the trigger per
 connection. External host-tool permission and sender-bound delegation remain
 separate gaps; receiving a request does not establish execution authority.
 
+Before choosing a recipient, the shared conversation must resolve the desired
+outcome against relevant current evidence. Already-satisfied requests return the
+verified result without a duplicate assignment or effect; unavailable or stale
+facts stay unknown. Explanation and judgment may be completed directly, and
+unfinished work reuses a qualified existing owner. GQ03/GQ07 qualify this across
+repository operations and completed reports, then qualify consecutive direct
+group requests, correction, adoption and original-route return separately. This
+is general semantic triage, not a new steward-specific classifier or scheduler.
+Typed admission owns provider-independent trigger reasons; the App renders those
+facts without treating a configuration change as retroactive execution.
+
 ### R4: Shared Goal Alignment and Evolution
 
 - **Owner:** alignment RFC Stage 3–5 and TS Goal/work-graph owners.
@@ -739,7 +771,7 @@ independent admission without weakening task-level validation. See the
 [acceptance contract](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0).
 This narrows a local recovery gap, not the full R1/R2 coordination acceptance.
 
-**R1 transaction checkpoint.** Team-plan admission and whole-batch planning now live in `work_items/team_plan.ts`. Confirmation assigns all admitted lanes in one write with a durable operation receipt; identity is proposal + lane, never Todo text. File/SQLite authority uses the existing CAS and receipt owner; legacy Markdown writes the records and immutable receipt together under its existing fence and lock. Exact replay reads historical results even after a receiver changes, completes or deletes work. A precommit failure creates no lane prefix, and pending canonical display delivery requires recovery before Chat reports verified success. The card names partial assignments and gaps; quota/stop remain advisory and an explicit enforcement claim is rejected.
+**R1 transaction checkpoint.** Team-plan admission and whole-batch planning now live in `work_items/team_plan.ts`. Confirmation assigns all admitted lanes in one write with a durable operation receipt; identity is proposal + lane, never Todo text. File/SQLite authority uses the existing CAS and receipt owner; legacy Markdown writes the records and immutable receipt together under its existing fence and lock. Exact replay reads historical results even after a receiver changes, completes or deletes work. A precommit failure creates no lane prefix, and pending canonical display delivery requires recovery before Chat reports verified success. The card names partial assignments and gaps; quota/stop remain advisory and an explicit enforcement claim is rejected. Agent-originated settlement binds the same state basis at its journal's first write and re-reads it at settlement; a plan whose basis is missing or moved, or whose every lane is a gap, is a typed failed receipt that creates no Todo and replays unchanged.
 
 This closes the local assignment/retry portion of F4, not R1's collaboration acceptance. Registered receivers are assigned without being impersonated as authors; agent-originated settlement cannot assign another peer without owner confirmation. Assignment does not attest receiver adoption, a lease, execution, dependency consumption or independent acceptance. Do not add a second confirmation to ordinary already-authorized work. Gap resolution requires new explicit intent; replay must not silently extend the confirmed subset. The fingerprint binds current local state and canonical revision, not a full shared Goal-intent transaction. R2/R3/R4 still own executor qualification, receiver adoption/result return and shared intent/authorization; the cross-host Turn lease is not a plan barrier.
 

@@ -3,12 +3,12 @@
 import json
 from pathlib import Path
 from ..agent_registry import registered_agent_ids_for_goal
-from ..history import load_registry
 from ..capabilities.manager_context import (
     acknowledge,
     configure_delivery_target,
     configure_evidence_scope,
 )
+from ..control_plane.projects.registry_codec import load_project_registry
 
 
 def register_manager_inbox(subparsers, add_format):
@@ -65,6 +65,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--cursor", help="For read: continue with the previous page's next_cursor.")
+    parser.add_argument("--operation-cursor", help="For read: continue the independent original-operation page.")
     parser.add_argument("--decision", choices=("adopt", "defer", "reject", "no_change"))
     parser.add_argument("--reason")
 
@@ -72,8 +73,11 @@ def register_manager_inbox(subparsers, add_format):
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
         cursor = getattr(args, "cursor", None)
+        operation_cursor = getattr(args, "operation_cursor", None)
         if cursor is not None and args.manager_inbox_action != "read":
             raise ValueError("--cursor is only supported for read")
+        if operation_cursor is not None and args.manager_inbox_action != "read":
+            raise ValueError("--operation-cursor is only supported for read")
         if args.manager_inbox_action == "configure-ssh-read-scope":
             from ..capabilities.manager_context.ssh_evidence import configure
             result = configure(runtime_root, channel=args.channel_id or "", host=args.ssh_host,
@@ -102,7 +106,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
-        registry = load_registry(registry_path)
+        registry = load_project_registry(registry_path)
         goal = next(
             (g for g in registry.get("goals", []) if g.get("id") == args.goal_id), None
         )
@@ -151,11 +155,17 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 }
         elif args.manager_inbox_action == "acknowledge-return":
             from ..control_plane.collaboration.peers import consume_return
-            result = consume_return(runtime_root, args.goal_id, args.agent_id, args.request_id)
+            result = consume_return(
+                runtime_root,
+                args.goal_id,
+                args.agent_id,
+                args.request_id,
+                registry=registry_path,
+            )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
-                                workspace=Path.cwd(), cursor=cursor)
+                                workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor)
             result["followthrough"] = (
                 "After reading and deciding, associate Core work with manager-inbox link. Then use manager-inbox report --phase conclusion --reply-text to return this request's concrete result, replan decision, or explicit blocker/defer reason to its original audience automatically. Use optional --phase decision only for meaningful interim news during longer work. Adoption/linking alone is not a completed exchange. Do not wait for the owner to ask again. Write audience-ready text, not private deliberation."
             )
@@ -169,6 +179,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.phase,
                 args.reply_text or "",
+                registry=registry_path,
             )
         elif args.manager_inbox_action == "link":
             from ..capabilities.manager_context.tracking import link
@@ -206,6 +217,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.decision or "",
                 args.reason or "",
+                registry=registry_path,
             )
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}

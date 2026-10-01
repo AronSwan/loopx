@@ -408,7 +408,7 @@ def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
 
 
 def test_chat_snapshot_keeps_current_session_delivery_after_unrelated_route_limit(flow):
-    root, _, store, _ = flow
+    root, registry, store, _ = flow
     session = store.create_session(
         goal_id="loopx-manager",
         agent_id="codex",
@@ -465,7 +465,7 @@ def test_chat_snapshot_keeps_current_session_delivery_after_unrelated_route_limi
             {"request_id": request_id, "session_id": f"unrelated-{index}"},
         )
 
-    snapshot = project_chat_session_snapshot(root, store, session["session_id"])
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
     returned = {
         row["message_id"]: row["return_delivery"]["status"]
         for row in snapshot["messages"]
@@ -643,18 +643,15 @@ def accepted_attempt():
 
 
 @pytest.mark.parametrize(
-    "failure",
+    "reason",
     [
-        lambda: ReturnResolutionBlocked(
-            "return_authorization_unavailable", "context return authority revoked"
-        ),
-        lambda: ValueError("context return authority revoked"),
-        lambda: ValueError("manager connection no longer authorized"),
+        "return_authorization_unavailable",
+        "original_route_unavailable",
+        "initial_delivery_receipt_unavailable",
     ],
-    ids=["typed-reason", "prose-revoked", "prose-unauthorized"],
 )
-def test_return_authority_revocation_terminalizes_without_repeating_readback(
-    flow, failure
+def test_typed_return_resolution_terminalizes_without_repeating_readback(
+    flow, reason
 ):
     root, registry, store, create = flow
     _, _, receipt = create(True)
@@ -671,14 +668,14 @@ def test_return_authority_revocation_terminalizes_without_repeating_readback(
 
         def verify(self, *_args):
             self.verify_calls += 1
-            raise failure()
+            raise ReturnResolutionBlocked(reason, "Adapter resolution blocked")
 
     transport = Transport()
     drain(root, registry, store, transport)
     drain(root, registry, ChatSessionStore(root), transport)
     state = reply_status(root, receipt)[0]
     assert state["status"] == "explicit_unverified"
-    assert state["error"] == "return_authorization_unavailable"
+    assert state["error"] == reason
     assert transport.verify_calls == 1
     # A terminal reason is never re-read, not even after the backoff window.
     drain(
@@ -691,23 +688,34 @@ def test_return_authority_revocation_terminalizes_without_repeating_readback(
     assert transport.verify_calls == 1
 
 
-def test_unclassified_verification_failure_backs_off_instead_of_hot_looping(flow):
+@pytest.mark.parametrize("message", [
+    "provider readback transport failed",
+    "route lookup temporarily unavailable",
+    "authorization service read timed out",
+    "initial reply read interrupted",
+])
+def test_unclassified_verification_failure_recovers_without_resending(flow, message):
     root, registry, store, create = flow
-    _, _, receipt = create(True)
+    session, _, receipt = create(True)
     rid = receipt["request_id"]
     acknowledge(root, "research", "worker", rid, "adopt", "Checked")
     report(root, "research", "worker", rid, "conclusion", "Bounded result.")
 
     class Transport:
         verify_calls = 0
+        send_calls = 0
 
         def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.send_calls += 1
             record_attempt(accepted_attempt())
-            return {"external_write_performed": True, "reply_verified": False}
+            # A recorded provider write resumes readback regardless of wording.
+            raise RuntimeError(message)
 
         def verify(self, *_args):
             self.verify_calls += 1
-            raise RuntimeError("provider readback transport failed")
+            if self.verify_calls == 1:
+                raise RuntimeError(message)
+            return {"verification_performed": True, "reply_verified": True}
 
     transport = Transport()
     drain(root, registry, store, transport)
@@ -726,6 +734,13 @@ def test_unclassified_verification_failure_backs_off_instead_of_hot_looping(flow
         now=datetime.now(timezone.utc) + timedelta(days=2),
     )
     assert transport.verify_calls == 2
+    assert transport.send_calls == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    snapshot = project_chat_session_snapshot(root, ChatSessionStore(root), session["session_id"], registry=registry)
+    replies = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert len(replies) == 1
+    assert replies[0]["return_delivery"]["status"] == "delivered"
+    assert message not in json.dumps(snapshot)
 
 
 def test_public_delivery_projection_normalizes_unknown_private_state(flow):
@@ -745,7 +760,9 @@ def test_public_delivery_projection_normalizes_unknown_private_state(flow):
     assert "private" not in str(state)
 
 
-def test_background_service_delivers_without_another_agent_or_query(flow):
+def test_background_service_delivers_without_another_agent_or_query(flow, monkeypatch):
+    observations = []
+    monkeypatch.setattr('loopx.usage_ping.observe_verified_return', lambda: observations.append('verified'))
     root, registry, store, create = flow
     _, _, receipt = create(True)
     rid = receipt["request_id"]
@@ -776,6 +793,8 @@ def test_background_service_delivers_without_another_agent_or_query(flow):
     assert state["status"] == "delivered"
     assert state["provider_receipt"] == "sha256:provider-proof"
     assert not service.thread.is_alive()
+    drain(root, registry, store, transport)
+    assert observations == []  # Legacy delivery is outside the exact-source telemetry contract.
 
 
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
@@ -885,7 +904,7 @@ def test_reply_delivery_does_not_replace_receiver_disposition(flow, project, dec
     acknowledge(root, "research", "worker", rid, decision, reason)
     report(root, "research", "worker", rid, "conclusion", "The assessment is available.")
     drain(root, registry, store, lambda *_: pytest.fail("private return sent externally"))
-    snapshot = project_chat_session_snapshot(root, ChatSessionStore(root), session["session_id"])
+    snapshot = project_chat_session_snapshot(root, ChatSessionStore(root), session["session_id"], registry=registry)
     collaboration = next(row["collaboration"] for row in snapshot["messages"] if row.get("collaboration"))
     assert collaboration["decision"] == decision
     assert collaboration["goal_id"] == "research"
@@ -909,7 +928,7 @@ def test_external_reply_never_exposes_private_receiver_reason(flow):
         sent.append(payload)
         return {"ok": True, "reply_verified": True, "verification_performed": True}
     drain(root, registry, store, sender)
-    snapshot = project_chat_session_snapshot(root, store, session["session_id"])
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
     assert "Private receiver rationale" not in json.dumps(snapshot)
     assert len(sent) == 1
     assert sent[0].startswith("协作回复 · worker")

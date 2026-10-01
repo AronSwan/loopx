@@ -160,6 +160,14 @@ Before moving `stable`, maintainers should:
   [release-only native Goal regression](../development/testing-and-quality.md#release-only-native-goal-regression--仅发布前的原生-goal-回归)
   in a supported Codex environment; record an unavailable environment as
   `skipped`, not a live pass. Never enable paid model execution in default PR CI;
+- for conversational intake/routing changes, run the
+  [public intake evaluation](use-cases/steward/golden-queries.md#gq01-conversational-preparation-variant)
+  on the release candidate for the default and newly advertised model profiles,
+  with at least two repeats. Record the exact commit, model/settings, prompt/case
+  hashes, usage, failures and skips. Paid calls belong to release qualification,
+  never routine PR work, per-commit checks or heartbeats; ordinary development
+  uses offline regressions and affected browser scenarios. A skipped profile is
+  not qualified, and provider failures must remain visible;
 - fast-forward `stable` to that tagged commit after the release canary passes;
 - confirm `release.json`, `loopx doctor`, and `loopx update check` report the
   same package version and tag;
@@ -661,6 +669,16 @@ path, and canary route rather than as a user-facing release baseline.
   disposable native-profile cleanup race; the complete same-source rerun passed
   under unchanged budgets. Its remaining fixture-quiescence limit is retained
   on the [existing profile lifecycle owner](https://github.com/loopx-project/loopx/pull/5226#issuecomment-5860681814).
+
+- `v1.2.3` on 2026-09-29 22:54 +08:00: App Goal drafts with explicit Apply,
+  exact Goal ownership for Chat and delegation, opt-in Kiro CLI mode, and typed
+  Explore observations at commit `0a401fe75`. The [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.3)
+  has 11 assets; package and desktop installer checksums, matching PyPI package
+  hashes, and the signed `desktop-stable` update feed were read back after all
+  three release workflows passed. `stable` was fast-forwarded to the tag.
+  This expedited release used focused local version, packaging, and two native
+  canary checks; the full Python/public smoke/model-behavior/PostgreSQL matrix
+  and a separate Pages check were not run.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

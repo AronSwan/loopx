@@ -20,13 +20,16 @@ import sys
 import time
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
-from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+from .control_plane.effect_runtime import (
+    effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
+)
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.handoff_mode import show_goal_handoff_mode
 from .control_plane.turn_driver.journal_store import (
@@ -38,6 +41,11 @@ from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.peers import return_result
 from .control_plane.collaboration.inbox import acknowledge, _entry, normalize_request
+from .control_plane.collaboration.goal_instance_scope import (
+    capture_collaboration_goal_ref,
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
 from .control_plane.collaboration import delegation_results, delegation_validation
 from .control_plane.collaboration.peers import (
     _goal,
@@ -87,6 +95,31 @@ def _pinned_release_environment() -> dict[str, str]:
 
 def _python_module_command(module: str) -> list[str]:
     return [sys.executable, "-P", "-m", module]
+
+
+def _observe_bound_workspace(path: Path) -> tuple[str, tuple[int, int, Path] | None]:
+    """Observe a directory and its target identity without exposing its path.
+
+    The binding is operator-owned, but a worktree or symlink can disappear or
+    change targets while a read-only Turn preview is running.  Identity is a
+    host fact; the shared TypeScript preflight still owns the readiness rule.
+    """
+
+    try:
+        observed = path.stat()
+        if not stat.S_ISDIR(observed.st_mode):
+            return "not_directory", None
+        resolved = path.resolve(strict=True)
+        target = resolved.stat()
+        if (observed.st_dev, observed.st_ino) != (target.st_dev, target.st_ino):
+            return "unavailable", None
+        return "available", (observed.st_dev, observed.st_ino, resolved)
+    except FileNotFoundError:
+        return "missing", None
+    except NotADirectoryError:
+        return "not_directory", None
+    except (OSError, RuntimeError):
+        return "unavailable", None
 
 
 def _pinned_module_command(module: str, *, interpreter: str | None = None) -> list[str]:
@@ -186,7 +219,11 @@ def create_server(
 
 def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, goal_id: str,
                                  agent_id: str, workspace: Path) -> None:
-    _goal(registry, goal_id, agent_id)
+    caller_goal_ref = capture_collaboration_goal_ref(
+        registry,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
 
     def check_scope():
         # Revocation is read on every tool call, including a long-lived server.
@@ -199,7 +236,15 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         Follow next_cursor for later requests. Omit cursor to start a fresh scan.
         Pages are live; reading all pages does not complete outstanding work.
         """
-        return read_inbox(root, registry, goal_id, agent_id, workspace=workspace, cursor=cursor)
+        return read_inbox(
+            root,
+            registry,
+            goal_id,
+            agent_id,
+            workspace=workspace,
+            cursor=cursor,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def assess_request(
@@ -209,7 +254,16 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
     ) -> dict:
         """Record your independent decision; this does not change task ownership or priority."""
         check_scope()
-        return acknowledge(root, goal_id, agent_id, request_id, decision, reason)
+        return acknowledge(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            decision,
+            reason,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def request_peer(
@@ -235,28 +289,40 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             operation_id,
             brief,
             parent_request_id,
+            caller_goal_ref=caller_goal_ref,
         )
 
     @server.tool()
     def return_result(request_id: str, text: str) -> dict:
         """Save an evidence-backed conclusion or explicit blocker for the original requester."""
         check_scope()
-        row = _entry(root, goal_id, agent_id, request_id)
-        if row.get("source_kind") == "peer":
-            from .control_plane.collaboration.peers import return_result as save_result
-
-            return save_result(root, goal_id, agent_id, request_id, text)
         # The host adapter selects Chat/Lark transport; the shared collaboration
         # owner never depends on presentation or manager capabilities.
         from .capabilities.manager_context.roundtrip import report
 
-        return report(root, goal_id, agent_id, request_id, "conclusion", text)
+        return report(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            "conclusion",
+            text,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def consume_peer_result(request_id: str) -> dict:
         """Acknowledge a peer result after reading and using/rejecting it; no work-state mutation."""
         check_scope()
-        return consume_return(root, goal_id, agent_id, request_id)
+        return consume_return(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
 
     @server.tool()
@@ -296,6 +362,27 @@ class Delegations:
     def __init__(self, root: Path, registry: Path, goal_id: str, agent_id: str, config: Path):
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
+        self._goal_ref_lock = Lock()
+        try:
+            self.goal_ref = capture_collaboration_goal_ref(
+                self.registry,
+                goal_id=self.goal_id,
+                agent_id=self.agent_id,
+            )
+        except FileNotFoundError:
+            self.goal_ref = None
+
+    def _caller_goal_ref(self) -> dict[str, str] | None:
+        if self.goal_ref is not None:
+            return self.goal_ref
+        with self._goal_ref_lock:
+            if self.goal_ref is None:
+                self.goal_ref = capture_collaboration_goal_ref(
+                    self.registry,
+                    goal_id=self.goal_id,
+                    agent_id=self.agent_id,
+                )
+        return self.goal_ref
 
     def binding(self, binding_id: str, *, require_active: bool = False) -> dict:
         _goal(self.registry, self.goal_id, self.agent_id, require_active=require_active)
@@ -324,36 +411,52 @@ class Delegations:
 
     def inspect(self, binding_id: str) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
+        # Pin executable source only for this observation, not authority data.
+        # Bindings, acceptance and validation files are still read twice below;
+        # the next inspection must resolve its own current source revision.
+        with effect_runtime_request_scope():
+            return self._inspect(binding_id)
+
+    def _inspect(self, binding_id: str) -> dict[str, object]:
         binding = self.binding(binding_id, require_active=True)
         # Host filesystem facts only; the shared TS owner projects readiness.
         # Do not expose a path/error body or probe authority in a missing cwd.
-        try:
-            workspace_state = (
-                "available" if stat.S_ISDIR(Path(binding["workspace"]).stat().st_mode)
-                else "not_directory"
-            )
-        except FileNotFoundError:
-            workspace_state = "missing"
-        except NotADirectoryError:
-            workspace_state = "not_directory"
-        except OSError:
-            workspace_state = "unavailable"
-        if workspace_state != "available":
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
+        workspace_path = Path(binding["workspace"])
+        workspace_state, workspace_identity = _observe_bound_workspace(workspace_path)
+
+        def workspace_fault(state: str) -> dict[str, object]:
             return effect_runtime_result("collaboration.delegation.preflight", {
                 "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-                "workspace": {"state": workspace_state},
+                "workspace": {"state": state},
                 "authority": None, "preview": None, "acceptance": None,
                 "validation_files_current": False,
             })
+
+        def recheck_workspace() -> dict[str, object] | None:
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            current_state, current_identity = _observe_bound_workspace(workspace_path)
+            if current_state == "available" and current_identity == workspace_identity:
+                return None
+            # A replacement directory is not the directory whose authority
+            # and acceptance were observed at entry.  No path or error leaks.
+            return workspace_fault(
+                current_state if current_state != "available" else "unavailable"
+            )
+
+        if workspace_state != "available":
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return workspace_fault(workspace_state)
+        assert workspace_identity is not None
         try:
             acceptance = delegation_validation.capture(self, binding)
         except (OSError, ValueError) as exc:
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
             # Authority admission is a readiness observation, not a reason for
             # inspection to invent a provider launch or collapse into a raw CLI error.
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
             try:
                 promoted = local_authority_is_promoted(
                     runtime_root=self.root,
@@ -378,19 +481,25 @@ class Delegations:
                 },
                 "preview": None, "acceptance": None, "validation_files_current": False,
             })
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         operation = "inspect-" + _hash(binding_id)[:32]
         arguments = ["turn", "run-once", "--goal-id", self.goal_id,
                      "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
                      "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
         # Host arguments are operator-owned, but inspection must stay read-only
         # even when they contain an abbreviated execution flag or a selector.
-        from .cli import build_parser
+        from .cli_runtime import add_subcommand_format, build_cli_parser
+        from .cli_commands.turn_registration import register_turn_commands
 
+        parser, subparsers = build_cli_parser()
+        register_turn_commands(subparsers, add_subcommand_format)
         try:
-            selected = build_parser().parse_args(arguments)
+            selected = parser.parse_args(arguments)
         except SystemExit as exc:
             raise ValueError("invalid delegation Turn arguments") from exc
-        workspace = Path(binding["workspace"]).resolve()
+        workspace = workspace_identity[2]
         selected_project = Path(selected.project)
         selected_scan_root = Path(selected.scan_root)
         if not selected_project.is_absolute():
@@ -402,11 +511,32 @@ class Delegations:
                 != (self.goal_id, binding["agent_id"], binding["todo_id"], operation)
                 or selected_project.resolve() != workspace
                 or selected_scan_root.resolve() != workspace):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
             raise ValueError("delegation inspection cannot execute or retarget bound work")
-        preview = self._cli(binding, *arguments)
+        try:
+            preview = self._cli(binding, *arguments)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
+            raise
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         if preview.get("status") != "preview" and "selection_rejection" not in preview:
             raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
-        current = delegation_validation.capture(self, binding)
+        try:
+            current = delegation_validation.capture(self, binding)
+        except (OSError, ValueError):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
+            raise
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         if acceptance != current or self.binding(binding_id, require_active=True) != binding:
             raise ValueError("delegation preflight source changed; retry inspection")
         return effect_runtime_result("collaboration.delegation.preflight", {
@@ -430,7 +560,8 @@ class Delegations:
             if not exists:
                 delegation_results.require_dependencies(self, binding, brief)
             delivered = request(self.root, self.registry, self.goal_id, self.agent_id,
-                                binding["agent_id"], operation_id, brief, parent_request_id)
+                                binding["agent_id"], operation_id, brief, parent_request_id,
+                                caller_goal_ref=self._caller_goal_ref())
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
             if exists:
                 if _read(path).get("identity") != identity:
@@ -748,20 +879,54 @@ class Delegations:
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
-        decision, error = _receipt(
-            self.root,
-            "decisions",
-            _entry(self.root, self.goal_id, binding["agent_id"], request_id),
-        )
+        with collaboration_goal_scope(
+            self.registry,
+            goal_id=self.goal_id,
+            agents=(),
+            caller_goal_ref=self._caller_goal_ref(),
+        ) as goal_scope:
+            entry = _entry(
+                self.root,
+                self.goal_id,
+                binding["agent_id"],
+                request_id,
+                scope=goal_scope,
+            )
+            decide_collaboration_lifecycle(
+                goal_scope,
+                operation="history_inspect",
+                record=entry,
+            )
+            decision, error = _receipt(
+                self.root,
+                "decisions",
+                entry,
+            )
         return not error and bool(decision) and decision["decision"] == "adopt"
 
     def _delegation_bootstrap(self, row: dict, binding: dict) -> dict:
         request_id = row["identity"]["request_id"]
+        with collaboration_goal_scope(
+            self.registry,
+            goal_id=self.goal_id,
+            agents=(),
+            caller_goal_ref=self._caller_goal_ref(),
+        ) as goal_scope:
+            entry = _entry(
+                self.root,
+                self.goal_id,
+                binding["agent_id"],
+                request_id,
+                scope=goal_scope,
+            )
+            decide_collaboration_lifecycle(
+                goal_scope,
+                operation="history_inspect",
+                record=entry,
+            )
         return {
             "request_id": request_id,
-            "brief": _entry(
-                self.root, self.goal_id, binding["agent_id"], request_id
-            )["brief"],
+            "brief": entry["brief"],
             "instruction": (
                 "Use the loopx_delegation tools to read_context and call "
                 "assess_request for this request before working. If you adopt "
@@ -994,9 +1159,24 @@ class Delegations:
                 self._complete_delegated_todo(row, binding)
             row["artifacts"] = self._accepted(binding)
             if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
-                return_result(self.root, self.goal_id, binding["agent_id"], request_id,
-                              json.dumps({"todo_id": binding["todo_id"], "status": "accepted",
-                                          "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]]}))
+                return_result(
+                    self.root,
+                    self.goal_id,
+                    binding["agent_id"],
+                    request_id,
+                    json.dumps(
+                        {
+                            "todo_id": binding["todo_id"],
+                            "status": "accepted",
+                            "artifacts": [
+                                {k: v for k, v in item.items() if k != "text"}
+                                for item in row["artifacts"]
+                            ],
+                        }
+                    ),
+                    registry=self.registry,
+                    caller_goal_ref=self._caller_goal_ref(),
+                )
             self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True, artifacts_current=True)
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.

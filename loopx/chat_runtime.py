@@ -16,6 +16,7 @@ from .chat_manager import (
     is_manager_channel, manager_agent_objective, manager_model_config,
     manager_workspace, manager_skill_text, operator_credential_pair, operator_credential_resolution,
     manager_answer_readback,
+    manager_session_model_allocation,
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION
 from .control_plane.collaboration import conversation_scope
@@ -54,6 +55,12 @@ from .chat_store import (
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .attached_session import (
+    enqueue_attached_agent_turn,
+    require_current_attached_session,
+    resume_attached_agent_session,
+    select_current_attached_session,
+)
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
@@ -367,9 +374,12 @@ class ChatRuntimeController:
 
         history_context = ""
         if history:
+            # This history is supplied when native continuity cannot be reused.
+            # Dropping early messages discards user constraints in a fresh
+            # thread. Ordinary native resume supplies no replayed history.
             history_lines = [
                 f"{item.get('role', 'user')}: {str(item.get('content') or '').strip()}"
-                for item in history[-12:]
+                for item in history
                 if str(item.get("content") or "").strip()
             ]
             if history_lines:
@@ -391,7 +401,7 @@ class ChatRuntimeController:
         manager_runtime: Mapping[str, Any] | None = None,
         project_coordination: bool = False,
         loopx_tools: bool = False,
-        executor_model: dict[str, str | None] | None = None,
+        executor_model: Mapping[str, str | None] | None = None,
     ) -> ChatRuntimeAdapter:
         if (
             manager_runtime is not None
@@ -424,6 +434,14 @@ class ChatRuntimeController:
                 objective = manager_agent_objective(
                     str(manager_profile["runtime_profile"])
                 )
+            model_config = (
+                executor_model or manager_model_config(
+                    endpoint=agent_id,
+                    machine_defaults=self.steward_executor_defaults(),
+                )
+                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
+                else executor_model or {}
+            )
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -448,15 +466,14 @@ class ChatRuntimeController:
                     if manager_profile is not None
                     else None
                 ),
-                **(
-                    (executor_model or manager_model_config(
-                        endpoint=agent_id,
-                        machine_defaults=self.steward_executor_defaults(),
-                    ))
-                    if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
-                    else (executor_model or {})
-                ),
-                **({"dynamic_tools": [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]} if not execution_mode and (goal_id == MANAGER_AGENT_GOAL_ID or project_coordination) else {}),
+                model=model_config.get("model"),
+                reasoning_effort=model_config.get("reasoning_effort"),
+                dynamic_tools=(
+                    [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
+                    else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
+                ) if not execution_mode and (
+                    goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
+                ) else None,
             )
         if agent_id == "claude-code":
             return ClaudeCodeAdapter.start(
@@ -565,6 +582,23 @@ class ChatRuntimeController:
             route_lock = self.session_open_locks.setdefault(route_key, threading.Lock())
         with route_lock:
             latest = None
+            if not is_manager_channel(selected_channel):
+                exact_attached, strict_profile = select_current_attached_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    channel_id=selected_channel,
+                )
+                if strict_profile:
+                    if mode == "resume_latest" and exact_attached is not None:
+                        return exact_attached, True
+                    raise CodexChatAgentError(
+                        "Managed Chat execution is not qualified for the "
+                        "source-session profile.",
+                        error_code="source_session_managed_chat_unsupported",
+                        gate=None,
+                    )
             if mode == "resume_latest":
                 latest = self.store.latest_session(
                     goal_id=None if is_manager_channel(selected_channel) else goal_id,
@@ -685,6 +719,15 @@ class ChatRuntimeController:
                 error_code="attached_session_requires_host_bridge",
             )
         reusable: ChatRuntimeAdapter | None = None
+        # An owner-edited model takes effect between Turns. Keep a running Turn
+        # and its binding intact; accepted queued work has not started upstream.
+        model_allocation = None
+        if manager_runtime is not None and (
+            not session.get("active_turn_id")
+            or (session.get("active_turn_id") == accepted_turn_id
+                and (self.store.load_turn(session_id, str(accepted_turn_id)) or {}).get("status") == "queued")
+        ):
+            model_allocation = manager_session_model_allocation(self, session)
         legacy_project_context = (conversation_scope(session)["kind"] == "owner_goal"
             and session.get("coordination_context_version") != PROJECT_CONTEXT_VERSION
             # A context/tool refresh cannot discard a native Goal and its usage.
@@ -707,6 +750,7 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and model_allocation is None
             ):
                 reusable = current
             elif current is not None:
@@ -783,6 +827,7 @@ class ChatRuntimeController:
                 and (
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
+                    or model_allocation is not None
                 )
             )
             legacy_codex_goal_thread = (
@@ -820,7 +865,8 @@ class ChatRuntimeController:
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
-                executor_model=alloc.restored_executor_model(session),
+                executor_model=(alloc.manager_executor_model(model_allocation)
+                    if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
@@ -864,6 +910,7 @@ class ChatRuntimeController:
                 changes = {
                     "manager_context_version": MANAGER_CONTEXT_VERSION,
                     **manager_runtime_session_fields(manager_runtime),
+                    **alloc.manager_executor_session_fields(model_allocation),
                 }
                 if session["channel_id"] == "manager":
                     changes["goal_id"] = MANAGER_AGENT_GOAL_ID
@@ -906,8 +953,10 @@ class ChatRuntimeController:
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             if attachments:
                 raise ValueError("attached host session queue does not yet accept attachments")
-            return self.store.create_queued_turn(
-                session_id,
+            return enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 origin="web",
@@ -1022,6 +1071,12 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            session = require_current_attached_session(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+            )
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1149,13 +1204,22 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
-        turn, created = self.store.create_queued_turn(
-            session_id,
-            client_turn_id=client_turn_id,
-            message=message,
-            origin=origin,
-        )
-        if session.get("session_mode") != CHAT_SESSION_MODE_ATTACHED:
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            turn, created = enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                origin=origin,
+            )
+        else:
+            turn, created = self.store.create_queued_turn(
+                session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                origin=origin,
+            )
             self.resume_session_queue(
                 session_id=session_id,
                 work_dir=work_dir,
@@ -1753,15 +1817,11 @@ class ChatRuntimeController:
                 raise KeyError("chat session was not found")
             self._check_codex_home(session)
             if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-                if session.get("active_turn_id"):
-                    return session
-                restored = self.store.update_session(
-                    session_id,
-                    status="ready",
-                    active_turn_id=None,
-                    last_error_code=None,
+                return resume_attached_agent_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    session_id=session_id,
                 )
-                return restored
             with self.lock:
                 current = self.adapters.get(session_id)
                 adapter_healthy = current is not None and current.healthcheck()

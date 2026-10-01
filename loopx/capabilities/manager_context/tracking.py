@@ -5,15 +5,25 @@ Receipts describe transport/consumption, never a second mutable work status.
 
 from __future__ import annotations
 
-import re
-
 from . import _read, _root, _write
 from ...control_plane.collaboration.inbox import (
-    _now as _now, _entry as _entry, _receipt as _receipt, record_read as record_read,
+    _entry as _entry,
+    _now as _now,
+    _receipt as _receipt,
+    _request_lock,
+    record_read as record_read,
 )
-from ...file_lock import exclusive_file_lock
+from ...control_plane.collaboration.goal_instance_scope import (
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
 from ...todos import list_goal_todos
+from ...control_plane.todos.contract import TODO_ID_PATTERN
 from ...chat_manager_details import _text
+from ...control_plane.content_digest import (
+    BARE_SHA256_PATTERN,
+    ENVELOPED_SHA256_PATTERN,
+)
 
 
 def _core_todos(registry_path, root, goal_id):
@@ -25,15 +35,25 @@ def _core_todos(registry_path, root, goal_id):
     return {r["todo_id"]: r for r in result.get("todos", []) if r.get("todo_id")}
 
 
-def link(root, registry_path, goal_id, agent_id, request_id, todo_ids, evidence_ids):
-    _entry(root, goal_id, agent_id, request_id)
+def link(
+    root,
+    registry_path,
+    goal_id,
+    agent_id,
+    request_id,
+    todo_ids,
+    evidence_ids,
+    *,
+    caller_goal_ref=None,
+    scope=None,
+):
     if not todo_ids and not evidence_ids:
         raise ValueError("at least one Core Todo or evidence reference required")
     if len(todo_ids) > 16 or len(evidence_ids) > 16:
         raise ValueError("too many context links")
-    if any(not re.fullmatch(r"todo_[a-f0-9]{12}", x) for x in todo_ids):
+    if any(not TODO_ID_PATTERN.fullmatch(x) for x in todo_ids):
         raise ValueError("invalid Core Todo id")
-    if any(not re.fullmatch(r"sha256:[a-f0-9]{64}", x) for x in evidence_ids):
+    if any(not ENVELOPED_SHA256_PATTERN.fullmatch(x) for x in evidence_ids):
         raise ValueError("evidence references must be opaque SHA256 identifiers")
     if todo_ids:
         rows = _core_todos(registry_path, root, goal_id)
@@ -41,12 +61,35 @@ def link(root, registry_path, goal_id, agent_id, request_id, todo_ids, evidence_
             row = rows.get(tid, {})
             if row.get("claimed_by") != agent_id and row.get("bound_agent") != agent_id:
                 raise ValueError("linked Todo must belong to the receiving Agent")
+    if scope is None:
+        with collaboration_goal_scope(
+            registry_path,
+            goal_id=goal_id,
+            agents=(agent_id,),
+            caller_goal_ref=caller_goal_ref,
+        ) as goal_scope:
+            return link(
+                root,
+                registry_path,
+                goal_id,
+                agent_id,
+                request_id,
+                todo_ids,
+                evidence_ids,
+                scope=goal_scope,
+            )
+    row = _entry(root, goal_id, agent_id, request_id, scope=scope)
+    decide_collaboration_lifecycle(
+        scope,
+        operation="artifact_link",
+        record=row,
+    )
     path = _root(root) / "links" / (request_id + ".json")
-    with exclusive_file_lock(path.with_suffix(".lock")):
+    with _request_lock(root, request_id, scope, path.with_suffix(".lock")):
         old, error = _receipt(
             root,
             "links",
-            {"request_id": request_id, "goal_id": goal_id, "agent_id": agent_id},
+            row,
         )
         if error:
             raise ValueError(error)
@@ -54,13 +97,12 @@ def link(root, registry_path, goal_id, agent_id, request_id, todo_ids, evidence_
         refs = sorted(set(old.get("evidence_ids", [])) | set(evidence_ids))
         if len(tids) > 16 or len(refs) > 16:
             raise ValueError("too many context links")
-        value = dict(
-            request_id=request_id,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_ids=tids,
-            evidence_ids=refs,
-        )
+        value = {
+            key: row[key]
+            for key in ("request_id", "goal_id", "agent_id", "goal_ref")
+            if key in row
+        }
+        value.update(todo_ids=tids, evidence_ids=refs)
         if any(old.get(k) != v for k, v in value.items()):
             _write(path, value | {"updated_at": _now()})
     return {"ok": True, **value}
@@ -79,7 +121,7 @@ def query(
     limit=8,
 ):
     """External callers see only requests from their exact audience, never raw text."""
-    if request_id is not None and not re.fullmatch(r"[a-f0-9]{64}", request_id):
+    if request_id is not None and not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
     if not owner_scope and not channel_id:
         raise ValueError("handoff audience required")
@@ -125,7 +167,24 @@ def query(
                     and legacy_channels.get(row.get("source_id")) == {channel_id}
                 ):
                     continue
-            _entry(root, row["goal_id"], row["agent_id"], row["request_id"])
+            with collaboration_goal_scope(
+                registry_path,
+                goal_id=row["goal_id"],
+                agents=(),
+                caller_goal_ref=row.get("goal_ref"),
+            ) as goal_scope:
+                entry = _entry(
+                    root,
+                    row["goal_id"],
+                    row["agent_id"],
+                    row["request_id"],
+                    scope=goal_scope,
+                )
+                decide_collaboration_lifecycle(
+                    goal_scope,
+                    operation="history_inspect",
+                    record=entry,
+                )
             rows.append(row)
         except (OSError, ValueError, KeyError, TypeError):
             unreadable += 1
@@ -161,7 +220,11 @@ def query(
                         else "core_todo_unavailable_or_not_found",
                     }
                 )
-        item = {k: row[k] for k in ("request_id", "goal_id", "agent_id", "source_id")}
+        item = {
+            key: row[key]
+            for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")
+            if key in row
+        }
         if row.get("source_kind") == "peer":
             item.update(source_kind="peer", source_agent_id=row["source_agent_id"], parent_request_id=row.get("parent_request_id"))
         if owner_scope and row.get("brief"):

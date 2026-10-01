@@ -410,6 +410,25 @@ through `turn run-once` without `--execute`. It creates no request or Turn,
 does not invoke the host and spends no quota. Host arguments that enable
 execution or retarget the selected work are rejected before the subprocess.
 
+Inspection and its Turn preview load their existing command registrars, not
+unrelated CLI owners. One inspection reuses only the executable TS source
+revision within that logical request; it does not cache binding, acceptance,
+provider revision or validation-file facts. Those facts are still re-read to
+reject drift, and the next observation resolves its own source revision. The
+preview remains a pinned child process with the real workspace scan; CLI, MCP
+and Team execution consume the same unchanged projection. There is no new
+setting, scheduler or grant. Diagnose cold process/fixture cost separately from
+the useful observation, following the
+[measurement and budget rules](../development/testing-and-quality.md#roadmap-aligned-optimization);
+functional success does not waive an original latency qualification.
+
+中文：预检与其 Turn 预览只加载既有命令注册，不加载无关 CLI owner。同一次逻辑
+观察仅复用可执行 TS 源码版本，不缓存 binding、验收、provider revision 或校验
+文件事实；这些事实仍重读以拒绝漂移，下次观察重新解析源码版本。预览仍在固定
+release 的子进程中扫描真实工作树；CLI、MCP 与团队执行消费不变的共享投影，不
+增加设置、调度器或授权。按上述测量与预算规则区分冷进程／fixture 开销和真实
+观察成本；功能检查通过不能豁免原延迟验收。
+
 The typed result keeps three facts separate: `turn_eligible` is the current
 Turn decision for that exact Todo; `acceptance_ready` is the current pinned
 acceptance binding, not passed output validation; `executor.available` uses
@@ -422,6 +441,40 @@ Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
 
+`acceptance_reason_code` and `acceptance_next_action` retain bounded diagnostics
+from the same TS validation plan; they do not change admission or grant repair
+authority. A current matching task can report
+`independent_delegation_validation_required`,
+`completion_validation_declaration_unavailable`, or
+`completion_validation_declaration_mismatch`, with
+`review_original_todo_validation`. A ready declaration with unavailable pinned
+files reports `validation_files_unavailable` and `restore_original_validation_files`.
+Missing, stale, foreign-task or unknown observations report
+`acceptance_binding_unavailable` and `review_original_task_acceptance` rather
+than exposing private errors. Workspace/authority stops did not inspect task
+validation, so their reason is `null` and action is `none`; ready acceptance
+also has no recovery action. Older clients may omit these optional fields.
+
+CLI, MCP and Goal Chat return this same projection. **Team execution** shows
+the matching Chinese/English cause and asks the original configuration owner
+to review the original task declaration/contract or restore pinned files, then
+recheck. A missing independent validator is not a runtime outage, a request to
+expand Goal acceptance, or permission to retarget/replay an old operation.
+Commands, file paths and validator effects are not part of the public diagnosis.
+
+中文：`acceptance_reason_code` 与 `acceptance_next_action` 来自同一 TS 验收计划，
+只补诊断，不改变准入或授予修复权限。同一当前任务缺少独立声明、已声明内容无法
+读取或指纹不符时，返回对应原因和 `review_original_todo_validation`；声明已就绪
+但固定文件不可用时，返回 `validation_files_unavailable` 与
+`restore_original_validation_files`。缺失、陈旧、其他任务或未知观察只能返回
+`acceptance_binding_unavailable` 与 `review_original_task_acceptance`，不输出私有
+异常。工作目录／权限提前停止代表验收尚未检查，原因为 `null`、动作为 `none`；
+验收已就绪也没有修复动作。旧客户端可省略这两个可选字段。
+
+CLI、MCP、Goal Chat 和「团队执行」消费同一投影；页面中英文提示由原配置责任人
+核对原任务声明／契约或恢复固定文件，再重新检查。缺少独立校验不等于运行时故障，
+不建议扩大 Goal 验收范围，不改绑或重放旧操作，也不暴露命令、路径与校验 effects。
+
 Workspace failures are observed before authority or Turn inspection, but after
 the caller's binding grant and active Goal are checked. `workspace_unavailable`
 retains a bounded `workspace_state`: `missing`, `not_directory`, or `unavailable`
@@ -433,7 +486,13 @@ repeat inspection. The same projection is rendered in **Team execution** and
 returned by CLI/MCP/Goal Chat. Inspection creates no directory, retargets no
 binding, launches no worker and exports no private path or filesystem error.
 It is a point-in-time observation; a changed binding fails closed and start
-still rechecks the existing work/authority boundaries.
+still rechecks the existing work/authority boundaries. Inspection also
+reobserves the directory target after acceptance and the real Turn preview:
+if that target disappeared or was replaced, it returns the same bounded
+workspace diagnosis instead of reporting the old workspace as ready. This
+does not lock the filesystem or authorize launch.
+Expected preview failures also recheck the workspace; when the directory is
+unchanged, the original timeout, malformed response or I/O error is preserved.
 
 中文：工作目录故障在调用者授权与 Goal 活跃检查之后、Authority 与 Turn 检查之前
 返回 `workspace_unavailable`。`workspace_state` 区分 `missing`（不存在）、
@@ -443,6 +502,9 @@ still rechecks the existing work/authority boundaries.
 要求核对原执行配置及绑定目录后重新检查；团队执行页面与 CLI/MCP/Goal Chat 消费
 同一投影。检查不创建目录、不改绑、不启动成员，也不暴露私人路径或文件系统错误。
 结果只是时点观察；配置变更仍拒绝，实际启动仍须重新通过原有工作与权限边界。
+预期的预览故障也重新检查目录；目录未变时保留原始超时、响应解析或 I/O 错误。
+预检还会在验收检查与真实 Turn 预览后复核目录目标；期间消失或被替换时，返回相同
+的有界工作目录诊断，不把旧目录误报为就绪。这并不锁定文件系统，也不授权启动。
 
 `executor.runtime_probe` preserves the host's bounded probe scope: a DSH
 `probing_interpreter` result concerns module availability in the interpreter

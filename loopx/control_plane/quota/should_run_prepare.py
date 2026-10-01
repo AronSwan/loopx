@@ -32,6 +32,7 @@ from ..goals.goal_frontier import (
 )
 from ..quota.blocked_transition_notice import build_blocked_transition_notice
 from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..agents.capability_memory import resolve_agent_capabilities
 from ..quota.goal_boundary import (
     goal_boundary as _goal_boundary,
@@ -180,23 +181,31 @@ class _QuotaDecisionPreparation:
 def _preserve_receipt_bound_replan_obligation(
     replan_obligation: Mapping[str, Any] | None,
     receipt_bound_replan_obligation_id: str | None,
+    *, guard_scoped: bool = False,
+    replay_phase: ReceiptBoundReplayPhase | None = None,
+    transition_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
     )
     if not preserved_replan_id:
         return dict(replan_obligation) if replan_obligation is not None else None
-    current_replan_id = normalize_todo_replan_obligation_id(
-        (replan_obligation or {}).get("obligation_id")
-    )
-    if current_replan_id != preserved_replan_id:
-        raise HeartbeatReceiptIdentityConflictError(
-            "heartbeat receipt settlement identity conflicts with the "
-            "current autonomous replan obligation"
-        )
-    preserved_replan_obligation = dict(replan_obligation or {})
-    preserved_replan_obligation["selection_binding"] = "heartbeat_receipt"
-    return preserved_replan_obligation
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "receipt_bound_obligation",
+            "current_obligation": dict(replan_obligation) if replan_obligation is not None else None,
+            "selected_obligation_id": preserved_replan_id, "guard_scoped": guard_scoped,
+            "replay_phase": replay_phase.value if replay_phase is not None else None,
+            "transition_candidates": transition_candidates or [],
+        })
+    except EffectRuntimeRejected as exc:
+        if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
+            raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
+        raise
+    obligation = result.get("obligation") if isinstance(result, Mapping) else None
+    if not isinstance(obligation, Mapping) or obligation.get("obligation_id") != preserved_replan_id:
+        raise RuntimeError("TypeScript receipt-bound replan obligation shape mismatch")
+    return dict(obligation)
 
 
 def _same_todo_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -466,6 +475,21 @@ def _deferred_receipt_bound_work_lane(
     return None
 
 
+def _with_auxiliary_gate_scope(
+    work_lane: dict[str, Any] | None, gates: list[dict[str, Any]], *, agent_id: str | None,
+) -> dict[str, Any] | None:
+    if not isinstance(work_lane, dict):
+        return work_lane
+    auxiliary = work_lane.get("auxiliary_monitor_poll")
+    if not isinstance(auxiliary, dict) or not isinstance(auxiliary.get("monitor_due_items"), list):
+        return work_lane
+    from ..todos.decision_scope import todo_gate_scope_projections
+    scopes = todo_gate_scope_projections(gates, auxiliary["monitor_due_items"], agent_id=agent_id)
+    selected_scope = next((scope for scope in scopes
+        if scope.get("todo_id") == auxiliary.get("selected_todo_id")), None)
+    return {**work_lane, "auxiliary_monitor_poll": {**auxiliary, "gate_scope": selected_scope}}
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -487,6 +511,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None,
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
+    receipt_bound_replan_guard_scoped: bool = False,
 ) -> _QuotaDecisionPreparation:
     quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
@@ -811,6 +836,9 @@ def _prepare_quota_should_run_item(
         else _preserve_receipt_bound_replan_obligation(
             goal_frontier_context.get("replan_obligation"),
             receipt_bound_replan_obligation_id,
+            guard_scoped=receipt_bound_replan_guard_scoped,
+            replay_phase=receipt_bound_replay_phase,
+            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
         )
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
@@ -884,7 +912,10 @@ def _prepare_quota_should_run_item(
         self_repair_allowed=self_repair_allowed,
         monitor_debt_arbitration=monitor_debt_arbitration,
         agent_monitor_only=agent_monitor_only,
-        work_lane_contract=work_lane_contract,
+        work_lane_contract=(
+            _with_auxiliary_gate_scope(work_lane_contract, task_orchestration_user_blockers,
+                agent_id=boundary_agent_id) if scoped_user_gate_fallback else work_lane_contract
+        ),
         receipt_bound_agent_next_action=receipt_bound_agent_next_action,
         task_orchestration_contract=task_orchestration_contract,
         capability_gate=capability_gate,

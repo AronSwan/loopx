@@ -43,10 +43,12 @@ def test_native_spawn_preserves_isolated_profile_and_secret_free_shell(monkeypat
     def inspect(command, **kwargs):
         assert len(prompt_loads) == 1
         env = kwargs["env"]
+        assert env["LOOPX_USAGE_PING"] == "0"
         assert "UNRELATED_AUTH_TOKEN" not in env and "SSH_AUTH_SOCK" not in env
         settings = tomllib.loads((Path(env["CODEX_HOME"]) / "config.toml").read_text())
         policy = settings["shell_environment_policy"]
         assert policy["inherit"] == "none"
+        assert policy["set"]["LOOPX_USAGE_PING"] == "0"
         assert "LOOPX_CODEX_QUALIFICATION_API_KEY" not in policy["set"]
         child = subprocess.run([sys.executable, "-c", "import os,json; print(json.dumps(dict(os.environ)))"],
                                env=policy["set"], capture_output=True, text=True, check=True)

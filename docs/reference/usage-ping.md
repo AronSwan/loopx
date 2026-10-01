@@ -24,9 +24,10 @@ Lark has no separate switch and cannot override the machine owner's choice.
 | Question | Evidence | Limit |
 |---|---|---|
 | Which versions/platforms need support? | Daily version, OS, CPU architecture, Python minor and install channel | Only reporting installations |
-| Do installations keep using LoopX? | Random installation ID, deduplicated by UTC day | Installations, not people; reinstall/re-enable may count again |
-| Which CLI entry points are used? | Fixed command-family counters | Polling and automation count too; not a measure of user value |
-| Which commands fail or take time? | Result, typed error category, coarse elapsed-time bucket | CLI return status is not Goal acceptance; handled domain failures may return 0 |
+| Do installations keep using LoopX? | Random installation ID, daily deduplication, mature 1/7/30-day return windows | Persistent state directories, not people or organizations; deleting state/re-enabling creates a new ID |
+| Which CLI entry points are used? | Fixed command-family/sub-operation counters, release version and UTC activity date | Polling and automation count too; not a measure of user value |
+| Which commands fail or take time? | Typed result/reason and coarse elapsed-time bucket | Merge-readiness holds are `blocked`, not failures; unclassified failures remain `command_failed` |
+| Is meaningful work observed? | Receipt-backed registration, Turn commitment, Todo completion/validation and verified return | Partial transition counts, not unique Goals or independently judged quality |
 
 The first version measures CLI invocations, including those made by agents.
 Top-level `--help`/`--version` fast paths, native exec-replaced scheduler
@@ -34,7 +35,7 @@ followups, API-only interactions and individual App/Lark actions are not
 instrumented. Heartbeats start in the background before dispatch; long-running server command
 results are counted only when the CLI returns. There is no claim to complete product activity or task success rates.
 
-## Two separate payloads
+## Separate payload contracts
 
 **Daily heartbeat** (`POST /v1/ping`), with exactly these fields:
 
@@ -42,19 +43,62 @@ results are counted only when the CLI returns. There is no claim to complete pro
 {"schema":"loopx_usage_ping_v1","install_id":"00000000-0000-4000-8000-000000000001","version":"1.2.0","os":"linux","arch":"x64","python":"3.13","channel":"pip"}
 ```
 
-The ID is random, local to the installation and not derived from hardware or an
-account. It enables cross-day association, so this is **not fully anonymous**.
+The ID is random, local to the persistent machine-state directory and not derived
+from hardware or an account. Sessions and disclosure upgrades retain it; explicit
+disable deletes it. Ephemeral homes, deleted/copied state and re-enabling distort
+installation counts. It enables cross-day association, so this is **not fully anonymous**.
 OS is `darwin|linux|windows|other`, CPU is `x64|arm64|x86|other`, and channel is
 `pip|local_release|source|unknown`. Version accepts only numeric major.minor.patch;
 a custom version containing a private suffix is not sent.
 
-**Closed-day CLI aggregate** (`POST /v1/aggregate`):
+**Current CLI diagnostics** (`POST /v1/aggregate`, notice revision 5):
+
+```json
+{"schema":"loopx_usage_diagnostics_v1","counters":[{"feature":"pr-review","operation":"merge-readiness","outcome":"blocked","error":"not_ready","duration":"lt_1s","count":4,"version":"1.2.3","activity_day":"2026-09-30","context":"unknown","signal":"none"}]}
+```
+
+The new default adds numeric release version, UTC activity **date** (not event
+time), fixed sub-operation, result/reason and receipt-backed lifecycle signal.
+Deployment context is optional self-report via `LOOPX_USAGE_CONTEXT`:
+`unknown` (default), `personal`, `shared_service`, `ephemeral`,
+`organization_managed`, `maintainer`. Invalid values become `unknown`; no
+company name, person or hardware topology is inferred or sent. Set `maintainer`
+on maintainer processes to distinguish their **future diagnostics** in operator
+analysis. This does not label heartbeats or identify historical ID-free counts.
+Use the shared disable switch to exclude a machine from all channels.
+
+The collector adds a separate receipt date. It accepts activity dates from the
+previous seven days through today; old/future packets are rejected. No ID, Goal
+or request timestamp enters this table. Both ends share the typed schema.
+Operations come from parsed command structure, never argument values:
+
+- `turn`: `plan|run-once|status`; `quota`: `status|plan|should-run|spend-slot|monitor-poll`.
+- `todo`: `list|add|claim|update|complete`.
+- `project`: `register|resolve|bind-session|unbind-session`.
+- `pr-review`: `merge-readiness|check-result`; other operations are `default`.
+- Verified return observation uses `other/result-return`.
+
+Results are `ok|blocked|failed|cancelled`. Reasons are
+`none|not_ready|invalid_input|permission|not_found|timeout|connection|interrupted|command_failed`.
+An otherwise valid merge-readiness response with `ready=false` records
+`blocked/not_ready` without changing its original nonzero exit code. Errors
+come from exception classes and typed booleans, never parsed error prose.
+
+Signals are `none|project_registered|managed_turn_committed|todo_completed|todo_validated|result_returned`.
+They require existing changed/committed receipts, not mere exit success. Dry
+runs and unchanged Todo completion do not count; Turn replays do not pass the
+existing committed-current-effects predicate. Passed completion validation is
+required for `todo_validated`. Return currently covers exact-source manager-context
+deliveries verified by the provider and newly settled as delivered, not legacy
+or unverified paths. None of these observations changes work authority.
+
+**Retained legacy CLI aggregate** (same endpoint):
 
 ```json
 {"schema":"loopx_usage_aggregate_v1","counters":[{"feature":"todo","outcome":"ok","duration":"lt_1s","error":"none","count":4}]}
 ```
 
-No installation ID, version, timestamp, Goal or other join key is included.
+No installation ID, version, timestamp, Goal or other join key is included in this legacy contract.
 The collector adds its reception day, merges counters, and stores no individual
 request rows. Both sender and collector use the same strict TS allowlist:
 
@@ -75,8 +119,9 @@ Additional payload fields and invalid enum combinations are rejected.
 
 Interactive CLI, unattended scripts/agents and the App use the same
 **first disclosure → automatic activation → subsequent measurement** policy.
-The first ordinary CLI command prints the recipient, fields, purpose and
-both disable mechanisms to stderr, records the disclosure, and sends nothing.
+The first ordinary CLI command prints the recipient, fields, purpose, CLI delivery
+cadence, network timing correlation boundary and both disable mechanisms to
+stderr, records the disclosure, and sends nothing.
 This also applies to captured stderr in scripts and Agent tool calls; JSON
 stdout is unaffected. Discarded stderr (the null device) or a failed write
 cannot acknowledge a notice. Background `chat`/`serve-status` services defer
@@ -105,6 +150,14 @@ settings also block all channels, even after explicit enable:
 - `DO_NOT_TRACK` set to a nonempty value other than `0`
 - `CI` set to a nonempty value other than `0|false`
 
+Project Python CI and public smoke workflows explicitly set `LOOPX_USAGE_PING=0`.
+Pytest and the canary smoke runner also disable collection for local validation.
+Native Codex benchmark profiles force the same opt-out during installation,
+runtime and Agent shell execution, even when a minimal environment removes `CI`
+or the parent requests collection. Release qualification uses the same boundary.
+These synthetic runs must not count as reporting installations. Telemetry tests
+may explicitly enable collection only against a disposable local collector.
+
 `LOOPX_USAGE_POLICY=consent_required` requires explicit enable; merely displaying
 the notice is insufficient. Default policy is `opt_out`; unknown policies fail
 closed. Distribution owners must choose the applicable policy before shipping;
@@ -128,16 +181,38 @@ CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
 
-Each installation attempts at most one heartbeat per UTC day. The detached
-sender persists that daily claim and starts the request under one short lock;
-network waiting happens after release, so another observer cannot consume the
-claim between persistence and request initiation. Counts are capped
-at 128 distinct rows and 10,000 per row, then flushed on the first eligible
-command after the UTC day closes. Unsent counts older than seven days are
-discarded. An installation that never runs again will not flush its final day.
-Lock contention, crashes and failed requests can lose counts. There are no
-immediate retries and no durable network queue. Clock rollback does not reopen
-a daily attempt. These are **lossy diagnostics**, not billing or audit records.
+Each installation attempts at most one heartbeat per UTC day. The first measured
+CLI result attempts an aggregate send immediately, including a failed result.
+Later eligible activity sends buffered deltas at most once every 15 minutes;
+UTC midnight does not reset that interval. Heartbeats and CLI batches have
+independent claims, so a heartbeat attempt cannot suppress a completed result.
+Startup alone never invents a result. Settings/status operations never flush.
+This replaces next-day-only CLI delivery for enabled installations across
+interactive and unattended CLI lanes; Goal-duration snapshots remain daily.
+
+Legacy counts are capped at 128 distinct rows; new diagnostics at 32, with
+10,000 per row. Diagnostics expire by activity date after seven UTC days;
+legacy expiry uses the oldest buffered day. Overflow records a bounded local
+`diagnostic_dropped` count, not an unbounded queue. Existing buffers remain
+readable. Notice revision 5 renews disclosure before the expanded default takes
+effect: old notice state cannot send or consume buffers.
+Acknowledging the renewed notice discards old-scope counters and fences queued
+observations with a new generation; only subsequent measurements can send.
+Explicit disable remains disabled, and acknowledgment cannot replace explicit
+enable under `consent_required`. Each batch is removed and its attempt time
+persisted before the request starts under the same short lock; network waiting
+happens after release. Attempts are spaced even on failure or clock rollback.
+There are no immediate retries, background timers or durable network queues.
+A session that stops within the interval can still lose its unsent tail; this
+reduces dependence on next-day return without promising complete coverage.
+Lock contention, crashes and failed requests can also lose counts. These are
+**lossy diagnostics**, not billing or audit records.
+
+Current diagnostics contain version/activity date, but no installation ID or
+event time. Historical legacy counts have neither version nor activity date
+and cannot be retrospectively reattributed. Do not divide either channel's
+totals by reporting installations to infer per-install usage. More frequent requests can make
+network timing correlation easier; identity-free payloads do not prevent that.
 
 Requests have a three-second deadline, do not block command completion, and
 cannot change its output or exit code. They use the supported Node runtime's
@@ -146,6 +221,10 @@ never enter telemetry payloads. Disable deletes the local ID and buffered
 counts; an old worker cannot restore them or send the next channel. A request
 already handed to the network cannot be recalled. Re-enable uses a new ID.
 Corrupt or unsupported state fails closed; explicit disable is the repair path.
+Status/Settings show at most 20 local delivery summaries (UTC date, channel,
+row count, accepted/rejected/unavailable). No request bodies, errors or URLs
+enter this journal. Disable erases it. HTTP acceptance does not prove durable
+collector storage or work acceptance; an unsent preview is not a receipt.
 
 ## Collector and interpretation
 
@@ -155,6 +234,20 @@ The existing `/v0/stats` endpoint continues to report deduplicated installations
 from old and new heartbeat clients. `/v1/aggregate-stats` publishes independent
 feature/result/duration/error totals, omitting cells below five. It does not
 publish cross-dimensional combinations or per-install behavior histories.
+`/v1/diagnostic-stats` publishes independent 30-receipt-day marginals for feature,
+operation, result, reason, duration, version, context and signal, suppressing
+cells below five. Operator-only queries may exclude `context='maintainer'` and
+compare activity/receipt dates; those counts still cannot join installations.
+Apply additive migration `0004-diagnostics.sql` and deploy the collector before
+releasing notice-v5 clients. An older Worker rejects new packets lossily;
+retain the table on rollback. No historical diagnostic rows are invented.
+
+`/v1/adoption-stats` uses existing heartbeat data: each 1/7/30-day cohort includes
+30 first-seen UTC dates whose full horizon has elapsed. Return means any later
+heartbeat **within** that horizon, not exact day-N retention. It also publishes
+30-day active-day buckets. Small cohorts are suppressed; the windows overlap
+and are not additive. Many installations or high activity do not prove
+enterprise adoption, distinct people or a paid customer.
 
 Application code stores no client IP, user agent or Cloudflare request metadata;
 Worker observability is disabled in the deployment template. Network providers
@@ -197,7 +290,9 @@ observed activity, including pauses; **duration** is the union of observed
 intervals. Parallel or nested overlap counts once within that series. Both stop
 growing without new evidence. They are not Goal age, CPU time, completion or
 billing evidence. Fixed Host labels are `codex_app`, `codex_cli`, `claude_code`,
-`dsh`, `opencode`, `trae`, `other`, `unknown`; custom names never go on the wire.
+`dsh`, `opencode`, `trae`, `kiro_cli`, `other`, `unknown`; custom names never go on
+the wire. A new label is accepted only by a collector built from the same
+contract, so deploy the collector before releasing a client that emits it.
 
 One cumulative snapshot per observed series/UTC day is claimed after that day
 closes, when another observation or normal usage occurs. Unfinished Goals count;
@@ -232,7 +327,7 @@ measurement histograms over 30 receipt days, omitting cells below five.
 The existing settings switch, environment opt-outs and consent policy control
 all channels and local timing reads. Settings and `loopx usage-ping status`
 show `goal_preview`, a local snapshot rather than a delivery receipt. Expanded
-scope requires notice version 3; an existing explicit disable persists.
+scope requires the current notice version 5; an existing explicit disable persists.
 
 Before shipping the client, back up D1, apply `0002-goal-usage.sql` and
 `0003-goal-duration-sources.sql`, then deploy the Worker. The latter migrates

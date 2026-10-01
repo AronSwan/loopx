@@ -92,22 +92,24 @@ test("automatic acknowledgment cannot override a choice, changed policy or recip
   assert.equal(await readFile(path, "utf8"), disabled);
 });
 
-test("one heartbeat per UTC day; closed-day aggregation is separate and identifier-free", async t => {
+test("one heartbeat per UTC day; same-day aggregates stay separate and identifier-free", async t => {
   const { path, state } = await fixture(t); const ctx = context();
   await configure(path, ctx, "enable"); const generation = (await state()).generation;
   const sent: { url: string; payload: unknown }[] = [];
   const post: Post = async (url, payload) => { sent.push({ url, payload }); return 204; };
   await observe(path, ctx, generation, row, post); await observe(path, ctx, generation, row, post);
-  assert.equal(sent.length, 1); assert.ok(validPing(sent[0].payload));
-  assert.equal((await inspect(path, ctx)).aggregate_preview?.counters[0].count, 2);
+  assert.equal(sent.length, 2); assert.ok(validPing(sent[0].payload));
+  assert.deepEqual(sent[1].payload, { schema: AGGREGATE_SCHEMA, counters: [row] });
+  assert.equal((await inspect(path, ctx)).aggregate_preview?.counters[0].count, 1);
   await observe(path, context("2026-09-27"), generation, row, post);
-  assert.equal(sent.length, 3);
-  assert.ok(sent[2].url.endsWith("/aggregate"));
-  assert.deepEqual(sent[2].payload, { schema: AGGREGATE_SCHEMA, counters: [{ ...row, count: 2 }] });
-  assert.equal((await state()).counters[0].count, 1);
+  assert.equal(sent.length, 4);
+  assert.ok(validPing(sent[2].payload));
+  assert.ok(sent[3].url.endsWith("/aggregate"));
+  assert.deepEqual(sent[3].payload, { schema: AGGREGATE_SCHEMA, counters: [{ ...row, count: 2 }] });
+  assert.deepEqual((await state()).counters, []);
 });
 
-test("a daily claim starts its request before a competing observer can take the released lock", async t => {
+test("heartbeat and aggregate claims start before a competing observer can take the released lock", async t => {
   const { path, state } = await fixture(t); const ctx = context();
   await configure(path, ctx, "enable"); const generation = (await state()).generation;
   let contender: FileMutationLock | undefined;
@@ -128,7 +130,7 @@ test("a daily claim starts its request before a competing observer can take the 
   const result = await observe(path, ctx, generation, row, async () => { requests++; return 204; });
   assert.ok(contender);
   assert.equal((await state()).last_attempt_day, "2026-09-26");
-  assert.equal(requests, 1, "a durable daily claim must not need another lock acquisition to initiate its request");
+  assert.equal(requests, 2, "durable heartbeat and aggregate claims must not need another lock acquisition to start");
   assert.equal(result.sent, true);
   hook.mock.restore(); syncBuiltinESMExports();
   await releaseFileMutationLock(path, contender.token); contender = undefined;
@@ -159,6 +161,36 @@ test("network failure is lossy and no-retry; no exception text enters local stat
   assert.equal((await observe(path, ctx, generation, row, async () => { throw new Error("SECRET:/private/path"); })).sent, false);
   await observe(path, ctx, generation, row, noPost);
   assert.ok(!(await readFile(path, "utf8")).includes("SECRET"));
+  assert.deepEqual((await inspect(path, ctx)).delivery_history.map(row => row.status), ["unavailable", "unavailable"]);
+});
+
+test("local delivery history is bounded, content-free and cleared by disable", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const generation = (await state()).generation;
+  for (let i = 0; i < 24; i++) {
+    await observe(path, { ...ctx, now: new Date(ctx.now!.getTime() + i * 15 * 60000) }, generation, row, async () => 400);
+  }
+  const status = await inspect(path, ctx);
+  assert.equal(status.delivery_history.length, 20);
+  assert.equal(status.identity_scope, "persistent_machine_state_directory_not_person_or_session");
+  for (const entry of status.delivery_history) {
+    assert.deepEqual(Object.keys(entry).sort(), ["channel", "day", "rows", "status"]);
+    assert.equal(entry.status, "rejected");
+  }
+  await configure(path, ctx, "disable");
+  assert.deepEqual((await inspect(path, ctx)).delivery_history, []);
+});
+
+test("scope disclosure upgrades preserve installation ID; only explicit disable resets it", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const original = await state();
+  await writeFile(path, JSON.stringify({ ...original, notice: { ...original.notice, version: 3 } }));
+  const pending = await inspect(path, ctx);
+  assert.equal(pending.sending, false);
+  assert.equal(pending.automatic_notice_required, true);
+  await configure(path, ctx, "acknowledge", pending.notice);
+  assert.equal((await state()).install_id, original.install_id);
+  assert.notEqual((await state()).generation, original.generation);
 });
 
 test("malformed state fails closed; disable is the explicit repair", async t => {
@@ -187,7 +219,7 @@ test("real HTTP sender does not follow redirects to another recipient", async t 
   ctx.env.LOOPX_USAGE_PING_ENDPOINT = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/ping`;
   await configure(path, ctx, "enable");
   assert.equal((await observe(path, ctx, (await state()).generation, row)).sent, false);
-  assert.equal(requests, 1);
+  assert.equal(requests, 2, "heartbeat and aggregate must each stop at the redirect");
 });
 
 test("startup heartbeat does not invent a successful command result", async t => {

@@ -698,6 +698,18 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
 - **剩余 hold：** 所有结果均为 `execution_authority: false`。M3 必须先完成其余
   effect owner 资格化，才能开放既有项目 activation 或 global routing。
 
+### 2026-09-26：M3 attached-host Chat 候选
+
+- **基线：** `9849366c6`。
+- **候选实现：** attached Chat Session 绑定当前精确 GoalRef；enqueue、resume
+  与新 claim 在 M2 lifetime guard 内重新校验。迟到结果只有在持久化 claim
+  admission 仍与历史 Session 一致时才能完成。
+- **兼容性：** 非 source profile 保留既有 writer、lookup、broker payload 与
+  序列化字节；客户端不提交 `goal_instance_id`。
+- **剩余 hold：** 本切片只资格化 `attached_host_chat_session`。Managed
+  provider 启动和下游 host effect 仍受独立 `first_party_host_runtime` 行与
+  M3 总 activation hold 阻断。
+
 ### 2026-09-27：第一方 Host runtime 部分 enforcement
 
 - **基线：** `fd96e5e2574272262b9ea604a96581a0d20e94d1`
@@ -710,6 +722,44 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
 - **剩余 hold：** 这只是 M3 的部分 enforcement。accepted-before-retirement 的
   downstream drain、不支持的旧/常驻二进制和其余 inventory owner 尚未
   qualified；`execution_authority: false` 与 M3 activation hold 保持不变。
+
+### 2026-09-29：M3 handoff inbox/outbox 候选
+
+- **基线：** `738115bde87eef3fd153abe456d53da5e2b249f8`。
+- **候选实现：** 将每个新 shadow management lineage 绑定到 source registry
+  的精确 GoalRef。既有 outbox entry、commit marker 和 cursor 字节保持兼容；
+  entry identity 已包含不可变 lineage。Exact bootstrap、management 和
+  outbox manifest 使用新 schema。Exact caller 不能从 legacy binding 推断身份。
+- **证据：** 真实 source-session A-to-B recreation 后，B drain 不会修改 Goal A
+  的 pending 文件或 candidate head，B 也不能向 A 的 active lineage 写 capture。
+  如果 A 已开始 capture 而 B 在 primary write 前替换 A，writer 会在 Goal
+  lifetime guard 内重新校验，并在写入前拒绝该 capture。显式 rollback 会连同
+  GoalRef 归档 A；重新 bootstrap 后，B 只提交并 replay 自己的工作。Legacy
+  drain request 不能进入 exact lineage。
+- **剩余 hold：** 本切片只资格化 `handoff_inbox_outbox` inventory 行。
+  Todo/lease mutation admission、quota、automation、Goal Channel 与 M3 总
+  activation hold 仍分别验收。
+
+### 2026-09-30：M3 Turn journal 精确提交候选
+
+- **基线：** `350f0f326`。
+- **候选实现：** 保持 `loopx_turn_journal_v0` 和既有路径。Source profile
+  plan 在 plan 与 transaction 中携带一致的精确 GoalRef。Executor 的每次
+  journal mutation 都通过同一个持久化回调，把 alias-scoped lifecycle guard
+  从 Python 交接给 TypeScript。TypeScript claim 并复核 witness，复用
+  `decideFirstPartyHostRuntime(require_current)`，再取得既有 journal mutation
+  lock 并提交，最后释放 source guard。
+- **证据：** TypeScript owner 测试证明缺失、畸形、副本不一致、失效和 stale
+  source admission 均在 journal mutation 前拒绝。真实 Python-to-TypeScript
+  集成先提交并重放 Goal A，再发布同名 Goal B，证明迟到的 A checkpoint
+  不改变 A/B 文件，随后 B 可独立提交。
+- **兼容性：** 只读 inspection 和 recovery 仍可读取 legacy journal。非 source
+  写入保留旧 RPC shape 与持久化字节。Source admission facts 和 lock token
+  只用于 transport，不落盘。
+- **剩余 hold：** 本切片只资格化 `turn_journal` inventory 行，不代表
+  `first_party_host_runtime`、downstream external-effect drain、不支持的旧／常驻
+  binary 或其他 M3 行已完成。`execution_authority: false` 和总 activation hold
+  保持不变。
 
 ## 附录 B：决策日志
 
