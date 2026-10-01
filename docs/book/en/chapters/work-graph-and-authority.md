@@ -99,7 +99,7 @@ This six-step teaching case does not claim automatic coordination across every H
 
 Ordinary conservative coordination excludes conflicting write scopes. A newer collaborative-editing mode can permit some same-path edits while still withholding merge authority.
 
-This is an **advanced source comparison**: main `f49b4a00…` documents an explicit `--write-worktree` path in the [independent-worktree reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md). It is not a product feature added to this revision's `76b7583a…` base and must not be backdated to released `v1.2.3` behavior.
+This is an **advanced source comparison**: main `f49b4a00…` documents an explicit `--write-worktree` path in the [independent-worktree reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md). The current source includes that implementation; the explanation follows its existing contract and must not be backdated to released `v1.2.3` behavior.
 
 On that promoted File/SQLite path, verified sibling worktrees on one machine can hold overlapping code-edit scopes under specified conditions, returning `integration_overlap_advisories`. Repository identity comes from the authoritative Todo. Host/path aliases, the same Todo or worktree, unverified workspaces and other machines retain their applicable exclusion rules.
 

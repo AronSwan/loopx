@@ -112,7 +112,7 @@ After obtaining `settlement_owed.command` from a trusted current entrypoint, ver
 
 “Independent work may continue” has a timing boundary. A Turn already bound to T1 does not switch its settlement identity to T2 merely because T1 discovers a dependency.
 
-This is an **advanced source comparison**, grounded in the [original-Turn wait recovery test](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py) at main `f49b4a00…`. That later implementation is not included in the `76b7583a…` product code underlying this revision. Do not treat it as shipped `v1.2.3` behavior or a command-ready exercise on an older checkout.
+This is an **advanced source comparison**, grounded in the [original-Turn wait recovery test](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py) at main `f49b4a00…`. The current source includes that implementation. The pinned link supports verification; it does not establish shipped `v1.2.3` behavior or make the example executable on an older checkout.
 
 ```text
 Original Turn binds T1 and records a monitor_changed / todo_done dependency

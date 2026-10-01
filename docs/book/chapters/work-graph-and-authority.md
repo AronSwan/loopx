@@ -99,7 +99,7 @@ flowchart TD
 
 传统保守做法对冲突写范围保持排他。读者还需要知道，新出现的协作编辑模式为什么可以允许某些“同路径编辑”，却仍不授予合并权。
 
-下面是**源码进阶对照**：主线 `f49b4a00…` 的[独立 worktree 编辑说明](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md)提供显式 `--write-worktree` 路径。它不是本次基于 `76b7583a…` 的产品代码新增功能，也不能倒推为发布版 `v1.2.3` 已支持。
+下面是**源码进阶对照**：主线 `f49b4a00…` 的[独立 worktree 编辑说明](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md)提供显式 `--write-worktree` 路径。当前源码已包含该实现；这里解释已有合同，不能倒推为发布版 `v1.2.3` 已支持。
 
 在该已提升 File/SQLite 路径上，经过校验的同机 sibling worktree 可以在指定条件下拥有重叠代码编辑范围，并返回 `integration_overlap_advisories`。仓库身份来自权威 Todo；Host/path 别名、同一 Todo、同一 worktree、未验证 workspace 或其他机器仍受相应排他规则约束。
 

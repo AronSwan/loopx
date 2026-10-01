@@ -320,7 +320,7 @@ not qualification of another product journey.
 
 ### Add one condition: the original Turn is not closed
 
-If T1 still owes blocked writeback under its original identity, independent T2 does not permit same-Turn rebinding. Explain original closeout before new admission selects T2. Compare the advanced main test in [wait sequencing](03-one-turn.md#wait-closeout). That later implementation is outside this branch's older product base and is not one of the eight available test functions above.
+If T1 still owes blocked writeback under its original identity, independent T2 does not permit same-Turn rebinding. Explain original closeout before new admission selects T2. See [wait sequencing](03-one-turn.md#wait-closeout) for the advanced test and version boundary. The eight test functions above are the selected scope of these four exercises, not an inventory of all tests in the checkout.
 
 Also check collaboration: A and B passing separate validation does not accept their combined result. Use [handoff through integration](work-graph-and-authority.md#handoff-to-integration) to name adopted revisions, integration validation, publication decisions and the final acceptor.
 

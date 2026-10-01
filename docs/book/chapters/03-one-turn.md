@@ -112,7 +112,7 @@ host_execute → typed_result → validation
 
 “独立工作可以继续”还需要时间边界：某轮已绑定 T1，T1 发现依赖，并不意味着同一轮可以直接把结算身份改为 T2。
 
-以下为**源码进阶对照**，依据主线 `f49b4a00…` 的[原 Turn 等待恢复测试](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py)。该后续实现未包含在本次修订所基于的 `76b7583a…` 产品代码中，不应当作 `v1.2.3` 已发布行为或在较旧 checkout 上直接执行的教程。
+以下为**源码进阶对照**，依据主线 `f49b4a00…` 的[原 Turn 等待恢复测试](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py)。当前源码已包含该实现；固定版本链接用于复核，不能倒推为 `v1.2.3` 已发布行为，也不能在较旧 checkout 上直接执行。
 
 ```text
 原 Turn 绑定 T1，登记 monitor_changed / todo_done 依赖
