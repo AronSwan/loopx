@@ -157,6 +157,7 @@ delegate start --binding-id independent-review --operation-id review-round-1 \
   --brief-file request.json --execute
 delegate read --operation-id review-round-1
 delegate wait --operation-id review-round-1
+delegate stop --operation-id review-round-1 --execute
 ```
 
 Inspection uses the bound worker workspace as its actual safety scan root. If
@@ -220,6 +221,68 @@ the configured task, quota and acceptance owners. A member coordinating its
 own authorized peers supplies `--parent-request-id` on start. CLI and MCP
 share grant validation, detached execution, wait/readback and recovery rather
 than maintaining separate rules.
+
+`stop --execute` ends one member's bounded work and returns a receipt that
+states what was proven. The request is written beside the execution record
+(`<operation>.stop.json`), never into it, so a worker that is still holding the
+operation cannot overwrite it. A worker on this machine receives `SIGTERM` for
+its whole process group, which ends its Turn child; the native host runs in
+its own process group, and its supervisor terminates that group once the Turn
+child is gone. The worker acknowledges from under its own lock, marks the
+record `stopped` and releases its hard task lease. When nobody holds the operation, the requester
+acknowledges itself. A worker on another machine is never signalled; it finds
+the request at its next checkpoint or at its next record write, which is
+refused. The receipt `phase` is `settled` only when an acknowledgement exists,
+the operation lock is free, the member's Turn lane holder record shows it
+released by the stopped worker (the lane is read, never taken), the native
+host the Turn launched has exited together with every process in its group,
+and a required hard task lease was actually released. The obligation is read
+from the operation record, not from the stop sidecar: the acknowledgement is
+persisted before the lease is released, so a crash in between must not turn
+"not yet written" into "nothing was owed". A release that failed is
+retried under the stop's own lock on the next read, so it never becomes a
+`settled` receipt that leaves the member's Todo blocked until the lease TTL;
+while it is unproven the stop stays `acknowledged` with
+`required_lease_release_unproven`. If that host cannot be attributed, or its
+supervisor never finished cleaning up, the stop stays `acknowledged` and a
+later `stop` rereads it. On a platform without process groups the launched
+host cannot be proven drained at all, so `stop --execute` fails with an
+actionable error naming that boundary rather than leaving a receipt no read
+can settle. `unknown`
+means the holder vanished before acknowledging, and `noop` means the
+work was already accepted, rejected or stopped. `requested` or `acknowledged`
+means it is still winding down: call `stop` again. A grace timeout never turns
+into a receipt. Stopped work is not resumed; `resume` refuses it and a new
+scope needs a new operation id. The Turn journal keeps its `in_progress` entry
+for inspection, and the record is never rewritten as a completion. A stopped
+member's Todo stays open, so the coordinator decides what happens next. The
+member's Todo completion and reply publication commit under the same lock a
+stop takes, so a stop written first means neither effect lands, and a stop
+written after both leaves their acceptance intact.
+
+中文：`stop --execute` 结束一个成员的有界工作，并返回一份只陈述已证明事实的
+回执。停止请求写在执行记录旁边的 `<operation>.stop.json`，从不写进记录本身，
+因此仍持有该 operation 的 worker 无法覆盖它。本机 worker 会收到整个进程组的
+`SIGTERM`，其 Turn 子进程随之结束；原生 host 在自己的进程组中运行，Turn 子进程
+退出后由其 supervisor 终止整个 host 进程组。worker 在自己的锁下确认，把记录标为
+`stopped` 并释放硬任务租约。没有持有者时由请求方自行确认。另一台机器上的
+worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
+只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
+worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
+都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。该义务取自
+操作记录而非 stop sidecar：确认会先于释放落盘，因此两者之间发生崩溃时，不能把
+「尚未写入」当成「本就不需要释放」。释放失败会在下一次读取时于 stop 自己的锁下重试，
+因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
+`required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
+停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
+启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的
+可操作错误失败，而不是留下一份任何读取都无法结算的回执。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
+rejected 或 stopped；`requested`/`acknowledged` 表示仍在收尾，再次调用 `stop`。
+宽限期超时永远不会变成回执。已停止的工作不能 `resume`，新范围需要新的
+operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会被改写成完成；
+成员的 Todo 仍然打开，由协调者决定下一步。成员的 Todo 完成与回执发布在 stop
+所取的同一把锁下提交，因此先写入停止则两个效果都不会落地，后写入停止则其验收结果
+保持不变。
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead
@@ -583,7 +646,8 @@ operation and observed artifact hashes in its existing inbox. Pending and delive
 receipts stay distinct from application; a retry after an uncertain response
 reuses the exact message and operation id. **Pause coordinator** stays in the
 panel and reports its actual scope. Dispatched members continue independently;
-this entrypoint cannot stop the whole team. Ordinary polling does not read artifact
+this entrypoint cannot stop the whole team. Stop one member explicitly with
+`delegation stop --execute` or `stop_delegation` and read its receipt. Ordinary polling does not read artifact
 bodies or run preflight. Closing the panel changes no work state. This local
 operator entrypoint does not grant a Lark audience access.
 
@@ -593,7 +657,8 @@ operator entrypoint does not grant a Lark audience access.
 可展开查看，返回列表保留位置与键盘焦点。协调员运行时，可把执行标识、看到的
 产物哈希和反馈投递到原收件箱；等待投递、已交付和已应用不能混为一谈。不确定响应
 后重试同一消息和标识，避免重复投递。面板内的「暂停协调员」显示实际反馈，但不会
-停止已派发成员，也不宣称整个团队停止。暂停时仍可检查证据；读取不启动模型。
+停止已派发成员，也不宣称整个团队停止。要停止某个成员，显式使用
+`delegation stop --execute` 或 `stop_delegation` 并阅读其回执。暂停时仍可检查证据；读取不启动模型。
 
 Screenshots use isolated synthetic research data, not a live-model qualification:
 [desktop evidence](../assets/personal-workspace/team-evidence-desktop.png),
@@ -623,6 +688,10 @@ unchanged and cannot launch workers. With it, the Agent can:
    response is normal. `read_delegation` reads the durable original operation.
 4. If `recovery_required` is true, call `resume_delegation` with that same id.
    This cannot retarget the work or silently create a replacement Turn.
+5. Call `stop_delegation(operation_id)` to end one member. Read its `phase`:
+   `settled` is the only receipt that the worker acknowledged and released its
+   locks and that the native host and its process group exited; `unknown` means the holder vanished first; `noop` means the work had
+   already ended. Stopped work cannot be resumed; use a new operation id.
 
 Configure the member's host to expose its own identity-bound collaboration
 tools. It reads `DELEGATION.json`, independently calls `assess_request`, and
@@ -663,6 +732,7 @@ concurrent executions still use the same kernel lock and original Turn journal.
 | Requesting MCP conversation closes | The detached bounded worker continues; another connection reads the original operation. |
 | Duplicate start/resume while work runs | Operation identity, task lock and Turn journal prevent another concurrent execution. |
 | Worker process or machine stops | Reconnect with the same operator configuration and credentials, then resume the original Turn. |
+| Member stopped on request | The worker acknowledges under its lock, its Turn child is ended and the host supervisor terminates the host group, its lease is released; `settled` needs that acknowledgement, free locks and an exited host group, `unknown` means the holder vanished first. The record is `stopped`; resume refuses it. |
 | Ark is computing without local tools | The already-started cloud turn can continue. It is not dependent on the local conversation. |
 | Ark requests a local tool while the host is absent | It waits for the local tool result. Recovery observes the original input/session and executes only previously unstarted tool calls. |
 | Tool execution or send acknowledgement is uncertain | Do not repeat the effect. Preserve the receipt/session for explicit reconciliation. |
@@ -678,7 +748,8 @@ or default executor change; those existing configuration surfaces are untouched.
 To disable new admission, remove the caller's grants or remove
 `--execution-config` from the host. A stopped Goal refuses new starts/resumes;
 existing completed results remain readable. Disabling does not kill work already
-running. Retain receipts, stop or reconcile owned workers, and confirm cloud
+running; `delegation stop --execute` ends one member and returns a receipt.
+Retain receipts, stop or reconcile owned workers, and confirm cloud
 resource cleanup before deleting a disposable runtime. The optional adapter's
 cleanup command never grants task completion.
 

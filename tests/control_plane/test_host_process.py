@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -204,3 +205,65 @@ def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> Non
     )
     assert result["ok"] is True
     assert result["value"] == {"args": values, "input": {}}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_ENV, host_process_drain,
+    )
+
+    record_path = tmp_path / "op.host.json"
+    assert host_process_drain(record_path) == "not_launched"
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record_path))
+    host = ("import json,os,sys;print(json.dumps({'env': os.environ.get(%r), 'pid': os.getpid(),"
+            " 'pgid': os.getpgid(0)}))" % HOST_PROCESS_RECORD_ENV)
+    result = _run_host({}, argv=[sys.executable, "-c", host], project=tmp_path, timeout_seconds=5)
+    assert result["ok"] is True
+    # A nested LoopX run inside the Host cannot overwrite its parent's record.
+    assert result["value"]["env"] is None
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == "finished"
+    assert record["host_pid"] == result["value"]["pid"] == record["process_group"] == result["value"]["pgid"]
+    assert host_process_drain(record_path) == "drained"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_SCHEMA_VERSION, host_process_drain,
+    )
+    from loopx.file_lock import lock_holder_host_label
+
+    path = tmp_path / "op.host.json"
+    live = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    gone.wait(timeout=10)
+
+    def drain(**fields):
+        path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                                    "host": lock_holder_host_label(), "owner_pid": 1, **fields}))
+        return host_process_drain(path)
+
+    try:
+        # A live supervisor or a live Host group is still draining.
+        assert drain(phase="launching", bridge_pid=live.pid, process_group=None) == "draining"
+        assert drain(phase="spawned", bridge_pid=gone.pid, process_group=live.pid) == "draining"
+        assert drain(phase="finished", bridge_pid=gone.pid, process_group=live.pid) == "draining"
+        assert drain(phase="spawned", bridge_pid=gone.pid, process_group=gone.pid) == "drained"
+        # A supervisor gone before it reported a group may have spawned one anyway.
+        assert drain(phase="launching", bridge_pid=gone.pid, process_group=None) == "unattributable"
+        assert drain(phase="finished", bridge_pid=gone.pid, process_group=None) == "drained"
+        for fields in ({"phase": "spawned", "bridge_pid": None, "process_group": gone.pid},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": "1"},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": 1},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "host": "another-machine"},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "schema_version": "other"}):
+            assert drain(**fields) == "unattributable", fields
+        path.write_text("{not json")
+        assert host_process_drain(path) == "unattributable"
+    finally:
+        live.kill()
+        live.wait(timeout=10)
