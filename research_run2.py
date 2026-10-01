@@ -593,8 +593,8 @@ def stage_route(root, phase, subtopics=None):
         f"Your identity is {actor}. Scoped loopx_collaboration MCP tools are available. "
         "DELIVERABLE (validator checks this exact path; missing/empty = phase fails): "
         f"{deliverable}. Write it FIRST-complete, then stop. "
-        "Host quirk: shell tools are BROKEN ('--profile <name> is required'); use read/write/edit/glob "
-        "and web_search/web_fetch instead. Compute digests with pwsh Get-FileHash (official tool). "
+        "Runtime note: shell (pwsh) WORKS on the current runtime (0.1.5's '--profile' bug is fixed); "
+        "prefer read/write/edit/glob for file edits, use pwsh for commands and Get-FileHash digests. "
         f"Owner request ids: {', '.join(meta['requests'])}.\n", encoding="utf-8")
     fb = ws / "outputs" / "repair-feedback.md"
     art = ws / deliverable
