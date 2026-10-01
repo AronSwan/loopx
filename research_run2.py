@@ -331,7 +331,9 @@ TASKS = {
         "reference sources present in the inputs — machine counts beat eyeballing. "
         "Write outputs/review-1.md IN CHINESE: (1) factual errors with evidence, (2) missing "
         "questions or angles the brief asked for, (3) over-engineering a small factory "
-        "does not need, (4) the three highest-value fixes, (5) a verdict line that ends with EXACTLY one of: 采纳 / 修改后采纳 / 重做. "
+        "does not need, (4) the three highest-value fixes, (5) the verdict as its OWN last line before any appendix, "
+        "in EXACTLY this format: 裁决:采纳 / 裁决:修改后采纳 / 裁决:重做 — the 裁决: label prefix is REQUIRED "
+        "(a bare verdict word without the label fails the gate; sample compliant line: 裁决:修改后采纳). "
         "Judge against our real constraints, not generic best practice."
     ),
     "reviewer-2": (
@@ -346,9 +348,10 @@ TASKS = {
         "otherwise. Write outputs/review-2.md IN CHINESE with this 5-part structure: "
         "(1) factual errors with evidence, (2) missing questions or angles the brief "
         "asked for, (3) over-engineering a small factory does not need, (4) the three "
-        "highest-value fixes, (5) a verdict that ends with EXACTLY one of these three "
-        "words: 采纳 / 修改后采纳 / 重做. Do not invent other verdict words "
-        "(English status words do not count)."
+        "highest-value fixes, (5) the verdict as its OWN last line before any appendix, in EXACTLY this format: "
+        "裁决:采纳 / 裁决:修改后采纳 / 裁决:重做 — the 裁决: label prefix is REQUIRED (a bare verdict word "
+        "without the label fails the gate; sample compliant line: 裁决:修改后采纳). Do not invent other verdict "
+        "words (English status words do not count)."
     ),
     "finalizer": (
         "You are the finalizing architect. Read REQUIREMENTS.md, inputs/research-*.md, "

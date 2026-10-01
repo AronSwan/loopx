@@ -555,3 +555,12 @@ def test_expected_endpoint_pairs_by_sdk_version():
     assert r2.expected_endpoint("0.1.5rc1") == "https://open.bigmodel.cn/api/coding/paas/v4"
     # 0.2.0+旧端点组合必须被拦(此前守卫双放行=放行一场必死的404发射)
     assert r2.expected_endpoint("0.2.0rc2") != "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
+# ==== 裁决格式契约钉死(0/2三连复现的病根: 任务书从未写标签前缀,模型按字面交白词) ====
+def test_reviewer_tasks_state_label_prefix_contract():
+    """任务书必须显式教'裁决:前缀+字面样例'——门禁要标签而任务书只说'以词结尾',
+    模型忠实执行光杆词连续三场0/2。契约两头必须对齐。"""
+    for who in ("reviewer-1", "reviewer-2"):
+        assert "裁决:" in r2.TASKS[who], who
+        assert "裁决:修改后采纳" in r2.TASKS[who], f"{who} 缺字面样例"
