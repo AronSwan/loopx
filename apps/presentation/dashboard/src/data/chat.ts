@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
+  type AgentResponse,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -427,6 +428,7 @@ const typedOperationEnvelopeSchema = z.object({
 
 export const typedActionProposalSchema = z.object({
   schema_version: z.literal("loopx_chat_action_proposal_v1"),
+  idempotency_key: z.string().optional(),
   proposal_id: z.string().min(1),
   action_kind: typedActionKindSchema,
   summary: z.string().min(1),
@@ -498,13 +500,13 @@ const typedActionListEnvelopeSchema = z.object({
   proposals: z.array(typedActionProposalSchema),
 });
 
-export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}) {
+export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (filters.contextKind) query.set("context_kind", filters.contextKind);
   if (filters.goalId) query.set("goal_id", filters.goalId);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return typedActionListEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions${suffix}`),
+    await requestJson<unknown>(`/api/actions${suffix}`, { signal }),
   ).proposals;
 }
 
@@ -1032,12 +1034,12 @@ export async function interruptChatTurn(sessionId: string, turnId: string) {
 }
 
 export async function steerChatTurn(sessionId: string, turnId: string, message: string, ingressId: string) {
-  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string }>(
+  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string; created: boolean }>(
     `/api/chat/sessions/${sessionId}/turns/${turnId}/steer`,
     { method: "POST", body: JSON.stringify({ message, client_ingress_id: ingressId }) },
   );
   if (receipt.ok !== true || receipt.session_id !== sessionId || receipt.turn_id !== turnId
-    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered") {
+    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered" || typeof receipt.created !== "boolean") {
     throw new ChatApiError("追加指令的回执不匹配，请保留草稿并检查当前状态。", { error_code: "steer_receipt_mismatch" });
   }
   return receipt;
@@ -1238,6 +1240,18 @@ async function receiveChatTurnStreaming(
     sessionId,
     turnId,
   };
+}
+
+/** Read a stored Turn's terminal outcome without submitting or resuming work.
+ * Failed/interrupted Turns have no completed proposals; transport failures throw
+ * so callers can retry instead of treating an unavailable response as empty.
+ */
+export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
+  let completed: AgentResponse | null = null;
+  await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
+    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+  }, signal);
+  return completed;
 }
 
 export async function resumeChatTurnStreaming(

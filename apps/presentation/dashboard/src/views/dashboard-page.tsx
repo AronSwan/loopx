@@ -3,7 +3,7 @@ import { conversationReturnSessions, reconcileConversationHistory, reconcileConv
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
-import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
+import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
 import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +38,6 @@ import {
   ChatApiError,
   applyGoalSubagentConfiguration,
   applyTypedAction,
-  applyTodo,
   closeChatSession,
   createChatSession,
   updateLoopXMode,
@@ -47,11 +46,12 @@ import {
   fetchChatSession,
   fetchChatSessions,
   interruptChatTurn,
+  listTypedActions,
   steerChatTurn,
   previewGoalSubagentConfiguration,
-  previewTodo,
   previewTypedAction,
   recordProjectionExchange,
+  readCompletedChatTurn,
   resumeChatSession,
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
@@ -59,8 +59,6 @@ import {
   chatSessionSupportsSteering,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
-  todoNoWriteReceiptFromPayload,
-  todoReceiptLabel,
   isTodoProposal,
   type ChatSessionSnapshot,
   type ChatSessionSummary,
@@ -68,8 +66,8 @@ import {
   type ChatVisibleMessage,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
+  type AgentResponse,
   type ProtectedActionProposal,
-  type TodoProposal,
 } from "../data/chat";
 import {
   beginStatusRequest,
@@ -101,6 +99,7 @@ import {
   type WorkspaceAgentOption,
   type WorkspaceAttention,
   type WorkspaceGoal,
+  type WorkspaceGoalTab,
   type WorkspaceGoalUsage,
   type WorkspaceHomeLane,
   type WorkspaceImageAttachment,
@@ -116,7 +115,9 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
+  type WorkspaceAgentTodo,
 } from "../features/personal-workspace/personal-workspace-model";
+import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
@@ -150,6 +151,24 @@ function semanticProtectedActionPreview(
     normalizedParameters: { goal_id: goalId, status: "operator_gate_requested" },
     summary: `请求受保护操作：${protectedOperationLabels[proposal.operation]} · ${proposal.target}`,
   };
+}
+
+// An Agent's Todo proposals are untrusted drafts. Each becomes a typed
+// todo.create preview the owner confirms in the Goal conversation. The key is
+// derived from the Turn, so observing the same completion twice reuses the
+// stored preview instead of offering a duplicate.
+function todoProposalPreviewRequests(
+  goalId: string,
+  turnId: string,
+  proposals: AgentResponse["proposals"],
+): WorkspaceActionPreviewRequest[] {
+  return proposals.filter(isTodoProposal).map((proposal, index) => ({
+    actionKind: "todo.create",
+    context: { goal_id: goalId, kind: "goal" },
+    idempotencyKey: `chat-todo-proposal:${turnId}:${index}`,
+    normalizedParameters: { goal_id: goalId, priority: proposal.priority, text: proposal.text },
+    summary: proposal.text,
+  }));
 }
 import type { StatusSourceControl } from "../features/personal-workspace/status-source-switcher";
 import { applyRemoteGoalLifecycle, ensureSshSource } from "../data/ssh-host-catalog";
@@ -217,24 +236,7 @@ type TodoExplorerItem = {
   todo: TodoItem;
 };
 
-type PersonalAgentTodoItem = {
-  completedAt?: string | null;
-  resumeWhen?: string | null;
-  resumeReady?: boolean | null;
-  resumeReceiptId?: string | null;
-  claimedBy?: string | null;
-  done: boolean;
-  evidence?: string | null;
-  priority?: string | null;
-  status?: string | null;
-  taskClass?: string | null;
-  taskDomain?: string | null;
-  text: string;
-  todoId: string;
-  validationDigest?: string | null;
-  validationRevision?: number | null;
-  validationRevisionActor?: string | null;
-};
+type PersonalAgentTodoItem = WorkspaceAgentTodo;
 
 function inferLifecyclePhase(status?: string | null, run?: RunRecord) {
   if (run?.controller_readiness?.decision_advisor_ready || run?.controller_readiness?.write_controller_ready) {
@@ -545,27 +547,6 @@ function workspaceImageAttachments(attachments?: ChatImageAttachment[]): Workspa
   }));
 }
 
-type PersonalProposalState =
-  | "candidate"
-  | "previewing"
-  | "ready"
-  | "applying"
-  | "approved"
-  | "rejected"
-  | "cancelled"
-  | "stale"
-  | "error";
-
-type PersonalProposalCard = {
-  goalId: string;
-  id: number;
-  previewId: string | null;
-  proposal: TodoProposal;
-  receiptLabel: string | null;
-  state: PersonalProposalState;
-  statusMessage: string | null;
-};
-
 type PersonalAgentOption = {
   adapterKind?: string;
   agentId: string;
@@ -727,6 +708,7 @@ function personalTodoResumeReceiptId(todo: TodoItem) {
 function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
   const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
   return {
+    ...monitorTodoReadback(todo),
     completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
@@ -869,21 +851,6 @@ function personalVisiblePlanTodos(todos: PersonalAgentTodoItem[], limit = 4) {
 function personalDecisionPrimaryLabel(goal: PersonalGoalItem) {
   const signal = `${goal.needsYouTaskClass ?? ""} ${goal.needsYouActionKind ?? ""}`.toLowerCase();
   return /approve|approval|merge|release|submit|write|publish/.test(signal) ? "确认处理" : "回复 Agent";
-}
-
-function personalProposalStateLabel(state: PersonalProposalState) {
-  const labels: Record<PersonalProposalState, string> = {
-    candidate: "候选 Todo",
-    previewing: "正在生成写入预览",
-    ready: "预览已锁定，等待你批准",
-    applying: "正在写入",
-    approved: "已批准并写入",
-    rejected: "已拒绝，未写入",
-    cancelled: "已取消，未写入",
-    stale: "状态已变化，需重新预览",
-    error: "暂时无法处理",
-  };
-  return labels[state];
 }
 
 function isPersonalGoalTerminal(row: GoalDirectoryRow) {
@@ -1045,7 +1012,7 @@ function buildPersonalHomeModel(
     return (personalTodosForQueueItem(item, "user")?.items ?? [])
       .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => ({
         projectedDone: todo.done,
-        details: attentionDetails(todo),
+        details: attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id),
         actionKind: todo.action_kind ?? null,
         blocking,
         goalId: item.goal_id,
@@ -1245,7 +1212,8 @@ function buildPersonalHomeModel(
 }
 function PersonalGoalHome({
   goalArchiveLoadState,
-  initialManagerChatOpen,
+  selectedView,
+  onSelectView,
   isLoading,
   onGoalActivationStateChange,
   onGoalDeleted,
@@ -1262,11 +1230,12 @@ function PersonalGoalHome({
   toggleTheme,
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen: boolean;
+  selectedView?: WorkspaceGoalTab;
+  onSelectView: (view: WorkspaceGoalTab) => void;
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
@@ -1405,7 +1374,6 @@ function PersonalGoalHome({
   const [mobilePanel, setMobilePanel] = useState<"chat" | "goals">("chat");
   const [managerInput, setManagerInput] = useState("");
   const [messagesByContext, setMessagesByContext] = useState<Record<string, PersonalManagerMessage[]>>({});
-  const [proposalsByContext, setProposalsByContext] = useState<Record<string, PersonalProposalCard[]>>({});
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
@@ -1413,6 +1381,7 @@ function PersonalGoalHome({
   const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [steeringSessionIds, setSteeringSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
+  const [typedActionsRevision, setTypedActionsRevision] = useState(0);
   // Bumped when the service reports a running Turn this page did not know
   // about, so the Turn recovery effect re-reads the Session and adopts it.
   const [turnRecoveryRequest, setTurnRecoveryRequest] = useState(0);
@@ -1421,7 +1390,6 @@ function PersonalGoalHome({
   // undefined: not read yet; null: the session owner could not be read.
   const [goalSessionFacts, setGoalSessionFacts] = useState<ChatSessionSummary[] | null | undefined>(undefined);
   const managerMessageId = useRef(1);
-  const proposalId = useRef(1);
   const sessionIds = useRef(new Map<string, string>());
   const newSessionRequired = useRef(new Set<string>());
   const activeTurnIds = useRef(new Map<string, string>());
@@ -1444,7 +1412,6 @@ function PersonalGoalHome({
   const managerInputRef = useRef<HTMLInputElement>(null);
   const managerQuickPrompts = ["我现在该做什么？", "哪些 Goal 在等我？", "Agent 在做什么？"];
   const contextMessages = messagesByContext[contextId] ?? [];
-  const contextProposals = proposalsByContext[contextId] ?? [];
   const conversationHistory = useConversationHistory({
     agentId: selectedGoal ? selectedAgent.agentId : undefined,
     currentAgentId: selectedAgent.agentId,
@@ -1782,42 +1749,46 @@ function PersonalGoalHome({
               }));
             },
           });
+          // The completed Turn's proposal projection outlives this view: the
+          // owner may have left for another conversation while it finished, and
+          // returning must still find the card. Only the transcript update below
+          // belongs to the mounted view, so this runs before the cancellation
+          // guard that retires the pending reply.
+          const recoveryGoalId = targetContextId !== "manager" ? activeSnapshot?.session.goal_id : undefined;
+          const proposalsProjected = await projectRecoveredTurnProposals(targetContextId, recoveryGoalId, streamed.turnId, streamed.response.proposals, streamingMessageId);
           if (cancelled) return;
           updateConversationMessage(targetContextId, streamingMessageId, {
-            lines: streamed.response.gate
-              ? [streamed.response.gate.summary, streamed.response.gate.next_action].filter(Boolean).slice(0, 2)
-              : [],
+            lines: [
+              ...(streamed.response.gate
+                ? [streamed.response.gate.summary, streamed.response.gate.next_action].filter(Boolean).slice(0, 2)
+                : []),
+              ...(!proposalsProjected ? [t("feedback.proposalDraftFailed")] : []),
+            ],
             pending: false,
             goalDraft: streamed.response.goal_draft,
             text: streamed.response.message
               || streamedText.trim()
               || `${answerIdentityLabel(targetContextId, selectedAgent.label)} 已完成分析。`,
           });
-          const recoveryGoal = model.goals.find((goal) => goal.goalId === activeSnapshot?.session.goal_id)
-            ?? selectedGoal
-            ?? model.goals[0]
-            ?? null;
-          if (recoveryGoal && streamed.response.proposals.length > 0) {
-            // A recovered Turn may carry the steward's admitted team plan beside
-            // its todo proposals. The plan is not a candidate Todo: the manager
-            // channel already stored it as the typed card the owner confirms, so
-            // only the todos become cards here.
-            const cards = streamed.response.proposals.filter(isTodoProposal).map((proposal) => ({
-              goalId: recoveryGoal.goalId,
-              id: proposalId.current++,
-              previewId: null,
-              proposal,
-              receiptLabel: null,
-              state: "candidate" as const,
-              statusMessage: null,
-            }));
-            if (cards.length > 0) {
-              setProposalsByContext((current) => ({
-                ...current,
-                [targetContextId]: [...(current[targetContextId] ?? []), ...cards],
-              }));
+          // Refresh the existing history owner so this terminal Turn no longer
+          // appears active in the replay snapshot. A failed preview stays
+          // discoverable and the history projection can retry it without a
+          // new Turn, navigation or an in-memory completion ledger.
+          const refreshCompletedHistory = async (attempt = 0) => {
+            if (cancelled) return;
+            try {
+              const refreshed = await conversationHistory.refresh();
+              if (refreshed.unavailableSessionIds.length) conversationHistory.retry();
+            } catch {
+              if (!cancelled) {
+                handoffRetryTimer = window.setTimeout(
+                  () => void refreshCompletedHistory(attempt + 1),
+                  Math.min(3000 * 2 ** attempt, 30_000),
+                );
+              }
             }
-          }
+          };
+          void refreshCompletedHistory();
         } catch (error) {
           if (cancelled) return;
           const interrupted = interruptedTurnIds.current.delete(activeTurnId)
@@ -1912,6 +1883,93 @@ function PersonalGoalHome({
       window.clearTimeout(handoffRetryTimer);
     };
   }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
+
+  // The projection deliberately outlives the mounted view. Its caller may be
+  // running for a Goal the owner has already left, and the recovery stream's
+  // teardown aborts only the display subscription, never the owner's claim on
+  // the drafts the Turn already produced. A Goal other than the Session's own
+  // never owns them, and the Turn-derived idempotency key makes re-projecting
+  // the same completion a no-op.
+  async function projectRecoveredTurnProposals(
+    targetContextId: string,
+    goalId: string | undefined,
+    turnId: string,
+    proposals: AgentResponse["proposals"],
+    streamingMessageId: number | null,
+  ) {
+    const requests = goalId && model.goals.some((goal) => goal.goalId === goalId)
+      ? todoProposalPreviewRequests(goalId, turnId, proposals)
+      : [];
+    if (!requests.length) return true;
+    // Existing previews own their lifecycle, including applied/rejected states.
+    // Recomputing a preview after Goal state changes can conflict with its stored
+    // fingerprint; use the persisted Turn key before attempting any new preview.
+    const stored = await listTypedActions({ contextKind: "goal", goalId }).catch(() => null);
+    if (!stored) return false;
+    const known = new Set(stored.filter((proposal) => proposal.action_kind === "todo.create"
+      && proposal.context.goal_id === goalId).map((proposal) => proposal.idempotency_key));
+    const missing = requests.filter((request) => !known.has(request.idempotencyKey));
+    const results = await Promise.allSettled(missing.map((request) => previewTypedAction(request)));
+    if (results.some((result) => result.status === "fulfilled")) setTypedActionsRevision((current) => current + 1);
+    if (!results.some((result) => result.status === "rejected")) return true;
+    // The answer stays readable; say its draft is missing so the owner knows
+    // to retry. A view that has since been left has no message to amend.
+    if (streamingMessageId === null) return false;
+    setMessagesByContext((messages) => ({
+      ...messages,
+      [targetContextId]: (messages[targetContextId] ?? []).map((message) => message.id !== streamingMessageId
+        ? message
+        : { ...message, lines: [...message.lines, t("feedback.proposalDraftFailed")] }),
+    }));
+    return false;
+  }
+
+  // History, not an in-memory pending list, discovers answers missed while the
+  // page was closed. Read each stored Turn's canonical completion; a transcript
+  // message alone cannot authorize a preview. This also covers older Sessions.
+  useEffect(() => {
+    const history = conversationHistory.history;
+    const goalId = selectedGoal?.goalId;
+    if (readOnly || !goalId || !history) return;
+    const controller = new AbortController();
+    const projected = new Set<string>(); // Optimization only; never a durable claim.
+    let timer: number | undefined;
+    let failures = 0;
+    const replay = async () => {
+      let retry = false;
+      for (const snapshot of history.snapshots) {
+        const session = snapshot.session;
+        if (session.goal_id !== goalId || session.channel_id !== `goal.${goalId}`) continue;
+        const turnIds = new Set(snapshot.messages
+          .map((message) => message.turn_id)
+          .filter((turnId): turnId is string => Boolean(turnId) && turnId !== session.active_turn_id));
+        for (const turnId of turnIds) {
+          if (controller.signal.aborted) return;
+          const key = `${session.session_id}:${turnId}`;
+          if (projected.has(key)) continue;
+          try {
+            const completed = await readCompletedChatTurn(session.session_id, turnId, controller.signal);
+            if (controller.signal.aborted) return;
+            const persisted = !completed || await projectRecoveredTurnProposals(goalId, session.goal_id, turnId, completed.proposals, null);
+            if (persisted) projected.add(key);
+            else retry = true;
+          } catch {
+            // A transport/preview failure is not evidence of an empty response.
+            // Leave the completion discoverable and retry without another Turn.
+            retry = true;
+          }
+        }
+      }
+      if (retry && !controller.signal.aborted) {
+        timer = window.setTimeout(() => void replay(), Math.min(3000 * 2 ** failures++, 30_000));
+      }
+    };
+    void replay();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [conversationHistory.history, selectedGoal?.goalId, readOnly]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -2099,19 +2157,6 @@ function PersonalGoalHome({
           ...(update.text !== undefined || update.activity !== undefined ? { updatedAt: Date.now() } : {}),
           ...(message.pending && update.pending === false ? { preparing: false, endedAt: Date.now() } : {}),
         } : message),
-    }));
-  }
-
-  function updatePersonalProposal(
-    targetContextId: string,
-    targetProposalId: number,
-    update: Partial<PersonalProposalCard>,
-  ) {
-    setProposalsByContext((current) => ({
-      ...current,
-      [targetContextId]: (current[targetContextId] ?? []).map((proposal) =>
-        proposal.id === targetProposalId ? { ...proposal, ...update } : proposal
-      ),
     }));
   }
 
@@ -2324,29 +2369,13 @@ function PersonalGoalHome({
           lines: ["请进入要修改的 Goal，预览并确认具体变更。"],
         });
       }
-      if (todoProposals.length > 0 && targetGoal) {
-        const cards = todoProposals.map((proposal) => ({
-          goalId: targetGoal.goalId,
-          id: proposalId.current++,
-          previewId: null,
-          proposal,
-          receiptLabel: null,
-          state: "candidate" as const,
-          statusMessage: null,
-        }));
-        setProposalsByContext((current) => ({
-          ...current,
-          [targetContextId]: [...(current[targetContextId] ?? []), ...cards],
-        }));
-      }
-      if (targetContextId !== "manager" && response.protected_action) {
-        const protectedPreview = semanticProtectedActionPreview(
-          targetContextId,
-          question,
-          response.protected_action,
-        );
-        if (protectedPreview) return protectedPreview;
-      }
+      const decision = targetContextId !== "manager" && response.protected_action
+        ? semanticProtectedActionPreview(targetContextId, question, response.protected_action) ?? undefined
+        : undefined;
+      const candidates = targetGoal
+        ? todoProposalPreviewRequests(targetGoal.goalId, streamed.turnId, response.proposals)
+        : [];
+      if (decision || candidates.length > 0) return { candidates, decision };
     } catch (error) {
       if (preparationController.signal.aborted && !submittedTurnId) {
         updateConversationMessage(targetContextId, streamingMessageId, {
@@ -2548,69 +2577,6 @@ function PersonalGoalHome({
     recordRuntimeBinding(run.goalId, null);
   }
 
-  async function previewPersonalProposal(card: PersonalProposalCard) {
-    const targetContextId = contextId;
-    updatePersonalProposal(targetContextId, card.id, {
-      state: "previewing",
-      statusMessage: null,
-    });
-    try {
-      const preview = await previewTodo(card.goalId, card.proposal.text);
-      updatePersonalProposal(targetContextId, card.id, {
-        previewId: preview.preview_id,
-        state: "ready",
-        statusMessage: "LoopX 已锁定这次写入预览，请确认后再提交。",
-      });
-    } catch (error) {
-      updatePersonalProposal(targetContextId, card.id, {
-        state: "error",
-        statusMessage: error instanceof Error ? error.message : "无法生成 Todo 预览。",
-      });
-    }
-  }
-
-  async function approvePersonalProposal(card: PersonalProposalCard) {
-    if (!card.previewId) {
-      return;
-    }
-    const targetContextId = contextId;
-    updatePersonalProposal(targetContextId, card.id, {
-      state: "applying",
-      statusMessage: null,
-    });
-    try {
-      const result = await applyTodo(card.goalId, card.proposal.text, card.previewId);
-      updatePersonalProposal(targetContextId, card.id, {
-        receiptLabel: todoReceiptLabel(result.receipt),
-        state: "approved",
-        statusMessage: result.receipt.already_exists ? "Todo 已存在，本次没有重复写入。" : "Todo 已写入，并返回可核对回执。",
-      });
-      onRefresh();
-    } catch (error) {
-      const noWriteReceipt = error instanceof ChatApiError
-        ? todoNoWriteReceiptFromPayload(error.payload)
-        : null;
-      updatePersonalProposal(targetContextId, card.id, noWriteReceipt ? {
-        previewId: null,
-        receiptLabel: `未写入 · 回执 ${noWriteReceipt.receipt_id.slice(0, 12)}`,
-        state: "stale",
-        statusMessage: "Goal 状态已变化，本次保持零写入。请重新生成预览。",
-      } : {
-        state: "error",
-        statusMessage: error instanceof Error ? error.message : "Todo 写入失败。",
-      });
-    }
-  }
-
-  function settlePersonalProposal(card: PersonalProposalCard, state: "rejected" | "cancelled") {
-    updatePersonalProposal(contextId, card.id, {
-      previewId: null,
-      receiptLabel: "未写入",
-      state,
-      statusMessage: state === "rejected" ? "你已拒绝这个候选 Todo。" : "你已取消本次处理。",
-    });
-  }
-
   function chooseAgent(agentId: string) {
     if (!agentOptions.some((agent) => agent.agentId === agentId && agent.available)) {
       return;
@@ -2619,18 +2585,8 @@ function PersonalGoalHome({
     setAgentMenuOpen(false);
   }
 
-  function openManagerChat() {
-    onSelectGoal("");
-    setMobilePanel("chat");
-  }
-
-  function openGoalList() {
-    onSelectGoal("");
-    setMobilePanel("goals");
-  }
-
   function openGoalChat(goalId: string) {
-    onSelectGoal(goalId);
+    onSelectGoal(goalId, "chat");
     setMobilePanel("chat");
   }
 
@@ -2843,6 +2799,7 @@ function PersonalGoalHome({
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       <PersonalWorkspacePage
+        typedActionsRevision={typedActionsRevision}
         agents={agentOptions.map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,
@@ -2952,7 +2909,13 @@ function PersonalGoalHome({
             if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
             // The service owns exact-turn admission and durable retry. A delivered
             // ingress may be read back after completion; never retarget it locally.
-            await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            const receipt = await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            if (receipt.created === false) {
+              // A replay reads an existing delivery; its message belongs to the
+              // stored transcript, not a second optimistic user bubble.
+              if (targetContextId === contextId) await conversationHistory.refresh();
+              return;
+            }
             const id = managerMessageId.current++;
             setMessagesByContext(current => {
               const messages = current[targetContextId] ?? [];
@@ -2960,7 +2923,6 @@ function PersonalGoalHome({
               return { ...current, [targetContextId]: [...messages, { id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId, lines: [], role: "user", text: message }] };
             });
           },
-          onOpenGoal: openGoalChat,
           onOpenRunSession: async (run) => {
             if (!run.sessionId) return;
             const sessionId = run.sessionId;
@@ -2969,7 +2931,6 @@ function PersonalGoalHome({
               ...current,
               [sessionId]: snapshot,
             }));
-            openGoalChat(run.goalId);
             setMessagesByContext((current) => ({
               ...current,
               [run.goalId]: snapshot.messages.map((message) => ({
@@ -2993,7 +2954,6 @@ function PersonalGoalHome({
               turnId: snapshot.session.active_turn_id ?? undefined,
             });
           },
-          onOpenOutput: (output) => openGoalChat(output.goalId),
           ...(goalSubagentConfigurationEnabled ? {
           onPreviewGoalSubagentConfiguration: async (request) => {
             const preview = await previewGoalSubagentConfiguration(request);
@@ -3079,14 +3039,15 @@ function PersonalGoalHome({
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
-          onSelectGoal: (goalId) => goalId ? openGoalChat(goalId) : openManagerChat(),
+          onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
+          onSelectView,
           onSendMessage: async (message, agentId, goalId, attachments) => sendManagerQuestion(message, { agentId, goalId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
         }}
         goalArchiveLoadState={goalArchiveLoadState}
-        initialManagerChatOpen={initialManagerChatOpen}
+        selectedView={selectedView}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3297,12 +3258,16 @@ export function DashboardPage() {
     setPayload(nextPayload);
     setSource(nextSource);
     setStatusUrl(url);
-    await navigate({
-      search: (current) => ({
-        ...current,
-        statusUrl: url,
-      }),
-    });
+    // Loading the current source on reload must not add a duplicate history
+    // entry: Back should return to the user's previous workspace view.
+    if (search.statusUrl !== url) {
+      await navigate({
+        search: (current) => ({
+          ...current,
+          statusUrl: url,
+        }),
+      });
+    }
     if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return false;
     statusRequestFenceRef.current.requestedUrl = null;
     setRequestedStatusUrl(null);
@@ -3543,11 +3508,12 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
     void navigate({
       search: (current) => ({
         ...current,
         goalId,
+        view: view === "chat" ? "conversation" : view,
       }),
     });
   }
@@ -3568,7 +3534,10 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
-      initialManagerChatOpen={search.view === "conversation" && !search.goalId}
+      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
+      onSelectView={(view) => {
+        void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });
+      }}
       isLoading={isLoading}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;

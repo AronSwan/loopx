@@ -42,6 +42,7 @@ import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
+import { formatMonitorDate } from "./monitor-readback";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -119,7 +120,7 @@ const RUN_ACTION_LABEL_KEYS = {
   retry: "drawer.recoveryRetry",
 } as const;
 
-export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, runs = [], selection }: {
+export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, proposalReadbackUnavailable = false, onRetryProposalReadback, proposalReadbackFetching = false, runs = [], selection }: {
   agents: WorkspaceAgentOption[];
   attentionHistory?: WorkspaceAttention[];
   onSelectAttention?: (item: WorkspaceAttention) => void;
@@ -131,6 +132,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   onClose: () => void;
   onToggleInspectorSize?: () => void;
   readOnly?: boolean;
+  proposalReadbackUnavailable?: boolean;
+  onRetryProposalReadback?: () => void;
+  proposalReadbackFetching?: boolean;
   runs?: WorkspaceRun[];
   selection: ContextDrawerSelection;
 }) {
@@ -292,8 +296,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       : selection.kind === "run" ? t("drawer.runDetails")
         : selection.kind === "output" ? t("drawer.titleOutput")
           : selection.kind === "proposal" && selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? t("proposal.teamPlan.resultTitle")
-          : selection.kind === "proposal" && selection.item.actionKind === "operation.execute"
-            && selection.item.reviewPlan?.operationFrame?.kind !== "confirmation" ? t("drawer.operationReadOnly")
+          : selection.kind === "proposal" && selection.item.actionKind === "operation.execute" ? t("drawer.operationReadOnly")
           : selection.kind === "proposal" ? t(selection.item.reviewPlan?.retryOriginal ? "drawer.recoverEditResult" : selection.item.status === "applied" ? "drawer.titleProposalApplied" : "drawer.titleProposalConfirm")
             : selection.kind === "schedule" ? (selection.item.scheduleKind === "heartbeat" ? "Heartbeat" : t("drawer.titleSchedule"))
               : t("drawer.goalDetails");
@@ -1101,14 +1104,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
 
         {selection.kind === "proposal" ? (
           <>
+            {proposalReadbackUnavailable && selection.item.actionKind === "operation.execute"
+              ? <div role="status" className="personal-proposal-state is-error" data-testid="operation-readback-unavailable"><p>{t("proposal.readbackUnavailable")}</p>
+                {onRetryProposalReadback ? <button type="button" className="personal-secondary-action" disabled={proposalReadbackFetching} onClick={onRetryProposalReadback}>{t("proposal.readbackRetry")}</button> : null}</div> : null}
             {selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? <TeamPlanResult proposal={selection.item} t={t} /> : <section className="personal-proposal-card">
-              <small>{selection.item.actionKind} · {selection.item.status}</small>
+              <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
+                ? t(`proposal.kind.${selection.item.actionKind}`)
+                : `${selection.item.actionKind} · ${selection.item.status}`}</small>
               <h3>{selection.item.title}</h3>
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
               {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && selection.item.actionKind !== "team.plan" ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
                 ? t("actionReview.operation_reconcile_original")
+                : selection.item.reviewPlan.operationFrame?.kind === "inactive"
+                ? t(`actionReview.${selection.item.reviewPlan.operationFrame.reason}`)
                 : selection.item.actionKind === "operation.execute" && selection.item.status === "gated"
-                ? t("actionReview.operation_group_confirmation")
+                ? t(selection.item.reviewPlan.operationFrame?.kind === "confirmation"
+                  && selection.item.reviewPlan.operationFrame.confirmationDeliveryVerified
+                  ? "actionReview.operation_group_confirmation" : "proposal.impact.operationDeliveryPending")
                 : selection.item.actionKind === "operation.execute" && selection.item.reviewPlan.reason === "readback_unverified"
                   ? t("actionReview.operation_result_delivery_pending")
                   : t(`actionReview.${selection.item.reviewPlan.reason}`)}</p> : null}
@@ -1120,6 +1132,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             {selection.item.status === "stale" ? <p className="personal-proposal-state is-stale">{t("drawer.proposalStale")}</p> : null}
             {selection.item.status === "error" && !selection.item.reviewPlan?.retryOriginal ? <div className="personal-proposal-state is-error"><span>{operationUnknown ? t("proposal.operationState.submission_unknown") : selection.item.reviewPlan?.reason === "readback_unverified" ? t("actionReview.readback_unverified") : t("drawer.proposalApplyFailed")}</span>{selection.item.errorMessage ? <small>{selection.item.errorMessage}</small> : null}<small>{t(operationUnknown ? "actionReview.operation_reconcile_original" : selection.item.actionKind === "team.plan" ? "proposal.teamPlan.retryHint" : "drawer.proposalApplyFailedHint")}</small></div> : null}
             {selection.item.status === "rejected" ? <p className="personal-proposal-state is-error">{t("drawer.proposalRejected")}</p> : null}
+            {selection.item.reviewPlan?.operationFrame?.kind === "result"
+              && selection.item.reviewPlan.operationFrame.resultKind === "cancelled"
+              ? <p className="personal-proposal-state is-stale">{t("proposal.primary.operationCancelled")}</p> : null}
             {selection.item.status === "deferred" ? <p className="personal-proposal-state is-gated">{t("drawer.proposalDeferred")}</p> : null}
             {selection.item.status === "gated" ? <div className="personal-proposal-state is-gated"><span><strong>{selection.item.actionKind === "operation.execute" ? selection.item.primaryLabel : selection.item.workspaceCandidates?.length ? selection.item.title : t("drawer.gateRequiresHost")}</strong>{selection.item.actionKind === "operation.execute" || selection.item.workspaceCandidates?.length ? selection.item.impact : t("drawer.gateRequiresHostDescription")}</span>{selection.item.gate?.nextAction ? <small>{selection.item.gate.nextAction}</small> : null}</div> : null}
             {selection.item.status === "gated" && selection.item.actionKind === "gate.resolve" ? (() => {
@@ -1151,10 +1166,20 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <p>{selection.item.target ?? selection.item.schedule ?? t("drawer.scheduleDefaultTarget")}</p>
               <dl>
                 <div><dt>{t("drawer.scheduleTimezone")}</dt><dd>{selection.item.timezone ?? t("drawer.scheduleLocalTimezone")}</dd></div>
-                <div><dt>{t("drawer.scheduleNext")}</dt><dd>{selection.item.nextRunAt ?? t("drawer.schedulePending")}</dd></div>
-                <div><dt>{t("drawer.scheduleLast")}</dt><dd>{selection.item.previousRunAt ?? t("drawer.scheduleNeverRun")}</dd></div>
-                <div><dt>{t("drawer.scheduleNotification")}</dt><dd>{selection.item.notificationRule ?? t("drawer.scheduleDefaultNotification")}</dd></div>
-                <div><dt>{t("drawer.scheduleStopCondition")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleDefaultStop")}</dd></div>
+                {selection.item.scheduleKind === "monitor" ? <>
+                  <div><dt>{t("drawer.scheduleOwner")}</dt><dd>{selection.item.agentId ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleCadence")}</dt><dd>{selection.item.schedule ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleNextCheck")}</dt><dd>{formatMonitorDate(selection.item.nextRunAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleLastCheck")}</dt><dd>{formatMonitorDate(selection.item.previousRunAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleExpires")}</dt><dd>{formatMonitorDate(selection.item.expiresAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleWatchOnly")}</dt><dd>{selection.item.watchOnly === true ? t("drawer.scheduleWatchYes") : selection.item.watchOnly === false ? t("drawer.scheduleWatchNo") : t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleResumeWhen")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleUnknown")}</dd></div>
+                </> : <>
+                  <div><dt>{t("drawer.scheduleNext")}</dt><dd>{selection.item.nextRunAt ?? t("drawer.schedulePending")}</dd></div>
+                  <div><dt>{t("drawer.scheduleLast")}</dt><dd>{selection.item.previousRunAt ?? t("drawer.scheduleNeverRun")}</dd></div>
+                  <div><dt>{t("drawer.scheduleStopCondition")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleDefaultStop")}</dd></div>
+                </>}
+                <div><dt>{t("drawer.scheduleNotification")}</dt><dd>{selection.item.notificationRule ?? (selection.item.scheduleKind === "monitor" ? t("drawer.scheduleUnknown") : t("drawer.scheduleDefaultNotification"))}</dd></div>
               </dl>
             </section>
             {!readOnly && selection.item.scheduleKind === "monitor" ? <button className="personal-primary-action" onClick={() => void callbacks.onUpdateSchedule?.(selection.item, "run_now")} type="button"><Play size={16} />{t("drawer.scheduleRunNow")}</button> : null}

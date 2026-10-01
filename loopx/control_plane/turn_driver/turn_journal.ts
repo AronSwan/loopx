@@ -249,15 +249,6 @@ function typedSettlementIdentityState(
   if (parsed.failure !== null || parsed.value === null) {
     return [false, false, false];
   }
-  if (
-    identity.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
-    (
-      identity.binding_kind !== parsed.value.binding_kind ||
-      identity.binding_id !== parsed.value.binding_id
-    )
-  ) {
-    return [false, false, false];
-  }
   const expectedTurnInstance = isValidIdentity(transaction.turn_instance_id)
     ? transaction.turn_instance_id
     : transaction.turn_key;
