@@ -1,0 +1,5 @@
+# 本地harness轮子完整性锚(git层)——甲席审计缺口1/4修复
+# 溯源: 官方tag dsh-v0.2.0-rc.2 本机自构建(构建链见docs/harness-upgrade-020.md)
+# 官方tag commit: 639ed015397290b3745d163aafe02ffee4aa3f84(升级组二轮核证)
+6ef7034e3a934f2b43387b7024145cb49876b2b5e4034239dec78e0d184dc01e  .local/deepseek_harness_runtime_bin-0.2.0rc2-py3-none-win_amd64.whl
+d9f7b97035ca17f5070cd1f15234d3cee30f696accecdc391b12b2c240ebf2dd  .local/deepseek_harness_sdk-0.2.0rc2-py3-none-any.whl
