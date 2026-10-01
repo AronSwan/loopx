@@ -457,6 +457,27 @@ def test_inspect_journal_cli_returns_zero_for_identity_mismatch(tmp_path: Path) 
     assert payload["violations"] == ["owner_mismatch"]
 
 
+def test_inspect_journal_cli_blocks_contradictory_binding_without_rewriting(
+    tmp_path: Path,
+) -> None:
+    journal = _journal()
+    identity = journal["plan"]["transaction"]["settlement_plan"]["identity"]
+    identity.update(binding_kind="autonomous_replan", binding_id="different-work")
+    path = _write_journal(tmp_path, journal)
+    before = path.read_bytes()
+
+    exit_code, raw_output = _run_inspection_cli(tmp_path, output_format="json")
+
+    payload = json.loads(raw_output)
+    assert exit_code == 0  # A successful inspection reports the invalid record.
+    assert payload["decision"] == "replay_blocked"
+    assert payload["journal_consistent"] is False
+    assert "settlement_identity_invalid" in payload["violations"]
+    assert payload["recovery_decision"]["action"] == "blocked"
+    assert payload["effects"] == []
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     ("journal_text", "error_fragment"),
     (
