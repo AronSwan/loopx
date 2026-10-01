@@ -228,3 +228,7 @@ App 连续性工作，不重复实现结果 watcher。归属总体路线图 S1/S
 本 RFC 不交付功能代码、账号连接、模型评估、安装版流程或试用结果。关联的
 App 恢复工作维持现有归属。仓库与开放 PR 检查仅为设计证据；干净 checkout
 没有可用运行态 Todo registry，实现前必须核对任务分配。
+
+## 附录 B：执行记录
+
+实现证据与剩余验收见[执行记录](ledger/personal-follow-through-v0/)。

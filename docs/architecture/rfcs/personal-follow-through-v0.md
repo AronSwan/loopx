@@ -295,3 +295,7 @@ connection, model evaluation, installed journey or pilot is delivered by this RF
 Related App recovery work remains independently owned. Repository and open-PR
 inspection are design evidence; an operational Todo registry was not available
 in this clean checkout, so task allocation must be checked before implementation.
+
+## Appendix B: Execution ledger
+
+Implementation evidence and remaining acceptance live in the [execution ledger](ledger/personal-follow-through-v0/).
