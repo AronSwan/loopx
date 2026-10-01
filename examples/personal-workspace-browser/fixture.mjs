@@ -1282,6 +1282,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (resumedEvents && request.method() === "GET") {
       const sessionId = resumedEvents[1];
       const turnId = resumedEvents[2];
+      const completed = completedTurns.get(JSON.stringify([sessionId, turnId]));
+      if (completed) {
+        await route.fulfill({ contentType: "text/event-stream", body: completed, status: 200 });
+        return;
+      }
       // A resumed Turn completes with the same scripted answer it was sent for.
       const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(turnMessages.get(turnId) ?? "") : null;
       const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
@@ -1713,7 +1718,6 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
     const matching = Array.from(actionProposals.values()).filter((proposal) => {
-      if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
     });
@@ -1759,10 +1763,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         return;
       }
       const proposal_id = `proposal-${body.idempotency_key}`;
+      // Match the native store: replay preserves even an applied/cancelled
+      // preview's identity and lifecycle, rather than resetting it to ready.
+      const existing = actionProposals.get(proposal_id);
+      if (existing) {
+        await route.fulfill({ contentType: "application/json", json: { ok: true, proposal: existing }, status: 200 });
+        return;
+      }
       actionKinds.set(proposal_id, body.action_kind);
       state.actionPreviews.push({ ...body, proposalId: proposal_id });
       const proposal = {
-        schema_version: "loopx_chat_action_proposal_v1", proposal_id, action_kind: body.action_kind,
+        schema_version: "loopx_chat_action_proposal_v1", proposal_id, idempotency_key: body.idempotency_key, action_kind: body.action_kind,
         summary: body.summary, normalized_parameters: body.normalized_parameters, context: body.context,
         expected_state_fingerprint: "fixture-r1", permission_classification: "durable_write",
         validation_evidence: ["fixture validation"], available_transitions: ["apply", "cancel"],

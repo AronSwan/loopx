@@ -127,6 +127,7 @@ export const chatTodoProposalScenario = {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await openGoalChat();
+      api.failNextActionPreview = true;
       await page.locator(".personal-channel-timeline").getByText("恢复后给出一个步骤。", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
       const recoveredCard = page.locator(".personal-proposal-row", { hasText: RECOVERY_TEXT });
       await recoveredCard.waitFor({ state: "visible", timeout: 5_000 });
@@ -168,11 +169,16 @@ export const chatTodoProposalScenario = {
         throw new Error("The departed recovery Turn wrote its preview while its Goal was not mounted");
       }
 
+      // A new page has no in-memory recovery claim; persisted completion must suffice.
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+
       // Returning to the owning Goal must show the card without another reload.
+      // A transient preview failure must leave the stored completion retryable.
+      api.failNextActionPreview = true;
       await openGoalChat();
       await waitFor(() => api.actionPreviews.filter((item) => item.normalized_parameters?.text === RECOVERED_DEPARTURE_TEXT).length === 1,
         "Returning to the Goal did not replay the completed recovery's Todo preview");
-      await departedRecoveryCard.waitFor({ state: "visible", timeout: 5_000 });
       await departedRecoveryCard.waitFor({ state: "visible", timeout: 5_000 });
       // Re-entering and reloading must not add a second card or write a Todo.
       const appliesBeforeDepartureReplay = api.actionApplies.length;
