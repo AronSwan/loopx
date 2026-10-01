@@ -5,6 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {resolveConversationScope} from "./conversation_scope.ts";
 import {isTerminalTurnStatus} from "../turn_driver/chat_turn_acceptance.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -82,7 +83,7 @@ function planDelegationWake(input: JsonObject, session: JsonObject, settings: Js
   const intent = requireJsonObject(input.intent, "wake intent");
   const requester = requireJsonObject(intent.requester, "wake requester");
   const conversation = requireJsonObject(intent.conversation, "wake conversation");
-  requireThat(typeof intent.intent_id === "string" && /^[a-f0-9]{64}$/.test(intent.intent_id), "invalid wake intent");
+  requireThat(typeof intent.intent_id === "string" && BARE_SHA256_PATTERN.test(intent.intent_id), "invalid wake intent");
   const outcome = (state: "pending" | "refused", reason: string) => ({operation: "wake", state, reason});
   if (conversation.session_id !== session.session_id || requester.goal_id !== session.goal_id) {
     return outcome("refused", "wake_identity_conflict");

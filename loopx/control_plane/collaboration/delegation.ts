@@ -380,7 +380,7 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
   const digests = requester.artifacts.map(value => {
     const artifact = requireJsonObject(value, "accepted artifact");
     requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
-      && /^[a-f0-9]{64}$/.test(artifact.sha256), "invalid accepted artifact reference");
+      && BARE_SHA256_PATTERN.test(artifact.sha256), "invalid accepted artifact reference");
     return {ref: artifact.ref, sha256: artifact.sha256};
   });
   return {
