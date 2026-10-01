@@ -233,6 +233,7 @@ import {
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
+import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -757,6 +758,7 @@ export function createEffectRuntimeHandlers(
       (params) => normalizeCollaborationRequest(params.request),
     ],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
+    ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [
       "collaboration.goal_instance.decide",
       (params) => decideCollaborationLifecycle(params),
