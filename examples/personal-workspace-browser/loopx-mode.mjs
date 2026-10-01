@@ -66,8 +66,14 @@ export const loopxModeScenario = {
       if (api.loopxModeRequests.some(row => row.operation === "inspect")) throw new Error("Reading results ran member preflight");
       await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
       const team = page.getByRole("region", {name: "团队执行详情"});
-      await team.getByText("local-analyst · 已通过当前验收", {exact: true}).waitFor();
+      const memberCard = name => team.locator(".goal-team-bindings > li").filter({hasText: name});
+      const pulseCount = bucket => team.locator(`.goal-team-pulse li[data-bucket="${bucket}"] strong`).innerText();
+      await memberCard("local-analyst").getByText("已通过当前验收", {exact: true}).waitFor();
       await team.getByText("本页有无法核验的工作，请检查原请求；不要直接重新派工。", {exact: true}).waitFor();
+      await team.locator(".goal-team-operations").getByText("记录不可读 · 无法核验", {exact: true}).waitFor();
+      if (await pulseCount("accepted") !== "1" || await pulseCount("attention") !== "1" || await pulseCount("executing") !== "0") {
+        throw new Error("Team pulse did not count the page's typed delegation states");
+      }
       await team.getByRole("button", {name: "检查整个团队", exact: true}).click();
       await team.getByText(/运行时可用性尚未验证/).waitFor();
       await team.getByText("上次检查 3/3 名：1 名满足本机启动条件，1 名运行时待核验，1 名受阻或无法读取。检查不代表已经执行。", {exact: true}).waitFor();
@@ -78,8 +84,10 @@ export const loopxModeScenario = {
       }
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-desktop.png"), fullPage: false, animations: "disabled"});
       await team.getByRole("button", {name: "下一页", exact: true}).click();
-      await team.getByText("cloud-reviewer · 需要恢复原执行", {exact: true}).waitFor();
-      if (await team.getByText("cloud-reviewer · 执行中", {exact: true}).count()) throw new Error("Stopped worker was labeled executing");
+      await memberCard("cloud-reviewer").getByText("需要恢复原执行", {exact: true}).waitFor();
+      if (await memberCard("cloud-reviewer").getByText("执行中", {exact: true}).count() || await pulseCount("executing") !== "0") {
+        throw new Error("Stopped worker was labeled executing");
+      }
       await page.setViewportSize({width: 390, height: 844});
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-mobile.png"), fullPage: false, animations: "disabled"});
       if (api.turnRequests.length) throw new Error("Inspecting the team started a model turn");
