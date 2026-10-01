@@ -7,7 +7,7 @@ name = "loopx"
 version = "1.2.3"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"  # 2026-10-01收窄: 本地win专属运行时轮+harness单机构建链
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
 authors = [{ name = "LoopX contributors" }]
@@ -24,7 +24,11 @@ Changelog = "https://github.com/loopx-project/loopx/releases"
 
 [project.optional-dependencies]
 deepseek-harness = [
-  "deepseek-harness-sdk==0.1.5rc1",
+  # 2026-10-01 受控升级(官方tag自建轮子,构建链与坑见docs/harness-upgrade-020.md):
+  # PyPI最高只到0.1.5rc1,本机自构建dsh-v0.2.0-rc.2——shell工具修复+Anthropic协议支持
+  # runtime-bin显式声明,让tool.uv.sources的本地轮子路径能应用(sdk->runtime-bin传递依赖需要)
+  "deepseek-harness-sdk>=0.2.0rc2",
+  "deepseek-harness-runtime-bin>=0.2.0rc2",
 ]
 test = [
   "jsonschema>=4.23,<5",
@@ -169,3 +173,8 @@ files = [
   "loopx/presentation/renderers/trajectory_hygiene_markdown.py",
   "loopx/presentation/renderers/turn_envelope_markdown.py",
 ]
+
+# 2026-10-01 受控升级: 本地自构建的harness 0.2.0rc2轮子(官方tag dsh-v0.2.0-rc.2构建链)
+[tool.uv.sources]
+deepseek-harness-sdk = { path = "../harness-020/python/sdk/dist/deepseek_harness_sdk-0.2.0rc2-py3-none-any.whl" }
+deepseek-harness-runtime-bin = { path = ".local/deepseek_harness_runtime_bin-0.2.0rc2-py3-none-win_amd64.whl" }
