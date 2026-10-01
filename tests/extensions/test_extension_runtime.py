@@ -23,6 +23,7 @@ from loopx.capabilities.semantic_preference.cli import (
 )
 from loopx.capabilities.semantic_preference.contract import provider_doctor, recall
 from loopx.cli import main
+from loopx.extensions.hook_adapters import discover_extension_hook_adapters
 from loopx.extensions.manifest import load_extension_manifest
 from loopx.extensions.openviking_semantic_preference.provider import (
     register_openviking_provider_arguments,
@@ -39,6 +40,7 @@ from loopx.extensions.runtime import (
     doctor_installed_extension,
     enable_extension,
     execute_extension_runtime_binding,
+    extension_catalog_entries,
     extension_status,
     install_extension,
     resolve_capability_binding,
@@ -46,6 +48,7 @@ from loopx.extensions.runtime import (
     resolve_extension_activation,
     resolve_extension_binding,
     resolve_extension_runtime_binding,
+    resolve_optional_capability_binding,
     rollback_extension,
     run_standalone_extension,
 )
@@ -196,6 +199,91 @@ def test_presentation_surface_manifest_is_normalized(tmp_path: Path) -> None:
             "empty_state_detail": "Publish a validated projection.",
         }
     ]
+
+
+def test_capability_action_hook_adapter_manifest_is_normalized(tmp_path: Path) -> None:
+    provider = _provider(tmp_path / "provider")
+    manifest_path = _standalone_manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        permission="semantic_preference.read",
+    )
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8")
+        + """
+
+[[hook_adapters]]
+id = "sample-report-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.request"
+phase = "capability_action"
+factory = "sample_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.request.bind_source", "sample_report.request.settle_source"]
+""",
+        encoding="utf-8",
+    )
+
+    manifest = load_extension_manifest(manifest_path)
+
+    assert manifest["hook_adapters"] == [
+        {
+            "id": "sample-report-source",
+            "capability_id": "sample-report",
+            "target_hook_id": "sample_report.request",
+            "phase": "capability_action",
+            "factory": "sample_extension.hooks:build_adapter",
+            "required_permissions": ["semantic_preference.read"],
+            "ports": [
+                "sample_report.request.bind_source",
+                "sample_report.request.settle_source",
+            ],
+        }
+    ]
+
+
+def test_capability_action_factory_failure_is_content_free_and_kernel_independent(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path / "provider")
+    manifest_path = _standalone_manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        permission="semantic_preference.read",
+    )
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8")
+        + """
+
+[[hook_adapters]]
+id = "sample-report-source"
+capability_id = "sample-report"
+target_hook_id = "sample_report.request"
+phase = "capability_action"
+factory = "missing_extension.hooks:build_adapter"
+required_permissions = ["semantic_preference.read"]
+ports = ["sample_report.request.bind_source"]
+""",
+        encoding="utf-8",
+    )
+    state_file = tmp_path / "runtime" / "extensions" / "state.json"
+    install_extension(manifest_path, state_file=state_file, execute=True)
+
+    discovery = discover_extension_hook_adapters(
+        state_file=state_file,
+        phase="capability_action",
+        capability_id="sample-report",
+        target_hook_id="sample_report.request",
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        goal_id="sample-goal",
+        agent_id="sample-agent",
+    )
+
+    assert discovery.ports == ()
+    assert len(discovery.failures) == 1
+    assert discovery.failures[0].adapter_id == "sample-report-source"
+    assert discovery.failures[0].error_code == "extension_hook_adapter_unavailable"
 
 
 @pytest.mark.parametrize(
@@ -588,6 +676,177 @@ def test_executable_identity_is_content_addressed_across_paths(tmp_path: Path) -
     assert changed[1] != identity_a[1]
 
 
+def test_runtime_entrypoint_resolves_sibling_python_for_opaque_launcher(
+    tmp_path: Path,
+) -> None:
+    launcher = tmp_path / "provider.exe"
+    launcher.write_bytes(b"MZ opaque console launcher")
+    launcher.chmod(0o755)
+    sibling_python = tmp_path / "python.exe"
+    sibling_python.symlink_to(sys.executable)
+
+    resolved = resolve_runtime_entrypoint({"entrypoint": str(launcher)})
+
+    assert resolved is not None
+    assert resolved.python_executable == str(sibling_python)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink mutation fixture")
+def test_opaque_runtime_identity_binds_sibling_python_artifact(
+    tmp_path: Path,
+) -> None:
+    launcher = tmp_path / "provider.exe"
+    launcher.write_bytes(b"MZ opaque console launcher")
+    launcher.chmod(0o755)
+    sibling_python = tmp_path / "python.exe"
+    sibling_python.symlink_to(sys.executable)
+
+    verified = resolve_runtime_entrypoint({"entrypoint": str(launcher)})
+    sibling_python.unlink()
+    sibling_python.symlink_to("/bin/sh")
+    changed = resolve_runtime_entrypoint({"entrypoint": str(launcher)})
+
+    assert verified is not None and changed is not None
+    assert changed.python_executable == verified.python_executable == str(sibling_python)
+    assert changed.identity != verified.identity
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink mutation fixture")
+def test_runtime_entrypoint_identity_binds_selected_python_artifact(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    interpreter = runtime_root / "python"
+    interpreter.symlink_to(sys.executable)
+    provider = runtime_root / "provider"
+    provider.write_text(
+        f"#!{interpreter}\nraise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    provider.chmod(0o755)
+
+    verified = resolve_runtime_entrypoint({"entrypoint": str(provider)})
+    interpreter.unlink()
+    interpreter.symlink_to("/bin/sh")
+    changed = resolve_runtime_entrypoint({"entrypoint": str(provider)})
+
+    assert verified is not None and changed is not None
+    assert changed.python_executable == verified.python_executable == str(interpreter)
+    assert changed.identity != verified.identity
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang lifecycle fixture")
+def test_catalog_invalidates_doctor_when_selected_python_artifact_changes(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    interpreter = runtime_root / "python"
+    interpreter.symlink_to(sys.executable)
+    provider = _provider(runtime_root / "provider")
+    provider.write_text(
+        provider.read_text(encoding="utf-8").replace(
+            f"#!{sys.executable}",
+            f"#!{interpreter}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    manifest = _manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        version="1.0.0",
+    )
+    state_file = tmp_path / "extensions.json"
+    install_extension(manifest, state_file=state_file, execute=True)
+    ready = extension_catalog_entries(state_file=state_file)
+    assert ready[0]["provider"]["ready"] is True
+
+    interpreter.unlink()
+    interpreter.symlink_to("/bin/sh")
+
+    stale = extension_catalog_entries(state_file=state_file)
+    assert stale[0]["provider"]["ready"] is False
+    with pytest.raises(ValueError, match="doctor readiness is stale"):
+        resolve_extension_binding(
+            "test-semantic-extension",
+            state_file=state_file,
+            capability_id="semantic-preference",
+            protocol="semantic_preference_provider_v0",
+            permission="semantic_preference.read",
+        )
+
+
+def test_runtime_identity_binds_declared_view_validator_reference(
+    tmp_path: Path,
+) -> None:
+    provider = _provider(tmp_path / "provider")
+    manifest = load_extension_manifest(
+        _standalone_manifest(tmp_path / "extension.toml", entrypoint=provider)
+    )
+    runtime = manifest["runtime"]
+    declaration = ("missing_validator_module:validate_view",)
+
+    undeclared = resolve_runtime_entrypoint(runtime)
+    declared = resolve_runtime_entrypoint(runtime, view_validators=declaration)
+    repeated = resolve_runtime_entrypoint(runtime, view_validators=declaration)
+
+    assert undeclared is not None and declared is not None
+    assert repeated is not None
+    # Declaring implementation code the runtime interpreter runs is part of what
+    # the doctor verifies, and an unresolvable declaration must not drift between
+    # two computations of the same declaration.
+    assert declared.identity != undeclared.identity
+    assert repeated.identity == declared.identity
+
+
+def test_doctor_keeps_provider_ready_when_declared_validator_cannot_resolve(
+    tmp_path: Path,
+) -> None:
+    """A validator the runtime cannot import is not a provider-runtime fault.
+
+    The doctor owns the provider runtime: the launcher, the selected interpreter
+    and the implementations that run in it. A declared validator the runtime
+    interpreter cannot resolve is recorded in that identity, and the projection
+    surface that uses it fails with its own actionable error instead.
+    """
+
+    provider = _provider(tmp_path / "provider")
+    manifest = _presentation_surface_manifest(
+        tmp_path / "extension.toml",
+        entrypoint=provider,
+        declaration="""
+[[presentation_surfaces]]
+id = "investment-research"
+kind = "decision_research_dashboard"
+title = "Investment Research"
+view_schema = "decision_research_dashboard_v0"
+view_validator = "missing_validator_module:validate_view"
+visibility = "owner-only"
+empty_state_title = "No validated research yet"
+empty_state_detail = "Publish a validated projection."
+""",
+        include_view_validator=False,
+    )
+    state_file = tmp_path / "extensions.json"
+    installed = install_extension(manifest, state_file=state_file, execute=True)
+
+    assert installed["doctor"]["verified"] is True
+    assert extension_catalog_entries(state_file=state_file)[0]["provider"]["ready"]
+
+    redoctored = doctor_installed_extension(
+        "test-standalone-extension",
+        state_file=state_file,
+        execute=True,
+    )
+    assert redoctored["verified"] is True
+    assert (
+        redoctored["entrypoint_identity"]
+        == installed["doctor"]["entrypoint_identity"]
+    )
+
+
 def test_standalone_runtime_does_not_require_a_capability_contract(
     tmp_path: Path,
 ) -> None:
@@ -682,6 +941,37 @@ def test_capability_executor_reuses_bounded_json_runtime(tmp_path: Path) -> None
             binding,
             request={"payload": "x" * (MAX_EXTENSION_REQUEST_BYTES + 1)},
         )
+
+
+def test_capability_executor_preserves_fractional_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, float] = {}
+
+    def run_process(*_args: object, **kwargs: object) -> SimpleNamespace:
+        captured["timeout_seconds"] = float(kwargs["timeout_seconds"])
+        return SimpleNamespace(
+            failure_kind=None,
+            stdout=b'{"ok": true}',
+            returncode=0,
+        )
+
+    monkeypatch.setattr(
+        "loopx.extensions.runtime.run_capped_process",
+        run_process,
+    )
+
+    result = execute_extension_runtime_binding(
+        {
+            "schema_version": "loopx_extension_runtime_binding_v0",
+            "argv": ["provider"],
+            "timeout_seconds": 1.5,
+        },
+        request={"schema_version": "test_extension_request_v0"},
+    )
+
+    assert result == {"ok": True}
+    assert captured["timeout_seconds"] == 1.5
 
 
 def test_extension_run_rejects_capability_provider_bypass(tmp_path: Path) -> None:
@@ -1363,6 +1653,23 @@ def test_semantic_preference_resolves_enabled_extension(tmp_path: Path) -> None:
     )
     assert catalog_provider["active_revision"] == capability_binding["revision"]
     assert catalog_provider["ready"] is True
+    optional = resolve_optional_capability_binding(
+        state_file=state_file,
+        extension_id="test-semantic-extension",
+        capability_id="semantic-preference",
+        protocol="semantic_preference_provider_v0",
+        permission="semantic_preference.read",
+    )
+    assert optional.public_readiness() == {
+        "schema_version": "loopx_extension_provider_readiness_v0",
+        "status": "ready",
+        "extension_id": "test-semantic-extension",
+        "installed": True,
+        "enabled": True,
+        "doctor_verified": True,
+        "next_action": None,
+    }
+    assert optional.binding == capability_binding
     project = tmp_path / "project"
     project.mkdir()
     config = tmp_path / "semantic-preference.json"
@@ -1413,6 +1720,15 @@ def test_semantic_preference_resolves_enabled_extension(tmp_path: Path) -> None:
     )
     assert unavailable["status"] == "provider_unavailable"
     assert unavailable["failure_kind"] == "extension_binding_unavailable"
+    optional = resolve_optional_capability_binding(
+        state_file=state_file,
+        extension_id="test-semantic-extension",
+        capability_id="semantic-preference",
+        protocol="semantic_preference_provider_v0",
+        permission="semantic_preference.read",
+    )
+    assert optional.status == "extension_disabled"
+    assert optional.binding is None
 
     detail = build_capability_detail_packet(
         "semantic-preference",
@@ -1760,3 +2076,126 @@ def test_legacy_openviking_alias_matches_provider_argument_contract() -> None:
     assert options(_register_legacy_openviking_provider_arguments) == options(
         register_openviking_provider_arguments
     )
+
+
+def test_executable_location_survives_path_changes_upgrade_and_rollback(tmp_path, monkeypatch):
+    first_bin, second_bin, unrelated = [tmp_path / name for name in ("first", "second", "unrelated")]
+    for directory in (first_bin, second_bin, unrelated):
+        directory.mkdir()
+    first = _provider(first_bin / "provider")
+    second = _provider(second_bin / "provider")
+    _provider(unrelated / "provider", doctor_exit=42)
+    helper = _provider(first_bin / "companion")
+    first.write_text(first.read_text().replace(
+        "import json", f"import shutil\nassert shutil.which('companion') == {str(helper)!r}\nimport json",
+    ))
+    one = _standalone_manifest(tmp_path / "one.toml", entrypoint=Path("provider"))
+    two = _standalone_manifest(tmp_path / "two.toml", entrypoint=Path("provider"), version="2.0.0")
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv("PATH", str(first_bin))
+    installed = install_extension(one, state_file=state_file, execute=True)
+    monkeypatch.setenv("PATH", str(unrelated))
+    assert doctor_enabled_extensions(state_file=state_file, execute=True)["ok"]
+    result = run_standalone_extension(
+        "test-standalone-extension", state_file=state_file,
+        request={"schema_version": "test_extension_request_v0"}, execute=True,
+    )
+    assert result["status"] == "succeeded"
+    assert str(first_bin) not in json.dumps(installed)
+    assert os.environ["PATH"] == str(unrelated)
+    monkeypatch.setenv("PATH", str(second_bin))
+    install_extension(two, state_file=state_file, operation="upgrade", execute=True)
+    monkeypatch.setenv("PATH", str(unrelated))
+    assert rollback_extension("test-standalone-extension", state_file=state_file, execute=True)["doctor"]["verified"]
+    state = json.loads(state_file.read_text())
+    entry = state["extensions"]["test-standalone-extension"]
+    assert {r["entrypoint_path"] for r in entry["revisions"]} == {str(first), str(second)}
+    assert all(r["manifest"]["runtime"]["entrypoint"] == "provider" for r in entry["revisions"])
+    first.unlink()
+    missing = doctor_installed_extension("test-standalone-extension", state_file=state_file, execute=True)
+    assert missing["status"] == "entrypoint_missing"  # Never switch to the unrelated PATH copy.
+
+
+def test_executable_location_preserves_launcher_directory_for_sibling_tools(
+    tmp_path, monkeypatch,
+):
+    launcher_bin = tmp_path / "launcher-bin"
+    package_bin = tmp_path / "package-bin"
+    unrelated = tmp_path / "unrelated"
+    for directory in (launcher_bin, package_bin, unrelated):
+        directory.mkdir()
+    package_provider = _provider(package_bin / "provider")
+    launcher_provider = launcher_bin / "provider"
+    launcher_provider.symlink_to(package_provider)
+    companion = _provider(launcher_bin / "companion")
+    package_provider.write_text(package_provider.read_text().replace(
+        "import json",
+        f"import shutil\nassert shutil.which('companion') == {str(companion)!r}\nimport json",
+    ))
+    manifest = _standalone_manifest(
+        tmp_path / "manifest.toml", entrypoint=Path("provider"),
+    )
+    state_file = tmp_path / "state.json"
+
+    monkeypatch.setenv("PATH", str(launcher_bin))
+    install_extension(manifest, state_file=state_file, execute=True)
+    state = json.loads(state_file.read_text())
+    revision = state["extensions"]["test-standalone-extension"]["revisions"][0]
+    assert revision["entrypoint_path"] == str(launcher_provider)
+
+    monkeypatch.setenv("PATH", str(unrelated))
+    assert doctor_installed_extension(
+        "test-standalone-extension", state_file=state_file, execute=True,
+    )["verified"]
+    result = run_standalone_extension(
+        "test-standalone-extension", state_file=state_file,
+        request={"schema_version": "test_extension_request_v0"}, execute=True,
+    )
+    assert result["status"] == "succeeded"
+
+
+def test_legacy_doctor_captures_location_only_after_success(tmp_path, monkeypatch):
+    provider = _provider(tmp_path / "provider")
+    manifest = _standalone_manifest(tmp_path / "manifest.toml", entrypoint=Path("provider"))
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv("PATH", str(tmp_path))
+    install_extension(manifest, state_file=state_file, execute=True)
+    state = json.loads(state_file.read_text())
+    state["extensions"]["test-standalone-extension"]["revisions"][0].pop("entrypoint_path")
+    state_file.write_text(json.dumps(state))
+    preview = doctor_installed_extension("test-standalone-extension", state_file=state_file)
+    assert preview["status"] == "probe_required"
+    assert json.loads(state_file.read_text()) == state
+    assert doctor_installed_extension("test-standalone-extension", state_file=state_file, execute=True)["verified"]
+    monkeypatch.setenv("PATH", "")
+    assert doctor_installed_extension("test-standalone-extension", state_file=state_file, execute=True)["verified"]
+    provider.write_text(provider.read_text() + "\n# changed artifact\n")
+    with pytest.raises(ValueError, match="doctor readiness is stale"):
+        resolve_extension_activation("test-standalone-extension", state_file=state_file)
+
+
+def test_bound_execution_preserves_explicit_environment_and_sibling_tools(tmp_path, monkeypatch):
+    provider = _provider(tmp_path / "provider")
+    helper = _provider(tmp_path / "companion")
+    provider.write_text(provider.read_text().replace(
+        "request = json.load(sys.stdin)",
+        f"import os, shutil\nassert os.environ.get('EXPLICIT_BASE') == 'fixture'\n"
+        f"assert shutil.which('companion') == {str(helper)!r}\nrequest = json.load(sys.stdin)",
+    ))
+    manifest = _standalone_manifest(
+        tmp_path / "manifest.toml", entrypoint=Path("provider"), permission="semantic_preference.read",
+    )
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv("PATH", str(tmp_path))
+    install_extension(manifest, state_file=state_file, execute=True)
+    monkeypatch.setenv("PATH", "")
+    binding = resolve_extension_runtime_binding(
+        "test-standalone-extension", state_file=state_file,
+        protocol="semantic_preference_provider_v0", permission="semantic_preference.read",
+    )
+    environment = {"EXPLICIT_BASE": "fixture", "PATH": ""}
+    result = execute_extension_runtime_binding(
+        binding, request={"schema_version": "test_extension_request_v0"}, environment=environment,
+    )
+    assert result["schema_version"] == "semantic_preference_provider_response_v0"
+    assert environment == {"EXPLICIT_BASE": "fixture", "PATH": ""}

@@ -5,16 +5,18 @@ from typing import Any
 from ..agents.agent_scope import _agent_scope_monitor_blocked_resume_candidates
 from ..scheduler.external_evidence_observation import build_external_evidence_poll_signal
 from ..todos.contract import next_action_requires_advancement_text
-from ..todos.projection import (
+from ..todos.todo_semantics import (
     todo_summary_claim_scope_agent_id,
     todo_summary_first_executable_item,
     todo_summary_monitor_due_count,
     todo_summary_monitor_due_items,
+    todo_summary_non_watch_only_monitor_due_items,
     todo_summary_monitor_schedule_gap_count,
     todo_summary_monitor_schedule_gap_items,
     todo_summary_open_task_counts,
+    todo_summary_watch_only_monitor_due_items,
 )
-from .outcome_followthrough import build_outcome_followthrough_hint
+from .delivery_history import project_delivery_response
 from .work_lane import (
     build_work_lane_contract,
     due_monitor_preempts_advancement,
@@ -72,8 +74,11 @@ def post_handoff_latest_run(item: dict[str, Any]) -> dict[str, Any]:
     return latest_run
 
 
-def outcome_followthrough_hint(item: dict[str, Any]) -> dict[str, Any] | None:
-    return build_outcome_followthrough_hint(post_handoff_latest_run(item))
+def outcome_followthrough_hint(
+    item: dict[str, Any], summary: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    run = post_handoff_latest_run(item)
+    return project_delivery_response(run, summary)["outcome_followthrough"] if run else None
 
 
 def next_action_requires_advancement(item: dict[str, Any]) -> bool:
@@ -110,6 +115,12 @@ def build_work_lane_context_contract(
         agent_todo_summary,
         due_items=due_monitor_items,
     )
+    watch_only_due_monitor_items = todo_summary_watch_only_monitor_due_items(
+        agent_todo_summary
+    )
+    non_watch_only_due_monitor_items = (
+        todo_summary_non_watch_only_monitor_due_items(agent_todo_summary)
+    )
     if not advancement_allowed and due_monitor_count <= 0:
         # In monitor-only mode, an action phrase such as "observe result" must
         # not bypass the monitor todo's explicit cadence window.
@@ -119,7 +130,11 @@ def build_work_lane_context_contract(
         agent_todo_summary,
         gap_items=monitor_schedule_gap_items,
     )
-    first_due_monitor = due_monitor_items[0] if due_monitor_items else None
+    first_preemptive_due_monitor = (
+        non_watch_only_due_monitor_items[0]
+        if non_watch_only_due_monitor_items
+        else None
+    )
     first_advancement = (
         todo_summary_first_executable_item(agent_todo_summary)
         if advancement_allowed
@@ -140,15 +155,17 @@ def build_work_lane_context_contract(
         todo_counts=todo_counts,
         monitor_due_count=due_monitor_count,
         due_monitor_items=due_monitor_items,
+        watch_only_due_monitor_items=watch_only_due_monitor_items,
+        non_watch_only_due_monitor_items=non_watch_only_due_monitor_items,
         monitor_schedule_gap_count=monitor_schedule_gap_count,
         monitor_schedule_gap_items=monitor_schedule_gap_items,
         first_advancement=first_advancement,
         due_monitor_preempts_advancement=due_monitor_preempts_advancement(
-            first_due_monitor,
+            first_preemptive_due_monitor,
             first_advancement=first_advancement,
         ),
         outcome_followthrough=(
-            outcome_followthrough_hint(item) if advancement_allowed else None
+            outcome_followthrough_hint(item, agent_todo_summary) if advancement_allowed else None
         ),
         next_action_requires_advancement=(
             next_action_requires_advancement(item) if advancement_allowed else False

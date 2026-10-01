@@ -36,10 +36,9 @@ from .completion_state import (
     normalize_todo_completion_recovery,
 )
 from .completion_fence import evaluate_todo_completion_fence
-from .event_writeback import event_projection_todo_context
 
 
-TodoCompletionProjectionSource = Literal["materialized", "event_log"]
+TodoCompletionProjectionSource = Literal["materialized"]
 
 
 def read_persisted_todo_record(
@@ -48,6 +47,7 @@ def read_persisted_todo_record(
     todo_id: str,
     registry_path: Path | None = None,
     goal_id: str | None = None,
+    runtime_root: Path | None = None,
 ) -> tuple[dict[str, Any], set[str]]:
     """Read one durable Todo record and the goal-state Todo id universe.
 
@@ -65,6 +65,7 @@ def read_persisted_todo_record(
             todo_id=todo_id,
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root=runtime_root,
         )
     )
     return todo, existing_todo_ids
@@ -76,8 +77,43 @@ def read_persisted_todo_record_with_source(
     todo_id: str,
     registry_path: Path | None = None,
     goal_id: str | None = None,
+    runtime_root: Path | None = None,
 ) -> tuple[dict[str, Any], set[str], TodoCompletionProjectionSource]:
-    """Read one durable Todo together with its authoritative projection source."""
+    """Read one durable Todo together with its authoritative projection source.
+
+    A promoted canonical provider is the primary persisted lifecycle. Markdown
+    and event projection remain the pre-promotion sources only; a stale
+    Markdown projection must never hide a canonical commit during Turn retry.
+    """
+
+    if runtime_root is not None and goal_id is not None:
+        from ..coordination.local_authority import (
+            read_canonical_todos_if_promoted,
+        )
+
+        canonical = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+        )
+        if canonical is not None:
+            records = [
+                dict(item)
+                for item in canonical.get("todos", [])
+                if isinstance(item, Mapping)
+            ]
+            canonical_todo_ids = {
+                normalized
+                for item in records
+                if (normalized := normalize_todo_id(item.get("todo_id")))
+            }
+            normalized_todo_id = normalize_todo_id(todo_id) or todo_id
+            for item in records:
+                if normalize_todo_id(item.get("todo_id")) == normalized_todo_id:
+                    return item, canonical_todo_ids, "materialized"
+            raise ValueError(
+                f"durable completion todo_id {normalized_todo_id!r} was not found "
+                "in canonical provider state"
+            )
 
     lines = state_file.read_text(encoding="utf-8").splitlines()
     block: dict[str, Any] | None = None
@@ -95,26 +131,6 @@ def read_persisted_todo_record_with_source(
             item_todo_id = normalize_todo_id(item.get("todo_id"))
             if item_todo_id:
                 existing_todo_ids.add(item_todo_id)
-    if block is None and registry_path is not None and goal_id is not None:
-        context = event_projection_todo_context(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            state_path=state_file,
-            todo_id=todo_id,
-            role=None,
-        )
-        if context is not None:
-            block = dict(context["item"])
-            projection_source = "event_log"
-            for candidate_role in ("user", "agent"):
-                summary = context["fields"].get(f"{candidate_role}_todos")
-                items = summary.get("items") if isinstance(summary, dict) else []
-                for item in items if isinstance(items, list) else []:
-                    if not isinstance(item, dict):
-                        continue
-                    item_todo_id = normalize_todo_id(item.get("todo_id"))
-                    if item_todo_id:
-                        existing_todo_ids.add(item_todo_id)
     if block is None:
         normalized_todo_id = normalize_todo_id(todo_id) or todo_id
         raise ValueError(

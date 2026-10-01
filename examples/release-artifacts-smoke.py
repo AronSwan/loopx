@@ -58,11 +58,11 @@ def main() -> int:
         "project"
     ]
     assert project_metadata["urls"] == {
-        "Homepage": "https://huangruiteng.github.io/loopx/",
-        "Documentation": "https://huangruiteng.github.io/loopx/docs/",
-        "Repository": "https://github.com/huangruiteng/loopx",
-        "Issues": "https://github.com/huangruiteng/loopx/issues",
-        "Changelog": "https://github.com/huangruiteng/loopx/releases",
+        "Homepage": "https://loopx-project.github.io/loopx/",
+        "Documentation": "https://loopx-project.github.io/loopx/docs/",
+        "Repository": "https://github.com/loopx-project/loopx",
+        "Issues": "https://github.com/loopx-project/loopx/issues",
+        "Changelog": "https://github.com/loopx-project/loopx/releases",
     }
 
     invalid_tag = run("validate-tag", "v999.0.0")
@@ -162,10 +162,15 @@ def main() -> int:
         "Verify the published package from PyPI",
         "--index-url https://pypi.org/simple",
         '"loopx==${version}"',
-        'test "$("${verify_venv}/bin/loopx" --version)" = "loopx ${version}"',
+        'test "$(PYTHONPATH="${verify_target}" python -m loopx.cli --version)" =',
         "workflow-skills --install --skills-dir",
         "workflow-skills --uninstall --skills-dir",
         'payload["source"]["kind"] == "python_distribution"',
+        "Verify wheel through the DSH managed-runtime install shape",
+        '--target "${target}"',
+        'loopx-wheel-target-inspect.json',
+        'verify_target="${RUNNER_TEMP}/loopx-pypi-target-${version}"',
+        'loopx-pypi-workflow-skills.json',
         '"schema_version": "quota_settlement_plan_v1"',
         '"identity": journal_identity.as_dict()',
     )
@@ -173,6 +178,23 @@ def main() -> int:
         assert text in workflow, text
     assert "password:" not in workflow
     assert "--clobber" not in workflow
+
+    official_repository = "github.repository == 'loopx-project/loopx'"
+    owner_gated_workflows = (
+        "release-artifacts.yml",
+        "desktop-release-artifacts.yml",
+        "desktop-updater.yml",
+        "full-public-smokes.yml",
+        "update-notes.yml",
+    )
+    for workflow_name in owner_gated_workflows:
+        owner_gated_workflow = (
+            ROOT / ".github" / "workflows" / workflow_name
+        ).read_text(encoding="utf-8")
+        assert official_repository in owner_gated_workflow, workflow_name
+        assert "github.repository == 'huangruiteng/loopx'" not in owner_gated_workflow, (
+            workflow_name
+        )
 
     print("release-artifacts-smoke ok")
     return 0

@@ -16,6 +16,7 @@ import {
   validatePostWritebackHookInvocation,
   validatePostWritebackHookReceipt,
   validateTurnStartHookInvocation,
+  validateTurnStartHookRegistration,
 } from "../../loopx/control_plane/capability_hooks.ts";
 
 function postWritebackRegistration(overrides: Record<string, unknown> = {}) {
@@ -176,9 +177,17 @@ test("post-writeback hook binds intent to the exact durable receipt", () => {
   );
 });
 
-test("post-writeback hook requires the complete settlement identity", () => {
+test("post-writeback hook accepts Todo-less identity but rejects an empty Todo id", () => {
+  const todoLess = postWritebackInput();
+  (todoLess.identity as Record<string, unknown>).todo_id = null;
+  const admitted = validatePostWritebackHookInput({
+    registration: postWritebackRegistration(),
+    hook_input: todoLess,
+  });
+  assert.equal((admitted.identity as Record<string, unknown>).todo_id, null);
+
   const incomplete = postWritebackInput();
-  (incomplete.identity as Record<string, unknown>).todo_id = null;
+  (incomplete.identity as Record<string, unknown>).todo_id = "";
   assert.throws(
     () => validatePostWritebackHookInput({
       registration: postWritebackRegistration(),
@@ -325,7 +334,7 @@ test("verified capability candidate projects separate preparation and delivery a
   );
 });
 
-test("pending capability intent projects local generation without delivery authority", () => {
+test("pending periodic report projects generation with configured standing delivery authority", () => {
   const result = validateInteractionProjectionHookInvocation({
     registration: {
       schema_version: CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION,
@@ -355,10 +364,10 @@ test("pending capability intent projects local generation without delivery autho
         agent_id: "agent-example",
         state: "pending",
         action_kind: "consume_periodic_report_intent",
-        action_summary: "Generate the exact local report draft.",
+        action_summary: "Generate the exact report and queue configured delivery.",
         command: "loopx periodic-report consume-pending --goal-id goal-example --agent-id agent-example --execute",
         generation_authorized: true,
-        external_delivery_authorized: false,
+        external_delivery_authorized: true,
         agent_read_required: true,
       },
     },
@@ -366,7 +375,7 @@ test("pending capability intent projects local generation without delivery autho
   assert.equal(result.status, "projected");
   assert.equal(
     (result.projection as JsonObject).external_delivery_authorized,
-    false,
+    true,
   );
   assert.equal(
     (result.projection as JsonObject).agent_read_required,
@@ -426,6 +435,12 @@ function turnStartRegistration(overrides: Record<string, unknown> = {}) {
     failure_policy: "isolate",
     requested_read_scope: ["provider_history"],
     requested_write_scope: ["owner_private_inbox", "owner_private_cursor"],
+    required_read: {
+      kind: "operator_inbox",
+      command: "loopx inbox drain --goal-id fixture",
+      reason: "read newly synchronized operator evidence",
+      ordering: "before_work",
+    },
     ...overrides,
   };
 }
@@ -449,6 +464,34 @@ function turnStartResult(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("turn-start read commands retain explicit routes with a bounded byte budget", () => {
+  const read = {kind: "capability_intent", reason: "Read due report facts", ordering: "before_work"};
+  const command = `loopx --registry /${"project/".repeat(35)}registry.json --runtime-root /${"runtime/".repeat(35)}state periodic-report consume-pending --goal-id example --agent-id reporter`;
+  assert.ok(command.length > 360 && command.length < 1024);
+  validateTurnStartHookRegistration(turnStartRegistration({required_read: {...read, command}}));
+  for (const invalid of ["x".repeat(1025), "界".repeat(342), "loopx\nother-command"]) {
+    assert.throws(() => validateTurnStartHookRegistration(turnStartRegistration({
+      required_read: {...read, command: invalid},
+    })), /outside the admitted envelope/);
+  }
+});
+
+test("turn-start reads can opt into a bounded prompt budget without changing defaults", () => {
+  const registration = turnStartRegistration();
+  const read = registration.required_read;
+  assert.deepEqual(validateTurnStartHookRegistration(registration).required_read, read);
+  const budgeted = { ...read, prompt_budget_bytes: 1_536 };
+  assert.deepEqual(validateTurnStartHookRegistration({ ...registration, required_read: budgeted }).required_read, budgeted);
+  for (const value of [0, -1, 2_049, 1.5, true, "1536", null]) {
+    assert.throws(() => validateTurnStartHookRegistration({ ...registration,
+      required_read: { ...read, prompt_budget_bytes: value },
+    }), /prompt budget/);
+  }
+  assert.throws(() => validateTurnStartHookRegistration({ ...registration,
+    required_read: { ...read, prompt_budget_bytes: 64 },
+  }), /exceeds its declared prompt budget/);
+});
+
 test("turn-start observations require Agent reading without returning private content", () => {
   const observed = validateTurnStartHookInvocation({
     registration: turnStartRegistration(),
@@ -471,6 +514,28 @@ test("turn-start observations require Agent reading without returning private co
       result: turnStartResult({ private_content_returned: true }),
     }),
     /private provider content/,
+  );
+  assert.throws(
+    () => validateTurnStartHookInvocation({
+      registration: turnStartRegistration({ required_read: null }),
+      result: turnStartResult(),
+    }),
+    /required read route is missing/,
+  );
+  assert.throws(
+    () => validateTurnStartHookInvocation({
+      registration: turnStartRegistration({
+        required_read: {
+          kind: "operator_inbox",
+          command: "loopx inbox drain --goal-id fixture",
+          reason: "read newly synchronized operator evidence",
+          ordering: "before_work",
+          private_message_text: "must-not-enter-the-contract",
+        },
+      }),
+      result: turnStartResult(),
+    }),
+    /required_read fields are invalid/,
   );
 });
 

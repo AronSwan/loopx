@@ -1,6 +1,7 @@
 # RFC: Post-Outcome Memory Utility Attribution v0
 
-- Status: Draft; Stage 1 shipped, Stage 2 implemented in follow-up issue #3824, Stage 3+ remain proposed
+- Status: Accepted; Stage 1 shipped, Stage 2 delivered by this PR, Stage 3+ remain proposed
+- Supersedes / closes: none
 - Date: 2026-08-15
 - Tracking issues: [#3214](https://github.com/huangruiteng/loopx/issues/3214), [#3824](https://github.com/huangruiteng/loopx/issues/3824)
 - Decision boundary: how LoopX attributes later, verified work outcomes to previously recalled memory and exposes a bounded utility projection

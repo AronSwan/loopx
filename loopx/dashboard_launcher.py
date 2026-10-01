@@ -12,6 +12,7 @@ import time
 from urllib.parse import quote
 import webbrowser
 
+from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .release_manifest import release_runtime_identity
 
 
@@ -33,7 +34,12 @@ def default_packaged_assets_dir() -> Path:
     return Path(__file__).resolve().parent / "web" / "chat"
 
 
-def _probe_existing_chat(host: str, port: int) -> str:
+def _probe_existing_chat(
+    host: str,
+    port: int,
+    *,
+    goal_subagent_configuration_enabled: bool | None = None,
+) -> str:
     """Return whether the target port already serves LoopX Chat.
 
     The result is one of ``matching`` (the current LoopX runtime is running),
@@ -59,7 +65,10 @@ def _probe_existing_chat(host: str, port: int) -> str:
             status = response.status
         finally:
             connection.close()
-    except ConnectionRefusedError:
+    except (ConnectionRefusedError, TimeoutError):
+        # Some native Windows execution environments time out instead of
+        # returning WSAECONNREFUSED for an unused loopback port. Treat that as
+        # non-reusable and let the later server bind remain authoritative.
         return "unavailable"
     except (OSError, http.client.HTTPException):
         return "foreign"
@@ -79,6 +88,10 @@ def _probe_existing_chat(host: str, port: int) -> str:
     expected_identity = release_runtime_identity(dashboard_release_root())
     if capabilities.get("runtime_identity") != expected_identity:
         return "stale"
+    if goal_subagent_configuration_enabled is not None and (
+        capabilities.get("goal_subagent_configuration") == "preview_locked"
+    ) != goal_subagent_configuration_enabled:
+        return "configuration_mismatch"
     return "matching"
 
 
@@ -87,7 +100,7 @@ def _listener_pids(port: int) -> list[int]:
         result = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -112,7 +125,7 @@ def _is_same_user_loopx_chat_process(pid: int) -> bool:
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "uid=", "-o", "command="],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -197,18 +210,37 @@ def launch_dashboard(
     goal_id: str | None = None,
     codex_bin: str = "codex",
     claude_bin: str = "claude",
+    kiro_cli_bin: str = KIRO_CLI_BIN,
     lark_cli_bin: str | None = None,
     assets_dir: Path | None = None,
     verbose: bool = False,
     open_browser: bool = True,
     prefer_dev: bool = False,
+    enable_goal_subagent_configuration: bool = False,
 ) -> int:
     release_root = dashboard_release_root()
     dev_launcher = release_root / "scripts" / "dashboard-dev.sh"
     if (prefer_dev or os.environ.get("LOOPX_DASHBOARD_DEV") == "1") and dev_launcher.is_file():
-        return subprocess.call(["bash", str(dev_launcher)], cwd=release_root)
+        environment = dict(os.environ)
+        if enable_goal_subagent_configuration:
+            environment["LOOPX_ENABLE_GOAL_SUBAGENT_CONFIGURATION"] = "1"
+        return subprocess.call(
+            ["bash", str(dev_launcher)],
+            cwd=release_root,
+            env=environment,
+        )
 
-    existing_chat = _probe_existing_chat(host, port)
+    if assets_dir is None:
+        from .presentation.chat_bundle import validate_bundle
+        validate_bundle(default_packaged_assets_dir(), source_root=Path(__file__).resolve().parents[1])
+
+    existing_chat = _probe_existing_chat(
+        host,
+        port,
+        goal_subagent_configuration_enabled=(
+            enable_goal_subagent_configuration
+        ),
+    )
     if existing_chat == "matching":
         url = f"http://{host}:{port}{DASHBOARD_CHAT_PATH}"
         if goal_id:
@@ -227,6 +259,11 @@ def launch_dashboard(
             f"port {port} is serving LoopX Chat from a different installed runtime; "
             "stop the old `loopx dashboard` or desktop app, then retry so the "
             "current release can start its matching service."
+        )
+    if existing_chat == "configuration_mismatch":
+        raise RuntimeError(
+            f"port {port} is serving LoopX Chat with a different Goal "
+            "sub-agent configuration gate; restart it with the requested setting."
         )
 
     from .chat_server import serve_chat
@@ -248,9 +285,13 @@ def launch_dashboard(
         goal_id=goal_id,
         codex_bin=codex_bin,
         claude_bin=claude_bin,
+        kiro_cli_bin=kiro_cli_bin,
         lark_cli_bin=lark_cli_bin,
         assets_dir=resolved_assets,
         verbose=verbose,
         open_browser=open_browser,
+        enable_goal_subagent_configuration=(
+            enable_goal_subagent_configuration
+        ),
     )
     return 0

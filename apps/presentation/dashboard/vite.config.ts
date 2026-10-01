@@ -8,6 +8,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     proxy: {
+      "/periodic-report-workspace": {
+        target: "http://127.0.0.1:8766",
+        changeOrigin: false,
+      },
       "/status.json": {
         target: "http://127.0.0.1:8766",
         changeOrigin: false,
@@ -21,6 +25,10 @@ export default defineConfig({
         changeOrigin: false,
       },
       "/api/actions": {
+        target: "http://127.0.0.1:8767",
+        changeOrigin: false,
+      },
+      "/api/ssh-source": {
         target: "http://127.0.0.1:8767",
         changeOrigin: false,
       },

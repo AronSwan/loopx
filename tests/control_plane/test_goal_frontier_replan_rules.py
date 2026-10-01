@@ -19,11 +19,17 @@ from loopx.control_plane.goals.goal_frontier.replan_rules import (
     select_goal_frontier_replan_rule,
 )
 from loopx.control_plane.todos.addition import require_replan_successor_scope
+from loopx.control_plane.todos.frontier_revision import (
+    TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION,
+    advancement_frontier_revision_from_index,
+    build_advancement_frontier_revision_index,
+)
 from loopx.control_plane.todos.summary_item import compact_todo_summary_item
 from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
 )
+from loopx.control_plane.work_items.progress_observation import semantic_delta_from_writeback
 
 
 @pytest.mark.parametrize(
@@ -223,12 +229,13 @@ def _accepted_long_chain_ack(obligation: dict[str, object]) -> dict[str, object]
 def _derive_long_chain(
     source_items: list[dict[str, object]],
     *,
+    agent_todo_summary: dict[str, object] | None = None,
     latest_replan_ack: dict[str, object] | None = None,
     current_transition_replan_ack: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     return derive_goal_frontier_replan_obligation_from_summaries(
         user_todo_summary={"open_count": 0},
-        agent_todo_summary=_long_chain_summary(source_items),
+        agent_todo_summary=agent_todo_summary or _long_chain_summary(source_items),
         agent_todo_source_items=source_items,
         work_lane_contract={"lane": "advancement_task", "must_attempt_work": True},
         agent_id="current-agent",
@@ -264,6 +271,124 @@ def test_long_todo_chain_checkpoint_is_edge_triggered_and_rearms_on_change() -> 
     assert rearmed["triggers"][0]["frontier_revision"] != (
         original["triggers"][0]["frontier_revision"]
     )
+
+
+@pytest.mark.parametrize("change,rearms", [
+    ("peer_claim", False), ("unclaimed_priority", False),
+    ("owned_priority", True), ("maintenance_timestamp", False),
+])
+def test_writeback_ack_preserves_owned_material_basis(change: str, rearms: bool) -> None:
+    items = [*_long_chain_source_items(), {
+        **_advancement("todo_unclaimed", ""),
+        "updated_at": "2026-08-22T09:00:00+08:00",
+    }]
+
+    def derive(rows, ack=None):
+        owned = [row for row in rows if row.get("claimed_by") == "current-agent"]
+        unclaimed = [row for row in rows if not row.get("claimed_by")]
+        return _derive_long_chain(rows, latest_replan_ack=ack, agent_todo_summary={
+            "open_count": len(rows), "current_agent_claimed_open_count": len(owned),
+            "current_agent_claimed_advancement_count": len(owned),
+            "unclaimed_open_count": len(unclaimed),
+            "unclaimed_priority_open_items": unclaimed,
+            "executable_backlog_items": owned + unclaimed,
+            "claim_scope": {"other_agent_claimed_items": [
+                row for row in rows if row not in owned + unclaimed]},
+        })
+
+    original = derive(items)
+    assert original is not None
+    delta = semantic_delta_from_writeback(obligation=original, progress_observation={
+        "result_class": "advanced", "surface_id": "dependency-recovery",
+        "evidence_ids": ["evidence:independent-acceptance"],
+    })
+    assert delta["accepted"]
+    ack = {"recorded": True, "semantic_delta": delta}
+    assert derive(items, ack) is None
+    changed = deepcopy(items)
+    if change == "peer_claim":
+        changed[-1]["claimed_by"] = "peer-agent"
+    elif change == "unclaimed_priority":
+        changed[-1]["priority"] = "P0"
+    elif change == "owned_priority":
+        changed[0]["priority"] = "P0"
+    else:
+        changed[0]["updated_at"] = "2026-08-22T10:00:00+08:00"
+    # The open Turn must keep its binding even before an ACK is recorded.
+    assert (derive(changed)["obligation_id"] != original["obligation_id"]) is rearms
+    assert (derive(changed, ack) is not None) is rearms
+
+
+def test_frontier_revision_index_preserves_complete_agent_lane_semantics() -> None:
+    source_items = [
+        {
+            **_advancement("todo_000000000001", "current-agent"),
+            "updated_at": "2026-08-22T09:00:00+08:00",
+        },
+        {
+            **_advancement("todo_000000000002", "other-agent"),
+            "updated_at": "2026-08-22T09:00:00+08:00",
+        },
+        {
+            "todo_id": "todo_000000000003",
+            "status": "open",
+            "task_class": "advancement_task",
+            "updated_at": "2026-08-22T09:00:00+08:00",
+        },
+    ]
+    original = build_advancement_frontier_revision_index(source_items)
+    current_revision = advancement_frontier_revision_from_index(
+        original,
+        agent_id="current-agent",
+    )
+    unclaimed_revision = advancement_frontier_revision_from_index(
+        original,
+        agent_id="new-agent",
+    )
+    all_revision = advancement_frontier_revision_from_index(original, agent_id=None)
+    assert current_revision is not None and current_revision[2] is True
+    assert unclaimed_revision is not None and unclaimed_revision[2] is True
+    assert all_revision is not None and all_revision[2] is True
+
+    other_agent_change = deepcopy(source_items)
+    other_agent_change[1]["priority"] = "P0"
+    changed_other = build_advancement_frontier_revision_index(other_agent_change)
+    assert advancement_frontier_revision_from_index(
+        changed_other,
+        agent_id="current-agent",
+    ) == current_revision
+    assert advancement_frontier_revision_from_index(
+        changed_other,
+        agent_id="new-agent",
+    ) == unclaimed_revision
+    assert advancement_frontier_revision_from_index(
+        changed_other,
+        agent_id=None,
+    ) != all_revision
+
+    unclaimed_change = deepcopy(source_items)
+    unclaimed_change[2]["priority"] = "P0"
+    changed_unclaimed = build_advancement_frontier_revision_index(unclaimed_change)
+    assert advancement_frontier_revision_from_index(
+        changed_unclaimed,
+        agent_id="current-agent",
+    ) != current_revision
+    assert advancement_frontier_revision_from_index(
+        changed_unclaimed,
+        agent_id="new-agent",
+    ) != unclaimed_revision
+
+
+def test_frontier_revision_index_rejects_malformed_agent_rows() -> None:
+    assert advancement_frontier_revision_from_index(
+        {
+            "schema_version": TODO_FRONTIER_REVISION_INDEX_SCHEMA_VERSION,
+            "all": {"complete": False},
+            "unclaimed": {"complete": False},
+            "by_agent": "not-a-list",
+        },
+        agent_id="current-agent",
+    ) == (None, None, False)
 
 
 def test_todo_succession_gap_prefers_exact_lifecycle_settlement() -> None:
@@ -580,14 +705,16 @@ def test_long_chain_successor_transition_is_bound_to_current_frontier() -> None:
     assert post_successor_obligation["triggers"][0]["frontier_revision"] != (
         rearmed["triggers"][0]["frontier_revision"]
     )
-    assert fresh_ack["semantic_delta"]["trigger_checkpoints"] == [
-        {
-            "kind": "long_todo_chain",
-            "frontier_revision": post_successor_obligation["triggers"][0][
-                "frontier_revision"
-            ],
-        }
-    ]
+    fresh_checkpoints = fresh_ack["semantic_delta"]["trigger_checkpoints"]
+    assert [row["kind"] for row in fresh_checkpoints] == ["long_todo_chain"]
+    assert fresh_checkpoints[0]["frontier_revision"] == (
+        post_successor_obligation["triggers"][0]["frontier_revision"]
+    )
+    # The checkpoint also records the identity of the rows this agent owns, so
+    # another lane taking over unclaimed work does not re-arm this ACK.
+    assert fresh_checkpoints[0]["frontier_owned_identity"].startswith(
+        "todo_frontier_revision_v0:owned:"
+    )
     assert (
         _derive_long_chain(
             [*changed_items, stale_successor, fresh_successor],

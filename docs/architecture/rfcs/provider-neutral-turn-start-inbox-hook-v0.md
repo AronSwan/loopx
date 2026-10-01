@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented behind explicit provider configuration |
+| Status | Accepted; implemented behind explicit provider configuration |
+| Supersedes / closes | none |
 | Date | 2026-08-26 |
 | Decision boundary | How fresh external inbox evidence reaches an Agent before it selects ordinary Goal work |
 | Core owner | Hook admission, ordering, bounded public receipt, and Agent-read obligation |
@@ -24,10 +25,16 @@ contain message content, provider payloads, credentials, destinations, profile
 names, or private cursor values.
 
 The hook is complete only when fresh evidence is routed to Agent reading. A
-result with new observations must set `agent_read_required=true`. The same turn
-then recomputes inbox urgency, selects the inbox work lane ahead of ordinary
-work, and exposes the existing goal-bound private `drain_command`. The Agent
-reads the messages and chooses one typed semantic disposition:
+result with new observations must set `agent_read_required=true`. Its
+registration declares one bounded, public-safe `required_read` descriptor.
+The generic hook kernel validates that descriptor, deduplicates it by command,
+and projects it into both Agent and CLI interaction channels with
+`ordering=before_work`. A fresh ordinary material read emits a non-blocking user
+notification while preserving the already selected work lane. If the material
+remains durably pending on the next turn, the existing material-review lane
+preempts work for recovery. A direct question or verified reply still preempts
+on its first turn. The Agent reads the messages and chooses one typed semantic
+disposition:
 
 - `steer_current_turn`: update the selected work without changing the durable
   Goal frontier;
@@ -49,8 +56,8 @@ provider-neutral turn_start dispatch
   -> first Agent-read receipt independent of optional provider reaction
   -> retry optional reaction from durable pending reads
   -> fresh status + quota projection
-  -> inbox lane preempts ordinary work when agent_read_required
-  -> private drain into the active Agent turn
+  -> generic kernel projects the registered required read before selected work
+  -> private drain into the active Agent turn (ordinary selection may remain)
   -> semantic disposition + durable settlement
   -> ACK and resume the prior lane when appropriate
 ```

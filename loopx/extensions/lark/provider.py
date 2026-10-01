@@ -28,7 +28,9 @@ REQUIRED_EXPORTS = {
     ),
     "loopx.extensions.lark.reviewer_notification": ("lark_reviewer_notification_sink",),
     "loopx.extensions.lark.goal_channel": (
+        "deliver_goal_channel_operation_card",
         "doctor_lark_goal_channel",
+        "handle_goal_channel_operation_callback",
         "notify_lark_goal_channel_gate",
         "setup_lark_goal_channel",
         "sync_lark_goal_channel",
@@ -39,6 +41,11 @@ REQUIRED_EXPORTS = {
     ),
     "loopx.extensions.lark.periodic_report_delivery": (
         "deliver_periodic_report_to_goal_channel",
+    ),
+    "loopx.extensions.lark.periodic_report_request": (
+        "bind_lark_periodic_report_source",
+        "build_lark_periodic_report_hook_adapter",
+        "settle_lark_periodic_report_source",
     ),
     "loopx.extensions.lark.presentation.kanban": (
         "lark_kanban_doctor",

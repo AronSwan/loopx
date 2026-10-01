@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from .memory_utility import (
     ATTRIBUTION_LEVELS,
+    RewardMemoryUtilityObservationValidationError,
     validate_reward_memory_utility_observation,
 )
 
@@ -48,6 +49,7 @@ _EVIDENCE_ORDER = (
 )
 _EVIDENCE_RANK = {name: index for index, name in enumerate(_EVIDENCE_ORDER)}
 _LABEL_DIRECTIONS = {"helpful": 1.0, "harmful": -1.0, "neutral": 0.0}
+_UTILITY_LABEL_ORDER = ("helpful", "harmful", "neutral", "unknown")
 _PROJECTION_STATUSES = frozenset({"ready", "empty", "review_required", "rejected"})
 _REVIEW_STATES = frozenset(
     {"none", "attenuation_proposed", "conflict", "unresolved_attribution"}
@@ -254,19 +256,10 @@ def _normalized_context(
     }
 
 
-def _reason_code(exc: Exception) -> str:
-    message = str(exc).lower()
-    if "schema_version" in message or "schema_mismatch" in message:
-        return "observation_schema_mismatch"
-    if "observation_id" in message:
-        return "observation_identity_invalid"
-    if "scope" in message:
-        return "observation_malformed_scope"
-    if "snapshot" in message:
-        return "observation_malformed_snapshot"
-    if "raw_content" in message or "provider_write" in message:
-        return "observation_write_boundary_violation"
-    return "observation_malformed"
+class _ObservationContextMismatch(ValueError):
+    def __init__(self, reason_codes: Sequence[str]) -> None:
+        self.reason_codes = tuple(sorted(set(reason_codes)))
+        super().__init__(",".join(self.reason_codes))
 
 
 def _base_projection(
@@ -383,8 +376,10 @@ def _validate_observation_batch(
             raise ValueError(f"observation[{index}] must be an object")
         try:
             item = validate_reward_memory_utility_observation(dict(raw))
-        except (OverflowError, ValueError, TypeError) as exc:
-            raise ValueError(f"observation[{index}] {_reason_code(exc)}") from exc
+        except RewardMemoryUtilityObservationValidationError as exc:
+            raise RewardMemoryUtilityObservationValidationError(
+                exc.reason_code, f"observation[{index}] {exc}"
+            ) from exc
         mismatches: list[str] = []
         if item["scope"] != context["scope"]:
             mismatches.append("scope_mismatch")
@@ -393,7 +388,7 @@ def _validate_observation_batch(
         if item["policy_snapshot_ref"] != context["policy_snapshot_ref"]:
             mismatches.append("policy_snapshot_mismatch")
         if mismatches:
-            raise ValueError("observation context mismatch: " + ",".join(mismatches))
+            raise _ObservationContextMismatch(mismatches)
         normalized.append(item)
 
     deliveries: dict[str, dict[str, dict[str, Any]]] = {}
@@ -479,6 +474,33 @@ def _combined_confidence(observations: Sequence[Mapping[str, Any]]) -> float:
     return _bounded(1.0 - remaining, 0.0, 1.0)
 
 
+def _evidence_label_summary(
+    observations: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return sparse sufficient facts for validating truncated projections."""
+
+    result: list[dict[str, Any]] = []
+    for basis in _EVIDENCE_ORDER:
+        for utility_label in _UTILITY_LABEL_ORDER:
+            matching = [
+                observation
+                for observation in observations
+                if observation["evidence_basis"] == basis
+                and observation["utility_label"] == utility_label
+            ]
+            if not matching:
+                continue
+            result.append(
+                {
+                    "evidence_basis": basis,
+                    "utility_label": utility_label,
+                    "observation_count": len(matching),
+                    "combined_confidence": _combined_confidence(matching),
+                }
+            )
+    return result
+
+
 def _review(
     *,
     state: str,
@@ -501,7 +523,7 @@ def _reduce_subject(
     memory_ref_digests: tuple[str, ...],
     observations: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    support = {label: 0 for label in ("helpful", "harmful", "neutral", "unknown")}
+    support = {label: 0 for label in _UTILITY_LABEL_ORDER}
     evidence_strength = {basis: 0 for basis in _EVIDENCE_ORDER}
     for observation in observations:
         support[str(observation["utility_label"])] += 1
@@ -612,6 +634,7 @@ def _reduce_subject(
         "uncertainty": uncertainty,
         "support": support,
         "evidence_strength": evidence_strength,
+        "evidence_label_summary": _evidence_label_summary(observations),
         "observation_count": len(observations),
         "last_observed_at": _latest(observations)[0],
         "last_observation_id": _latest(observations)[1],
@@ -728,23 +751,28 @@ def reduce_reward_memory_utility_observations(
             duplicate_count,
             conflicting_delivery_count,
         ) = _validate_observation_batch(observations, context=context)
-    except (OverflowError, ValueError, TypeError) as exc:
+    except RewardMemoryUtilityObservationValidationError as exc:
         if strict:
             raise
-        text = str(exc).lower()
-        if "context mismatch" in text:
-            codes = [
-                part.strip()
-                for part in text.split(":", 1)[-1].split(",")
-                if part.strip()
-            ]
-        elif "reducer" in text and "mismatch" in text:
-            codes = ["reducer_identity_mismatch"]
-        else:
-            codes = [_reason_code(exc)]
         return _rejected_projection(
             locals().get("context"),
-            reason_codes=codes,
+            reason_codes=[exc.reason_code],
+            rejected_count=1,
+        )
+    except _ObservationContextMismatch as exc:
+        if strict:
+            raise
+        return _rejected_projection(
+            locals().get("context"),
+            reason_codes=list(exc.reason_codes),
+            rejected_count=1,
+        )
+    except (OverflowError, ValueError, TypeError):
+        if strict:
+            raise
+        return _rejected_projection(
+            locals().get("context"),
+            reason_codes=["observation_malformed"],
             rejected_count=1,
         )
 
@@ -1165,6 +1193,7 @@ def validate_reward_memory_utility_projection(
                 "uncertainty",
                 "support",
                 "evidence_strength",
+                "evidence_label_summary",
                 "observation_count",
                 "review",
             ):

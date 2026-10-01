@@ -117,6 +117,16 @@ PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },
         {
+            "schema_version": "periodic_report_workspace_projection_v0",
+            "module": "loopx.capabilities.periodic_report.workspace",
+            "doc": "docs/reference/protocols/periodic-report-v0.md",
+        },
+        {
+            "schema_version": "periodic_report_workspace_index_v0",
+            "module": "loopx.capabilities.periodic_report.workspace",
+            "doc": "docs/reference/protocols/periodic-report-v0.md",
+        },
+        {
             "schema_version": "periodic_report_sink_binding_v0",
             "module": "loopx.capabilities.periodic_report.bindings",
             "doc": "docs/reference/protocols/periodic-report-v0.md",
@@ -144,6 +154,11 @@ PERIODIC_REPORT_CATALOG_ENTRY: dict[str, Any] = {
         {
             "schema_version": "periodic_report_goal_channel_delivery_request_v0",
             "module": "loopx.extensions.lark.periodic_report_delivery",
+            "doc": "docs/reference/protocols/periodic-report-v0.md",
+        },
+        {
+            "schema_version": "periodic_report_delivery_authority_v0",
+            "module": "loopx.capabilities.periodic_report.machine_defaults",
             "doc": "docs/reference/protocols/periodic-report-v0.md",
         },
         {

@@ -55,12 +55,12 @@ def _application(memories: list[str] | None = None) -> dict[str, Any]:
     }
 
 
-def _outcome() -> dict[str, Any]:
+def _outcome(outcome_status: str = "succeeded") -> dict[str, Any]:
     return {
         "verified": True,
         "outcome_ref": "effect:stage2",
         "artifact_ref": "artifact:stage2",
-        "outcome_status": "succeeded",
+        "outcome_status": outcome_status,
     }
 
 
@@ -114,12 +114,13 @@ def _observation(
     *,
     application: dict[str, Any] | None = None,
     proposal: dict[str, Any] | None = None,
+    outcome: dict[str, Any] | None = None,
     created_at: str = CREATED_AT,
 ) -> dict[str, Any]:
     context = _context()
     return build_reward_memory_utility_observation(
         application or _application(),
-        _outcome(),
+        outcome or _outcome(),
         context,
         proposal or _proposal(),
         created_at=created_at,
@@ -185,6 +186,34 @@ def test_labels_have_bounded_read_only_subjects() -> None:
     assert projection["grants_new_action_authority"] is False
     assert projection["provider_write_performed"] is False
     assert projection["raw_content_captured"] is False
+
+
+@pytest.mark.parametrize("outcome_status", ["succeeded", "failed"])
+def test_task_outcome_alone_never_credits_memory(outcome_status: str) -> None:
+    outcome = _outcome(outcome_status)
+    application = _application([MEMORY_A, MEMORY_B])
+    proposal = _proposal(memories=[MEMORY_A, MEMORY_B], level="set")
+    proposal["outcome_status"] = outcome_status
+
+    with pytest.raises(ValueError):
+        build_reward_memory_utility_observation(
+            {}, outcome, _context(), proposal, created_at=CREATED_AT
+        )
+
+    observation = _observation(
+        application=application,
+        proposal=proposal,
+        outcome=outcome,
+    )
+    projection = _reduce([observation])
+
+    assert projection["item_subject_count"] == 0
+    assert projection["set_subject_count"] == 1
+    subject = projection["subjects"][0]
+    assert subject["attribution_level"] == "set"
+    assert subject["memory_ref_digests"] == [MEMORY_A, MEMORY_B]
+    assert subject["effective_utility_label"] == "unknown"
+    assert subject["utility_estimate"] == 0.0
 
 
 def test_exact_replay_is_a_noop_even_when_retry_timestamp_changes() -> None:
@@ -504,6 +533,30 @@ def test_private_or_unknown_observation_fields_fail_closed() -> None:
     assert projection["rejections"][0]["reason_codes"] == ["observation_malformed"]
 
 
+def test_reason_codes_use_typed_observation_failures_not_field_name_substrings() -> (
+    None
+):
+    unknown_field = _observation()
+    unknown_field["scope_hint"] = "not-a-scope-error"
+
+    unknown_projection = _reduce([unknown_field])
+
+    assert unknown_projection["status"] == "rejected"
+    assert unknown_projection["rejections"][0]["reason_codes"] == [
+        "observation_malformed"
+    ]
+
+    write_boundary = _observation()
+    write_boundary["provider_write_performed"] = True
+
+    boundary_projection = _reduce([write_boundary])
+
+    assert boundary_projection["status"] == "rejected"
+    assert boundary_projection["rejections"][0]["reason_codes"] == [
+        "observation_write_boundary_violation"
+    ]
+
+
 def test_harmful_utility_only_proposes_attenuation_not_deletion_or_authority() -> None:
     harmful = _observation(
         proposal=_proposal(
@@ -674,6 +727,62 @@ def test_history_budget_retains_each_subject_latest_observation() -> None:
     unsupported_label["subjects"][0]["utility_estimate"] = 0.0
     with pytest.raises(ValueError, match="has no supporting observation"):
         validate_reward_memory_utility_projection(unsupported_label)
+
+
+def test_truncated_history_preserves_joint_label_evidence_semantics() -> None:
+    observations = [
+        _observation(
+            proposal=_proposal(
+                label="harmful",
+                basis="owner_correction",
+                confidence=0.8,
+                evidence_refs=["owner:correction"],
+                evaluation_version="evaluation:owner-correction",
+            ),
+            created_at="2026-08-15T00:00:00Z",
+        )
+    ]
+    observations.extend(
+        _observation(
+            proposal=_proposal(
+                label="helpful",
+                basis="evaluator_inference",
+                confidence=0.1,
+                evidence_refs=[f"inference:{index}"],
+                evaluation_version=f"evaluation:weak-{index}",
+            ),
+            created_at=f"2026-08-15T00:{index // 60:02d}:{index % 60:02d}Z",
+        )
+        for index in range(1, 257)
+    )
+
+    projection = _reduce(observations)
+    subject = projection["subjects"][0]
+
+    assert projection["observation_history_truncated"] is True
+    assert subject["effective_utility_label"] == "harmful"
+    assert subject["effective_evidence_basis"] == "owner_correction"
+    assert all(
+        entry["observation_id"] != observations[0]["observation_id"]
+        for entry in projection["observation_history"]
+    )
+
+    tampered = deepcopy(projection)
+    tampered_subject = tampered["subjects"][0]
+    tampered_subject["effective_utility_label"] = "helpful"
+    tampered_subject["utility_estimate"] = tampered_subject["confidence"]
+    tampered_subject["review"] = {
+        "state": "none",
+        "proposed_action": "none",
+        "reason_codes": [],
+        "quarantine_proposed": False,
+        "automatic_deletion": False,
+        "action_authority_granted": False,
+    }
+    tampered["review_proposals"] = []
+
+    with pytest.raises(ValueError, match="joint evidence summary"):
+        validate_reward_memory_utility_projection(tampered)
 
 
 def test_projection_validator_rejects_noncanonical_timestamp_whitespace() -> None:

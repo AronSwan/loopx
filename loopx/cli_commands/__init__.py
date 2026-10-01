@@ -36,15 +36,20 @@ def _load_exports() -> None:
         handle_benchmark_command,
         register_benchmark_command_group,
     )
-    from .benchmark_external_agent import (
-        handle_benchmark_external_agent_command,
-        register_benchmark_external_agent_commands,
+    from .benchmark_continuation import (
+        handle_benchmark_continuation_command,
+        register_benchmark_continuation_commands,
     )
     from .bootstrap_connect import (
         handle_bootstrap_connect_command,
         register_bootstrap_connect_command,
     )
     from .canary import handle_canary_command, register_canary_commands
+    from .authority_archive import handle_authority_archive_command, register_authority_archive_command
+    from .coordination_shadow import (
+        handle_coordination_shadow_command,
+        register_coordination_shadow_command,
+    )
     from .capability import handle_capability_command, register_capability_commands
     from .extension import handle_extension_command, register_extension_commands
     from .doctor import handle_doctor_command, register_doctor_command
@@ -138,9 +143,15 @@ def _load_exports() -> None:
         handle_support_control_command,
         register_support_control_commands,
     )
+    from .authority_shadow import (
+        handle_authority_shadow_command,
+        register_authority_shadow_command,
+    )
     from .task_lease import handle_task_lease_command, register_task_lease_command
-    from .todo import handle_todo_command, register_todo_command
+    from .todo import handle_todo_command
+    from .todo_registration import register_todo_command
     from .version import handle_version_command, register_version_command
+    from .usage_ping import handle_usage_ping_command, register_usage_ping_command
     from .worker_bridge import handle_worker_bridge_command, register_worker_bridge_commands
     from .workflow_skills import (
         handle_workflow_skills_command,
@@ -156,9 +167,11 @@ __all__ = [
     "handle_host_mode_plan_command",
     "handle_benchmark_boundary_command",
     "handle_benchmark_command",
-    "handle_benchmark_external_agent_command",
+    "handle_benchmark_continuation_command",
     "handle_bootstrap_connect_command",
     "handle_canary_command",
+    "handle_coordination_shadow_command",
+    "handle_authority_archive_command",
     "handle_capability_command",
     "handle_extension_command",
     "handle_check_command",
@@ -216,18 +229,22 @@ __all__ = [
     "handle_starter_visible_pilot_command",
     "handle_summary_all_command",
     "handle_support_control_command",
+    "handle_authority_shadow_command",
     "handle_task_lease_command",
     "handle_todo_command",
     "handle_version_command",
+    "handle_usage_ping_command",
     "handle_worker_bridge_command",
     "handle_workflow_skills_command",
     "register_turn_commands",
     "register_host_mode_plan_command",
     "register_benchmark_boundary_commands",
     "register_benchmark_command_group",
-    "register_benchmark_external_agent_commands",
+    "register_benchmark_continuation_commands",
     "register_bootstrap_connect_command",
     "register_canary_commands",
+    "register_coordination_shadow_command",
+    "register_authority_archive_command",
     "register_capability_commands",
     "register_extension_commands",
     "register_doctor_command",
@@ -262,9 +279,11 @@ __all__ = [
     "register_summary_all_command",
     "register_status_commands",
     "register_support_control_commands",
+    "register_authority_shadow_command",
     "register_task_lease_command",
     "register_todo_command",
     "register_version_command",
+    "register_usage_ping_command",
     "register_worker_bridge_commands",
     "register_workflow_skills_command",
 ]

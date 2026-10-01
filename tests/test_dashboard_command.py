@@ -54,6 +54,8 @@ def _prepare_dashboard_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path
     (dashboard_dir / "node_modules" / ".bin" / "vite").touch()
     fake_bin.mkdir()
     _copy_dashboard_launcher(scripts_dir)
+    # This fixture isolates service error propagation; bundle integrity has its own suite.
+    (scripts_dir / "chat_bundle.py").write_text("# frontend already qualified in fixture\n")
     for executable in (fake_bin / "node", fake_bin / "npm"):
         executable.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
@@ -129,6 +131,19 @@ def test_chat_command_passes_explicit_lark_cli_binary_to_server(
     assert calls[0]["lark_cli_bin"] == "custom-lark-cli"
 
 
+def test_chat_goal_subagent_configuration_is_default_off_and_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(support_control, "serve_chat", lambda **kwargs: calls.append(kwargs))
+
+    assert main(["chat", "--no-open"]) == 0
+    assert calls[-1]["enable_goal_subagent_configuration"] is False
+
+    assert main(["chat", "--enable-goal-subagent-configuration", "--no-open"]) == 0
+    assert calls[-1]["enable_goal_subagent_configuration"] is True
+
+
 def test_chat_command_replaces_existing_service_before_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,6 +195,32 @@ def test_dashboard_command_runs_the_dashboard_launcher(
     assert len(calls) == 1
 
 
+def test_dashboard_goal_subagent_configuration_is_default_off_and_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        support_control,
+        "launch_dashboard",
+        lambda **kwargs: calls.append(kwargs) or 0,
+    )
+
+    assert main(["dashboard", "--no-open"]) == 0
+    assert calls[-1]["enable_goal_subagent_configuration"] is False
+
+    assert (
+        main(
+            [
+                "dashboard",
+                "--enable-goal-subagent-configuration",
+                "--no-open",
+            ]
+        )
+        == 0
+    )
+    assert calls[-1]["enable_goal_subagent_configuration"] is True
+
+
 def test_launch_dashboard_in_installed_mode_serves_packaged_chat(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -190,7 +231,7 @@ def test_launch_dashboard_in_installed_mode_serves_packaged_chat(
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "loopx.dashboard_launcher._probe_existing_chat",
-        lambda _host, _port: "unavailable",
+        lambda _host, _port, **_kwargs: "unavailable",
     )
 
     calls: list[dict[str, object]] = []
@@ -214,6 +255,42 @@ def test_probe_existing_chat_accepts_exact_loopx_fingerprint() -> None:
     server, thread = _serve_capabilities()
     try:
         assert _probe_existing_chat("127.0.0.1", server.server_address[1]) == "matching"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("capability", "requested"),
+    [(None, True), ("preview_locked", False)],
+)
+def test_probe_existing_chat_rejects_goal_subagent_gate_mismatch(
+    capability: str | None,
+    requested: bool,
+) -> None:
+    from loopx.dashboard_launcher import _probe_existing_chat
+
+    class _GateCapabilitiesHandler(_CapabilitiesHandler):
+        capabilities = {
+            **_CapabilitiesHandler.capabilities,
+            **(
+                {"goal_subagent_configuration": capability}
+                if capability is not None
+                else {}
+            ),
+        }
+
+    server, thread = _serve_capabilities(_GateCapabilitiesHandler)
+    try:
+        assert (
+            _probe_existing_chat(
+                "127.0.0.1",
+                server.server_address[1],
+                goal_subagent_configuration_enabled=requested,
+            )
+            == "configuration_mismatch"
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -259,6 +336,30 @@ def test_probe_existing_chat_rejects_stale_runtime_identity() -> None:
         thread.join(timeout=2)
 
 
+def test_probe_existing_chat_defers_timeout_to_server_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import dashboard_launcher
+
+    class _TimingOutConnection:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def request(self, *_args: object, **_kwargs: object) -> None:
+            raise TimeoutError("timed out")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        dashboard_launcher.http.client,
+        "HTTPConnection",
+        _TimingOutConnection,
+    )
+
+    assert dashboard_launcher._probe_existing_chat("127.0.0.1", 8767) == "unavailable"
+
+
 def test_replace_existing_loopx_chat_stops_one_verified_listener(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -266,7 +367,7 @@ def test_replace_existing_loopx_chat_stops_one_verified_listener(
 
     listener_reads = iter([[4321], []])
     killed: list[tuple[int, signal.Signals]] = []
-    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port, **_kwargs: "stale")
     monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: next(listener_reads))
     monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda pid: pid == 4321)
     monkeypatch.setattr(dashboard_launcher.os, "kill", lambda pid, sig: killed.append((pid, sig)))
@@ -281,7 +382,7 @@ def test_replace_existing_loopx_chat_leaves_foreign_listener_untouched(
     from loopx import dashboard_launcher
 
     killed: list[tuple[int, signal.Signals]] = []
-    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port: "foreign")
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port, **_kwargs: "foreign")
     monkeypatch.setattr(dashboard_launcher.os, "kill", lambda pid, sig: killed.append((pid, sig)))
 
     with pytest.raises(RuntimeError, match="unverified service"):
@@ -299,7 +400,7 @@ def test_replace_existing_loopx_chat_rejects_non_loopback_before_process_lookup(
     monkeypatch.setattr(
         dashboard_launcher,
         "_probe_existing_chat",
-        lambda host, port: probed.append((host, port)) or "stale",
+        lambda host, port, **_kwargs: probed.append((host, port)) or "stale",
     )
 
     with pytest.raises(ValueError, match="explicit loopback"):
@@ -314,7 +415,7 @@ def test_replace_existing_loopx_chat_rejects_unverified_same_port_process(
     from loopx import dashboard_launcher
 
     killed: list[tuple[int, signal.Signals]] = []
-    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda _host, _port, **_kwargs: "stale")
     monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: [4321])
     monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda _pid: False)
     monkeypatch.setattr(dashboard_launcher.os, "kill", lambda pid, sig: killed.append((pid, sig)))
@@ -334,7 +435,7 @@ def test_launch_dashboard_reuses_existing_matching_chat_service(
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "loopx.dashboard_launcher._probe_existing_chat",
-        lambda _host, _port: "matching",
+        lambda _host, _port, **_kwargs: "matching",
     )
     opened: list[str] = []
     monkeypatch.setattr("loopx.dashboard_launcher.webbrowser.open", opened.append)
@@ -360,7 +461,7 @@ def test_launch_dashboard_rejects_foreign_chat_service(
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "loopx.dashboard_launcher._probe_existing_chat",
-        lambda _host, _port: "foreign",
+        lambda _host, _port, **_kwargs: "foreign",
     )
 
     with pytest.raises(RuntimeError, match="not LoopX Chat"):
@@ -376,7 +477,7 @@ def test_launch_dashboard_rejects_stale_chat_service(
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "loopx.dashboard_launcher._probe_existing_chat",
-        lambda _host, _port: "stale",
+        lambda _host, _port, **_kwargs: "stale",
     )
 
     with pytest.raises(RuntimeError, match="different installed runtime"):
@@ -386,9 +487,18 @@ def test_launch_dashboard_rejects_stale_chat_service(
 def test_serve_status_still_returns_success_when_server_stops_cleanly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(support_control, "serve_status", lambda **_kwargs: None)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        support_control,
+        "serve_status",
+        lambda **kwargs: calls.append(kwargs),
+    )
 
     assert main(["serve-status"]) == 0
+    assert calls[-1]["enable_goal_subagent_configuration"] is False
+
+    assert main(["serve-status", "--enable-goal-subagent-configuration"]) == 0
+    assert calls[-1]["enable_goal_subagent_configuration"] is True
 
 
 def test_dashboard_launcher_installs_missing_frontend_dependencies(
@@ -874,6 +984,10 @@ def test_dashboard_command_in_installed_mode_resolves_packaged_web_bundle(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "loopx.dashboard_launcher._probe_existing_chat",
+        lambda *args, **kwargs: "unavailable",
+    )
     served: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -888,3 +1002,49 @@ def test_dashboard_command_in_installed_mode_resolves_packaged_web_bundle(
     assert served[0]["port"] == 8791
     assert served[0]["open_browser"] is False
     assert (Path(str(served[0]["assets_dir"])) / "index.html").is_file()
+
+
+@pytest.mark.parametrize(
+    ("command", "target", "argv"),
+    [
+        ("chat", "serve_chat", ["chat", "--no-open"]),
+        ("dashboard", "launch_dashboard", ["dashboard"]),
+        ("serve-status", "serve_status", ["serve-status"]),
+    ],
+)
+def test_local_service_start_failure_keeps_its_error_in_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    target: str,
+    argv: list[str],
+) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise RuntimeError("Chat bundle is missing; run npm run build:chat")
+
+    monkeypatch.setattr(support_control, target, fail, raising=False)
+
+    assert main(argv) == 1
+    output = capsys.readouterr().out
+    assert output.startswith(f"# LoopX {command} could not start")
+    assert "- error: Chat bundle is missing; run npm run build:chat" in output
+    # A failed start has no status projection to render.
+    assert "- goals: `None`" not in output
+
+
+def test_chat_start_failure_markdown_names_the_next_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise RuntimeError("Codex app-server is unavailable")
+
+    monkeypatch.setattr(support_control, "serve_chat", fail)
+
+    assert main(["chat", "--no-open"]) == 1
+    assert "- next action: Resolve the reported local host capability, then retry loopx chat." in capsys.readouterr().out
+
+    assert main(["--format", "json", "chat", "--no-open"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "loopx_chat_start_v0"
+    assert payload["error"] == "Codex app-server is unavailable"

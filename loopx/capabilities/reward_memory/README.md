@@ -33,8 +33,9 @@ loopx reward-memory ingest-event --input full-public-fixture.json --format json
 
 ## Experimental activation
 
-Reward Memory is a provider-neutral, default-off experimental goal capability.
-It is enabled for named registered agent lanes, not for a whole LoopX install:
+Reward Memory is a provider-neutral, default-off experimental capability. It is
+enabled for a named Agent inside one Goal, not for a whole Goal or LoopX
+install:
 
 ```bash
 # Preview first; add --execute only after checking the boundary change.
@@ -46,11 +47,82 @@ loopx reward-memory experiment-status \
   --goal-id <goal> --agent-id <registered-agent> --format json
 ```
 
-The registry retains only `enabled`, `experimental`, an ignored repo-relative
-config pointer, and the explicit agent allowlist. Provider-specific choices
-therefore stay local and private. OpenViking is the first provider used by the
-Issue Fix pilot, but it is not a global LoopX feature flag or mandatory
-dependency; another provider can satisfy the same binding contract.
+The registry retains `enabled`, `experimental`, an ignored repo-relative config
+pointer and digest, the explicit Agent allowlist, and a public-safe per-Agent
+enablement receipt. Provider-specific choices stay local and private. A
+verified receipt proves that the exact route accepted a fresh non-recallable
+canary write and returned the same bytes. A missing receipt or config digest
+drift makes automatic use unavailable without blocking ordinary Goal work.
+OpenViking is the first provider used by the Issue Fix pilot, but it is not a
+global LoopX feature flag or mandatory dependency; another provider can
+satisfy the same binding contract.
+
+### Recovering a changed binding
+
+Editing the ignored config invalidates its old enablement receipt. `enablement_stale`
+and `enablement_unverified` now return a shared `repair` plan: reuse the invoked
+registry and existing Agent allowlist with `configure-goal`, inspect the config
+change, preview, apply within existing authorization, then verify `available`.
+Commands are explicitly marked templates with a required `<invoked-registry>`
+binding. Bind it to the exact invocation registry before execution; an omitted
+registry must never silently select a default. The private registry path, config
+pointer and provider scopes are not published. The config pointer is retained. Apply re-runs provider write/exact-readback and
+synchronizes the source/global binding. Never repair drift by copying a digest
+into an old receipt. Disabled capabilities offer no re-enable plan.
+
+The configuration catalog checks the live config digest and reuses runtime
+admission validation rather than presenting a cached receipt as current verification. It separates `desired_automation` and
+`recorded_verified_agents` from `binding_status`, `effective_available` and
+effective automation. The existing settings summary renders these same fields.
+
+The same plan is carried through Turn recall, quota and agent status/Markdown;
+the explicit recall CLI preserves the actual failure instead of labelling every
+unavailable configuration `disabled`. The existing capability editor can preview
+and reapply the retained pointer/Agent list through the same owner. No automatic
+configuration acceptance or new provider permissions are introduced. Recovery of
+enablement must still be followed by a real qualified experience write, exact
+readback and destination recall before claiming useful memory is available.
+
+### OpenViking v0.4.19 identity boundary
+
+LoopX currently assumes one Agent belongs to exactly one Goal, while a Goal may
+contain several Agents. Agent names are only Goal-local. The durable runtime
+identity is therefore `(goal_id, agent_id)`, and LoopX derives a deterministic,
+OpenViking-safe peer token from that pair. Reusing `explorer` in another Goal
+produces another peer token, even when both routes use the same authenticated
+OpenViking user.
+
+New private writes must use
+`viking://user/{user_id}/peers/{canonical_peer}/memories/...`; the request's
+`actor_peer_id` must equal the URI peer before any provider call. LoopX rejects
+`viking://agent/...` as a Reward Memory write target because OpenViking v0.4.19
+keeps durable memories in the current User or actor-bound Peer namespace; the
+Agent scope is not the durable per-peer memory root. LoopX also rejects
+user-private paths without an actor-bound peer for an Agent-private corpus. Private peer
+reads/writes require CLI `>=0.4.18` and server `>=0.4.19`. See OpenViking's
+[multi-tenant model](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/11-multi-tenant.md)
+and [context types](https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/02-context-types.md).
+
+Config v1 can bind one private Goal-scoped Agent only. Supplying several Agents
+with one private provider binding is rejected instead of silently sharing a
+peer. Account/public resources remain an explicit shared mode. A future
+same-Goal `goal_shared` memory must be a separate corpus with its own owner,
+reader allowlist, write/promotion policy, and receipt; runtime recall may then
+federate the Agent-private and Goal-shared corpora explicitly. Private memory is
+never promoted or made visible to a sibling Agent merely because both Agents
+belong to the same Goal.
+
+### Lifecycle completion boundary
+
+Provider readiness and lifecycle automation are separate status dimensions. A
+verified storage receipt does not by itself prove that automatic recall and
+writeback are connected to every host. Complete lifecycle enablement means the
+supported planning/decision entry points perform bounded recall, and real
+evidence-backed outcome reviews perform idempotent writeback without another
+hidden opt-in. No new evidence means no new memory. A missing identity never
+falls back to a shared corpus; provider degradation stays visible while base
+Goal work continues. Each host must report its actual coverage rather than
+generalizing from a direct CLI or helper test.
 
 Config v1 declares one `project_provider_binding`, its exact per-corpus scope
 references, the project corpus set, module-owned surfaces, and an automation
@@ -88,15 +160,22 @@ provider/corpus identity are still checked independently for every corpus.
     }
   ],
   "automation": {
-    "automatic_recall": false,
-    "automatic_ingest": false,
+    "automatic_recall": true,
+    "automatic_ingest": true,
     "fail_open": true
   }
 }
 ```
 
 The abbreviated corpus and standing-policy objects above represent the full
-existing record contracts. `experiment-status` reports the v1 config schema,
+existing record contracts. These `true` values show the new-enable default;
+an explicit `false` remains the supported per-hook opt-out. `configure-goal`
+preview now calls the provider
+preflight and reports `preflight_ready`, `preflight_incomplete`, or
+`unavailable`; it never reports a provider write as merely `planned`. Preview
+does not prove writability. Apply must complete the fresh canary write and
+exact readback before it commits the registry binding. `experiment-status`
+reports the v1 config schema,
 corpus/surface counts, recall-profile ids, and the effective automatic policy
 without exposing scope refs. Agent-scoped `quota should-run` and `status
 --agent-id` resolve that policy through the same invoked registry and config
@@ -122,8 +201,47 @@ remain responsible for exact actor/project/surface/action scope. The shared
 hook reuses deterministic candidate identity, activation, provider sync, exact
 readback, and an ingest receipt. It does not collect chats, parse tool logs,
 store raw content, or infer new authority. Repeated events remain idempotent.
-Both flags default to false, and the explicit `ingest-event` command remains an
-explicit operator/caller path rather than a compatibility fallback.
+When either automation field is omitted from a newly enabled v1 config it
+defaults to `true`; an explicit `false` remains disabled and is projected with
+`explicit` intent provenance. Existing false values are never silently
+reinterpreted. The explicit `ingest-event` command remains an operator/caller
+path rather than a compatibility fallback.
+
+The production Codex CLI Turn performs recall after quota/Todo admission and
+accepts outcome ingestion only after independent validation, durable writeback,
+and quota settlement. A reflection must use `turn_reward_memory_reflection_v1`
+and include an exact configured surface, a distinct research/simulation/real/
+engineering source kind, and opaque evidence refs; an ordinary Turn summary is
+not evidence. It also carries `procedural_experience_contract_v0` with
+applicability, observed outcome, attribution, complete future behavior,
+limitations, and the same evidence refs. Legacy v0 reflections remain
+audit-only and cannot become durable memory. Ambiguous provider commits and
+unverified readbacks remain in a
+mode-0600 Goal+Agent+event sidecar. The next executing Turn retries the same
+deterministic event before recall, so the provider can deduplicate it and LoopX
+can require exact readback. Explicit disable suppresses reconciliation and all
+provider calls.
+
+The Codex App uses the same settlement boundary without copying the raw
+reflection into run indexes, rollout events, or public projections. For a
+Todo-bound accountable refresh, the caller may add
+`--reward-memory-reflection-json <turn_reward_memory_reflection_v1 JSON>`.
+LoopX stores that candidate only in a mode-0600 Goal+Agent+candidate sidecar and
+runs the exact completion-validation command already declared by that Todo. The
+validator must return `reward_memory_reflection_validation_v0` with the exact
+reflection digest and evidence references; an ordinary successful validation
+exit is insufficient. The later matching `quota spend-slot --execute` finalizes
+ingestion only after exact refresh/writeback and spend readback. A missing,
+failed, or non-attesting validation remains `awaiting_evidence_validation` and
+makes zero provider calls. The App does not need a separate manual
+`reward-memory ingest-event` command for this lifecycle. DSH currently carries
+recall context but does not claim this post-settlement ingest boundary.
+
+Dashboard, CLI/status, and Lark projections reuse the same capability owner and
+public receipt. Dashboard writes only an ignored config pointer and registered
+Goal-local Agent allowlist through the existing preview/apply/readback
+transaction. It returns an opaque binding revision, effective automation and
+intent provenance, never the local-private path or provider scope.
 
 An allowlisted agent supplies only the compact event at runtime:
 
@@ -148,6 +266,58 @@ verified. Issue Fix continues normally when the experiment is disabled,
 unavailable, rejected by guards, or fails exact readback. Invalid or non-v1
 configuration resolves unavailable with both automatic flags false.
 
+### Inbox feedback review (explicit ingestion)
+
+When a registry-routed `loopx lark-inbox drain --goal-id <goal> --agent-id
+<agent>` returns messages, it also emits `reward_memory_feedback_review` if
+Reward Memory is enabled for that agent and has an active, writable
+`scoped_feedback` route with an enabled standing policy and exact
+`peer_ref=agent:<agent>`. The hint lists configured destinations and a preview
+command bound to the same registry, Goal and Agent. It is advisory: there is no
+provider call, automatic candidate creation, new permission, or ACK gate.
+Both JSON and Markdown drains expose it. Empty/disabled inboxes, disabled or
+invalid memory configurations, unconfigured agents, incompatible routes, and
+explicit `--config`/`--project` overrides retain their previous output.
+
+The agent reviews the conversation before choosing what, if anything, to learn:
+
+1. Verify the source actor and existing authority, current evidence, conflicts
+   and applicability. A policy's allowed roles are not proof of a sender's role.
+   A disagreement is not a universal ban, and one-off task state belongs in
+   Todo/vision rather than durable preference memory.
+2. Distill only confirmed reusable feedback into an applicable configured
+   `soft_preference`, `procedural_experience`, or independently authorized
+   `hard_policy` route. Never widen the route or enable automation to make an
+   event pass. Keep raw chat and credentials out of the event.
+3. Prepare `{adapter, event, observed_at}` using the
+   [scoped feedback fixture](../../../examples/fixtures/reward-memory-scoped-feedback-ingest.public.json)
+   for field shape only. The event uses
+   `schema_version=scoped_feedback_reward_memory_event_v0`, a stable
+   `feedback_ref`, actual `source`, `reasoning`, `guard_context`, compact
+   `content_summary`, `target_class`, and exact identity/surface/revision/action
+   scope. `procedural_experience` additionally requires a typed
+   `procedural_experience_contract_v0`: applicability, observed outcome,
+   attribution, future behavior (`trigger`, `action`, `validation`, and
+   `stop_condition`), limitations, and opaque evidence refs. A fact recap does
+   not satisfy this contract. Advisory classes require empty
+   `requested_action_scopes`; allowed
+   policy scopes do not grant advisory memory action authority. Do not copy the
+   fixture's actor or verified-guard assertions.
+4. Replace the hint's input placeholder and preview `ingest-event` without
+   `--execute`. Inspect its guards. Only then execute within the standing
+   policy and verify `exact_readback_verified` and
+   `memory_available_for_recall`; a preview is not a learned memory.
+5. Finish normal reply/material-review/ACK. No reusable feedback or unavailable
+   memory is an honest no-memory outcome, not a reason to block the inbox or
+   repeatedly ask the user for permission. Actual write failures remain visible
+   in the existing ingestion receipt.
+
+`automatic_ingest=false` does **not** prohibit this explicit workflow. Enabling
+it also does **not** wire raw inbox messages into ingestion. Issue Fix's compact
+feedback adapter and recall hooks share the same core but are not a general
+inbox-to-memory feedback loop. Disable the hint by disabling Reward Memory for
+the agent (or its applicable route); no extra store, queue or scheduler exists.
+
 ## Five first-class classes
 
 | Class | Source and scope | Authority and use | Lifecycle |
@@ -155,7 +325,7 @@ configuration resolves unavailable with both automatic flags false.
 | `run_bound_reward` | Explicit human judgment attached to one exact goal/run. | Evidence about that outcome only. Future influence requires compact candidate derivation and an activation policy; the overlay itself is not a standing instruction. | Append-only overlay; corrections and revocations append references instead of rewriting the judged run. |
 | `hard_policy` | Explicit user/repository/operator authority, or policy content inferred from verified owner/core-contributor evidence and bound to an existing project/action authority scope. | Constraint or veto inside the verified scope. Reasoning may infer policy meaning from rewards, preferences, current-artifact-verified experience, selected options, accepted/rejected outcomes, and maintainer corrections; it may not infer credentials, new publish/production scope, or cross-user/repository authority. | Active records retain actor, evidence, scope, and derivation provenance until superseded, revoked, or expired; temporary or weakly reinforced inference should expire or return to review. |
 | `soft_preference` | Explicit feedback, selected options, or later reviewed candidates scoped to a workspace/project and module-owned surface. | Advisory ranking or rewrite only. It cannot grant publish, merge, write, credential, or production authority. | Durable only after explicit review; editable, rejectable, supersedable, revocable, and retireable. |
-| `procedural_experience` | Revision-stamped trajectories, distilled experiences, maintainer corrections, accepted/rejected changes, and reviewed architectural learning, with repository/module/revision/applicability scope. | Advisory diagnosis, scope, routing, or validation guidance only after current-artifact verification. A training/evaluation case is evidence, not an executable instruction. Retrieval alone has zero patch authority. | Trajectories may be add-only; distilled or architectural experiences are supersedable. New source truth can stale, quarantine, refute, or retire them. |
+| `procedural_experience` | Revision-stamped trajectories, distilled experiences, maintainer corrections, accepted/rejected changes, and reviewed architectural learning. The typed experience contract preserves applicability, observed outcome, attribution, future behavior, limitations, and evidence refs. | Advisory diagnosis, scope, routing, or validation guidance only after current-artifact verification and experience-quality qualification. A fact-only summary or successful provider write is not experience evidence. Retrieval alone has zero patch authority. | New source truth or application evidence can mark an experience stale, harmful, refuted, superseded, or retired. Initial qualification means structurally reusable and evidence-bound; value remains unproven until application/outcome attribution. |
 | `working_context` | Either fresh execution state (`fresh_execution_context`) or a revisioned session-continuation summary (`session_working_memory`). | Supports only the current execution/session continuation. Neither subtype becomes reusable policy or grants action authority. Fresh source-of-truth reads outrank recalled material. | `fresh_execution_context` already exists in LoopX registry/state/todo/quota/checkout observations and is reused, not rebuilt. Session context remains bound to its session/archive revision. |
 
 Every durable record must name `source`, `scope`, `authority`, `confidence`,
@@ -328,13 +498,32 @@ repository write authority, publish/production scope, or cross-project
 authority. Out-of-scope, conflicted, stale, raw, or unmodelled input is
 `guard_blocked` before any provider call.
 
+For `procedural_experience`, deterministic guards first require the complete
+typed experience contract. Missing or malformed future behavior, limitations,
+or evidence binding is rejected before the provider is called. The complete
+contract participates in `candidate_ref`, survives the active envelope, and is
+injected into recall guidance. Legacy fact-only procedural records are not
+recallable. This is a qualification gate, not a claim of proven utility:
+application receipts and verified outcome attribution still decide whether an
+experience was helpful, neutral, harmful, or should be retired.
+
 The command then composes deterministic `candidate_ref` deduplication, standing
 policy acceptance, active-envelope construction, declared-provider `sync`, and
-one exact-corpus/surface function-boundary recall. A
+one exact-corpus/surface function-boundary readback. For
+`procedural_experience`, it also performs a destination-surface
+`business_recall` using the applicability and future-behavior fields, without
+the candidate id in the query. The recalled record must match both the
+candidate and experience digests. This prevents an exact-id storage check from
+being mistaken for evidence that a lesson can be found where decisions use it. A
 `reward_memory_ingest_receipt_v0` reports `activated` and
 `memory_available_for_recall=true` only when resource ref, candidate ref, and
-canonical content digest all match. Provider unavailability, pending commit,
-or readback mismatch fails open and does not block the caller's normal work.
+canonical content digest all match, the class-specific experience-quality gate
+passes, and any required destination recall succeeds. A destination miss stays
+`recall_unverified` for bounded reconciliation rather than becoming active.
+`exact_readback_verified=true` alone proves persistence, not experience quality,
+discoverability, or utility. Provider unavailability, pending commit, readback
+mismatch, or destination-recall miss fails open and does not block the caller's
+normal work.
 `observed_at` is the immutable first-observed event timestamp and must be reused
 on retries. The provider target binds both standing-policy and candidate
 digests so a policy revision cannot silently reuse an older activation.
@@ -477,6 +666,11 @@ performs no provider or external write.
 
 ## Stage 3 recall and application seam
 
+For an explicit query-ready decision, use the optional
+[decision-consumption caller API](../../../docs/reference/reward-memory-decision-consumption.md).
+It distinguishes private context delivery from attributed semantic assessment,
+reuses the existing provider/applier, and retains the original optional-callback SDK path.
+
 Stage 3 accepts only an explicit `reward_memory_recall_request_v0` naming one
 registered corpus and one module-owned surface. The request carries a matching
 read-authority checkpoint and current freshness/conflict observations. A
@@ -497,6 +691,17 @@ corpus and surface. Private summaries remain transient in-process. Public
 packets expose opaque provider references and compact lineage; application
 receipts contain hashed memory references, the model-owned reasoning summary,
 and current-artifact verification, never raw provider content.
+
+Recall packets also separate a provider that returned no items from provider
+items rejected by the exact-record gates. `provider_item_count`,
+`filtered_item_count`, and `filtered_reason_counts` expose only bounded counts
+for contract, scope, lifecycle, expiry, quality, and legacy-contract filters;
+they never expose provider content. A fact-only procedural record is reported
+as `legacy_contract_missing` while remaining non-recallable. Its maintenance
+projection offers only two owner-governed paths: ingest a separately validated
+replacement and then retire the legacy record, or retire it directly through
+the corpus's declared retirement authority. Both paths require provider write
+readback. Recall itself performs no migration or retirement write.
 
 Provider unavailability returns setup guidance and preserves the base output.
 It is an agent/runtime condition, not a user gate. Invalid or failed model
@@ -639,3 +844,9 @@ candidate linked to the active record. Retire produces a retired decision.
 Neither command writes provider state. The declared corpus owner still performs
 the write and exact readback, so operator control cannot silently become a
 publish, production, or cross-project authority expansion.
+
+## Outbound communication
+
+The opt-in [outbound guidance integration](OUTBOUND.md) ([中文](OUTBOUND.zh-CN.md)) recalls reviewed
+preferences at the actual goal/agent-bound Lark inbox send and reply boundary.
+It returns guidance for agent review without granting send authority.

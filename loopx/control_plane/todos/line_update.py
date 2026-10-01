@@ -3,6 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .authoring_scope import todo_authoring_facts
+from .external_wait_contract import TodoExternalWaitAuthoringError, build_monitor_advancement_authoring_contract
+from .update_source import todo_update_snapshot
+from .todo_semantics import todo_priority_label
+
 from .active_state_editing import (
     TODO_SECTION_HEADINGS,
     find_todo_block,
@@ -11,15 +17,10 @@ from .active_state_editing import (
     todo_metadata_would_change,
 )
 from .contract import (
-    TODO_MONITOR_METADATA_FIELDS,
-    TODO_STATUS_DONE,
-    TODO_STATUS_OPEN,
-    TodoContinuationPolicy,
     merge_todo_id_lists,
     metadata_line_for_todo_block,
     normalize_explore_result_node_refs,
     normalize_required_capabilities,
-    normalize_removed_todo_continuation_policy,
     normalize_target_capabilities,
     normalize_todo_blocks_agent,
     normalize_todo_bound_agent,
@@ -35,7 +36,6 @@ from .contract import (
     normalize_todo_no_followup,
     normalize_todo_required_decision_scopes,
     normalize_todo_resume_when,
-    normalize_todo_status,
     normalize_todo_task_domain,
     normalize_todo_task_repository,
     parse_todo_metadata_line,
@@ -43,10 +43,10 @@ from .contract import (
 )
 from .completion_state import (
     TodoCompletionContinuation,
-    completion_metadata_updates,
     normalize_todo_completion_continuation,
     normalize_todo_completion_recovery,
 )
+from .contract import TODO_MONITOR_METADATA_FIELDS
 
 
 def upsert_todo_metadata(
@@ -99,9 +99,7 @@ def link_generated_successor_todo_ids(
             block,
             {
                 "successor_todo_ids": merged_successor_ids,
-                "completion_continuation": (
-                    TodoCompletionContinuation.SUCCESSOR.value
-                ),
+                "completion_continuation": (TodoCompletionContinuation.SUCCESSOR.value),
             },
         ),
     )
@@ -111,37 +109,6 @@ def link_generated_successor_todo_ids(
     )
     update_result["changed"] = bool(update_result.get("changed") or metadata_updated)
     return metadata_updated
-
-
-def _completion_updates_for_write(
-    block: Mapping[str, Any],
-    *,
-    target_status: str,
-    normalized_status: str | None,
-    completion_continuation: str | None,
-    completion_recovery: str | None,
-    completion_metadata_updates_override: Mapping[str, Any] | None,
-    no_followup: bool | None,
-    successor_todo_ids: list[str] | None,
-) -> dict[str, Any]:
-    if completion_metadata_updates_override is None:
-        return completion_metadata_updates(
-            block,
-            target_status=target_status,
-            normalized_status=normalized_status,
-            completion_continuation=completion_continuation,
-            completion_recovery=completion_recovery,
-            no_followup=no_followup,
-            successor_todo_ids=successor_todo_ids,
-        )
-    updates = dict(completion_metadata_updates_override)
-    if any(
-        key not in {"completion_continuation", "completion_recovery"}
-        or not isinstance(value, str)
-        for key, value in updates.items()
-    ):
-        raise RuntimeError("TypeScript Todo completion metadata updates shape mismatch")
-    return updates
 
 
 def link_superseding_todo_id(
@@ -187,24 +154,66 @@ def link_superseding_todo_id(
     return metadata_updated
 
 
-def _resume_metadata_updates(
-    *,
-    normalized_resume_when: str | None,
-    resume_monitor_generation: int | None,
-    clear_resume_when: bool,
+def _field_update_plan(
+    block: Mapping[str, Any], intent: dict[str, Any], updated_at: str,
+    monitor_context: dict[str, Any] | None = None,
+    public_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if clear_resume_when:
-        return {"resume_when": None, "resume_monitor_generation": None}
-    if not normalized_resume_when:
-        return {}
-    return {
-        "resume_when": normalized_resume_when,
-        "resume_monitor_generation": (
-            resume_monitor_generation
-            if normalized_resume_when.startswith("monitor_changed:")
-            else None
-        ),
-    }
+    """Adapt source facts only; the TS planner owns omission/clear/state rules."""
+    try:
+        result = effect_runtime_result(
+            "todo.public_update.plan" if public_context is not None else "todo.field_update.plan",
+            {
+                "schema_version": "todo_public_update_request_v0" if public_context is not None else "loopx_todo_field_update_request_v0",
+                "todo": {
+                    **todo_authoring_facts(dict(block)),
+                    "role": block.get("role"),
+                    **{key: block.get(key)
+                    for key in (
+                        "text",
+                        "todo_id",
+                        "status",
+                        "claimed_by",
+                        "completed_at",
+                        "removed_continuation_policy",
+                        "no_followup",
+                        "completion_continuation",
+                        "successor_todo_ids",
+                        "resume_monitor_generation",
+                        "task_class",
+                        *TODO_MONITOR_METADATA_FIELDS,
+                    )},
+                },
+                "intent": intent,
+                "updated_at": updated_at,
+                "monitor_context": monitor_context,
+                "context": public_context,
+            },
+        )
+    except EffectRuntimeRejected as exc:
+        if public_context is not None and exc.diagnostic_code.startswith("external_wait_"):
+            condition = str(intent.get("resume_when") or block.get("resume_when") or "").strip().lower()
+            kind, _, target = condition.partition(":")
+            raise TodoExternalWaitAuthoringError(str(exc), code=exc.diagnostic_code,
+                monitor_todo_id=target if kind == "monitor_changed" else None,
+                successor_todo_ids=intent.get("successor_todo_ids")
+                    if intent.get("successor_todo_ids") is not None else block.get("successor_todo_ids")) from None
+        raise ValueError(str(exc)) from None
+    if (
+        not isinstance(result, dict)
+        or result.get("schema_version") != "loopx_todo_field_update_result_v0"
+        or result.get("target_status") not in {"open", "done", "blocked", "deferred"}
+        or result.get("normalized_status")
+        not in {None, "open", "done", "blocked", "deferred"}
+        or not isinstance(result.get("metadata_updates"), dict)
+    ):
+        raise RuntimeError("TypeScript Todo field update result shape mismatch")
+    transition = result.get("external_wait_transition")
+    if isinstance(transition, dict) and transition.get("resume_kind") == "monitor_changed":
+        transition["authoring_contract"] = build_monitor_advancement_authoring_contract(
+            monitor_todo_id=transition["dependency_todo_id"],
+            successor_todo_ids=transition["successor_todo_ids"])
+    return result
 
 
 def apply_todo_update_to_lines(
@@ -212,6 +221,8 @@ def apply_todo_update_to_lines(
     *,
     todo_id: str,
     text: str | None = None,
+    priority: str | None = None,
+    clear_priority: bool = False,
     status: str | None = None,
     role: str | None = None,
     note: str | None = None,
@@ -250,11 +261,13 @@ def apply_todo_update_to_lines(
     clear_resume_when: bool = False,
     no_followup: bool | None = None,
     monitor_metadata: dict[str, Any] | None = None,
+    monitor_context: dict[str, Any] | None = None,
+    public_context: dict[str, Any] | None = None,
     clear_claim: bool = False,
     claim_only: bool = False,
     updated_at: str,
 ) -> dict[str, Any]:
-    normalized_resume_when = require_supported_todo_resume_when(resume_when)
+    normalized_resume_when = resume_when if public_context is not None else require_supported_todo_resume_when(resume_when)
     if normalized_resume_when and clear_resume_when:
         raise ValueError(
             "todo update accepts either resume_when or clear_resume_when, not both"
@@ -273,37 +286,75 @@ def apply_todo_update_to_lines(
             f"todo_id {normalized_todo_id!r} was not found in active user or agent todos"
         )
     resolved_role, section, _start, _end, block = block_match
-    removed_continuation_policy = normalize_removed_todo_continuation_policy(
-        block.get("removed_continuation_policy")
-    )
-    if removed_continuation_policy:
-        if claim_only:
-            raise ValueError(
-                f"todo_id {normalized_todo_id!r} uses removed continuation_policy="
-                f"{removed_continuation_policy}; repair it before claiming"
-            )
-        repair_policy = normalize_todo_continuation_policy(continuation_policy)
-        repair_exclusions = normalize_todo_excluded_agents(excluded_agents)
-        if (
-            repair_policy != TodoContinuationPolicy.INDEPENDENT_HANDOFF.value
-            or not repair_exclusions
-        ):
-            raise ValueError(
-                f"todo_id {normalized_todo_id!r} uses removed continuation_policy="
-                f"{removed_continuation_policy}; repair it explicitly with "
-                "continuation_policy=independent_handoff and excluded_agents=<author>"
-            )
-    normalized_status = normalize_todo_status(status) if status else None
-    if status and not normalized_status:
-        raise ValueError("todo status must be one of: open, done, blocked, deferred")
-    target_status = normalized_status or str(block.get("status") or TODO_STATUS_OPEN)
-    if target_status == "deferred" and clear_resume_when:
-        raise ValueError("cannot clear resume_when while todo status remains deferred")
-    if claim_only and target_status != TODO_STATUS_OPEN:
-        raise ValueError(
-            f"todo claim requires status=open; todo_id {normalized_todo_id!r} "
-            f"is status={target_status!r}"
+    if public_context is not None:
+        public_context = {**public_context, "items": todo_update_snapshot(lines)
+                          if resume_when or block.get("resume_when") else []}
+    raw_intent = {
+            "text": text,
+            "priority": priority,
+            "clear_priority": clear_priority,
+            "status": status,
+            "note": note,
+            "evidence": evidence,
+            "completion_turn_key": completion_turn_key,
+            "reason": reason,
+            "task_class": task_class,
+            "action_kind": action_kind,
+            "task_domain": task_domain,
+            "task_repository": task_repository,
+            "continuation_policy": continuation_policy,
+            "required_write_scopes": required_write_scopes,
+            "required_capabilities": required_capabilities,
+            "target_capabilities": target_capabilities,
+            "explore_result_node_refs": explore_result_node_refs,
+            "decision_scope": decision_scope,
+            "required_decision_scopes": required_decision_scopes,
+            "decision_outcome": decision_outcome,
+            "decision_scope_outcomes": decision_scope_outcomes,
+            "claimed_by": claimed_by,
+            "bound_agent": bound_agent,
+            "goal_bound": goal_bound,
+            "clear_user_binding": clear_user_binding,
+            "blocks_agent": blocks_agent,
+            "clear_blocks_agent": clear_blocks_agent,
+            "excluded_agents": excluded_agents,
+            "global_gate": global_gate,
+            "clear_global_gate": clear_global_gate,
+            "unblocks_todo_id": unblocks_todo_id,
+            "successor_todo_ids": successor_todo_ids,
+            "completion_continuation": completion_continuation,
+            "completion_recovery": completion_recovery,
+            "completion_metadata_updates_override": completion_metadata_updates_override,
+            "resume_when": normalized_resume_when,
+            "resume_monitor_generation": resume_monitor_generation,
+            "clear_resume_when": clear_resume_when,
+            "no_followup": no_followup,
+            "monitor_metadata": monitor_metadata,
+            "clear_claim": clear_claim,
+            "claim_only": claim_only,
+    }
+    # Python's compatibility API uses None (and blank note text) for
+    # omission. Strip those sentinels before crossing the typed planner; an
+    # actual empty scalar such as reason="" remains an explicit clear.
+    intent = {
+        key: value for key, value in raw_intent.items()
+        if value is not None and not (
+            key == "note" and isinstance(value, str) and not value.strip()
         )
+    }
+    plan = _field_update_plan(
+        {**block, "role": resolved_role},
+        intent,
+        updated_at,
+        monitor_context,
+        public_context,
+    )
+    normalized_status = plan["normalized_status"]
+    target_status = plan["target_status"]
+    updates = plan["metadata_updates"]
+    text = updates.pop("text", text)
+    updated_priority = updates.pop("priority", todo_priority_label(block))
+    updates.pop("title", None)
     status_changed = (
         set_todo_marker(lines, block, normalized_status) if normalized_status else False
     )
@@ -312,100 +363,6 @@ def apply_todo_update_to_lines(
         if text is not None
         else False
     )
-
-    updates: dict[str, Any] = {
-        "todo_id": normalized_todo_id,
-        "status": target_status,
-    }
-    if normalized_status == TODO_STATUS_DONE and not block.get("completed_at"):
-        updates["completed_at"] = updated_at
-    elif normalized_status and normalized_status != TODO_STATUS_DONE:
-        updates["completed_at"] = None
-    for key, value in (
-        ("note", note),
-        ("evidence", evidence),
-        ("completion_turn_key", completion_turn_key),
-        ("reason", reason),
-        ("task_class", task_class),
-        ("action_kind", action_kind),
-        ("task_domain", task_domain),
-        ("task_repository", task_repository),
-        ("continuation_policy", continuation_policy),
-    ):
-        if value:
-            updates[key] = value
-    for key, value in (
-        ("required_write_scopes", required_write_scopes),
-        ("required_capabilities", required_capabilities),
-        ("target_capabilities", target_capabilities),
-        ("explore_result_node_refs", explore_result_node_refs),
-        ("decision_scope", decision_scope),
-        ("required_decision_scopes", required_decision_scopes),
-        ("decision_outcome", decision_outcome),
-        ("decision_scope_outcomes", decision_scope_outcomes),
-    ):
-        if value is not None:
-            updates[key] = value
-    if clear_claim:
-        updates["claimed_by"] = None
-    elif claimed_by:
-        existing_claim = normalize_todo_claimed_by(block.get("claimed_by"))
-        if claim_only and existing_claim and existing_claim != claimed_by:
-            raise ValueError(
-                f"todo_id {normalized_todo_id!r} is already claimed_by="
-                f"{existing_claim!r}; clear or transfer the claim explicitly before "
-                "claiming it"
-            )
-        updates["claimed_by"] = claimed_by
-    if clear_user_binding:
-        updates["bound_agent"] = None
-        updates["goal_bound"] = None
-    elif bound_agent:
-        updates["bound_agent"] = bound_agent
-        updates["goal_bound"] = None
-    elif goal_bound is not None:
-        updates["bound_agent"] = None
-        updates["goal_bound"] = goal_bound
-    if blocks_agent:
-        updates["blocks_agent"] = blocks_agent
-    elif clear_blocks_agent:
-        updates["blocks_agent"] = None
-    if excluded_agents is not None:
-        updates["excluded_agents"] = excluded_agents
-    if clear_global_gate:
-        updates["global_gate"] = None
-    elif global_gate is not None:
-        updates["global_gate"] = global_gate
-    if unblocks_todo_id:
-        updates["unblocks_todo_id"] = unblocks_todo_id
-    if successor_todo_ids is not None:
-        updates["successor_todo_ids"] = successor_todo_ids
-    updates.update(
-        _resume_metadata_updates(
-            normalized_resume_when=normalized_resume_when,
-            resume_monitor_generation=resume_monitor_generation,
-            clear_resume_when=clear_resume_when,
-        )
-    )
-    if no_followup is not None:
-        updates["no_followup"] = no_followup
-    updates.update(
-        _completion_updates_for_write(
-            block,
-            target_status=target_status,
-            normalized_status=normalized_status,
-            completion_continuation=completion_continuation,
-            completion_recovery=completion_recovery,
-            completion_metadata_updates_override=(
-                completion_metadata_updates_override
-            ),
-            no_followup=no_followup,
-            successor_todo_ids=successor_todo_ids,
-        )
-    )
-    for key, value in (monitor_metadata or {}).items():
-        if key in TODO_MONITOR_METADATA_FIELDS:
-            updates[key] = value
     metadata_line = metadata_line_for_todo_block(block, updates)
     semantic_metadata_changed = todo_metadata_would_change(lines, block, metadata_line)
     if status_changed or text_changed or semantic_metadata_changed:
@@ -414,6 +371,10 @@ def apply_todo_update_to_lines(
     metadata_updated = upsert_todo_metadata(lines, block, metadata_line)
     effective_metadata = parse_todo_metadata_line(metadata_line or "") or {}
     return {
+        **({"monitor_poll_transition": plan["monitor_poll_transition"]}
+           if "monitor_poll_transition" in plan else {}),
+        **({"external_wait_transition": plan["external_wait_transition"]}
+           if "external_wait_transition" in plan else {}),
         "role": resolved_role,
         "section": section,
         "todo": block.get("text"),
@@ -421,6 +382,7 @@ def apply_todo_update_to_lines(
         "status": target_status,
         "status_changed": status_changed,
         "text_changed": text_changed,
+        "priority": updated_priority,
         "metadata_updated": metadata_updated,
         "changed": status_changed or text_changed or metadata_updated,
         "claimed_by": normalize_todo_claimed_by(effective_metadata.get("claimed_by")),

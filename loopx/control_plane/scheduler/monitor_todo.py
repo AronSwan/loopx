@@ -10,19 +10,13 @@ from ..todos.contract import (
     normalize_todo_resume_when,
     normalize_todo_status,
     normalize_todo_task_class,
+    normalize_todo_watch_only,
 )
 from .time import parse_scheduler_timestamp
 from .state_transition_rules import project_monitor_todo_schedule
 
 
 parse_monitor_timestamp = parse_scheduler_timestamp
-
-
-def parse_monitor_counter(value: Any) -> int:
-    try:
-        return max(0, int(str(value or "0").strip()))
-    except ValueError:
-        return 0
 
 
 def monitor_cadence_delta(value: Any) -> timedelta | None:
@@ -118,5 +112,7 @@ def monitor_todo_missing_schedule(
     if monitor_todo_task_class(item, task_text=task_text) != TODO_TASK_CLASS_MONITOR:
         return False
     if monitor_todo_is_expired(item, now=now):
+        return False
+    if normalize_todo_watch_only(item.get("watch_only")) is True:
         return False
     return not monitor_todo_has_schedule(item)

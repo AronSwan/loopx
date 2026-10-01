@@ -154,6 +154,16 @@ def main() -> int:
                 localized_case = case.get("localizations", {}).get(lang, {})
                 expected_boundary = localized_case.get("evidence_boundary", case.get("evidence_boundary"))
                 assert str(expected_boundary) in localized_text, localized_page
+            if case.get("page_assets") == "shared":
+                table = case.get("showcase_table", {})
+                localized_table = case.get("localizations", {}).get(lang, {})
+                expected_proof = localized_table.get("proof_point", table.get("proof_point"))
+                expected_intervention = localized_table.get(
+                    "loopx_intervention", table.get("loopx_intervention")
+                )
+                assert expected_proof and str(expected_proof) in localized_text, localized_page
+                assert expected_intervention and str(expected_intervention) in localized_text, localized_page
+                assert 'href="../showcase-page.css"' in localized_text, localized_page
 
         demo_command = case.get("demo_command")
         if case.get("status") == "reproducible_synthetic_demo":
@@ -265,13 +275,9 @@ def main() -> int:
     ):
         assert phrase in feedback_loop, phrase
     for phrase in (
-        "Loop engineering for long-horizon AI agents and peer agent teams.",
-        "The open, provider-neutral, stateful control plane for long-horizon agents.",
-        "https://huangruiteng.github.io/loopx/",
-        "## Advanced Paths",
+        "https://loopx-project.github.io/loopx/",
         "docs/assets/long-running-loop-openviking-trajectory.png",
         "docs/assets/long-running-loop-ml-experiment-trajectory.png",
-        "### Presets and Auto Research",
         "### Review Agent Work",
         "## Evidence",
         "### Used In Real Projects",
@@ -284,7 +290,7 @@ def main() -> int:
     featured_section = repo_readme.split("### Used In Real Projects", 1)[1].split("More inspectable surfaces:", 1)[0]
     assert featured_section.count("- **Independent user") == 3, featured_section
     assert "user-feedback-coverage.md" in showcase_index, showcase_index
-    hosted_frontstage = "https://huangruiteng.github.io/loopx/frontstage/"
+    hosted_frontstage = "https://loopx-project.github.io/loopx/frontstage/"
     assert hosted_frontstage not in repo_readme, (
         "README must promote the public homepage instead of hosted frontstage"
     )

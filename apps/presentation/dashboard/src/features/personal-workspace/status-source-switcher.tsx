@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Plus, RotateCw, Server, Trash2, X } from "lucide-react";
+import { Copy, Plus, RotateCw, Server, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { StatusSource } from "../../data/status-source-catalog";
@@ -8,14 +8,18 @@ import {
   type ConfiguredSshHost,
 } from "../../data/ssh-host-catalog";
 import { useWorkspaceI18n } from "./i18n";
+import { WorkspaceSelect } from "./workspace-select";
 
-export type StatusSourceConnectionState = "connected" | "error" | "loading";
+// "degraded": the status source answers but the Chat execution service does
+// not, so state stays readable while Agent runs cannot be listed or started.
+export type StatusSourceConnectionState = "connected" | "degraded" | "error" | "loading";
 
 export type StatusSourceControl = {
   activeSource: StatusSource;
   connectionState: StatusSourceConnectionState;
   errorMessage?: string | null;
-  onAdd: (input: { ensureTunnel?: boolean; label: string; statusUrl: string }) => { error?: string };
+  onAdd: (input: { ensureTunnel?: boolean; hostAlias?: string; label: string; statusUrl: string }) => { error?: string };
+  onConfiguredHostsLoaded?: (hostAliases: string[]) => void;
   onRemove: (sourceId: string) => void;
   onSelect: (sourceId: string) => void;
   sources: StatusSource[];
@@ -26,6 +30,7 @@ export function StatusSourceSwitcher({
   connectionState,
   errorMessage,
   onAdd,
+  onConfiguredHostsLoaded,
   onRemove,
   onSelect,
   sources,
@@ -43,6 +48,16 @@ export function StatusSourceSwitcher({
   const [localPort, setLocalPort] = useState("8876");
   const [statusUrl, setStatusUrl] = useState("");
   const quickAddPrefix = "configured:";
+  const sourceOptions = [
+    ...sources.map((source) => ({ label: source.label, value: source.id })),
+    ...configuredHosts
+      .filter((host) => !sources.some((source) => source.label === host.alias))
+      .map((host) => ({
+        group: t("source.configuredGroup", { count: configuredHosts.length }),
+        label: host.alias,
+        value: `${quickAddPrefix}${host.alias}`,
+      })),
+  ];
   const configuredDraft = useMemo(() => {
     if (!configuredHosts.some((host) => host.alias === hostAlias)) {
       return { error: t("source.selectHost") } as const;
@@ -60,6 +75,7 @@ export function StatusSourceSwitcher({
     try {
       const catalog = await fetchConfiguredSshHosts();
       setConfiguredHosts(catalog.hosts);
+      onConfiguredHostsLoaded?.(catalog.hosts.map((host) => host.alias));
       setHostAlias((current) => current || catalog.hosts[0]?.alias || "");
       if (!catalog.hosts.length) setConfiguredHostsError(t("source.hostEmpty"));
     } catch (caught) {
@@ -102,7 +118,7 @@ export function StatusSourceSwitcher({
       setError(configuredDraft.error ?? t("source.invalid"));
       return;
     }
-    const result = onAdd({ ensureTunnel: true, label: configuredDraft.label, statusUrl: configuredDraft.statusUrl });
+    const result = onAdd({ ensureTunnel: true, hostAlias: configuredDraft.hostAlias, label: configuredDraft.label, statusUrl: configuredDraft.statusUrl });
     if (result.error) {
       setError(result.error);
       return;
@@ -131,7 +147,7 @@ export function StatusSourceSwitcher({
       setError(draft.error ?? t("source.invalid"));
       return;
     }
-    const result = onAdd({ ensureTunnel: true, label: draft.label, statusUrl: draft.statusUrl });
+    const result = onAdd({ ensureTunnel: true, hostAlias: draft.hostAlias, label: draft.label, statusUrl: draft.statusUrl });
     if (result.error) setError(result.error);
     else setError(null);
     setLocalPort(freePort);
@@ -157,33 +173,22 @@ export function StatusSourceSwitcher({
         <span>Control plane</span>
         <button aria-label={t("source.addSsh")} onClick={openForm} title={t("source.add")} type="button"><Plus size={14} /></button>
       </header>
-      <label className="personal-status-source-select">
-        <Server size={15} />
-        <select
-          aria-label={t("source.select")}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value.startsWith(quickAddPrefix)) {
-              quickAddConfiguredHost(value.slice(quickAddPrefix.length));
-              return;
-            }
-            onSelect(value);
-          }}
-          value={activeSource.id}
-        >
-          {sources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
-          {configuredHosts.length > 0 ? (
-            <optgroup label={t("source.configuredGroup", { count: configuredHosts.length })}>
-              {configuredHosts
-                .filter((host) => !sources.some((source) => source.label === host.alias))
-                .map((host) => <option key={`${quickAddPrefix}${host.alias}`} value={`${quickAddPrefix}${host.alias}`}>{host.alias}</option>)}
-            </optgroup>
-          ) : null}
-        </select>
-        <ChevronDown aria-hidden size={13} />
-      </label>
+      <WorkspaceSelect
+        ariaLabel={t("source.select")}
+        className="personal-status-source-select"
+        icon={<Server size={15} />}
+        onChange={(value) => {
+          if (value.startsWith(quickAddPrefix)) {
+            quickAddConfiguredHost(value.slice(quickAddPrefix.length));
+            return;
+          }
+          onSelect(value);
+        }}
+        options={sourceOptions}
+        value={activeSource.id}
+      />
       <div className="personal-status-source-meta">
-        <span className={`is-${connectionState}`}><i />{connectionState === "loading" ? t("source.connecting") : connectionState === "error" ? t("source.notAvailable") : t("source.connected")}</span>
+        <span className={`is-${connectionState}`}><i />{connectionState === "loading" ? t("source.connecting") : connectionState === "error" ? t("source.notAvailable") : connectionState === "degraded" ? t("source.executionUnavailable") : t("source.connected")}</span>
         <small>{activeSource.readOnly ? t("source.readOnly") : t("source.localInteractive")}</small>
         {activeSource.kind === "ssh_tunnel" ? (
           <button aria-label={t("source.remove", { source: activeSource.label })} onClick={() => onRemove(activeSource.id)} title={t("source.removeCurrent")} type="button"><Trash2 size={12} /></button>

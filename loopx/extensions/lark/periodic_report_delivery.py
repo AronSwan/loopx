@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,31 +13,35 @@ from ...capabilities.periodic_report.bindings import (
     build_periodic_report_generation_bundle,
 )
 from ...capabilities.periodic_report.core import _reject_raw_keys
+from ...capabilities.periodic_report.incremental import (
+    commit_periodic_report_publication_cursor,
+    find_periodic_report_publication_candidate,
+)
+from ...capabilities.periodic_report.machine_defaults import (
+    build_periodic_report_delivery_authority,
+    normalize_periodic_report_delivery_authority,
+    resolve_goal_periodic_report_subscription,
+)
+from ...capabilities.periodic_report.machine_store import (
+    read_periodic_report_machine_defaults,
+)
+from ...history import load_registry
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_contracts import (
     binding_for_goal,
     default_goal_channel_binding_path,
+    goal_from_registry,
     read_goal_channel_binding,
 )
+from .goal_channel_message_delivery import GoalChannelMessageDeliverySession
 from .goal_channel_targets import (
     default_goal_channel_target_path,
     goal_channel_target_for_name,
     read_goal_channel_targets,
 )
-from .goal_channel_transport import (
-    auth_verified,
-    bot_membership_verified,
-    call,
-    chat_verified,
-    contains_exact_field,
-    find_first_string,
-    json_payload,
-    lark_args,
-    MESSAGE_ID_PATTERN,
-    verified_app_id,
-)
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 from .presentation.periodic_report import periodic_report_lark_sink_adapter
+from ...presentation.public_safety import redact_public_text
 
 
 GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA = (
@@ -45,7 +49,9 @@ GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA = (
 )
 GOAL_CHANNEL_DELIVERY_RESULT_SCHEMA = "periodic_report_goal_channel_delivery_result_v0"
 DELIVERY_INTENT_SCHEMA = "periodic_report_delivery_intent_v0"
+ANNOUNCEMENT_IDEMPOTENCY_SCHEMA = "periodic_report_goal_channel_announcement_v1"
 _ANNOUNCEMENT_KINDS = ("hosted_report", "lark_document")
+_ANNOUNCEMENT_FOOTER = "LoopX periodic report · Goal Channel"
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:
@@ -107,10 +113,61 @@ def _announcements(value: object) -> list[dict[str, str]]:
     return normalized
 
 
-def _announcement_markdown(announcement: Mapping[str, str]) -> str:
+def _next_action_guidance(document: Mapping[str, Any]) -> str | None:
+    primary_items: list[dict[str, Any]] = []
+    for section in document.get("sections") or []:
+        if not isinstance(section, Mapping):
+            continue
+        for item in section.get("items") or []:
+            if (
+                isinstance(item, Mapping)
+                and str(item.get("visibility") or "primary") == "primary"
+            ):
+                primary_items.append(dict(item))
+    candidates = [
+        item.get("summary") or item.get("title")
+        for item in primary_items
+        if item.get("content_kind") == "next_action"
+    ]
+    if not candidates:
+        candidates = [
+            item.get("next_action") for item in primary_items if item.get("next_action")
+        ]
+    if not candidates:
+        return None
+    guidance = str(redact_public_text(candidates[0], limit=360)).strip()
+    return guidance or None
+
+
+def _announcement_markdown(
+    announcement: Mapping[str, str], *, next_action: str | None
+) -> str:
     if announcement["kind"] == "hosted_report":
-        return f"本期阶段周报已发布。\n\n[查看周报]({announcement['url']})"
+        guidance = f"\n\n下一步：{next_action}" if next_action else ""
+        return f"本期阶段周报已发布。{guidance}\n\n[查看周报]({announcement['url']})"
     return f"配套 Lark 文档已同步。\n\n[查看 Lark 文档]({announcement['url']})"
+
+
+def _announcement_idempotency_key(
+    *,
+    delivery_idempotency_key: str,
+    announcement: Mapping[str, str],
+    content: str,
+) -> str:
+    material = "\0".join(
+        (
+            ANNOUNCEMENT_IDEMPOTENCY_SCHEMA,
+            delivery_idempotency_key,
+            announcement["kind"],
+            announcement["title"],
+            content,
+            _ANNOUNCEMENT_FOOTER,
+        )
+    )
+    return (
+        "periodic-report-announcement-v1:"
+        + hashlib.sha256(material.encode("utf-8")).hexdigest()
+    )
 
 
 def _normalized_generation_bundle(raw: object) -> dict[str, Any]:
@@ -134,14 +191,42 @@ def _resolved_goal_channel_binding(
     registry_path: Path,
     runtime_root: Path,
     goal_id: str,
+    expected_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
+    registry = load_registry(registry_path)
+    goal = goal_from_registry(registry, goal_id)
+    subscription = resolve_goal_periodic_report_subscription(
+        goal,
+        read_periodic_report_machine_defaults(runtime_root),
+    )
+    if subscription.get("enabled") is not True:
+        raise ValueError("periodic report delivery subscription is disabled")
+    current_authority = build_periodic_report_delivery_authority(subscription)
+    if current_authority != dict(expected_authority):
+        raise ValueError("periodic report delivery subscription authority drifted")
+
     payload = read_goal_channel_binding(
         default_goal_channel_binding_path(registry_path)
     )
     raw = binding_for_goal(payload, goal_id)
+    authorized_target_ref = str(expected_authority.get("route_ref") or "").strip()
+    if not authorized_target_ref:
+        raise ValueError("periodic report subscription route is missing")
+    target_ref = str((raw or {}).get("target_ref") or "").strip()
     if raw is None:
-        raise ValueError("periodic report delivery requires a Goal Channel binding")
-    target_ref = str(raw.get("target_ref") or "").strip()
+        target_ref = authorized_target_ref
+        raw = {
+            "goal_id": goal_id,
+            "provider": "lark",
+            "enabled": True,
+            "target_ref": target_ref,
+            "channel": {},
+            "identity": {},
+        }
+    elif target_ref != authorized_target_ref:
+        raise ValueError(
+            "periodic report Goal Channel binding does not match the authorized route"
+        )
     target = None
     if target_ref:
         target = goal_channel_target_for_name(
@@ -150,100 +235,23 @@ def _resolved_goal_channel_binding(
         )
         if target is None:
             raise ValueError("periodic report Goal Channel target is missing")
+    resolution_payload = payload
+    if binding_for_goal(payload, goal_id) is None:
+        resolution_payload = {
+            **payload,
+            "bindings": {
+                **dict(payload.get("bindings") or {}),
+                goal_id: raw,
+            },
+        }
     resolved = binding_for_goal(
-        payload,
+        resolution_payload,
         goal_id,
         provider_target=target,
     )
     if resolved is None:
         raise ValueError("periodic report Goal Channel binding is incomplete")
     return resolved
-
-
-def _find_message(value: Any, message_id: str) -> Mapping[str, Any] | None:
-    if isinstance(value, Mapping):
-        if str(value.get("message_id") or "") == message_id:
-            return value
-        for child in value.values():
-            found = _find_message(child, message_id)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_message(child, message_id)
-            if found is not None:
-                return found
-    return None
-
-
-def _message_card(value: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    body = value.get("body")
-    content = body.get("content") if isinstance(body, Mapping) else None
-    if isinstance(content, Mapping):
-        return content
-    if not isinstance(content, str):
-        return None
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, Mapping) else None
-
-
-def _normalized_card_text(card: Mapping[str, Any]) -> str | None:
-    """Match the lossless interactive-card projection returned by new CLIs."""
-
-    header = card.get("header")
-    elements = card.get("elements")
-    if not isinstance(header, Mapping) or not isinstance(elements, list):
-        return None
-    title = header.get("title")
-    title = title.get("content") if isinstance(title, Mapping) else None
-    if not isinstance(title, str) or not elements:
-        return None
-    first = elements[0]
-    first = first if isinstance(first, Mapping) else {}
-    text = first.get("text")
-    markdown = text.get("content") if isinstance(text, Mapping) else None
-    if not isinstance(markdown, str):
-        return None
-    footer = None
-    if len(elements) == 3 and elements[1] == {"tag": "hr"}:
-        note = elements[2]
-        note_elements = note.get("elements") if isinstance(note, Mapping) else None
-        if isinstance(note_elements, list) and len(note_elements) == 1:
-            note_text = note_elements[0]
-            footer = (
-                note_text.get("content") if isinstance(note_text, Mapping) else None
-            )
-    lines = [f'<card title="{title}">', markdown]
-    if isinstance(footer, str) and footer:
-        lines.extend(["---", f"📝 {footer}"])
-    lines.append("</card>")
-    return "\n".join(lines)
-
-
-def _message_card_matches(
-    value: Mapping[str, Any], expected: Mapping[str, Any] | None
-) -> bool:
-    if expected is None:
-        return False
-    if _message_card(value) == expected:
-        return True
-    content = value.get("content")
-    return isinstance(content, str) and content == _normalized_card_text(expected)
-
-
-def _message_sender(value: Mapping[str, Any]) -> tuple[str, str]:
-    sender = value.get("sender")
-    sender = sender if isinstance(sender, Mapping) else {}
-    sender_type = str(
-        sender.get("sender_type") or value.get("sender_type") or ""
-    ).strip()
-    sender_id = str(
-        sender.get("id") or sender.get("sender_id") or value.get("sender_id") or ""
-    ).strip()
-    return sender_type, sender_id
 
 
 def _validate_extension_activation(value: Mapping[str, Any]) -> None:
@@ -263,16 +271,31 @@ def _validate_extension_activation(value: Mapping[str, Any]) -> None:
 
 def _normalized_delivery_request(
     request: Mapping[str, Any],
-) -> tuple[dict[str, Any], str, str, list[dict[str, str]], dict[str, Any]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    str,
+    str,
+    list[dict[str, str]],
+    dict[str, Any],
+]:
     payload = _mapping(request, "request")
     _reject_unknown_fields(
         payload,
-        allowed={"schema_version", "generation_bundle", "delivery_intent"},
+        allowed={
+            "schema_version",
+            "generation_bundle",
+            "delivery_authority",
+            "delivery_intent",
+        },
         label="request",
     )
     if payload.get("schema_version") != GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA:
         raise ValueError(f"request must use {GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA}")
     generation = _normalized_generation_bundle(payload.get("generation_bundle"))
+    authority = normalize_periodic_report_delivery_authority(
+        payload.get("delivery_authority")
+    )
     intent = _mapping(payload.get("delivery_intent"), "request.delivery_intent")
     identity_override_keys = sorted(
         {
@@ -330,157 +353,7 @@ def _normalized_delivery_request(
     ]
     if len(artifacts) != 1:
         raise ValueError("delivery intent must resolve exactly one Markdown artifact")
-    return generation, sink_id, idempotency_key, announcements, artifacts[0]
-
-
-class _GoalChannelDeliverySession:
-    def __init__(
-        self,
-        *,
-        goal_id: str,
-        binding: Mapping[str, Any],
-        runner: CommandRunner,
-    ) -> None:
-        self.goal_id = goal_id
-        self.binding = dict(binding)
-        self.runner = runner
-        self.route: dict[str, Any] = {}
-        self.expected_cards: dict[str, list[dict[str, Any]]] = {}
-
-    def resolve(self, requested_goal_id: str) -> Mapping[str, Any]:
-        if requested_goal_id != self.goal_id:
-            raise ValueError("Goal Channel delivery goal identity changed")
-        return self.binding
-
-    def verify(self, route: Mapping[str, Any]) -> bool:
-        cli_bin = str(route["cli_bin"])
-        profile = str(route["sender_profile"])
-        app_id = str(route["bot_app_id"])
-        chat_id = str(route["chat_id"])
-        checks = (
-            auth_verified(
-                runner=self.runner,
-                cli_bin=cli_bin,
-                profile=profile,
-                identity="bot",
-                expected_bot_name=str(route["bot_display_name"]),
-            ),
-            verified_app_id(
-                runner=self.runner,
-                cli_bin=cli_bin,
-                profile=profile,
-            )
-            == app_id,
-            chat_verified(
-                runner=self.runner,
-                cli_bin=cli_bin,
-                profile=profile,
-                identity="bot",
-                chat_id=chat_id,
-            ),
-            bot_membership_verified(
-                runner=self.runner,
-                cli_bin=cli_bin,
-                profile=profile,
-                chat_id=chat_id,
-                app_id=app_id,
-            ),
-        )
-        verified = all(checks)
-        if verified:
-            self.route = dict(route)
-        return verified
-
-    def send(
-        self,
-        card: Mapping[str, Any],
-        key: str,
-        route: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
-        result = call(
-            self.runner,
-            lark_args(
-                cli_bin=str(route["cli_bin"]),
-                profile=str(route["sender_profile"]),
-                tail=[
-                    "im",
-                    "+messages-send",
-                    "--chat-id",
-                    str(route["chat_id"]),
-                    "--content",
-                    json.dumps(card, ensure_ascii=False, separators=(",", ":")),
-                    "--msg-type",
-                    "interactive",
-                    "--idempotency-key",
-                    f"loopx-{hashlib.sha256(key.encode()).hexdigest()[:32]}",
-                    "--as",
-                    "bot",
-                    "--format",
-                    "json",
-                ],
-            ),
-        )
-        message_id = find_first_string(
-            json_payload(result), {"message_id"}, MESSAGE_ID_PATTERN
-        )
-        if result.get("returncode") != 0 or not message_id:
-            raise ValueError("Goal Channel periodic report send failed")
-        self.expected_cards.setdefault(message_id, []).append(dict(card))
-        return {"message_id": message_id}
-
-    def readback(self, message_id: str) -> Mapping[str, Any]:
-        result = call(
-            self.runner,
-            lark_args(
-                cli_bin=str(self.route["cli_bin"]),
-                profile=str(self.route["sender_profile"]),
-                tail=[
-                    "im",
-                    "+messages-mget",
-                    "--message-ids",
-                    message_id,
-                    "--as",
-                    "bot",
-                    "--no-reactions",
-                    "--format",
-                    "json",
-                ],
-            ),
-        )
-        message = _find_message(json_payload(result), message_id)
-        sender_type, sender_app_id = (
-            _message_sender(message) if message is not None else ("", "")
-        )
-        expected_card = (self.expected_cards.get(message_id) or [None]).pop(0)
-        exact = bool(
-            result.get("returncode") == 0
-            and message is not None
-            and contains_exact_field(message, "chat_id", str(self.route["chat_id"]))
-            and _message_card_matches(message, expected_card)
-            and sender_type == "app"
-            and sender_app_id == self.route["bot_app_id"]
-            and auth_verified(
-                runner=self.runner,
-                cli_bin=str(self.route["cli_bin"]),
-                profile=str(self.route["sender_profile"]),
-                identity="bot",
-                expected_bot_name=str(self.route["bot_display_name"]),
-            )
-            and verified_app_id(
-                runner=self.runner,
-                cli_bin=str(self.route["cli_bin"]),
-                profile=str(self.route["sender_profile"]),
-            )
-            == self.route["bot_app_id"]
-        )
-        return {
-            "verified": exact,
-            "message_id": message_id,
-            "chat_id": self.route["chat_id"] if exact else None,
-            "sender_app_id": sender_app_id if exact else None,
-            "sender_identity": "bot" if exact else None,
-            "sender_evidence_source": "message_readback" if exact else None,
-        }
+    return generation, authority, sink_id, idempotency_key, announcements, artifacts[0]
 
 
 def _delivery_status(*, satisfied: bool, execute: bool) -> str:
@@ -504,18 +377,30 @@ def deliver_periodic_report_to_goal_channel(
     """Deliver one generated report through the Goal-bound project Bot only."""
 
     _validate_extension_activation(extension_activation)
-    generation, sink_id, idempotency_key, announcements, artifact = (
+    generation, authority, sink_id, idempotency_key, announcements, artifact = (
         _normalized_delivery_request(request)
     )
+    if authority["goal_id"] != goal_id:
+        raise ValueError("periodic report delivery authority Goal identity changed")
 
     binding = _resolved_goal_channel_binding(
         registry_path=registry_path,
         runtime_root=runtime_root,
         goal_id=goal_id,
+        expected_authority=authority,
     )
-    session = _GoalChannelDeliverySession(
+    session = GoalChannelMessageDeliverySession(
         goal_id=goal_id,
         binding=binding,
+        binding_lock_path=default_goal_channel_binding_path(registry_path),
+        target_lock_path=default_goal_channel_target_path(runtime_root),
+        history_start_at=str(generation["document"]["generated_at"]),
+        resolve_current_binding=lambda: _resolved_goal_channel_binding(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            expected_authority=authority,
+        ),
         runner=runner,
     )
     registry = PeriodicReportAdapterRegistry()
@@ -528,9 +413,15 @@ def deliver_periodic_report_to_goal_channel(
             sink_id=sink_id,
         )
     )
+    next_action = _next_action_guidance(generation["document"])
     message_results: list[dict[str, Any]] = []
     for announcement in announcements:
-        content = _announcement_markdown(announcement)
+        content = _announcement_markdown(announcement, next_action=next_action)
+        announcement_idempotency_key = _announcement_idempotency_key(
+            delivery_idempotency_key=idempotency_key,
+            announcement=announcement,
+            content=content,
+        )
         result = registry.deliver(
             sink_id,
             {
@@ -542,9 +433,9 @@ def deliver_periodic_report_to_goal_channel(
             {
                 "execute": bool(execute),
                 "goal_id": goal_id,
-                "idempotency_key": f"{idempotency_key}:{announcement['kind']}",
+                "idempotency_key": announcement_idempotency_key,
                 "title": announcement["title"],
-                "footer": "LoopX periodic report · Goal Channel",
+                "footer": _ANNOUNCEMENT_FOOTER,
             },
         )
         message_results.append({"kind": announcement["kind"], **result})
@@ -573,6 +464,25 @@ def deliver_periodic_report_to_goal_channel(
         ),
         "message_results": message_results,
     }
+    publication_cursor = None
+    if satisfied:
+        generation_id = str(generation["generation_receipt"]["generation_id"])
+        candidate = find_periodic_report_publication_candidate(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            generation_id=generation_id,
+        )
+        if candidate is not None:
+            publication_cursor = commit_periodic_report_publication_cursor(
+                runtime_root=runtime_root,
+                candidate=candidate,
+                publication_id=(
+                    "goal-channel-"
+                    + hashlib.sha256(idempotency_key.encode()).hexdigest()[:24]
+                ),
+                delivered_at=datetime.now(timezone.utc).isoformat(),
+                covered_until=str(generation["document"]["period_window"]["end_at"]),
+            )
     return {
         "ok": bool(satisfied or not execute),
         "schema_version": GOAL_CHANNEL_DELIVERY_RESULT_SCHEMA,
@@ -580,11 +490,21 @@ def deliver_periodic_report_to_goal_channel(
         "intent_satisfied": satisfied,
         "generation_id": generation["generation_receipt"]["generation_id"],
         "sink_result": sink_result,
+        "publication_cursor": publication_cursor,
+        "incremental_baseline": (
+            candidate.get("incremental_baseline")
+            if satisfied and candidate is not None
+            else None
+        ),
         "boundary": {
-            "goal_channel_binding_required": True,
+            "goal_channel_binding_required": False,
+            "goal_channel_binding_preferred": True,
+            "machine_default_route_allowed_when_unbound": True,
             "project_bot_identity_required": True,
             "caller_identity_override_allowed": False,
             "exact_sender_and_chat_readback_required": True,
+            "exact_history_dedupe_required": True,
+            "rendered_announcement_idempotency_bound": True,
             "sender_evidence_source": "message_readback",
             "external_writes_performed": sink_result.get("external_writes_performed")
             is True,
@@ -593,6 +513,7 @@ def deliver_periodic_report_to_goal_channel(
 
 
 __all__ = [
+    "ANNOUNCEMENT_IDEMPOTENCY_SCHEMA",
     "DELIVERY_INTENT_SCHEMA",
     "GOAL_CHANNEL_DELIVERY_REQUEST_SCHEMA",
     "GOAL_CHANNEL_DELIVERY_RESULT_SCHEMA",

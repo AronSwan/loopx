@@ -78,6 +78,11 @@ provider-specific routing data. This runtime contract is not itself a new
 capability registry entry; providers advertise stable caller outcomes through
 their existing extension and capability surfaces.
 
+Manager group bindings additionally apply the bilingual
+[context-capture and Turn-authority contract](protocols/lark-manager-context-authority-v0.md):
+an unaddressed message may be retained as bounded non-authoritative context,
+but only typed provider addressing may enqueue or steer a Turn.
+
 For asynchronous sources, the same module provides an owner-local incremental
 inbox runtime. A provider translates a bounded page into
 `agent_external_connector_event_v0` envelopes and calls the capture operation
@@ -757,6 +762,19 @@ table solely to make a runtime installable.
 The v0 runtime exposes integer extension API version `1` and accepts bounded
 integer constraints such as `>=1,<2`; incompatible manifests fail closed.
 
+`[[hook_adapters]]` lets an extension contribute provider ports to an existing
+capability-owned hook point without adding provider branches to the capability
+composition root or control-plane kernel. Discovery reads only installed
+manifest declarations and admits a factory only when the extension is enabled,
+doctor-ready, and authorized for every declared adapter permission. The
+factory must return exactly the declared callable ports. Import, activation,
+and factory failures become content-free optional-adapter failures; they do not
+execute or replace kernel logic.
+
+`phase = "capability_action"` is for an explicit typed action whose semantics
+have already been decided by the Agent or caller. The adapter may bind and
+settle provider evidence, but it must not infer the action from provider text.
+
 ```toml
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-lark"
@@ -781,6 +799,18 @@ real_world_anchor = "operator-facing Lark Base projection"
 user_value = "Project public-safe LoopX status and todo rows into Lark."
 entry_command = "loopx lark-kanban sync"
 next_real_step = "Validate one explicitly enabled owner-approved sink."
+
+[[hook_adapters]]
+id = "lark-periodic-report-source"
+capability_id = "periodic-report"
+target_hook_id = "periodic_report.request"
+phase = "capability_action"
+factory = "loopx.extensions.lark.periodic_report_request:build_lark_periodic_report_hook_adapter"
+required_permissions = ["lark.inbox.read", "lark.inbox.write"]
+ports = [
+  "periodic_report.request.bind_source",
+  "periodic_report.request.settle_source",
+]
 ```
 
 The bundled OpenViking pilot uses `[[implements]]` instead:
@@ -796,6 +826,15 @@ required_permissions = ["semantic_preference.read"]
 capability_id = "semantic-preference"
 protocol = "semantic_preference_provider_v0"
 ```
+
+The optional `packages/loopx-obelisk` package follows the same placement rule.
+It implements the existing `decision-context` capability's advisory
+`ContextProvider` port; it does not register a second session-context
+capability. LoopX Core parses a copied Codex deep link into the normalized
+`host-session:codex:<thread-id>` scope, and the extension maps that scope to
+Obelisk's public read-only query CLI. See
+[`decision_context_advisory_provider_v0`](protocols/decision-context-advisory-provider-v0.md)
+and the package README for activation, validation, and removal.
 
 The bundled periodic-report archive uses the same ownership direction. It
 implements one existing capability port rather than registering a second
@@ -867,6 +906,45 @@ bound to both that interpreter and the resolved module source. This lets a
 clean source checkout and a local LoopX release activate bundled providers
 without separately installing a console script; catalog discovery remains
 declarative and does not import the module.
+
+Because discovery is declarative, a declared launch target is only shape-checked
+until activation. The public smoke
+`examples/extension-entrypoint-surface-smoke.py` is a repository-scoped coverage
+guard for that gap rather than an activation check: without importing provider
+code it resolves the declared `python_module`, the `entrypoint` console script,
+each hook adapter `factory`, and each presentation `view_validator` for every
+bundled and co-located manifest in this repository against the source tree, so a
+renamed or removed entrypoint fails in the same change that removes it instead
+of at the user's first activation. It does not cover an edited or third-party
+manifest, and detection is structural: an attribute the scanner cannot see, for
+example one installed through `getattr`, is reported as unresolved.
+
+### Local executable locations
+
+Successful executable install/upgrade and doctor operations save the selected
+absolute launcher path in the host-local revision state, separately from the
+portable manifest. When that launcher is a symlink, identity checks still hash
+the final executable artifact while the launcher directory remains the child
+process PATH prefix. Enable, rollback, update-time revalidation and invocation
+use that revision's saved location instead of rediscovering a same-named
+executable on the current shell PATH. File-identity checks remain mandatory; a
+missing saved executable does not fall back to another PATH entry. Package
+upgrades resolve and verify the new revision's executable through the explicit
+upgrade workflow. Bundled `python_module` providers continue using the current
+LoopX interpreter and retain their existing identity checks.
+
+For executable providers, only the child process prepends the executable's
+directory to PATH, so tools installed in the same environment remain available.
+No complete environment, credentials, package contents, or local path is added
+to the public manifest or doctor result. An explicitly supplied execution
+environment remains the base environment; only this PATH prefix is added.
+
+Legacy installations without a saved location require one successful
+`loopx extension doctor <extension-id> --execute` with the provider environment
+available on PATH. Read-only doctor calls do not migrate state. Subsequent
+revalidation can run from the desktop's minimal PATH. If an executable is moved,
+restore its registered location or explicitly upgrade its local manifest to
+point to the new executable; do not hide the failure by disabling the extension.
 
 ## Scope Boundaries
 

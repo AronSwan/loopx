@@ -56,6 +56,18 @@ async function readFileIdentity(path: string): Promise<CreatedFileIdentity | nul
   }
 }
 
+async function publishedMutationLockMatches(
+  lockPath: string,
+  identity: CreatedFileIdentity,
+  ownerPid: number,
+  token: string,
+): Promise<boolean> {
+  if (!sameFileIdentity(identity, await readFileIdentity(lockPath))) return false;
+  const owner = await readMutationLockOwner(lockPath);
+  if (owner?.pid !== ownerPid || owner.token !== token) return false;
+  return sameFileIdentity(identity, await readFileIdentity(lockPath));
+}
+
 function processIsAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
@@ -225,16 +237,16 @@ export async function releaseFileMutationLockClaim(
   await removeCreatedFile(claim.claimPath, claim.identity);
 }
 
-async function reclaimStaleMutationLock(path: string): Promise<void> {
+async function reclaimStaleMutationLock(path: string): Promise<boolean> {
   const identity = await readFileIdentity(path);
-  if (!identity) return;
+  if (!identity) return false;
   const owner = await readMutationLockOwner(path);
-  if (owner && processIsAlive(owner.pid)) return;
+  if (owner && processIsAlive(owner.pid)) return false;
   if (!owner) {
     try {
-      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return;
+      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return false;
     } catch {
-      return;
+      return false;
     }
   }
   const targetPath = path.slice(0, -".ts-effect.lock".length);
@@ -242,29 +254,29 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     targetPath,
     owner?.token ?? INVALID_LOCK_CLAIM_TOKEN,
   );
-  if (!claim) return;
+  if (!claim) return false;
   const stalePath = `${path}.stale.${randomUUID()}`;
   try {
     const current = await readMutationLockOwner(path);
-    if (owner && (!current || current.token !== owner.token)) return;
-    if (current && processIsAlive(current.pid)) return;
+    if (owner && (!current || current.token !== owner.token)) return false;
+    if (current && processIsAlive(current.pid)) return false;
     if (!current) {
       try {
         if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) {
-          return;
+          return false;
         }
       } catch {
-        return;
+        return false;
       }
     }
     // The lock pathname is not a compare-and-swap primitive.  Holding the
     // token claim serializes compliant writers; the identity check additionally
     // prevents a replacement inode from being retired after a stale read.
-    if (!sameFileIdentity(identity, await readFileIdentity(path))) return;
+    if (!sameFileIdentity(identity, await readFileIdentity(path))) return false;
     await rename(path, stalePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return;
+    return false;
   } finally {
     if (claim) {
       try {
@@ -275,6 +287,7 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     }
   }
   await rm(stalePath, { force: true });
+  return true;
 }
 
 export interface FileMutationLock {
@@ -286,14 +299,19 @@ export interface FileMutationLock {
 export async function acquireFileMutationLock(
   targetPath: string,
   ownerPid = process.pid,
+  timeoutMs = MUTATION_LOCK_TIMEOUT_MS,
 ): Promise<FileMutationLock> {
   if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
     throw new TypeError("mutation lock owner PID must be a positive safe integer");
   }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new TypeError("mutation lock timeout must be a non-negative number");
+  }
   await mkdir(dirname(targetPath), { recursive: true, mode: 0o700 });
   const lockPath = `${targetPath}.ts-effect.lock`;
   const token = randomUUID();
-  const deadline = Date.now() + MUTATION_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let retriedAfterReclaim = false;
   while (true) {
     try {
       const handle = await open(lockPath, "wx", 0o600);
@@ -318,14 +336,43 @@ export async function acquireFileMutationLock(
         await removeCreatedFile(lockPath, identity);
         throw error;
       }
+      if (!identity) {
+        throw new Error("mutation lock identity was not captured");
+      }
+      if (
+        !(await publishedMutationLockMatches(
+          lockPath,
+          identity,
+          ownerPid,
+          token,
+        ))
+      ) {
+        await removeCreatedFile(lockPath, identity);
+        if (Date.now() >= deadline) {
+          throw new EffectRuntimeLockTimeoutError();
+        }
+        continue;
+      }
       return { targetPath, lockPath, token };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      await reclaimStaleMutationLock(lockPath);
+      const reclaimed = await reclaimStaleMutationLock(lockPath);
+      // Removing a dead owner is progress, not waiting for a live owner. Allow
+      // one immediate acquisition even for a zero-wait caller. Bound the retry
+      // so repeated replacement cannot extend that caller's lock budget.
+      if (reclaimed && !retriedAfterReclaim) {
+        retriedAfterReclaim = true;
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new EffectRuntimeLockTimeoutError();
       }
-      await new Promise((resolve) => setTimeout(resolve, MUTATION_LOCK_POLL_MS));
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.min(MUTATION_LOCK_POLL_MS, Math.max(0, deadline - Date.now())),
+        )
+      );
     }
   }
 }
@@ -380,8 +427,9 @@ export async function releaseFileMutationLock(
 export async function withFileMutationLock<T>(
   targetPath: string,
   operation: () => Promise<T>,
+  timeoutMs = MUTATION_LOCK_TIMEOUT_MS,
 ): Promise<T> {
-  const lock = await acquireFileMutationLock(targetPath);
+  const lock = await acquireFileMutationLock(targetPath, process.pid, timeoutMs);
   try {
     return await operation();
   } finally {
@@ -395,7 +443,8 @@ async function atomicWriteTextFile(
   path: string,
   content: string,
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   try {
@@ -406,6 +455,14 @@ async function atomicWriteTextFile(
       await handle.close();
     }
     await rename(temporary, path);
+    if (process.platform !== "win32") {
+      const directoryHandle = await open(directory, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    }
   } finally {
     await rm(temporary, { force: true });
   }
@@ -436,5 +493,41 @@ export async function appendJsonLine(
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+async function syncDirectoryForDurableWrite(directory: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const handle = await open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Write JSON so that a crash cannot leave a torn or unlinked file behind:
+ * temp file in the same directory, fsync, atomic rename, directory fsync.
+ */
+export async function durableWriteJson(
+  path: string,
+  payload: JsonObject,
+): Promise<void> {
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    try {
+      await handle.writeFile(`${JSON.stringify(payload, null, 1)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, path);
+    await syncDirectoryForDurableWrite(directory);
+  } finally {
+    await rm(temporary, { force: true });
   }
 }

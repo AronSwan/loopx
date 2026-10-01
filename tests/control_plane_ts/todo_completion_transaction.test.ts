@@ -35,6 +35,21 @@ function request(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const completionPolicyRequest = {
+  schema_version: "loopx_todo_completion_policy_request_v0",
+  goal_id: "goal-example",
+  agent_model: "peer_v1",
+  claimed_by: "agent-a",
+  registered_agents: ["agent-a"],
+  next_claimed_by: null,
+  next_agent_todo: "Continue the bounded migration.",
+  next_continuation_policy: "same_agent_non_delivery",
+  next_excluded_agents: [],
+  self_merged: false,
+  evidence: "focused validation passed",
+  linked_successors: [],
+};
+
 test("open completion commits in one reduction with a stable local identity", () => {
   const result = reduceTodoCompletionTransaction(request());
 
@@ -69,6 +84,7 @@ test("declared validation is one external effect between two reductions", () => 
         validation_command_argv: ["python", "-c", "pass"],
         validation_label: "focused smoke",
         validation_timeout_seconds: "5",
+        task_repository: "git:github.com/example/repo-b",
       },
     }),
   );
@@ -85,6 +101,7 @@ test("declared validation is one external effect between two reductions", () => 
       validation_argv: ["python", "-c", "pass"],
       validation_label: "focused smoke",
       validation_timeout_seconds: 5,
+      task_repository: "git:github.com/example/repo-b",
     },
   });
 
@@ -130,6 +147,102 @@ test("declared validation is one external effect between two reductions", () => 
   assert.equal(rejected.decision, "reject");
   assert.equal(rejected.failure.kind, "validation_failed");
   assert.equal(rejected.failure.validation_receipt.passed, false);
+});
+
+test("revised validators reject stale or unbound validation receipts", () => {
+  const todo = {
+    ...baseTodo,
+    validation_command_argv: ["python", "-c", "pass"],
+    validation_label: "revised smoke",
+    completion_validation_revision: 1,
+  };
+  const pending = reduceTodoCompletionTransaction(request({todo}));
+  assert.equal(pending.decision, "execute_validation");
+  if (pending.decision !== "execute_validation") return;
+  const currentDigest = pending.validation_effect.validation_declaration_sha256;
+  assert.match(String(currentDigest), /^[a-f0-9]{64}$/u);
+
+  const receipt = {
+    schema_version: "issue_fix_validation_command_v0",
+    command_label: "revised smoke",
+    exit_code: 0,
+    passed: true,
+    stdout_captured: false,
+    stderr_captured: false,
+    local_path_captured: false,
+  };
+  assert.throws(
+    () => reduceTodoCompletionTransaction(request({todo, validation_receipt: receipt})),
+    /does not match the current validation declaration/,
+  );
+  assert.throws(
+    () => reduceTodoCompletionTransaction(request({
+      todo,
+      validation_receipt: {
+        ...receipt,
+        validation_declaration_sha256: "0".repeat(64),
+      },
+    })),
+    /does not match the current validation declaration/,
+  );
+
+  const committed = reduceTodoCompletionTransaction(request({
+    todo,
+    validation_receipt: {
+      ...receipt,
+      validation_declaration_sha256: currentDigest,
+    },
+  }));
+  assert.equal(committed.decision, "commit");
+});
+
+test("completion policy joins the coarse transaction only at commit", () => {
+  const pending = reduceTodoCompletionTransaction(
+    request({
+      todo: {
+        ...baseTodo,
+        validation_command: "true",
+      },
+      completion_policy_request: {
+        ...completionPolicyRequest,
+        claimed_by: "not registered",
+      },
+    }),
+  );
+  assert.equal(pending.decision, "execute_validation");
+  assert.equal("completion_policy" in pending, false);
+
+  const committed = reduceTodoCompletionTransaction(
+    request({ completion_policy_request: completionPolicyRequest }),
+  );
+  assert.equal(committed.decision, "commit");
+  assert.deepEqual(committed.completion_policy, {
+    schema_version: "loopx_todo_completion_policy_result_v0",
+    effective_claimed_by: "agent-a",
+    registered_agents: ["agent-a"],
+    effective_next_claimed_by: "agent-a",
+    effective_next_excluded_agents: [],
+    self_merged: false,
+    linked_successor_id: null,
+  });
+
+  const policyRejected = reduceTodoCompletionTransaction(
+    request({
+      completion_policy_request: {
+        ...completionPolicyRequest,
+        claimed_by: "not registered",
+      },
+    }),
+  );
+  assert.equal(policyRejected.decision, "policy_reject");
+  assert.deepEqual(policyRejected.completion_policy_failure, {
+    schema_version: "loopx_todo_completion_policy_failure_v0",
+    kind: "completion_policy_rejected",
+    diagnostic_code: "invalid_request",
+    summary:
+      "claimed_by='not-registered' is not registered for goal " +
+      "'goal-example'; registered_agents=agent-a",
+  });
 });
 
 test("terminal replay bypasses a stale validation declaration", () => {

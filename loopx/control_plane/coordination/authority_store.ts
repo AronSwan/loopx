@@ -18,7 +18,8 @@ export const AUTHORITY_STORE_REQUIRED_GUARANTEES = [
 export type AuthorityStoreRequiredGuarantee =
   (typeof AUTHORITY_STORE_REQUIRED_GUARANTEES)[number];
 
-export type AuthorityStoreProviderKind = "file" | "nokv" | "postgresql";
+export type AuthorityStoreProviderKind = "file" | "nokv" | "postgresql" | "sqlite";
+export type AuthorityStoreSourceAuthority = `${AuthorityStoreProviderKind}_v0`;
 export type AuthorityStoreProviderStage =
   | "stage1_implemented"
   | "stage2a_candidate"
@@ -39,6 +40,15 @@ export interface AuthorityStoreProviderProfile {
  * failure or transaction models into a fictional universal database.
  */
 export const AUTHORITY_STORE_PROVIDER_PROFILES = {
+  sqlite: {
+    stage: "stage2b_candidate",
+    revision_primitive: "database_incarnation_and_locked_sequence",
+    atomic_commit_mapping: "sqlite_transaction_over_head_and_commit_outbox",
+    receipt_and_cursor_mapping: "unique_operation_index_and_integer_cursor",
+    store_lineage_mapping: "persistent_database_incarnation",
+    trust_boundary: "trusted_local_process_and_private_directory",
+    qualification_holds: ["ten_day_soak", "retention_and_compaction", "authority_source_promotion"],
+  },
   file: {
     stage: "stage1_implemented",
     revision_primitive: "locked_document_revision_chain",
@@ -60,6 +70,7 @@ export const AUTHORITY_STORE_PROVIDER_PROFILES = {
     trust_boundary: "loopx_authority_owned_nokv_credentials",
     qualification_holds: [
       "service_grade_contract_adapter",
+      "atomic_workspace_incarnation_publication_fence",
       "restart_and_restore_recovery",
       "capacity_and_receipt_retention",
       "availability_and_ha",
@@ -71,11 +82,13 @@ export const AUTHORITY_STORE_PROVIDER_PROFILES = {
     atomic_commit_mapping: "one_sql_transaction_over_head_events_and_receipts",
     receipt_and_cursor_mapping: "unique_operation_row_and_per_goal_sequence",
     store_lineage_mapping: "service_managed_database_incarnation",
-    trust_boundary: "authenticated_tenant_scoped_loopx_service_role",
+    trust_boundary: "transaction_local_tenant_scoped_service_database_role",
     qualification_holds: [
-      "service_authentication_database_role_and_audit_policy",
+      "service_api_authentication_and_tenant_authorization",
+      "service_role_provisioning_and_audit_policy",
       "restore_incarnation_rotation",
       "failover_pool_exhaustion_and_cancellation",
+      "retention_partitioning_and_measured_capacity",
       "shadow_parity_and_authority_source_promotion",
     ],
   },
@@ -143,6 +156,13 @@ export type AuthorityStoreReceiptResult =
   | { status: "missing" }
   | AuthorityStoreReadFailure;
 
+/** Results retain caller order, including duplicate IDs and missing receipts.
+ * Each item has exactly the same proof contract as readReceipt. No global
+ * snapshot promise is made by the fallback; native providers may strengthen it. */
+export type AuthorityStoreReceiptBatchResult =
+  | {status: "receipts"; results: readonly AuthorityStoreReceiptResult[]}
+  | AuthorityStoreReadFailure;
+
 export type AuthorityStoreScanResult =
   | {
     status: "page";
@@ -154,9 +174,32 @@ export type AuthorityStoreScanResult =
 
 /** Storage-only seam. Legal transitions and receipt meaning stay in LoopX. */
 export interface AuthorityStore {
+  /**
+   * Provider identity is observability metadata, not a semantic authority.
+   * Optional keeps third-party/test stores source-compatible while built-in
+   * providers expose an unambiguous runtime label.
+   */
+  readonly providerKind?: AuthorityStoreProviderKind;
   storeIdentity(): Promise<AuthorityStoreIdentityResult>;
   loadAuthority(): Promise<AuthorityStoreLoadResult>;
   commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult>;
   readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult>;
+  /** Optional bounded acceleration; never a weaker receipt verification path. */
+  readReceipts?(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult>;
   scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult>;
+}
+
+export async function readAuthorityReceipts(store: AuthorityStore,
+  operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
+  if (operationIds.length < 1 || operationIds.length > 64) throw new TypeError("receipt batch requires 1..64 operations");
+  if (store.readReceipts !== undefined) return store.readReceipts(operationIds);
+  const results: AuthorityStoreReceiptResult[] = [];
+  for (const id of operationIds) results.push(await store.readReceipt(id));
+  return {status: "receipts", results};
+}
+
+/** Map a storage implementation to the public source label used by adapters. */
+export function authorityStoreSourceAuthority(store: AuthorityStore): AuthorityStoreSourceAuthority {
+  const kind = store.providerKind ?? "file";
+  return `${kind}_v0`;
 }

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from scripts.codex_app_apply_rrule import (
     _now_ms,
+    _parse_args,
     _scheduler_hint_turn_instance_id,
     _update_sqlite,
     _update_toml,
@@ -102,7 +104,7 @@ class _FakeCompleted:
         self.stderr = stderr
 
 
-def test_scheduler_hint_uses_stable_child_turn_identity(
+def test_scheduler_hint_replays_parent_turn_without_synthetic_capabilities(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -118,6 +120,8 @@ def test_scheduler_hint_uses_stable_child_turn_identity(
     assert (
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -131,12 +135,50 @@ def test_scheduler_hint_uses_stable_child_turn_identity(
         == 0
     )
 
-    child_turn = calls[0][calls[0].index("--turn-instance-id") + 1]
-    assert child_turn == _scheduler_hint_turn_instance_id(parent_turn)
-    assert child_turn == _scheduler_hint_turn_instance_id(parent_turn)
-    assert child_turn != parent_turn
-    assert len(child_turn) <= 128
-    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", child_turn)
+    replay_turn = calls[0][calls[0].index("--turn-instance-id") + 1]
+    assert replay_turn == _scheduler_hint_turn_instance_id(parent_turn)
+    assert replay_turn == parent_turn
+    assert len(replay_turn) <= 128
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", replay_turn)
+    assert "--available-capability" not in calls[0]
+
+
+def test_default_app_stores_follow_codex_home_and_capabilities_are_explicit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    defaults = _parse_args(["--agent-id", "codex-fixture"])
+    assert defaults.automations_root == codex_home / "automations"
+    assert defaults.db_path == codex_home / "sqlite/codex-dev.db"
+    assert defaults.capability == []
+
+    explicit = _parse_args(
+        ["--agent-id", "codex-fixture", "--capability", "network"]
+    )
+    assert explicit.capability == ["network"]
+
+
+def test_scheduler_bridge_requires_explicit_agent_identity() -> None:
+    with pytest.raises(SystemExit) as error:
+        _parse_args([])
+
+    assert error.value.code == 2
+
+
+def test_heartbeat_guide_matches_parent_turn_replay_contract() -> None:
+    guide = (
+        Path(__file__).parents[1] / "docs/heartbeat-automation-prompt.md"
+    ).read_text(encoding="utf-8")
+
+    assert "reuses the provided parent Turn" in guide
+    assert "same-Turn replay preserves the committed" in guide
+    assert "bound Todo, observed capabilities, and settlement identity" in guide
+    assert "explicitly conflicting identity still fails closed" in guide
+    assert "derives a stable child receipt id" not in guide
+    assert "does not reuse the already-settled heartbeat receipt" not in guide
 
 
 def test_should_run_failure_reports_structured_stdout(
@@ -157,6 +199,8 @@ def test_should_run_failure_reports_structured_stdout(
     with pytest.raises(SystemExit) as raised:
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -195,6 +239,8 @@ def test_apply_updates_toml_db_and_runs_ack(
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -237,6 +283,8 @@ def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -278,6 +326,8 @@ def test_no_apply_needed_is_quiet_noop(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -397,7 +447,9 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
     toml_text = toml_path.read_text(encoding="utf-8")
     assert 'rrule = "FREQ=MINUTELY;INTERVAL=5"' in toml_text
     assert 'target_thread_id = "thread-1"' in toml_text
-    assert 'prompt = """Advance `goal` from active state.' in toml_text
+    assert tomllib.loads(toml_text)["prompt"] == (
+        "Advance `goal` from active state. Agent: `agent`."
+    )
 
     connection = sqlite3.connect(str(db_path))
     try:

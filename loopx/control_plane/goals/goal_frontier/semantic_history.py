@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
+
 from ...work_items.autonomous_replan_ack import (
     latest_autonomous_replan_ack_for_projection,
 )
@@ -125,50 +127,6 @@ def latest_agent_vision_from_status_payload(
         goal_id=goal_id,
         agent_id=agent_id,
     )
-
-
-def latest_agent_vision_from_runs(
-    runs: list[dict[str, Any]],
-    *,
-    goal_id: str,
-    agent_id: str | None,
-) -> dict[str, Any] | None:
-    """Return the newest active vision from newest-first compact run records."""
-
-    for run in runs:
-        vision = run.get("agent_vision")
-        if not isinstance(vision, dict):
-            continue
-        vision_agent_id = str(
-            vision.get("agent_id") or run.get("agent_id") or ""
-        ).strip()
-        if agent_id and vision_agent_id and vision_agent_id != agent_id:
-            continue
-        patch = (
-            vision.get("vision_patch")
-            if isinstance(vision.get("vision_patch"), dict)
-            else {}
-        )
-        if not patch:
-            continue
-        result = {
-            "schema_version": vision.get("schema_version"),
-            "goal_id": goal_id,
-            "agent_id": vision_agent_id or agent_id,
-            "state": vision.get("state"),
-            "vision_patch": patch,
-            "todo_delta": vision.get("todo_delta")
-            if isinstance(vision.get("todo_delta"), list)
-            else [],
-            "vision_budget": vision.get("vision_budget")
-            if isinstance(vision.get("vision_budget"), dict)
-            else None,
-            "generated_at": run.get("generated_at"),
-        }
-        if isinstance(vision.get("path_delta"), dict):
-            result["path_delta"] = vision["path_delta"]
-        return result
-    return None
 
 
 def _latest_missing_vision_checkpoint_from_runs(

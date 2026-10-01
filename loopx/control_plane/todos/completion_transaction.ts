@@ -1,5 +1,9 @@
 import type { JsonObject } from "../effect_program.ts";
-import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {
+  effectRuntimeErrorPayload,
+  EffectRuntimeRequestError,
+} from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
   requireBoolean,
@@ -29,14 +33,21 @@ import {
   type TodoCompletionValidationPlanResult,
   TODO_COMPLETION_VALIDATION_PLAN_REQUEST_SCHEMA,
 } from "./completion_validation_plan.ts";
+import {
+  resolveTodoCompletionPolicy,
+  type TodoCompletionPolicyResult,
+} from "./completion_policy.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const TODO_COMPLETION_TRANSACTION_REQUEST_SCHEMA =
   "loopx_todo_completion_transaction_v0";
 export const TODO_COMPLETION_TRANSACTION_RESULT_SCHEMA =
   "loopx_todo_completion_transaction_result_v0";
+export const TODO_COMPLETION_POLICY_FAILURE_SCHEMA =
+  "loopx_todo_completion_policy_failure_v0";
 const CALLER_VALIDATION_RECEIPT_SCHEMA = "issue_fix_validation_command_v0";
 
-const PROJECTION_SOURCES = ["materialized", "event_log"] as const;
+const PROJECTION_SOURCES = ["materialized"] as const;
 const COMPLETION_IDENTITY_SOURCES = [
   "turn_settlement",
   "unscoped_completion",
@@ -53,6 +64,7 @@ interface CallerValidationReceipt extends JsonObject {
   stdout_captured: false;
   stderr_captured: false;
   local_path_captured: false;
+  validation_declaration_sha256?: string;
 }
 
 interface CompletionStateProjection extends JsonObject {
@@ -73,6 +85,8 @@ export interface TodoCompletionValidationEffect extends JsonObject {
   validation_argv: readonly string[] | null;
   validation_label: string | null;
   validation_timeout_seconds: number | null;
+  task_repository: string | null;
+  validation_declaration_sha256?: string;
 }
 
 export interface TodoCompletionExecuteValidation
@@ -81,11 +95,27 @@ export interface TodoCompletionExecuteValidation
   validation_effect: TodoCompletionValidationEffect;
 }
 
-export interface TodoCompletionCommit extends CompletionTransactionBase {
-  decision: "commit";
+interface TodoCompletionSettlement extends CompletionTransactionBase {
   completion_state: CompletionStateProjection;
   metadata_updates: JsonObject;
   validation_receipt: CallerValidationReceipt | null;
+}
+
+export interface TodoCompletionCommit extends TodoCompletionSettlement {
+  decision: "commit";
+  completion_policy?: TodoCompletionPolicyResult;
+}
+
+export interface TodoCompletionPolicyFailure extends JsonObject {
+  schema_version: typeof TODO_COMPLETION_POLICY_FAILURE_SCHEMA;
+  kind: "completion_policy_rejected";
+  diagnostic_code: string;
+  summary: string;
+}
+
+export interface TodoCompletionPolicyReject extends TodoCompletionSettlement {
+  decision: "policy_reject";
+  completion_policy_failure: TodoCompletionPolicyFailure;
 }
 
 export interface TodoCompletionReplay extends CompletionTransactionBase {
@@ -104,6 +134,7 @@ export interface TodoCompletionReject extends CompletionTransactionBase {
 export type TodoCompletionTransactionResult =
   | TodoCompletionExecuteValidation
   | TodoCompletionCommit
+  | TodoCompletionPolicyReject
   | TodoCompletionReplay
   | TodoCompletionReject;
 
@@ -118,6 +149,7 @@ interface DecodedTransactionRequest {
   requested_has_successor: boolean;
   dry_run: boolean;
   validation_receipt: CallerValidationReceipt | null;
+  completion_policy_request: JsonObject | null;
 }
 
 function optionalIdentitySource(
@@ -142,6 +174,14 @@ function optionalString(value: unknown, label: string): string | null {
     throw new EffectRuntimeRequestError(`${label} must be a string or null`);
   }
   return value;
+}
+
+function optionalDigest(value: unknown, label: string): string | null {
+  const normalized = optionalString(value, label);
+  if (normalized !== null && !BARE_SHA256_PATTERN.test(normalized)) {
+    throw new EffectRuntimeRequestError(`${label} must be a SHA-256 digest or null`);
+  }
+  return normalized;
 }
 
 function requireFalse(value: unknown, label: string): false {
@@ -196,6 +236,10 @@ function decodeValidationReceipt(
       receipt.local_path_captured,
       "validation_receipt.local_path_captured",
     ),
+    ...(optionalDigest(
+      receipt.validation_declaration_sha256,
+      "validation_receipt.validation_declaration_sha256",
+    ) === null ? {} : {validation_declaration_sha256: receipt.validation_declaration_sha256 as string}),
   };
 }
 
@@ -232,6 +276,14 @@ function decodeRequest(value: unknown): DecodedTransactionRequest {
     ),
     dry_run: requireBoolean(request.dry_run, "dry_run"),
     validation_receipt: decodeValidationReceipt(request.validation_receipt),
+    completion_policy_request:
+      request.completion_policy_request === null ||
+        request.completion_policy_request === undefined
+        ? null
+        : requireJsonObject(
+          request.completion_policy_request,
+          "completion_policy_request",
+        ),
   };
 }
 
@@ -278,6 +330,33 @@ function baseResult(
     completion_identity_source: identity.source,
     fence,
   };
+}
+
+function evaluateCompletionPolicy(
+  request: JsonObject | null,
+):
+  | { outcome: "not_requested" }
+  | { outcome: "accepted"; policy: TodoCompletionPolicyResult }
+  | { outcome: "rejected"; failure: TodoCompletionPolicyFailure } {
+  if (request === null) return { outcome: "not_requested" };
+  try {
+    return {
+      outcome: "accepted",
+      policy: resolveTodoCompletionPolicy(request),
+    };
+  } catch (error) {
+    if (!(error instanceof EffectRuntimeRequestError)) throw error;
+    const failure = effectRuntimeErrorPayload(error);
+    return {
+      outcome: "rejected",
+      failure: {
+        schema_version: TODO_COMPLETION_POLICY_FAILURE_SCHEMA,
+        kind: "completion_policy_rejected",
+        diagnostic_code: failure.code,
+        summary: failure.message,
+      },
+    };
+  }
 }
 
 /**
@@ -337,6 +416,15 @@ export function reduceTodoCompletionTransaction(
   }
 
   if (validationPlan.effect === "run") {
+    const validationDeclarationSha256 = canonicalAuthoritySha256({
+      validation_command: validationPlan.validation_command,
+      validation_command_argv: validationPlan.validation_argv,
+      validation_label: validationPlan.validation_label,
+      validation_timeout_seconds: validationPlan.validation_timeout_seconds,
+    });
+    const validationRevision = request.todo.completion_validation_revision;
+    const requiresDigest = Number.isSafeInteger(validationRevision) &&
+      Number(validationRevision) > 0;
     if (request.validation_receipt === null) {
       return {
         ...base,
@@ -348,6 +436,13 @@ export function reduceTodoCompletionTransaction(
           validation_label: validationPlan.validation_label,
           validation_timeout_seconds:
             validationPlan.validation_timeout_seconds,
+          task_repository: optionalNonEmptyString(
+            request.todo.task_repository,
+            "todo.task_repository",
+          ),
+          ...(requiresDigest
+            ? {validation_declaration_sha256: validationDeclarationSha256}
+            : {}),
         },
       };
     }
@@ -356,6 +451,13 @@ export function reduceTodoCompletionTransaction(
     if (request.validation_receipt.command_label !== expectedLabel) {
       throw new EffectRuntimeRequestError(
         "validation_receipt.command_label does not match the authorized effect",
+      );
+    }
+    if (requiresDigest &&
+        request.validation_receipt.validation_declaration_sha256 !==
+          validationDeclarationSha256) {
+      throw new EffectRuntimeRequestError(
+        "validation_receipt does not match the current validation declaration",
       );
     }
     if (!request.validation_receipt.passed) {
@@ -400,14 +502,30 @@ export function reduceTodoCompletionTransaction(
     metadataResult.updates,
     "completion metadata updates",
   );
-  return {
+  const completionPolicy = evaluateCompletionPolicy(
+    request.completion_policy_request,
+  );
+  const settlement = {
     ...base,
-    decision: "commit",
     completion_state: {
       continuation: completionStateResult.continuation,
       recovery: completionStateResult.recovery,
     },
     metadata_updates: updates,
     validation_receipt: request.validation_receipt,
+  };
+  if (completionPolicy.outcome === "rejected") {
+    return {
+      ...settlement,
+      decision: "policy_reject",
+      completion_policy_failure: completionPolicy.failure,
+    };
+  }
+  return {
+    ...settlement,
+    decision: "commit",
+    ...(completionPolicy.outcome === "not_requested"
+      ? {}
+      : { completion_policy: completionPolicy.policy }),
   };
 }

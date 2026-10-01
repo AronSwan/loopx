@@ -75,7 +75,7 @@ Decision Context does not:
 
 - replace LoopX Core todo, gate, quota, event, or authority semantics;
 - turn provider recall into trusted truth;
-- automatically capture chats, tool output, credentials, or raw provider
+- automatically persist chat bodies, tool output, credentials, or raw provider
   payloads;
 - grant permission to execute a recommendation;
 - automatically activate a Reward Memory candidate;
@@ -91,6 +91,45 @@ priority. Incomplete P0 coverage does not block safe LoopX lifecycle work, but
 the caller must label the conclusion as partial or exact-read the missing
 authority through another path. Fail-open must not masquerade as complete
 context coverage.
+
+## Code Map
+
+A decision runs through the modules in this order. Read only the rows your
+change touches.
+
+| Module | Owns |
+|---|---|
+| `profile.py` | Default-off, goal-scoped profile: which source classes matter, freshness policy, scan mode, weight; activation status |
+| `providers.py` | Registry of replaceable current-authority providers, plus the local-file provider |
+| `sources.py` | Provider-neutral source contracts: specs, items, scans, exact reads, source manifest |
+| `runtime.py` | Thin orchestration from profile to providers to evidence assembly and advisory recall |
+| `assembler.py` | Deterministic authority rebase, advisory recall assembly, `decision_source_coverage_v0` |
+| `freshness.py` | Per-source freshness reports and capture host health projection |
+| `packets.py` | Public-safe evidence, proposal, review and outcome packets |
+| `review_settlement.py` | Owner-gated or quiet settlement of one assembly |
+| `cursor_commit.py` | Validated private cursor commit after settlement |
+| `private_state.py` | Private cursor and pending-settlement file IO |
+| `outcome_feedback.py` | Audited feedback from outcomes into Reward Memory |
+| `capture.py` | Opt-in source-reference capture and `capture-status` |
+| `capture_recovery.py` | Reference-preserving capture diagnosis and recovery |
+| `extension_provider.py` | Advisory context provider delivered by an extension (`decision_context_advisory_provider_v0`) |
+| `architecture.py` | `architecture` readback of the capability contract |
+| `catalog_entry.py` | Capability catalog record |
+| `cli.py` | Every `loopx decision-context` subcommand and its rendering |
+
+To add an observable field:
+
+- **A per-source fact**, such as read time or scan status: produce it in
+  `sources.py` or the provider in `providers.py`, then carry it into coverage
+  in `assembler.py`.
+- **A decision-level field:** add it in `assembler.py`, and in `packets.py`
+  only if it belongs in a public packet, where the public-safety checks live.
+- **A capture-only fact:** add it in `capture.py`.
+- **Exposing it:** `cli.py` renders it. `loopx/cli.py` changes only when a new
+  top-level dispatch is needed.
+- **Documenting and testing it:** update the matching surface in this README
+  and `README.zh-CN.md`. Test it in `tests/capabilities/test_decision_context_<module>.py`
+  and, for packet shape, in `examples/decision-context-contract-smoke.py`.
 
 ## Four Auditable Outputs
 
@@ -149,6 +188,40 @@ loopx decision-context source-manifest \
   --format json
 ```
 
+Recall one task or other provider scope without modifying the profile or
+entering the evidence-settlement workflow:
+
+```bash
+loopx decision-context recall-context \
+  --goal-id <goal-id> \
+  --agent-id <agent-id> \
+  --profile <ignored-private-profile.json> \
+  --context-scope-ref 'host-session:codex:<thread-id>' \
+  --query '<specific private provider query>' \
+  --query-summary '<public-safe intent summary>' \
+  --format json
+```
+
+The profile still gates the Goal, Agent, and provider, but the one-off scope is
+not persisted. The command does not scan authority sources, read or write
+cursors, create pending settlement, or grant execution authority. Its top-level
+output is explicitly `local_private_transient` because it contains the recalled
+text for the current agent. The nested retrieval receipt is public-safe and
+retains only the query summary, provider-safe summaries, scores, and hashed
+references. Each recalled item is marked `untrusted_advisory` and must never be
+treated as an instruction.
+
+Keeping this profile enabled does not make Obelisk a required LoopX
+dependency. If the selected extension is not installed, is disabled, or no
+longer has a current doctor proof, recall exits normally with
+`status=unavailable`, a typed `provider_readiness` receipt, and no provider
+scan or write. Do not remove or rewrite the profile just to recover the
+provider: install it, run
+`loopx extension enable <extension-id> --execute --format json`, or run
+`loopx extension doctor <extension-id> --execute --format json` according to
+`provider_readiness.next_action`. The next recall re-resolves lifecycle state
+and resumes automatically when the provider is ready.
+
 Run bounded scans and exact reads without committing private cursors:
 
 ```bash
@@ -159,6 +232,15 @@ loopx decision-context prepare-evidence \
   --decision-id <stable-decision-id> \
   --format json
 ```
+
+An optional extension can implement the existing advisory `ContextProvider`
+port. For example, `packages/loopx-obelisk` accepts a normalized
+`host-session:codex:<thread-id>` scope and retrieves bounded historical task
+messages through Obelisk's public CLI. The profile selects it with
+`context_provider.provider=extension`; `config.extension_id` may name the exact
+provider, otherwise exactly one enabled, doctor-ready implementation must be
+available. Provider failure remains fail-open, and raw recalled text never
+enters the public packet.
 
 `prepare-evidence` is deliberately read only. A domain adapter can provide a
 strict semantic rebase and persist an unapplied private checkpoint:
@@ -204,6 +286,211 @@ or other irreversible authority. Removing the private profile disables the
 route; removing the pending checkpoint abandons an unsettled review without
 changing active cursors.
 
+### Opt-in Source-Reference Capture
+
+Automatic capture is **default off**. Earlier profiles rejected every
+`automatic_capture=true`; it now means explicitly allowlisted **reference
+capture**, not automatic semantic review, raw-content archiving, or memory sync.
+Add these fields to an existing private profile's `automation` object:
+
+```json
+{
+  "automatic_capture": true,
+  "fail_open": true,
+  "source_ids": ["source:authority:baseline"],
+  "interval_seconds": 900,
+  "max_pending_batches": 1000,
+  "max_sources_per_tick": 8
+}
+```
+
+Every listed source must already be enabled, incremental, and exact-readable.
+On-demand sources are never enrolled implicitly. The same goal/agent activation
+checks apply. Capture results include `activation.capture_max_sources_per_tick`
+only after profile, agent and automatic-capture activation. Shared activation,
+`inspect-profile` and evidence assembly do not project this capture budget.
+Preview does not call providers or create the spool:
+
+```bash
+loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
+  --profile <private-profile.json> --spool <private-capture.sqlite> \
+  --cursor-state <reviewed-cursors.json> --format json
+```
+
+Add `--execute` for one tick.
+
+Each tick attempts at most `automation.max_sources_per_tick` providers (default
+8, integer 1–64), in oldest-attempt-first order. Failed calls count toward this
+budget; held, pressured, and interval-skipped sources do not. Deferred sources
+keep their cursors and freshness timestamps and resume on later host ticks.
+`scan_budget` reports attempts and deferred source IDs. This bounds provider
+calls, not wall time: providers must still honor their timeout and the host
+must enforce its process deadline. Profile-race rollback remains atomic.
+
+Use `capture-status` with the same arguments
+and without `--execute` for readback. Configure a host scheduler to invoke the
+tick; the capability enforces `interval_seconds`, while the host owns process
+startup, an outer process timeout, and stop/uninstall. No model heartbeat is
+created. Private integrations use `capture_profile_sources` from
+`loopx.capabilities.decision_context.capture` with existing
+`source_provider_overrides`; generic queue/configuration rules remain here.
+
+The mode-0600 SQLite spool binds to one goal/agent and records bounded public-safe
+scan receipts plus **private replay cursors**. It contains no source bodies.
+Ticks are serialized; batch insertion and capture cursor advancement commit
+together. Failed scans keep their cursor, and capacity exhaustion reports
+`backpressure` without dropping pending batches. Each enrolled source now has
+a reserved active window of `max(1, floor(max_pending_batches / source_count))`.
+When that window is full, only that source reports `source_backpressure`; it is
+not scanned and its capture cursor and last successful read stay unchanged.
+Quiet sources keep their shares for later changes; idle shares and the integer
+remainder are not lent to busy sources. This changes the previous global-only
+admission default for multi-source profiles. Single-source behavior is unchanged.
+A changed source binding reports
+`binding_changed`, requiring an explicit rebase or a separately scoped new spool.
+Do not store the spool or its journal in a public repository.
+
+Consume each source's `next_batch_id` through a fresh bounded scan and exact read:
+
+```bash
+loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id> \
+  --profile <private-profile.json> --spool <private-capture.sqlite> \
+  --cursor-state <reviewed-cursors.json> --batch-id <batch-id> \
+  --decision-id <decision-id> --rebase-json <private-rebase.json> \
+  --pending-settlement <private-pending.json> --execute --format json
+```
+
+A domain host can instead use `assemble_captured_decision_evidence` with a
+`rebase` callback to inspect transient exact content. Preparing evidence does
+not acknowledge a batch. Use the existing `settle-review` path above; a later
+capture tick retires only the oldest batch whose before/after cursors match a
+newly observed transition in the **settlement-owned reviewed cursor file**.
+Unchanged reviewed cursors never acknowledge later batches, including A→B→A
+source changes. Capture-owned observations are not review authority. Never
+substitute capture cursors for that file or manually manufacture reviewed cursors.
+
+If several settlements occur between ticks, their intermediate transitions may
+be unobservable; ambiguous batches are retained, not inferred to be reviewed.
+An older spool without review observations is baselined without retiring rows.
+For either hold, reconcile against actual review evidence explicitly, or use the
+guarded recovery below. This conservative protocol does not promise automatic
+queue drainage after skipped review transitions.
+
+This is a change-reference spool, **not a lossless source archive**. First-scan
+history, pagination, late edits, deletion visibility and deadlines remain provider
+contracts. Providers must support deterministic bounded replay; an unavailable
+captured revision raises a hold rather than reviewing substituted content. Use
+an explicit current-source rebase and ordinary reviewed settlement when historical
+replay is impossible. Capture health is not proof of complete decision coverage.
+
+To stop collection, set `automatic_capture=false` and unload the host scheduler.
+Existing reviewable batches remain private and can still be prepared. To roll
+back bounded ticks, remove `max_sources_per_tick`. A release that predates
+reference capture also requires removing `source_ids`, `interval_seconds` and
+`max_pending_batches`. Retain the spool as a private checkpoint rather than
+deleting unreviewed work.
+
+#### Recover an unreplayable source without discarding history
+
+Recovery belongs to this capability's existing private SQLite spool, not Core
+Goal lifecycle. The local host/CLI is the operator surface; no provider, model,
+remote write permission, scheduler or dashboard setting is added. A trusted
+host may call `diagnose_capture_source` / `recover_capture_source` from
+`loopx.capabilities.decision_context.capture_recovery` with its existing
+`source_provider_overrides`.
+
+1. Run `capture-diagnose` with the same `--goal-id`, `--agent-id`, `--profile`,
+   `--spool`, `--cursor-state` arguments and an explicit `--source-id`.
+   Metadata-only diagnostics never contact providers. Add `--probe` to perform
+   one bounded transient replay/exact-read check, without semantic review or
+   pending settlement. Results distinguish `replay_not_checked`, `replayable`,
+   `revision_unavailable`, `binding_changed`, `cursor_diverged`,
+   `probe_unavailable`, `state_changed`, `empty` and `acquisition_held`.
+2. Preview `capture-recovery --action hold` with that same scope. It shows
+   affected counts and an opaque `preview_token`. Apply only with explicit
+   operator authorization, `--execute --expected-token <preview_token>`.
+   All pending references for that source move atomically to **held, unresolved
+   history**, byte-for-byte, and acquisition for that source pauses. They are
+   not marked reviewed. Other sources can use the released active capacity.
+3. When ready to read current material, preview and apply `--action restart`
+   with a fresh token. This rebinds acquisition to the current profile and the
+   **unchanged settlement-owned reviewed cursor**, clears the source's interval
+   wait, and removes its acquisition hold. The next ordinary capture produces
+   a fresh batch for `prepare-captured` and normal `settle-review`. Older held
+   references remain unresolved, even after the new batch is reviewed.
+4. `--action rollback --recovery-id <applied-recovery-id>` also requires preview
+   and explicit apply. It restores that operation's prior source state only if
+   the source scope and profile/reviewed files still match its receipt and the
+   active capacity permits restoration. After new capture/review, it fails
+   closed rather than overwriting progress. The applied/rolled-back receipts
+   remain in the private spool; copy/export the spool securely for inspection.
+
+All apply tokens bind action, source, profile/binding, spool identity and full
+queue frontier, reviewed-file digest/identity and audit state. A concurrent
+capture or review, duplicate apply, rebind or file ABA requires a fresh preview.
+SQLite serializes capture/recovery; apply uses the settlement cursor lock.
+Arbitrary manual edits are unsupported. Recovery never writes reviewed cursors,
+so it does not invalidate or supersede a legitimate separate review settlement.
+It is an acquisition restart, **not a claim to have created a new review epoch**.
+
+The existing `max_pending_batches=N` still bounds active batches. Held history
+has a separate cap of N; new hold/restart operations stop after 2N audit records
+(at most one rollback per applicable receipt). No automatic eviction, compaction
+or repeated capacity increase is performed. At that bound, preserve/export the
+private spool and make an explicit retention decision; increasing the limit is
+not evidence consumption. A hold is explicit, not an automatic fairness policy.
+It can isolate a noisy source; reserved source windows additionally prevent a
+busy source from borrowing other sources' future capacity. Neither mechanism
+replaces semantic review: a full source needs oldest-batch review or explicit
+`capture-diagnose` and guarded recovery when replay is unavailable. Both pressure
+statuses retry on the next tick when capacity is available instead of waiting
+an additional scan interval.
+
+Existing over-share batches are retained, never evicted or silently held. On
+upgrade they can still consume shared capacity until explicit review/recovery.
+If the global capacity is smaller than the number of enrolled sources, isolation
+cannot be guaranteed: status reports `reservation_capacity_sufficient=false`
+and the global cap remains authoritative. `capture-status.capacity_policy`
+reports both bounds and each source reports `pending_capacity`, `review_required`
+and `recovery_diagnosis_required`. These are work hints, not proof that replay
+failed, and do not grant recovery or settlement authority. The global cap
+continues to count pending batches from sources no longer enrolled as well.
+
+`capture-status` separates active `pending_batch_count`, unresolved
+`held_batch_count`, per-source `acquisition_held` and
+`semantic_review_completion=not_inferred_from_capture`. `last_checked_at` is
+the last attempt, not necessarily a successful scan. No status-only call proves
+historical replay or complete decision coverage. Disable capture using the existing profile
+switch; stop the scheduler before downgrading, since older runtimes do not honor
+recovery holds. Retain the spool/receipts rather than treating downgrade as rollback.
+
+#### Source freshness contract
+
+An enabled profile, a healthy `loopx doctor` or a settled projection never
+implies fresh sources. Every `prepare-evidence` / `prepare-review` assembly and
+every `capture` / `capture-status` result carries `source_freshness`
+(`decision_source_freshness_v0`): one row per enabled source with
+`last_read_at` (last *successful* read), `staleness_seconds`, the source
+`freshness_seconds` window, `status` (`fresh`, `stale`, `never_read`,
+`not_scanned`), `failure_streak` and `alert_reasons`. Enabled sources outside
+the current scan (for example on-demand sources) appear as `not_scanned`
+instead of disappearing. Markdown output marks every alerted row with 🔴.
+Consumers must disclose alerted sources before presenting a conclusion as current.
+
+A failed provider attempt updates `last_checked_at` and increments
+`failure_streak`, but never advances `last_read_at`. Existing spools migrate in
+place; a legacy row whose last attempt succeeded uses that attempt as its last read.
+
+`loopx decision-context capture --execute` records a local host health file
+under `<runtime-root>/decision-context/capture-hosts/`. Private hosts calling
+`capture_profile_sources` should pass `health_runtime_root` for the same effect.
+`loopx doctor` reports the optional `decision_context_capture_hosts_healthy`
+check without opening private spools. It alerts when a registered host has not
+ticked within `max(2 × interval, interval + 600s)` (for example a scheduler still
+pointing at a deleted checkout), when the last tick failed, when the spool is
+gone, or when a recorded source is stale or failing. Remove the record of a
+deliberately retired host.
+
 ## Relationship To Other Capabilities
 
 | Capability | Primary question | Relationship |
@@ -218,7 +505,8 @@ changing active cursors.
 The public capability currently ships its packet contracts, default-off
 activation profile, provider-neutral source contract, bounded evidence
 assembly, public-safe projections, owner-gated or quiet review settlement,
-private cursor commit, and later validated outcome feedback.
+private cursor commit, opt-in source-reference capture, and later validated
+outcome feedback.
 
 It is still marked **experimental**. A production integration must provide its
 own private source adapters, profile, authority policy, proposal logic, and
@@ -234,6 +522,7 @@ For implementation details and invariants, read the
 python3 examples/decision-context-contract-smoke.py
 python3 examples/decision-material-walkthrough-smoke.py
 python3 -m pytest -q tests/test_decision_context_material.py
+python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
 ```
 
 The contract smoke covers Decision Context packet and architecture readback.

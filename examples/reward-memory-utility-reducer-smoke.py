@@ -43,6 +43,8 @@ def _observation(
     confidence: float = 0.0,
     evidence_ref: str | None = None,
     version: str = "evaluation:stage2-smoke",
+    outcome_status: str = "succeeded",
+    application_available: bool = True,
 ) -> dict[str, Any]:
     memories = memories or [MEMORY_A]
     application = {
@@ -75,7 +77,7 @@ def _observation(
         "verified": True,
         "outcome_ref": "effect:stage2-smoke",
         "artifact_ref": application["artifact_ref"],
-        "outcome_status": "succeeded",
+        "outcome_status": outcome_status,
     }
     context = {
         "scope": deepcopy(SCOPE),
@@ -100,6 +102,8 @@ def _observation(
         "evaluator_ref": "evaluator:stage2-smoke",
         "evaluation_version": version,
     }
+    if not application_available:
+        application = {}
     return build_reward_memory_utility_observation(
         application,
         outcome,
@@ -164,6 +168,46 @@ def main() -> int:
             projection["raw_content_captured"],
         )
     )
+
+    for outcome_status in ("succeeded", "failed"):
+        try:
+            _observation(
+                label="helpful",
+                level="item",
+                basis="deterministic_effect",
+                confidence=0.9,
+                evidence_ref=f"effect:{outcome_status}",
+                outcome_status=outcome_status,
+                application_available=False,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"{outcome_status} outcome alone created a utility observation"
+            )
+
+        unattributed = _observation(
+            memories=[MEMORY_A, MEMORY_B],
+            label="unknown",
+            level="set",
+            basis="insufficient",
+            version=f"evaluation:stage2-unattributed-{outcome_status}",
+            outcome_status=outcome_status,
+        )
+        unattributed_projection = reduce_reward_memory_utility_observations(
+            [unattributed],
+            scope=SCOPE,
+            retrieval_snapshot_ref=RETRIEVAL,
+            policy_snapshot_ref=POLICY,
+        )
+        assert unattributed_projection["item_subject_count"] == 0
+        assert unattributed_projection["set_subject_count"] == 1
+        unattributed_subject = unattributed_projection["subjects"][0]
+        assert unattributed_subject["attribution_level"] == "set"
+        assert unattributed_subject["memory_ref_digests"] == [MEMORY_A, MEMORY_B]
+        assert unattributed_subject["effective_utility_label"] == "unknown"
+        assert unattributed_subject["utility_estimate"] == 0.0
 
     with tempfile.TemporaryDirectory(prefix="loopx-reward-memory-smoke-") as directory:
         input_path = Path(directory) / "projection-input.json"

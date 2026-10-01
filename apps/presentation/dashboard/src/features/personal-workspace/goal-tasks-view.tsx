@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { Check, ExternalLink, ListPlus, MessageSquareText, MoreHorizontal } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Bot, Check, ChevronDown, ExternalLink, ListPlus, LoaderCircle, MessageSquareText, MoreHorizontal } from "lucide-react";
 
 import type {
   WorkspaceDrawerSelection,
@@ -8,6 +8,95 @@ import type {
   WorkspaceTimelineItem,
 } from "./personal-workspace-model";
 import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
+import { CompletedTaskLane } from "./completed-task-lane";
+import { MarkdownText } from "./markdown";
+
+function TaskLane({
+  children,
+  count,
+  label,
+  tone,
+  listView = false,
+}: {
+  children: ReactNode;
+  count: number;
+  label: string;
+  tone: "attention" | "done" | "progress" | "schedule";
+  listView?: boolean;
+}) {
+  const labelId = useId();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const observedChildrenRef = useRef<HTMLElement[]>([]);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const [overflow, setOverflow] = useState({ after: false, before: false });
+  const syncOverflow = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    const next = {
+      after: maxScrollTop - element.scrollTop > 1,
+      before: element.scrollTop > 1,
+    };
+    setOverflow((current) => current.after === next.after && current.before === next.before ? current : next);
+  }, []);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(syncOverflow);
+    resizeObserverRef.current = observer;
+    observer.observe(element);
+    element.addEventListener("scroll", syncOverflow, { passive: true });
+    syncOverflow();
+    return () => {
+      observer.disconnect();
+      resizeObserverRef.current = null;
+      observedChildrenRef.current = [];
+      element.removeEventListener("scroll", syncOverflow);
+    };
+  }, [listView, syncOverflow]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    const observer = resizeObserverRef.current;
+    if (!element || !observer) return;
+    for (const child of observedChildrenRef.current) observer.unobserve(child);
+    const currentChildren = Array.from(element.children).filter(
+      (child): child is HTMLElement => child instanceof HTMLElement,
+    );
+    for (const child of currentChildren) observer.observe(child);
+    observedChildrenRef.current = currentChildren;
+    syncOverflow();
+  }, [children, count, listView, syncOverflow]);
+
+  if (listView) {
+    if (!count && tone !== "done") return null;
+    return (
+      <details className={`personal-task-group tone-${tone}`} open>
+        <summary><ChevronDown size={16} /><strong>{label}</strong><span>{count}</span></summary>
+        <div className="personal-task-list-rows">{children}</div>
+      </details>
+    );
+  }
+
+  return (
+    <section className="personal-object-list personal-task-lane">
+      <header id={labelId}>
+        <strong><i aria-hidden="true" className={`personal-kanban-dot tone-${tone}`} />{label}</strong>
+        <span>{count}</span>
+      </header>
+      <div
+        aria-labelledby={labelId}
+        className={`personal-task-lane-scroll${overflow.before ? " has-overflow-before" : ""}${overflow.after ? " has-overflow-after" : ""}`}
+        ref={scrollRef}
+        role="region"
+        tabIndex={count > 0 ? 0 : -1}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
 
 /**
  * Goal Tasks tab: one kanban surface that merges owner decisions ("待确认")
@@ -16,25 +105,33 @@ import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
  * Columns are states; cards open the same typed-preview drawer as the chat.
  */
 export function GoalTasksView({
+  historyEnabled = false,
+  historyRefreshRevision = 0,
   goal,
   items,
   onDraftTaskFromMessage,
   onOpenChat,
   onQuickComplete,
+  quickCompletingTodoIds,
   onSelect,
   selectedTodoId = null,
   userTodos,
 }: {
+  historyEnabled?: boolean;
+  historyRefreshRevision?: number;
   goal: WorkspaceGoal;
   items: WorkspaceTimelineItem[];
   onDraftTaskFromMessage?: (message: string) => void;
   onOpenChat?: () => void;
-  onQuickComplete?: (todo: WorkspaceGoal["agentTodos"][number] & { goalId: string; goalTitle: string; ownerLabel: string }) => void;
+  onQuickComplete?: (todo: WorkspaceGoal["agentTodos"][number] & { goalId: string; goalTitle: string; ownerLabel: string }) => void | Promise<void>;
+  quickCompletingTodoIds?: ReadonlySet<string>;
   onSelect: (selection: WorkspaceDrawerSelection) => void;
   selectedTodoId?: string | null;
   userTodos: WorkspaceModel["userTodos"];
 }) {
   const { t } = useWorkspaceI18n();
+  const [listView, setListView] = useState(false);
+  const [laneSelection, setLaneSelection] = useState({ goalId: "", laneId: "all" });
   const selectedTodoRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!selectedTodoId) return;
@@ -45,14 +142,32 @@ export function GoalTasksView({
     .filter((todo) => todo.goalId === goal.goalId)
     .map((todo) => ({ ...todo, goalTitle: goal.title }));
   const priorityRank = (todo: WorkspaceGoal["agentTodos"][number]) =>
-    todo.priority === "P0" ? 0 : todo.priority === "P1" ? 1 : todo.priority === "P2" ? 2 : 3;
+    todo.priority === "P0" ? 0 : todo.priority === "P1" ? 1 : todo.priority === "P2" ? 2 : todo.priority === "P3" ? 3 : todo.priority === "P4" ? 4 : 50;
+  const agentLanes = useMemo(() => {
+    const lanes = new Map((goal.agentLanes ?? []).map((lane) => [lane.agentId, lane]));
+    for (const todo of goal.agentTodos) {
+      if (todo.claimedBy && !lanes.has(todo.claimedBy)) {
+        lanes.set(todo.claimedBy, { agentId: todo.claimedBy, label: todo.claimedBy });
+      }
+    }
+    return [...lanes.values()];
+  }, [goal.agentLanes, goal.agentTodos]);
+  const selectedLaneId = laneSelection.goalId === goal.goalId
+    && agentLanes.some((lane) => lane.agentId === laneSelection.laneId)
+    ? laneSelection.laneId
+    : "all";
+  const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || agentId === selectedLaneId;
   const openAgentTodos = goal.agentTodos
     .filter((todo) => todo.taskClass !== "continuous_monitor" && !todo.done)
+    .filter((todo) => laneMatches(todo.claimedBy))
     .sort((left, right) => priorityRank(left) - priorityRank(right));
-  const doneAgentTodos = goal.agentTodos.filter((todo) => todo.taskClass !== "continuous_monitor" && todo.done);
-  const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> => item.kind === "schedule");
+  const doneAgentTodos = goal.agentTodos
+    .filter((todo) => todo.taskClass !== "continuous_monitor" && todo.done)
+    .filter((todo) => laneMatches(todo.claimedBy));
+  const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> =>
+    item.kind === "schedule" && laneMatches(item.schedule.agentId));
   const executionRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
-    item.kind === "run" && Boolean(item.run.todoId));
+    item.kind === "run" && Boolean(item.run.todoId) && laneMatches(item.run.agentId));
   const isEmpty = !attentionItems.length && !openAgentTodos.length && !doneAgentTodos.length && !scheduleItems.length;
   const conversation = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "message" }> =>
     item.kind === "message" && (item.message.role === "user" || item.message.role === "assistant"));
@@ -65,17 +180,40 @@ export function GoalTasksView({
     && conversation.slice(latestUserIndex + 1).some((item) => item.message.role === "assistant" && item.message.pending);
 
   return (
-    <>
+    <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`}>
+      <header className="personal-task-view-toolbar">
+        <div><strong>{t("header.tasks")}</strong></div>
+        <div className="personal-task-view-switch" role="group" aria-label={t("tasks.viewLabel")}>
+          <button type="button" aria-pressed={listView} onClick={() => setListView(true)}>{t("tasks.listView")}</button>
+          <button type="button" aria-pressed={!listView} onClick={() => setListView(false)}>{t("tasks.boardView")}</button>
+        </div>
+      </header>
+      {agentLanes.length > 1 ? (
+        <section aria-label={t("tasks.agentLaneFilter")} className="personal-task-lane-filter">
+          <div>
+            <Bot size={15} />
+            <span><strong>{t("tasks.agentLane")}</strong></span>
+          </div>
+          <label>
+            <span className="sr-only">{t("tasks.agentLaneFilter")}</span>
+            <select
+              aria-label={t("tasks.agentLaneFilter")}
+              onChange={(event) => setLaneSelection({ goalId: goal.goalId, laneId: event.target.value })}
+              value={selectedLaneId}
+            >
+              <option value="all">{t("tasks.allAgentLanes", { count: agentLanes.length })}</option>
+              {agentLanes.map((lane) => <option key={lane.agentId} value={lane.agentId}>{lane.label}</option>)}
+            </select>
+            <ChevronDown aria-hidden size={14} />
+          </label>
+        </section>
+      ) : null}
       {latestUserMessage ? (
         <section aria-label={t("tasks.chatRecent")} className="personal-task-chat-receipt">
           <span className="personal-task-chat-icon"><MessageSquareText size={18} /></span>
           <div>
-            <header><strong>{replyPending ? t("tasks.chatPending") : latestReply ? t("tasks.chatAgentReplied") : t("tasks.chatRecent")}</strong><small>{goal.agentLabel ?? goal.agentId}</small></header>
-            <p className="is-user"><b>{t("common.you")}</b>{latestUserMessage.text}</p>
-            {latestReply && !latestReply.pending ? <p className="is-assistant"><b>{t("common.agent")}</b>{latestReply.text}</p> : null}
-            <small>{replyPending
-              ? t("tasks.chatPendingDescription")
-              : t("tasks.chatUnchangedDescription")}</small>
+            <header><strong>{replyPending ? t("tasks.chatPending") : latestReply ? t("tasks.chatAgentReplied") : t("tasks.chatRecent")}</strong><small>{latestReply?.returnDelivery ? t("tasks.chatReturn") : latestReply?.agentLabel}</small></header>
+            <div className="personal-task-reply-preview"><MarkdownText text={replyPending ? t("tasks.chatPendingDescription") : (latestReply?.text ?? latestUserMessage.text).trim().split(/\r?\n/, 1)[0]} /></div>
           </div>
           <footer>
             <button onClick={onOpenChat} type="button"><MessageSquareText size={14} />{t("tasks.chatViewReply")}</button>
@@ -83,12 +221,8 @@ export function GoalTasksView({
           </footer>
         </section>
       ) : null}
-      <div className="personal-task-kanban">
-      <section className="personal-object-list">
-        <header>
-          <strong><i className="personal-kanban-dot tone-attention" />{t("timeline.waitingConfirmation")}</strong>
-          <span>{attentionItems.length}</span>
-        </header>
+      <div className={listView ? "personal-task-grouped-list" : "personal-task-kanban"}>
+      <TaskLane listView={listView} count={attentionItems.length} label={t("timeline.waitingConfirmation")} tone="attention">
         {attentionItems.map((attention) => {
           const age = localizedAttentionAge(attention.updatedAt, t);
           return (
@@ -103,12 +237,8 @@ export function GoalTasksView({
           );
         })}
         {!attentionItems.length ? <p className="personal-task-empty">{t("tasks.emptyConfirm")}</p> : null}
-      </section>
-      <section className="personal-object-list">
-        <header>
-          <strong><i className="personal-kanban-dot tone-progress" />{t("tasks.pendingAndRunning")}</strong>
-          <span>{openAgentTodos.length}</span>
-        </header>
+      </TaskLane>
+      <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
           const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
@@ -120,52 +250,48 @@ export function GoalTasksView({
                   {todo.priority ? <span className={`personal-priority-badge is-${todo.priority.toLowerCase()}`}>{todo.priority}</span> : null}
                   {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
                   {execution ? <span className="personal-task-session-status">{execution.status === "running" || execution.status === "queued" ? t("runs.running") : execution.status === "failed" ? t("tasks.sessionError") : t("common.waiting")}</span> : null}
-                  {!execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
+                  {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
                   {todo.claimedBy ?? goal.agentLabel ?? goal.agentId}
                 </small>
               </button>
               <div className="personal-task-card-actions">
                 {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={() => onSelect({ item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
-                {onQuickComplete ? <button aria-label={t("tasks.markComplete", { name: todo.text })} onClick={() => onQuickComplete(enriched)} title={t("tasks.completed")} type="button"><Check size={14} /></button> : null}
+                {onQuickComplete ? (
+                  <button
+                    aria-busy={quickCompletingTodoIds?.has(todo.todoId) || undefined}
+                    aria-label={t("tasks.markComplete", { name: todo.text })}
+                    disabled={quickCompletingTodoIds?.has(todo.todoId)}
+                    onClick={() => void onQuickComplete(enriched)}
+                    title={t("tasks.completed")}
+                    type="button"
+                  >
+                    {quickCompletingTodoIds?.has(todo.todoId)
+                      ? <LoaderCircle className="personal-spin" size={14} />
+                      : <Check size={14} />}
+                  </button>
+                ) : null}
                 <button aria-label={t("tasks.moreActions", { name: todo.text })} onClick={() => onSelect({ item: enriched, kind: "todo" })} title={t("common.actions")} type="button"><MoreHorizontal size={14} /></button>
               </div>
             </div>
           );
         })}
         {!openAgentTodos.length ? <p className="personal-task-empty">{t("tasks.emptyRunning")}</p> : null}
-      </section>
-      <section className="personal-object-list">
-        <header>
-          <strong><i className="personal-kanban-dot tone-schedule" />{t("tasks.scheduled")}</strong>
-          <span>{scheduleItems.length}</span>
-        </header>
+      </TaskLane>
+      <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
         {scheduleItems.map((item) => (
           <button key={item.id} onClick={() => onSelect({ item: item.schedule, kind: "schedule" })} type="button">
             <span>◷</span><strong>{item.schedule.label}</strong><small>{item.schedule.status === "paused" ? t("schedule.paused") : t("schedule.active")}</small>
           </button>
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
-      </section>
-      <section className="personal-object-list">
-        <header>
-          <strong><i className="personal-kanban-dot tone-done" />{t("tasks.completed")}</strong>
-          <span>{Math.max(goal.doneTodoCount ?? 0, doneAgentTodos.length)}</span>
-        </header>
-        {doneAgentTodos.map((todo) => (
-          <button aria-pressed={selectedTodoId === todo.todoId} className={selectedTodoId === todo.todoId ? "is-selected" : undefined} key={todo.todoId} onClick={() => onSelect({ item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId }, kind: "todo" })} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined} type="button">
-            <span className="is-done">✓</span><strong>{todo.text}</strong><small>{todo.claimedBy ?? goal.agentLabel ?? goal.agentId}</small>
-          </button>
-        ))}
-        {!doneAgentTodos.length ? <p className="personal-task-empty">{(goal.doneTodoCount ?? 0) > 0
-          ? t("tasks.completedSummary", { count: goal.doneTodoCount ?? 0 })
-          : t("tasks.emptyCompleted")}</p> : null}
-      </section>
+      </TaskLane>
+      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">
           {t("tasks.emptyGoal")}
         </p>
       ) : null}
-    </>
+    </section>
   );
 }

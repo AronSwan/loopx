@@ -6,6 +6,16 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .scheduling import (
+    DEFAULT_REVIEW_PRIORITY,
+    PullRequestReviewPriority,
+    build_scheduling_policy,
+    classify_scheduling_lane,
+    normalize_review_priority,
+    scheduling_sort_key,
+    scheduling_tier,
+)
+
 OBSERVATION_SCHEMA_VERSION = "pull_request_review_queue_observation_v1"
 CANDIDATE_SCHEMA_VERSION = "pull_request_review_candidate_v0"
 TODO_PREVIEW_SCHEMA_VERSION = "pull_request_review_todo_preview_v0"
@@ -17,6 +27,20 @@ OBSERVATION_STATES = {
     "observed_unchanged",
     "material_transition",
 }
+
+
+def _selection_policy_text(priority: PullRequestReviewPriority) -> str:
+    if priority is PullRequestReviewPriority.OWNER_FIRST:
+        return (
+            "authenticated-developer-owned actionable heads first; then other "
+            "developer response heads and aged backlog; otherwise use the "
+            "capability-ranked unprojected queue; exact head required"
+        )
+    return (
+        "other-developer actionable heads first; then authenticated-developer-owned "
+        "heads; response and age tie-breakers remain within each lane; exact head "
+        "required"
+    )
 
 
 def _fingerprint(value: Any) -> str:
@@ -57,7 +81,11 @@ def _check_snapshot(value: Any) -> dict[str, Any]:
     }
 
 
-def _pr_snapshot(item: Mapping[str, Any]) -> dict[str, Any]:
+def _pr_snapshot(
+    item: Mapping[str, Any],
+    *,
+    review_priority: PullRequestReviewPriority,
+) -> dict[str, Any]:
     snapshot = {
         "number": item.get("number"),
         "state": _upper(item.get("state"), "OPEN"),
@@ -67,16 +95,29 @@ def _pr_snapshot(item: Mapping[str, Any]) -> dict[str, Any]:
         "is_draft": item.get("is_draft") is True,
         "merge_state": _upper(item.get("merge_state")),
         "review_ready_at": item.get("review_ready_at"),
+        "review_ready_age_hours": item.get("review_ready_age_hours"),
+        "created_at": item.get("created_at"),
         "author_owned": item.get("author_owned") is True,
+        "community_feedback_ready": item.get("community_feedback_ready") is True,
         "review_conclusion_status": str(
             (item.get("review_conclusion") or {}).get("status")
             if isinstance(item.get("review_conclusion"), Mapping)
             else ""
         ),
     }
-    if "review_action_kind" in item:
-        snapshot["review_action_kind"] = item.get("review_action_kind")
-    return snapshot | {"fingerprint": _fingerprint(snapshot)}
+    action = _candidate_action(item)
+    snapshot["review_action_kind"] = action[0] if action is not None else None
+    snapshot["scheduling_lane"] = classify_scheduling_lane(snapshot).value
+    snapshot["scheduling_tier"] = scheduling_tier(
+        snapshot, review_priority=review_priority
+    )
+    snapshot["review_priority"] = review_priority.value
+    fingerprint_snapshot = {
+        key: value
+        for key, value in snapshot.items()
+        if key != "review_ready_age_hours"
+    }
+    return snapshot | {"fingerprint": _fingerprint(fingerprint_snapshot)}
 
 
 def _previous_observation(value: Any) -> Mapping[str, Any]:
@@ -192,6 +233,7 @@ def _candidate_action(item: Mapping[str, Any]) -> tuple[str, str] | None:
         if not action_kind:
             return None
         if action_kind not in {
+            "audit_pull_request_exact_head",
             "rereview_pull_request_exact_head",
             "qualify_pull_request_merge_readiness",
             "review_pull_request_exact_head",
@@ -223,6 +265,7 @@ def _candidate_packet(
     url = str(item.get("url") or "").strip()
     task_repository = f"git:github.com/{repository}" if repository else None
     verb = {
+        "audit_pull_request_exact_head": "Fresh-audit",
         "rereview_pull_request_exact_head": "Re-review",
         "qualify_pull_request_merge_readiness": "Qualify merge readiness for",
         "review_pull_request_exact_head": "Review",
@@ -288,10 +331,13 @@ def build_pull_request_review_queue_observation(
     previous_observation: Mapping[str, Any] | None = None,
     handled_exact_heads: Sequence[str] = (),
     projected_exact_heads: Sequence[str] = (),
+    authenticated_developer_login: str | None = None,
+    review_priority: object = DEFAULT_REVIEW_PRIORITY,
 ) -> dict[str, Any]:
     """Build one read-only observation and at most one exact-head candidate."""
 
     normalized_repository = str(repository or "").strip()
+    normalized_priority = normalize_review_priority(review_priority)
     previous = _previous_observation(previous_observation)
     previous_handled = _previous_handled_exact_heads(
         previous_observation, repository=normalized_repository
@@ -387,27 +433,36 @@ def build_pull_request_review_queue_observation(
             "projected_candidate_exact_heads": projected_sorted,
             "projected_candidate_count": len(projected_sorted),
             "candidate_projection_ack_semantics": PROJECTION_ACK_SEMANTICS,
-            "selection_policy": (
-                "one fast-feedback selection for a new head after REQUEST_CHANGES; "
-                "otherwise rotate through the age-fair unprojected backlog; exact head required"
+            "selection_policy": _selection_policy_text(normalized_priority),
+            "scheduling_policy": build_scheduling_policy(
+                authenticated_developer_login=authenticated_developer_login,
+                review_priority=normalized_priority,
             ),
             "write_authority_granted": False,
             "external_write_performed": False,
         }
 
-    ranked_items: list[dict[str, Any]] = []
-    for rank, item in enumerate(pull_requests, start=1):
+    normalized_ranked_items: list[dict[str, Any]] = []
+    for item in pull_requests:
         if _upper(item.get("state"), "OPEN") != "OPEN":
             continue
-        snapshot = _pr_snapshot(item)
+        snapshot = _pr_snapshot(item, review_priority=normalized_priority)
         snapshot.update(
             {
-                "rank": rank,
                 "title": str(item.get("title") or "").strip(),
                 "url": str(item.get("url") or "").strip(),
             }
         )
-        ranked_items.append(snapshot)
+        normalized_ranked_items.append(snapshot)
+    normalized_ranked_items.sort(
+        key=lambda item: scheduling_sort_key(
+            item, review_priority=normalized_priority
+        )
+    )
+    ranked_items = [
+        {**item, "rank": rank}
+        for rank, item in enumerate(normalized_ranked_items, start=1)
+    ]
 
     current_exact_heads = {
         key
@@ -449,7 +504,11 @@ def build_pull_request_review_queue_observation(
         for item in sorted(ranked_items, key=lambda row: str(row.get("number")))
     ]
     queue_fingerprint = _fingerprint(
-        {"repository": normalized_repository, "items": queue_items}
+        {
+            "repository": normalized_repository,
+            "review_priority": normalized_priority.value,
+            "items": queue_items,
+        }
     )
     previous_repository = str(previous.get("repository") or "").strip()
     prior_items = (
@@ -473,8 +532,28 @@ def build_pull_request_review_queue_observation(
 
     candidate = None
     candidate_selection_reason = None
+    for item in ranked_items:
+        if (
+            normalized_priority is PullRequestReviewPriority.OWNER_FIRST
+            and item.get("author_owned") is not True
+        ) or (
+            normalized_priority is PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
+            and item.get("author_owned") is True
+        ):
+            continue
+        exact_head_key = _exact_head_key(item.get("number"), item.get("head_oid"))
+        if exact_head_key in handled_set or exact_head_key in projected_set:
+            continue
+        candidate = _candidate_packet(item, repository=normalized_repository)
+        if candidate is not None:
+            candidate_selection_reason = (
+                "authenticated_developer_owned_first"
+                if normalized_priority is PullRequestReviewPriority.OWNER_FIRST
+                else "other_developer_owned_first"
+            )
+            break
     if observation_state == "material_transition":
-        for item in changed:
+        for item in changed if candidate is None else []:
             prior = prior_items.get(str(item.get("number")), {})
             action = _candidate_action(item)
             became_approved = (
@@ -483,7 +562,8 @@ def build_pull_request_review_queue_observation(
                 and _upper(prior.get("review_decision")) != "APPROVED"
             )
             is_author_response = (
-                bool(prior)
+                item.get("author_owned") is not True
+                and bool(prior)
                 and _upper(prior.get("review_decision")) == "CHANGES_REQUESTED"
                 and str(prior.get("head_oid") or "").strip().lower()
                 != str(item.get("head_oid") or "").strip().lower()
@@ -561,9 +641,10 @@ def build_pull_request_review_queue_observation(
         "projected_candidate_exact_heads": projected_sorted,
         "projected_candidate_count": len(projected_sorted),
         "candidate_projection_ack_semantics": PROJECTION_ACK_SEMANTICS,
-        "selection_policy": (
-            "one fast-feedback selection for a new head after REQUEST_CHANGES; "
-            "otherwise rotate through the age-fair unprojected backlog; exact head required"
+        "selection_policy": _selection_policy_text(normalized_priority),
+        "scheduling_policy": build_scheduling_policy(
+            authenticated_developer_login=authenticated_developer_login,
+            review_priority=normalized_priority,
         ),
         "write_authority_granted": False,
         "external_write_performed": False,

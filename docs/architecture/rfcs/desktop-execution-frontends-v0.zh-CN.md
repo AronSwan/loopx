@@ -1,10 +1,11 @@
 # RFC：LoopX 桌面执行前端 v0
 
-- 状态：Draft
+- 状态：已接受
+- 替代 / 关闭：无
 - 决策边界：同时支持挂接到外部拥有的 Agent 会话，以及端到端由 LoopX 托管的桌面运行时
 - 初始挂接运行时：Codex App / app-server
 - 初始托管运行时：Pi 与 DeepSeek Harness（`dsh`）
-- 默认托管 provider 配置：火山方舟 Agent Plan
+- 托管 provider 选择：显式配置引导与用户意图约束，Agent 在已授权可用 profile 内自主分配；火山方舟 Agent Plan 保留为可选发行预设。
 
 ## 摘要
 
@@ -15,8 +16,9 @@ LoopX Desktop 应支持两种显式的执行前端模式：
    中断、恢复和执行循环的所有权。
 2. **托管 Agent 运行时（Managed Agent Runtime）**。LoopX Desktop 启动并
    监督 Pi 或 DeepSeek Harness，选择显式的 provider 配置，并通过有界的
-   `loopx_turn_v0` 事务推进工作。默认发行配置使用火山方舟 Agent Plan，
-   而运行时与 provider 契约保持可替换。
+   `loopx_turn_v0` 事务推进工作。发行版可提供命名的火山方舟 Agent Plan 预设，
+   操作者配置与明确意图约束 Agent 的自主分配；不把任何 provider 设为统一产品
+   默认。运行时与 provider 契约保持可替换。
 
 两种模式呈现相同的 LoopX Goal、Todo、gate、quota、evidence 和状态事实。
 它们不共享进程所有权。前端绝不能从聊天散文推断模式切换，也不得静默启动
@@ -35,6 +37,34 @@ manager Agent，也不把连接器硬编码到 Codex。
 托管模式不要求宿主原生的 Goal 循环。桌面拥有的运行时监督器反复询问 LoopX
 下一个有界 Turn 是否有资格执行，调用所选运行时适配器，验证其结果，并提交
 被接受的状态。`loopx_turn_v0` 始终是一个事务，而不是第二个常驻调度器。
+
+## 显式配置引导、用户意图与自主分配
+
+这里细化 provider 默认策略，属于提案，不改变已发布运行时默认值，也不认证新
+适配器。复用现有 machine/Goal capability editor、provider store、会话绑定与
+调度准入，不新增 capability id、provider 实现或选路服务。
+
+- **配置让选择可用。** 展示已探测安装与登录、支持工具、模型/账户、费用或费用
+  未知、宿主在线条件和权限范围。发现不等于授权。命名预设是可选方案，不能覆盖
+  已有明确配置。
+- **用户明确意图约束选择。** 固定模型/账户、本地限定、预算和成员限制，按用户
+  声明的作用域生效。偏好不自动变成硬锁。不能把某位用户的 Codex 偏好，或某个
+  发行版的 Ark 预设，推广成全产品规则。未解决的明确约束冲突需要澄清。
+- **Agent 在范围内自主分配。** 按任务适配性、工具权限、成本和观测到的可用性，
+  选择可用模型/运行时、复用或请求 worker、重新分配后续工作。已授权的灵活资源池
+  不要求逐次确认。选择由 Agent 作语义判断；typed owner 执行资格、预算、权限和
+  会话 fence。
+
+在设置与团队详情投影有效 runtime/model/profile、分配理由和就绪状态，派发时
+重新验准入。锁定路径不可用就阻塞并给修复入口；灵活池中的成员不可用，可以选择
+另一条合格路径并明确回读。不能借替代扩大数据外发、凭证、费用权限或支持工具。
+活跃会话保留绑定与上下文所有权；已授权自主改派走现有显式重新绑定/continuation
+契约，不静默迁移会话。新增付费资源和范围变化保留原有决策边界。
+
+通过打包引导、Chat/管家和独立 CLI 验收：固定选择优先于预设；灵活分配不反复
+审批；锁定路径失效时保持阻塞；预算耗尽或未授权回退不产生执行；重启保持有效
+配置。可选 Lark 投影同一选择及自己的受众约束。用例通过前，这是分配设计而非
+运行保证。见[近期发布路线](loopx-overall-roadmap-v0.zh-CN.md#近期本地-agent-产品与发布路线)。
 
 ## 问题
 
@@ -138,6 +168,13 @@ Agent 到连接绑定；它不要求每个 Agent 都有唯一的 Lark 应用凭�
 broker 保留显式的 Agent 与频道路由，一个 Bot 应用可以为多个连接服务。
 
 ### 一个有序的工作对话
+
+项目 coordinator 的基线入口就是现有的 **Goal → 对话**。已注册 peer 也可以
+承担这份职责；两种选择都不另建 coordinator 对话，也不改变管家的跨 Goal
+职责。[Codex 显式续跑](../../reference/goal-chat-continuation.md)复用输入框、
+旁的开启/暂停/恢复、流式运行与原本地历史，接入共享委派和独立验收的成员
+返回。queue/inbox/steer 保留不同回执；首次配置选择现有执行绑定，不从注册
+推导授权。Lark、其他主力驱动等价和无人值守运行仍需分别资格化。
 
 在实时操控和队列会话模式下，Web 与 Lark 消息进入所选 Agent 会话的同一个
 串行化入口流。每条消息记录 public-safe 的传输元数据，例如 `origin=web` 或
@@ -253,10 +290,14 @@ owner-local inbox 存储中；状态和 quota 只看到无内容的紧迫性。
 绑定”的交互式聊天约束。Goal 级 Kanban、生命周期通知和共享协作工件可以保持
 Goal 级；入站工作对话是 Agent 级的。
 
+<a id="agent-scoped-bot-ingress-modes"></a>
+
 ## Agent 级 Bot 入口模式
 
-Agent 到 Bot 的连接需要三种显式的入口语义。它们是同一个已绑定 Agent 的
-投递策略，不是三个 Agent，也不是自然语言分类器：
+Agent 到 Bot 的连接与 peer 协作需要同样的三种显式入口语义。用户侧简称
+**inbox**、**queue**、**steer**，保留下述现有词汇。它们表达同一已绑定 Agent 的
+投递意图，不是三个 Agent 或自然语言分类器。本提案将共同策略扩展到 peer 入口，
+不因重命名输入就声称新增 API 或改变已有 adapter：
 
 ```text
 agent_bot_ingress_mode_v0 =
@@ -269,9 +310,41 @@ agent_bot_ingress_mode_v0 =
 
 | 模式 | 投递目标 | 可用性模型 | 持久边界 |
 |---|---|---|---|
-| `live_steering` | 当前挂接或托管的工作会话 | 会话在线并接受有序入口 | 现有会话/事件存储；无第二个 Agent 会话 |
-| `session_queue` | 同一 Agent 工作会话在下次接受输入时 | 运行时存在但忙碌、重连中或暂时离线 | 按 Agent 与会话键控的 owner-local 有序入口队列 |
+| `live_steering` | 已绑定工作会话中指定的当前执行 | 宿主能在声明的安全点采用输入 | 现有会话/事件存储及消费回执；无第二执行器 |
+| `session_queue` | 同一已绑定会话中的后续工作输入 | 当前工作结束或明确交还执行权后再投递 | 按 Agent 与会话键控的 owner-local 持久有序入口队列 |
 | `async_inbox` | 显式排空后的下一个合格 LoopX Agent Turn | 无需 Agent 进程保持存活 | 现有 provider 拥有的事件 inbox 加无内容 quota 紧迫性 |
+
+这细化了此前 queue 的“下次接受输入”表述：把 pending 输入合入当前工作的宿主，
+并不因此实现拟议 queue 语义。变更必须显式资格化，在 opt-in 实现和兼容测试通过前
+保持旧 profile 行为。
+
+沿现有入口身份和接收者范围持久化请求模式、允许的 fallback 和实际投递处置。读回
+区分耐久收件、排队派发、宿主消费和 steer 采用；工作采用/验收仍属于 collaboration/work
+owner。模型正文或 HTTP 成功不是消费回执；未知能力明确失败。前端、CLI、Lark 在
+原工作/对话面展示实际模式、等待原因及结果，不另造一块团队看板。
+
+### 投递意图不决定唤醒策略
+
+Mode 决定输入可以在哪里被消费；binding 已有的续跑 owner 决定是否接纳下一次
+执行机会。以下提议矩阵用于资格化 adapter，不增加第四种入口模式：
+
+| 接收方状态 | 要求行为 |
+| --- | --- |
+| 活跃 turn 或工具未决 | Inbox 等待显式 drain，queue 等待后续 turn；steer 指向精确活跃 generation 和已声明的安全输入边界。收件成功不能证明已提交的模型/工具请求被抢占。 |
+| 空闲或 turn 完成 | 保存符合范围的 inbox/queue 输入；只有配置的续跑 owner 在范围/预算检查后才可接纳新 turn，没有该策略就显示待处理。无活跃目标时 steer 不可用。 |
+| 正在收尾或已中断 | 保留迟到输入/结果身份，不重新打开收尾 turn；收尾后重查。通知不能撤销显式中断，恢复遵循已有 owner 和暂停策略。 |
+| 未加载或断线 | 保存成功不证明 session 在线；仅经资格化的 binding 路径恢复，重验范围与 generation，不支持恢复时保留可行动的待处理/不可用观察。 |
+
+排队不是启动 turn 的承诺，provider trigger 标志也不是 LoopX 准入。多条已收件
+消息可以进入同一合格 turn，但独立工作请求仍保留各自身份和返回义务；这些关系
+由[交接契约](capable-manager-semantic-handoff-v0.zh-CN.md#团队中的请求身份与结果路由)
+拥有，不能把一条传输回执当作 join。
+
+分别投影 ingress 收件回执、实际执行/唤醒观察和工作结果/验收；不能把“消息已存”
+显示成“Agent 正在工作”，也不能把唤醒通知显示成“结果已收到”。通知丢失后，保存的
+输入/结果仍须可经读回发现；重放或重连须按 ingress/result 身份去重应用，不能启动第二个执行器。在已有
+修订输入 fixture 中增加无唤醒策略的空闲输入、收尾竞态、通知合并，以及结果提交到
+通知之间重启。这是设计要求，每种宿主仍需独立资格化。
 
 ### 捕获、入口与回复正交
 
@@ -307,8 +380,14 @@ mention 准入同时绑定已验证 provider profile 返回的 App id 与 Bot op
 上游恢复身份、中断策略、工作区、运行时、信任和能力边界。如果该绑定陈旧、
 模糊、终态或属于另一个 Agent，投递失败关闭。
 
-操控是传输，不是任务权威。只读交流可以是普通会话 Turn。实质效果仍然需要与
+操控是传输，不是任务权威。当前会话可以消费只读输入而不领取新工作。实质效果仍然需要与
 所采用执行模式相称的最新 LoopX 决策、验证、回写和结算。
+
+Steer 面向当前执行代际及其下一个支持的安全输入点，不等于 interrupt/restart。
+外部工具未返回时，宿主可以耐久接收 pending correction，但不能声称已经采用。
+无法安全注入时明确报告，仅按请求显式 fallback 处理；绝不伪造工具结果来投递纠正。
+失效工具调用需要明确取消处置，其迟到结果对照当前输入版本和执行 fence 对账。
+消息本身不取消所有 peer，也不撤销其权限。
 
 ### 会话队列
 
@@ -316,7 +395,8 @@ mention 准入同时绑定已验证 provider profile 返回的 App id 与 Bot op
 去重、按会话排序、有界大小、过期、背压、取消和崩溃安全派发。它不是 LoopX
 Todo 队列，不得改变 Goal 优先级、认领工作或授予能力。
 
-当同一会话恢复就绪时，broker 通过正常的串行化入口提交最旧的合格条目。缺失
+当前工作结束或明确交还执行权后，broker 通过正常串行化入口提交最旧的合格条目；
+仅有 pending-tool idle 观察不能证明这个边界。缺失
 或被替换的会话需要显式重新绑定或死信决策；它不会把条目静默路由到全新 Agent
 历史。
 
@@ -327,8 +407,9 @@ Todo 队列，不得改变 Goal 优先级、认领工作或授予能力。
 `operator_inbox_urgency_v0`：pending/question/mention/reply 计数、最旧年龄和
 `reply_due`，绝不投影消息正文、发送者、provider id、私有路径或 chat id。
 
-当 `reply_due=true` 时，inbox 通道抢占普通推进和 monitor 工作。被选中的 Agent
-排空有界内容，对照最新 Goal 状态解释它，先写入任何持久效果，然后发送至多
+当 `reply_due=true` 时，inbox 通道在下次合格准入时抢占普通推进和 monitor 工作，
+不打断当前执行。被选中的 Agent 排空有界内容，对照最新 Goal 状态解释它，先写入
+任何持久效果，然后发送至多
 一条带 provider readback 的幂等 source-thread 回复，最后才 ACK。仅排空是
 只读的；采集或 ACK 永远不是语义权威。
 
@@ -337,6 +418,11 @@ Goal Topic 兼容运行时目前把 provider 采集、Inbox 文件、Goal Chat �
 在绑定 Goal 上登记 inbox 紧迫性时，它不是 Agent 级收敛。实现必须把 provider
 采集与入口策略分开、要求已登记的 Agent id，并且要么通过已验证的工作会话
 绑定提交，要么把 inbox 指针发布到规范 quota 路径。
+
+用同一修订输入 fixture 验证三模式：未决工具、接收方忙碌/离线、消息过期、满队列、
+重复/冲突身份、会话替换、发送方撤权及迟到工具结果。断言实际消费边界和 fallback，
+不能只看消息存在。Inbox drain 不证明工作验收；queue 不改当前工作；steer 不能先于
+宿主回执声称已采用。这些是拟议验收要求，不是所有宿主已支持三模式的证据。
 
 ### 初始产品排序
 
@@ -380,13 +466,17 @@ Agent 进程或第二个上游会话。
 
 ## 模式 B：托管 Agent 运行时
 
+[DSH/Pi 评估](./harness-selection-dsh-pi-v0.zh-CN.md) 区分首个被动事件源与 managed runtime
+选型，列出生命周期、读取及测量门槛。诊断 CLI 已支持组合读取，但这个增量不交付
+managed 面板或 supervisor。
+
 ### 产品流程
 
 托管桌面路径是端到端的：
 
 1. 选择或创建 LoopX Goal 和工作 Agent 绑定；
 2. 选择 Pi 或 `dsh` 作为运行时；
-3. 选择托管 provider 配置，默认发行配置为 Ark Agent Plan；
+3. 引导配置 provider 与用户约束，由 Agent 在已授权可用 profile 内选择；提供命名的 Ark Agent Plan 预设；
 4. 验证运行时安装、provider 认证和已宣称能力；
 5. 启动一个运行时并创建一个不透明可恢复会话；
 6. 向同一会话发送用户输入；
@@ -437,8 +527,9 @@ Pi 和 `dsh` 实现同一个窄托管运行时契约，而不假装其内部循�
 
 ### Provider 配置契约
 
-运行时选择与 provider 选择正交。Ark Agent Plan 是默认托管产品配置，而不是
-散落在 LoopX 内核各处的特例。
+运行时选择与 provider 选择正交。Ark Agent Plan 是命名的托管 provider 预设。
+显式配置引导、作用域内的用户意图与 Agent 自主分配共同选择合格 profile，
+不把 provider 规则散落在 LoopX 内核各处。
 
 一个 provider 配置必须暴露或解析：
 
@@ -486,6 +577,90 @@ provider 直接变更 Goal 或 Todo 状态。
 私有 provider coordinates、凭据、日志、trace、数据库行和文档内容保持
 owner-local。LoopX 持久状态只保存 public-safe 的 capability 与 operation
 身份、provider revision 与 profile digest、有界证据引用和已准入回执。
+
+## 管家工作区中的可选 Computer Use
+
+实施跟踪：[#4114](https://github.com/huangruiteng/loopx/issues/4114)。
+
+### 产品决策与归属
+
+在现有管家工作区增加显式启用的桌面操作入口，处理缺少合适 API 或 CLI 的有界任务。
+当声明过的 API/CLI 可以完成并验证同一授权效果时，优先使用它。首个场景是：在指定应用
+准备草稿，停在提交前。派发前必须确定 Goal、Todo、Agent 和已有工作会话；不增加中转
+管家 Agent，也不增加第三种执行模式。挂接模式只使用宿主声明的工具；托管模式可以
+显式启用可选 provider。
+
+归属：首个草稿场景由 `content-ops` 拥有；Computer Use 沿用
+[`computer_use_runtime_v0`](../../reference/protocols/computer-use-runtime-v0.md)
+的 provider 执行面定位，不新增内置 capability。候选 provider id 为 `maka-cu`，若被
+选用则通过可选 extension/package 交付，负责安装、doctor、禁用和兼容性；现有 Desktop
+broker 负责呈现。Capability 解释回执并提出状态迁移，Kernel 保留 Todo、gate、evidence
+和 quota 权威。复用现有 schema 和契约校验器，不再平行增加一套 builder。
+
+### 实现证据与采用边界
+
+参考 Apache Maka 的固定提交
+[`87797378`](https://github.com/apache/maka/tree/87797378cec89e2a31351f64656dc8d26a10e73d)。
+以下是源码核查结果，不代表已通过 LoopX 真机资格验证：
+
+- [模型工具](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/packages/runtime/src/computer-use-tools.ts)
+  提供应用发现、观察、语义元素操作、键盘输入和窗口操作。观察默认返回元素树，截图显式
+  请求；生产模型动作面排除裸坐标输入，有序元素操作在每一步重新观察。
+- [宿主适配层](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/packages/computer-use/README.md)
+  通过 stdio 上的 `maka.cu/2` JSON-RPC 连接 Runtime 与受监督的 native 子进程，包含
+  摘要校验、握手、取消和 generation 失效处理。Desktop 的光标/PiP 是下游呈现，不拥有
+  动作权威。
+- [执行器清单](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/apps/desktop/bundled-tools.json)
+  固定 native 提交 `4a9787d2`，标记 ad-hoc 签名、缺少 notarization、
+  `distributionReady: false`。产品选择器仅在 macOS 且提供执行器与摘要时启用。
+  Desktop 可下载，不等于 CU 执行器可用或已支持跨平台。
+- [宿主事件边界](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/docs/computer-use-host-events-contract.md)
+  区分 typed intervention 与 UI 内容变化，并明确全局物理输入归因、更强的进程实例身份
+  仍有缺口。[证据分级](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/docs/computer-use-evidence-classes.md)
+  区分 real-runtime、故障注入、协议测试和静态检查，各类证据不能互相替代。
+
+采用其观察、动作、回读与接管设计；provider 选型待隔离真机切片验证。
+[原生实现](https://github.com/maka-agent/maka-cu/tree/4a9787d2c7f2fbc6a29b33d691916c6b84543661/packages/OpenComputerUseKit/Sources/OpenComputerUseKit)
+使用 Swift、macOS Accessibility 和私有 SkyLight 输入路径。
+[来源记录](https://github.com/apache/maka/blob/87797378cec89e2a31351f64656dc8d26a10e73d/docs/computer-use-provenance.md)
+区分 MIT 派生代码与专有二进制行为观察。若分发执行器，需要单独完成来源、notice、签名
+和兼容性审查；本 RFC 不选用整套 Maka runtime，也不复制其光标实现。
+
+### 必需行为
+
+1. **范围可见。** 启用前展示目标应用/窗口、有界目标、允许的效果、停止条件、provider
+   就绪状态和截图/model 路由。启用不授予登录账户访问或新的外部写权限；复用有效的
+   范围授权，安装和 OS 权限本身不构成任务授权。
+2. **目标新鲜度。** 每次动作绑定当前 observation 和目标进程/窗口 generation，拒绝
+   过期或歧义目标，不回退到前台或全局输入。动作后重新观察，完成声明必须有对应效果
+   的回读；传输成功不能直接完成 Todo。
+3. **人可接管。** 在现有工作区与 Goal Chat 展示简洁进度和即时 Stop/Take over 入口。
+   停止撤销待执行输入的权限；已派发但效果未知的动作需要核对结果。锁屏、断连、目标
+   重启或可归因的用户介入使旧观察失效，恢复前重新观察并核对范围。未知弹窗与新权限
+   决策进入具体的人类 gate。
+4. **执行有界。** 对不同 Agent 竞争同一目标的操作串行化，限制动作数、时间和重试预算，
+   服务丢失后不盲目重放写动作。Provider 细节保留为本地 typed 状态，回执映射到现有
+   封闭 stop-reason 枚举，不随意扩展字符串。持久化未知效果的事实用于恢复核对，不从
+   自然语言推断重试指令。
+5. **证据私有。** 截图、AX 文本、输入值、窗口标题和 replay 数据留在宿主私有边界。
+   发给模型须满足所选 provider 的用户同意与模态策略。共享投影仅包含脱敏事实/句柄，
+   查看私有证据仍需要 owner 访问权限。
+6. **默认关闭隔离。** 禁用或不可用时不暴露 CU 工具、不启动执行器、不请求 OS 权限。
+   禁用撤销会话并停止子进程；卸载移除受管包并说明如何撤销 OS 权限。两者均不改变
+   Goal 状态。
+
+### 首个交付切片与验收
+
+通过可选 provider 和已有工作会话完成一个 `content-ops` 草稿至复核流程，将回执与
+人类 gate 投影到管家/Goal Chat。第二个真实消费者证明需求前，不增加共享 session/handoff
+协议。这是待实现切片，不代表已有可运行命令，也不承诺将 Maka 作为 runtime。
+
+验收必须经过生产入口、真实模型与 native executor，操作隔离的合成应用，独立检查字段值
+与 Submit 控件未被触发。另须覆盖干扰窗口、过期观察、应用重启、并发目标占用、用户接管、
+锁屏、派发结果未知、禁用再启用；真实宿主事件与故障注入分别记账。记录 provider/model/
+executor 精确版本、完成情况、延迟、动作数、人工介入、禁止效果和隐私检查。录制 fixture
+或 schema smoke 不足以证明通过。两种前端模式均须证明关闭时的工具暴露、进程启动、入口
+路由、投影和 writeback 对等；实现可见 UI 变化时，先提供预览并取得 owner 批准再提交。
 
 ## 状态与身份边界
 
@@ -549,6 +724,12 @@ owner-local。LoopX 持久状态只保存 public-safe 的 capability 与 operati
 - 只在独立验证和被接受的状态回写之后消耗 quota。
 - 不把私有部署或协作上下文复制到公共 fixtures、截图、示例或文档中。
 - 已提交测试使用合成 provider fixtures，并把真实 provider 测试设为显式可选。
+
+### 团队协调的产品闭环（2026-09-16）
+
+#4547/#4548/#4552 已交付团队预览确认 UI、打包资源及 browser fixture，不再把确认入口列为未实现。按[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R1 补语义一致的 partial/gap/stale 回读，R2 验 worker 实际执行，R3 验自动回报和重启恢复。现有确认 fixture 不能证明 Lark 端完整闭环。
+
+前端/Lark 消费同一 proposal、receipt 和 audience projection；运行状态不能由计划已确认推断。每个实现批次含 packaged frontend 的实际交互和 Lark 适用路径验收，或明确说明未验收。涉及首屏/主 CTA 的实现继续先展示具体预览并获批准；本次仅更新 RFC，不修改 UI。
 
 ## 交付切片
 
@@ -620,7 +801,7 @@ owner-local。LoopX 持久状态只保存 public-safe 的 capability 与 operati
 2. 一个 Desktop 运行时监督器，支持 start、interrupt、close、reconcile 和
    resume；
 3. `dsh` 作为第一个参考运行时，复用其已被接受的 Turn 适配器；
-4. Ark Agent Plan 作为默认配置的 provider 配置；
+4. Ark Agent Plan 作为一个显式选择的 provider 预设；
 5. 一个可恢复对话和一次一个的有界 Turn 执行；以及
 6. 在 Desktop 中联合展示运行时、Turn 和 LoopX 状态。
 

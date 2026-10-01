@@ -29,8 +29,8 @@ OTHER_AGENT_ID = "codex-replan-gate-other-agent"
 STATE_TEXT = "# Active Goal State\n"
 
 
-def _completed_advancement_chain_state() -> str:
-    """Five completed slices with explicit lineage and no succession warning.
+def _completed_advancement_chain_state(count: int = 5) -> str:
+    """Completed slices with explicit lineage and no succession warning.
 
     The final non-advancement anchor keeps this fixture focused on the outcome
     checkpoint rule instead of the independent completed-without-successor
@@ -38,10 +38,10 @@ def _completed_advancement_chain_state() -> str:
     """
 
     lines = ["## Agent Todo", ""]
-    for index in range(5):
+    for index in range(count):
         successor_id = (
             f"todo_completed_slice_{index + 1}"
-            if index < 4
+            if index < count - 1
             else "todo_completed_outcome_anchor"
         )
         lines.extend(
@@ -164,6 +164,36 @@ def test_typed_surface_delta_satisfies_periodic_obligation() -> None:
 
 def test_writeback_allowed_when_replan_not_due() -> None:
     _call_gate(runs=_durable_runs(5))
+
+
+def test_turn_guard_without_replan_target_defers_new_obligation() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+
+    semantic_delta = enforce_open_replan_writeback(
+        newest_first_runs=runs,
+        state_text=STATE_TEXT,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        guard_scoped=True,
+        guard_semantic_replan_obligation_id=None,
+    )
+
+    assert semantic_delta is None
+
+
+def test_turn_guard_keeps_its_exact_replan_target_strict() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    obligation_id = _current_obligation_id(runs)
+
+    with pytest.raises(ReplanWritebackRejected):
+        enforce_open_replan_writeback(
+            newest_first_runs=runs,
+            state_text=STATE_TEXT,
+            agent_id=AGENT_ID,
+            goal_id=GOAL_ID,
+            guard_scoped=True,
+            guard_semantic_replan_obligation_id=obligation_id,
+        )
 
 
 def _typed_repeat_runs() -> list[dict]:
@@ -733,7 +763,8 @@ def test_current_obligation_runnable_successor_is_the_semantic_receipt() -> None
     )
 
     assert after_transition is None
-    assert semantic_delta is None
+    assert semantic_delta["accepted"] is True
+    assert semantic_delta["obligation_id"] == obligation["obligation_id"]
 
 
 def test_rearmed_vision_obligation_accepts_only_its_fresh_successor_id() -> None:
@@ -780,7 +811,8 @@ def test_rearmed_vision_obligation_accepts_only_its_fresh_successor_id() -> None
 
     assert rearmed_id != original_id
     assert remaining is None
-    assert semantic_delta is None
+    assert semantic_delta["accepted"] is True
+    assert semantic_delta["obligation_id"] == rearmed_id
 
 
 def test_completed_or_wrong_obligation_successor_cannot_close_rotated_duty() -> None:
@@ -1312,3 +1344,25 @@ def test_matching_non_successor_ack_clears_rotated_vision_obligation(
     )
 
     assert remaining is None
+
+
+@pytest.mark.parametrize("threshold", [2, 3])
+def test_writeback_uses_configured_completion_cadence(threshold: int) -> None:
+    state = _completed_advancement_chain_state(threshold)
+    arguments = {
+        "newest_first_runs": [], "state_text": state,
+        "agent_id": AGENT_ID, "goal_id": GOAL_ID,
+    }
+    default_obligation, _ = qualify_replan_writeback(**arguments)
+    assert default_obligation is None
+    goal = {"execution_profile": {"replan_after_completed_todos": threshold}}
+    obligation, _ = qualify_replan_writeback(**arguments, registry_goal=goal)
+    assert obligation is not None
+    assert any(
+        trigger.get("kind") == "vision_outcome_checkpoint_required"
+        and trigger.get("completed_todo_count") == threshold
+        and trigger.get("completed_todo_threshold") == threshold
+        for trigger in obligation["triggers"]
+    )
+    with pytest.raises(ReplanWritebackRejected):
+        enforce_open_replan_writeback(**arguments, registry_goal=goal)

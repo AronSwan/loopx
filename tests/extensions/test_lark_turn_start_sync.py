@@ -13,8 +13,10 @@ from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
 from loopx.control_plane.work_items.work_lane import (
     operator_inbox_material_review_due_work_lane_contract,
 )
+from loopx.extensions.lark import goal_topic_connections as goal_topic_connections_module
 from loopx.extensions.lark import turn_start_sync as turn_start_sync_module
 from loopx.extensions.lark.event_collector import load_lark_event_collector_config
+from loopx.extensions.lark.event_inbox import project_lark_event_inbox_urgency
 from loopx.extensions.lark.inbox_reactions import lark_inbox_reaction_receipts
 from loopx.extensions.lark.routed_inbox import project_routed_lark_event_inbox_urgency
 from loopx.extensions.lark.turn_start_sync import sync_lark_turn_start_inbox
@@ -92,6 +94,53 @@ def _project(
         encoding="utf-8",
     )
     return project, collector
+
+
+def _write_direct_inbox(
+    project: Path,
+    *,
+    agent_id: str,
+    app_ref: str,
+    bot_display_name: str,
+    topic_root_message_id: str,
+    capture_scope: str = "addressed_only",
+) -> tuple[Path, Path]:
+    config, config_ref, payload = goal_topic_connections_module._agent_inbox_config(
+        goal={"id": "goal-fixture", "repo": str(project)},
+        agent_id=agent_id,
+        app_ref=app_ref,
+        chat_id="oc_fixture",
+        bot_display_name=bot_display_name,
+        capture_scope=capture_scope,
+        topic_root_message_id=topic_root_message_id,
+    )
+    written_ref = goal_topic_connections_module._write_agent_inbox_config(
+        config_path=config,
+        config_ref=config_ref,
+        payload=payload,
+    )
+    assert written_ref == config_ref
+    return config, project / str(payload["inbox_dir"])
+
+
+def _direct_addressed_inbox(tmp_path: Path) -> tuple[Path, Path, Path]:
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=project,
+        check=True,
+        capture_output=True,
+    )
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    config, inbox = _write_direct_inbox(
+        project,
+        agent_id="agent-fixture",
+        app_ref="fixture-bot",
+        bot_display_name="Fixture Bot",
+        topic_root_message_id="om_goal_topic_root",
+    )
+    return project, config, inbox
 
 
 def _agent_collector(
@@ -269,6 +318,268 @@ def test_turn_start_sync_captures_then_requires_same_turn_agent_read(
     assert "before ordinary work" in str(lane["action"])
 
 
+def test_turn_start_sync_accepts_one_click_addressed_only_inbox(
+    tmp_path: Path,
+) -> None:
+    project, config, inbox = _direct_addressed_inbox(tmp_path)
+    runner = ReactionPageRunner(
+        [
+            _page(
+                {
+                    "message_id": "om_addressed_goal_topic",
+                    "root_id": "om_goal_topic_root",
+                    "create_time": "2026-08-26T09:59:00Z",
+                    "content": "Please prepare the requested report.",
+                    "mentions": [{"name": "Fixture Bot"}],
+                    "deleted": False,
+                },
+                {
+                    "message_id": "om_unaddressed_goal_topic",
+                    "root_id": "om_goal_topic_root",
+                    "create_time": "2026-08-26T09:59:01Z",
+                    "content": "This conversation belongs to another participant.",
+                    "mentions": [],
+                    "deleted": False,
+                },
+            )
+        ]
+    )
+
+    result = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=config,
+        runner=runner,
+        now=FIRST_NOW,
+    )
+
+    assert result["status"] == "observed"
+    assert result["observation_count"] == 1
+    assert result["agent_read_required"] is True
+    assert result["received_reaction_count"] == 1
+    captured = json.loads((inbox / "om_addressed_goal_topic.json").read_text())
+    assert captured["route_key"] == "default"
+    assert captured["addressed_to_bot"] is True
+    assert not (inbox / "om_unaddressed_goal_topic.json").exists()
+
+
+def test_turn_start_sync_rejects_direct_inbox_without_goal_topic_root(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config, config_ref, payload = goal_topic_connections_module._agent_inbox_config(
+        goal={"id": "goal-fixture", "repo": str(project)},
+        agent_id="agent-fixture",
+        app_ref="fixture-bot",
+        chat_id="oc_fixture",
+        bot_display_name="Fixture Bot",
+        capture_scope="addressed_only",
+    )
+    goal_topic_connections_module._write_agent_inbox_config(
+        config_path=config,
+        config_ref=config_ref,
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="requires a Goal Topic root"):
+        sync_lark_turn_start_inbox(
+            project=project,
+            config_path=config,
+            runner=ReactionPageRunner([]),
+            now=FIRST_NOW,
+        )
+
+
+def test_turn_start_sync_rejects_same_chat_bot_mention_from_another_topic(
+    tmp_path: Path,
+) -> None:
+    project, config, inbox = _direct_addressed_inbox(tmp_path)
+    runner = ReactionPageRunner(
+        [
+            _page(
+                {
+                    "message_id": "om_other_topic_mention",
+                    "root_id": "om_other_topic_root",
+                    "create_time": "2026-08-26T09:59:00Z",
+                    "content": "@Fixture Bot this belongs elsewhere.",
+                    "mentions": [{"name": "Fixture Bot"}],
+                    "deleted": False,
+                }
+            )
+        ]
+    )
+
+    result = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=config,
+        runner=runner,
+        now=FIRST_NOW,
+    )
+
+    assert result["status"] == "empty"
+    assert result["observation_count"] == 0
+    assert result["agent_read_required"] is False
+    assert not (inbox / "om_other_topic_mention.json").exists()
+
+
+def test_turn_start_sync_configured_chat_all_explicitly_accepts_other_topic(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=project, check=True)
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    config, inbox = _write_direct_inbox(
+        project,
+        agent_id="agent-fixture",
+        app_ref="fixture-bot",
+        bot_display_name="Fixture Bot",
+        topic_root_message_id="om_goal_topic_root",
+        capture_scope="configured_chat_all",
+    )
+    runner = ReactionPageRunner(
+        [
+            _page(
+                {
+                    "message_id": "om_chat_wide_message",
+                    "root_id": "om_other_topic_root",
+                    "create_time": "2026-08-26T09:59:00Z",
+                    "content": "A chat-wide update without a mention.",
+                    "mentions": [],
+                    "deleted": False,
+                }
+            )
+        ]
+    )
+
+    result = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=config,
+        runner=runner,
+        now=FIRST_NOW,
+    )
+
+    assert result["observation_count"] == 1
+    assert (inbox / "om_chat_wide_message.json").is_file()
+
+
+def test_turn_start_sync_can_capture_history_as_quiet_context_only(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=project, check=True)
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    config, inbox = _write_direct_inbox(
+        project,
+        agent_id="agent-fixture",
+        app_ref="fixture-bot",
+        bot_display_name="Fixture Bot",
+        topic_root_message_id="om_goal_topic_root",
+        capture_scope="configured_chat_all",
+    )
+    runner = ReactionPageRunner(
+        [
+            _page(
+                {
+                    "message_id": "om_old_addressed_message",
+                    "root_id": "om_goal_topic_root",
+                    "create_time": "2026-08-26T09:59:00Z",
+                    "content": "@Fixture Bot an old request must not replay.",
+                    "mentions": [{"name": "Fixture Bot"}],
+                    "deleted": False,
+                }
+            )
+        ]
+    )
+
+    result = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=config,
+        runner=runner,
+        now=FIRST_NOW,
+        historical_context_only=True,
+        emit_received_reactions=False,
+    )
+
+    assert result["status"] == "observed"
+    captured = json.loads((inbox / "om_old_addressed_message.json").read_text())
+    assert captured["addressed_to_bot"] is False
+    assert captured["historical_context_only"] is True
+    assert captured["historical_was_addressed_to_bot"] is True
+    assert captured["historical_addressing_source"] == "provider_mention"
+    urgency = project_lark_event_inbox_urgency(
+        project=project,
+        config_path=config,
+        now=FIRST_NOW,
+    )
+    assert urgency["reply_due"] is False
+    assert urgency["attention_required_count"] == 0
+    assert urgency["material_review_count"] == 1
+    assert all("reactions" not in call for call in runner.calls)
+
+
+def test_turn_start_sync_isolates_two_agents_and_apps_in_the_same_chat(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=project, check=True)
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    alpha_config, alpha_inbox = _write_direct_inbox(
+        project,
+        agent_id="agent-alpha",
+        app_ref="bot-alpha",
+        bot_display_name="Bot Alpha",
+        topic_root_message_id="om_topic_alpha",
+    )
+    beta_config, beta_inbox = _write_direct_inbox(
+        project,
+        agent_id="agent-beta",
+        app_ref="bot-beta",
+        bot_display_name="Bot Beta",
+        topic_root_message_id="om_topic_beta",
+    )
+    messages = (
+        {
+            "message_id": "om_message_alpha",
+            "root_id": "om_topic_alpha",
+            "create_time": "2026-08-26T09:59:00Z",
+            "content": "@Bot Alpha alpha only.",
+            "mentions": [{"name": "Bot Alpha"}],
+            "deleted": False,
+        },
+        {
+            "message_id": "om_message_beta",
+            "root_id": "om_topic_beta",
+            "create_time": "2026-08-26T09:59:01Z",
+            "content": "@Bot Beta beta only.",
+            "mentions": [{"name": "Bot Beta"}],
+            "deleted": False,
+        },
+    )
+
+    alpha = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=alpha_config,
+        runner=ReactionPageRunner([_page(*messages)]),
+        now=FIRST_NOW,
+    )
+    beta = sync_lark_turn_start_inbox(
+        project=project,
+        config_path=beta_config,
+        runner=ReactionPageRunner([_page(*messages)]),
+        now=FIRST_NOW,
+    )
+
+    assert alpha["observation_count"] == 1
+    assert beta["observation_count"] == 1
+    assert (alpha_inbox / "om_message_alpha.json").is_file()
+    assert not (alpha_inbox / "om_message_beta.json").exists()
+    assert (beta_inbox / "om_message_beta.json").is_file()
+    assert not (beta_inbox / "om_message_alpha.json").exists()
+
+
 def test_turn_start_sync_acknowledges_ordinary_pending_message_once_by_default(
     tmp_path: Path,
 ) -> None:
@@ -369,6 +680,7 @@ def test_turn_start_sync_acknowledges_message_previously_captured_by_collector(
                 project=project,
                 config_path=config,
                 runtime_root_arg=None,
+                required_read_command="loopx lark-inbox drain --goal-id fixture",
             )
         ]
     )

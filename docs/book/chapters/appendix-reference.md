@@ -61,11 +61,16 @@ loopx doctor
 loopx registry
 loopx status
 loopx todo list --goal-id <goal-id>
+loopx todo list --goal-id <goal-id> --thin --format json
 loopx history --goal-id <goal-id>
 loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30
 loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 loopx extension list --format json
 ```
+
+`v0.5.4` 新增的 `todo list --thin` 是显式启用的有界投影；它压缩字段和每个 lane 的返回条数，
+但不改变默认 list 的选择、排序、quota 或 lifecycle 语义。需要完整详情时，继续使用不带
+`--thin` 的命令或按 `todo_id` 精确读取。
 
 ## 项目接入入口
 
@@ -136,6 +141,10 @@ archive 的默认来源是公开 `stable` ref。`--ref main` 是 maintainer/dev 
 不应作为普通用户默认升级。`update apply` 保留当前安装 owner：pip/pipx 继续管理 PyPI 环境，
 archive 继续管理 release snapshot，live checkout 仍需显式更新。成功退出不代表每个 Host
 automation、Goal migration 或 Extension Provider 都已更新。
+
+当 runtime 安装与核心 `doctor` 读回都通过后，`update apply` 会同时重启 LaunchAgent 托管的
+`status` 与 `chat` 服务，让新安装的行为真正开始服务；此时即使有 enabled Extension Provider
+被阻塞，也只会被报告为待修复，而不会阻止这次激活——否则旧服务会继续按上一个 release 运行。
 
 升级后按使用面继续验证：
 

@@ -264,6 +264,23 @@ def _recommendation(*parts: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def build_action_selection_recovery_recommendation(
+    *, reason: str,
+) -> dict[str, Any]:
+    """Project closed heartbeat guidance after a typed selection refusal."""
+
+    return _recommendation(
+        {
+            "source": "action_selection_recovery",
+            "recommended_mode": "quota_skip",
+            "notify": "DONT_NOTIFY",
+            "spend_policy": "no quota spend until an eligible Todo is selected",
+            "reason": reason,
+            "agent_must_attempt": False,
+        }
+    )
+
+
 def _stall_self_repair_rule(
     facts: _HeartbeatRecommendationFacts,
 ) -> dict[str, Any] | None:
@@ -442,6 +459,22 @@ def _monitor_lane_rule(
                     ),
                 }
             )
+        non_runnable_non_monitor_count = max(
+            0,
+            int(lane.get("non_runnable_non_monitor_count") or 0),
+        )
+        if non_runnable_non_monitor_count:
+            reason = (
+                "no executable advancement todo is runnable; "
+                f"{non_runnable_non_monitor_count} non-monitor todo(s) are "
+                "blocked or otherwise non-executable, and the remaining "
+                "schedulable work is non-due monitor-class"
+            )
+        else:
+            reason = (
+                "all visible open agent todos are monitor-class work with no "
+                "material transition to record"
+            )
         return _recommendation(
             {
                 "recommended_mode": "monitor_quiet_until_material_transition",
@@ -449,10 +482,7 @@ def _monitor_lane_rule(
                     "do not append quota spend until a material monitor transition, "
                     "regression, or concrete blocker is validated and written back"
                 ),
-                "reason": (
-                    "all visible open agent todos are monitor-class work with no "
-                    "material transition to record"
-                ),
+                "reason": reason,
             }
         )
     if must_attempt_work is not True or facts.has_user_todos:
@@ -583,13 +613,13 @@ def _post_handoff_observation_rule(
                 "recommended_mode": "post_handoff_observe_then_backlog_step",
                 "spend_policy": (
                     "observe registry/status/run history/repo state first; if unchanged, "
-                    "advance exactly one bounded agent-todo backlog segment and append "
+                    "advance scope-bounded agent-todo work and append "
                     "quota spend only after validation and durable writeback"
                 ),
                 "reason": (
                     "latest post-handoff implementation reached the primary outcome, "
                     "but an open agent todo remains; observe for new blockers first, "
-                    "then advance one bounded backlog step instead of quiet idling"
+                    "then advance scope-bounded backlog work instead of quiet idling"
                 ),
             },
         )
@@ -603,8 +633,8 @@ def _default_rule(
         {
             "recommended_mode": "steering_audit_then_one_step",
             "spend_policy": (
-                "append exactly one heartbeat spend only after a bounded progress "
-                "segment is validated and written back"
+                "append exactly one heartbeat spend only after scope-bounded work "
+                "is validated and written back; one_step: mode, not an operation limit"
             ),
             "reason": (
                 "eligible Codex-ready goal requires the standard steering audit "

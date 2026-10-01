@@ -61,11 +61,16 @@ loopx doctor
 loopx registry
 loopx status
 loopx todo list --goal-id <goal-id>
+loopx todo list --goal-id <goal-id> --thin --format json
 loopx history --goal-id <goal-id>
 loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30
 loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 loopx extension list --format json
 ```
+
+The `todo list --thin` option added in `v0.5.4` is an explicit bounded projection. It compacts fields and
+the number of returned items per lane without changing default selection, ordering, quota, or lifecycle
+semantics. Use the command without `--thin`, or an exact `todo_id`, when you need full detail.
 
 ## Project onboarding entrypoints
 
@@ -140,6 +145,11 @@ qualification path, not the ordinary user default. `update apply` preserves the 
 owner: pip and pipx keep the PyPI environment, archive installs keep the release snapshot, and live
 checkouts remain explicit. A successful exit does not prove that every Host automation, Goal migration,
 or Extension Provider is updated.
+
+Once the runtime install and its core `doctor` readback pass, `update apply` also restarts the
+LaunchAgent-managed `status` and `chat` services so the installed behavior actually serves. A blocked
+enabled Extension Provider is reported for repair instead of preventing that activation, because a
+stale service would otherwise keep serving the previous release.
 
 Validate the surfaces you use:
 

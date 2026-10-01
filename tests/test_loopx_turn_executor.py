@@ -7,6 +7,17 @@ from pathlib import Path
 
 import pytest
 
+from loopx.cli_commands import turn_cadence
+from loopx.cli_commands.turn_cadence import ManagedCadenceStart, managed_cadence_start
+from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+    FirstPartyHostRuntimeRejected,
+)
+from loopx.control_plane.goals.source_session_registry_state import guard_path
+from loopx.control_plane.projects.registry_codec import (
+    source_session_registry_transaction,
+)
 from loopx.control_plane.turn_driver import executor as turn_executor
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
@@ -16,13 +27,66 @@ from loopx.control_plane.turn_driver import (
     run_loopx_turn_once,
     validate_loopx_turn_host_result,
 )
+from loopx.control_plane.turn_driver.journal_store import (
+    find_loopx_turn_key_by_settlement_identity,
+)
+from loopx.control_plane.turn_driver.subagent_execution_topology import (
+    OPAQUE_REF_PATTERN,
+    child_execution_receipts_json_schema,
+)
 from loopx.control_plane.turn_driver.executor import (
     BuiltInHostError,
     LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
     _task_validation_stage,
+    turn_journal_path,
 )
+from loopx.control_plane.turn_driver.host_binding import managed_executor_binding
 from loopx.control_plane.turn_driver.settlement import execute_turn_driver_settlement
 from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+
+
+INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def _write_source_registry(path: Path, instance_id: str) -> None:
+    payload = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(path.parent),
+        "projects": [],
+        "goals": [
+            {
+                "id": "fixture-goal",
+                "goal_instance_id": instance_id,
+                "status": "active",
+                "execution_authority": False,
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    create = None if path.exists() else lambda: payload
+    with source_session_registry_transaction(
+        path,
+        operation="turn_host_goal_instance_test",
+        create=create,
+    ) as transaction:
+        current = transaction.payload_copy()
+        current["goals"] = payload["goals"]
+        transaction.commit(current)
+
+
+def _replace_source_goal(path: Path, instance_id: str) -> None:
+    with exclusive_cross_runtime_file_lock(
+        guard_path(path, "fixture-goal"),
+        operation="turn_host_goal_instance_test_recreate",
+    ):
+        _write_source_registry(path, instance_id)
 
 
 def _plan() -> dict[str, object]:
@@ -62,10 +126,154 @@ def _plan() -> dict[str, object]:
     )
 
 
+def _source_plan() -> dict[str, object]:
+    plan = _plan()
+    envelope = plan["turn_envelope"]
+    assert isinstance(envelope, dict)
+    return build_loopx_turn_plan(
+        envelope,
+        host="generic-cli",
+        execution_mode="isolated-headless",
+        goal_ref={
+            "goal_id": "fixture-goal",
+            "goal_instance_id": INSTANCE_A,
+        },
+    )
+
+
 def _codex_plan() -> dict[str, object]:
     plan = _plan()
     envelope = plan["turn_envelope"]
     assert isinstance(envelope, dict)
+    return build_loopx_turn_plan(
+        envelope,
+        host="codex-cli",
+        execution_mode="isolated-headless",
+    )
+
+
+def _managed_plan(*, runtime_available: bool) -> dict[str, object]:
+    """One dsh plan carrying the executor readback the command layer attaches."""
+
+    plan = _plan()
+    envelope = plan["turn_envelope"]
+    assert isinstance(envelope, dict)
+    managed = build_loopx_turn_plan(
+        envelope,
+        host="dsh",
+        execution_mode="isolated-headless",
+    )
+    managed["managed_executor"] = managed_executor_binding(
+        "dsh",
+        environ={"DEEPSEEK_API_KEY": "fixture-operator-credential"},
+        module_probe=lambda _module: runtime_available,
+    )
+    return managed
+
+
+def test_turn_journal_resolves_only_from_exact_settlement_identity(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    turn_key = str(transaction["turn_key"])
+    settlement = transaction["settlement_plan"]
+    assert isinstance(settlement, dict)
+    identity = settlement["identity"]
+    assert isinstance(identity, dict)
+    runtime_root = tmp_path / "runtime"
+    path = turn_journal_path(
+        runtime_root, goal_id="fixture-goal", turn_key=turn_key
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+                "goal_id": "fixture-goal",
+                "turn_key": turn_key,
+                "status": "in_progress",
+                "completed_phases": [],
+                "plan": plan,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert find_loopx_turn_key_by_settlement_identity(
+        runtime_root,
+        goal_id="fixture-goal",
+        agent_id="codex-fixture",
+        todo_id="todo_fixture0001",
+        turn_instance_id=str(identity["turn_instance_id"]),
+    ) == turn_key
+    assert find_loopx_turn_key_by_settlement_identity(
+        runtime_root,
+        goal_id="fixture-goal",
+        agent_id="other-agent",
+        todo_id="todo_fixture0001",
+        turn_instance_id=str(identity["turn_instance_id"]),
+    ) is None
+
+
+def _adaptive_observation_plan(
+    *,
+    required_write_scopes: list[str] | None = None,
+) -> dict[str, object]:
+    plan = _plan()
+    envelope = plan["turn_envelope"]
+    assert isinstance(envelope, dict)
+    envelope["task_orchestration_contract"] = {
+        "schema_version": "task_orchestration_contract_v2",
+        "mode": "adaptive",
+        "coordinator_agent_id": "codex-fixture",
+        "primary_todo_id": "todo_fixture0001",
+        "child_brief_defaults": {
+            "schema_version": "subagent_control_plane_handoff_v0",
+            "parent_goal_id": "fixture-goal",
+            "authority_artifact": "quota_should_run.goal_boundary",
+            "latest_state_ref": "quota_should_run.action_signature.source_hash",
+            "context_policy": {
+                "selection_owner": "task_coordinator",
+                "default": "fresh",
+                "allowed": ["fresh"],
+            },
+            "expected_output": "public_safe_evidence",
+            "execution_policy": {
+                "timeout": "bounded_by_host_turn",
+                "cancel": "task_coordinator_or_host_timeout",
+            },
+            "child_guard_policy": "prevention_first_v0",
+            "validation_policy": "report validation commands and results",
+            "acceptance": [
+                "report completed scope and evidence",
+                "do not write LoopX state or spend quota",
+            ],
+        },
+        "eligible_child_lanes": [
+            {
+                "todo_id": "todo_child001",
+                "task_domain": "validation",
+                "execution_kind": "ephemeral_child",
+                "child_brief": {
+                    "todo_id": "todo_child001",
+                    "objective": "Validate one independent fixture.",
+                    "action_kind": "validate",
+                    "task_domain": "validation",
+                    "required_capabilities": [],
+                    "task_repository": None,
+                    "required_write_scopes": required_write_scopes or [],
+                    "workspace_isolation": (
+                        "independent_git_worktree"
+                        if required_write_scopes
+                        else "not_required"
+                    ),
+                },
+            }
+        ],
+        "writeback_owner": "task_coordinator",
+    }
     return build_loopx_turn_plan(
         envelope,
         host="codex-cli",
@@ -130,6 +338,42 @@ def _host_result(
     return result
 
 
+def _child_execution_receipt(
+    plan: dict[str, object],
+    *,
+    effect_classes: list[str] | None = None,
+    evidence_refs: list[str] | None = None,
+) -> dict[str, object]:
+    topology = plan["subagent_execution_topology"]
+    assert isinstance(topology, dict)
+    lanes = topology["lanes"]
+    assert isinstance(lanes, list)
+    lane = lanes[0]
+    assert isinstance(lane, dict)
+    return {
+        "schema_version": "subagent_host_execution_receipt_v0",
+        "bundle_id": topology["bundle_id"],
+        "lane_id": lane["lane_id"],
+        "goal_id": topology["goal_id"],
+        "todo_id": lane["todo_id"],
+        "execution_kind": lane["execution_kind"],
+        "runtime_id": "codex-cli",
+        "worker_ref": "worker:fixture-child",
+        "source_state_ref": topology["source_state_ref"],
+        "task_packet_digest": lane["task_packet_digest"],
+        "context_mode": lane["task_packet"]["context"]["mode"],
+        "workspace_ref": None,
+        "status": "completed",
+        "effect_classes": (
+            ["local_read"] if effect_classes is None else effect_classes
+        ),
+        "evidence_refs": (
+            ["artifact:fixture-review"] if evidence_refs is None else evidence_refs
+        ),
+        "raw_transcript_copied": False,
+    }
+
+
 def test_task_validation_stage_reads_result_kind_through_effect_turn(
     tmp_path: Path,
 ) -> None:
@@ -156,7 +400,10 @@ def test_task_validation_stage_reads_result_kind_through_effect_turn(
         task_validator=None,
         completed_phases=list(TRANSACTION_PHASES[:2]),
         journal=journal,
-        journal_path=journal_path,
+        persist_journal=lambda snapshot: turn_executor._write_journal(
+            journal_path,
+            snapshot,
+        ),
         effects={},
     )
 
@@ -286,6 +533,169 @@ def _passing_validator(
     }
 
 
+def test_late_host_result_cannot_enter_a_recreated_goal(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    runtime_root = tmp_path / "runtime"
+
+    def stale_host_result(_request: Mapping[str, object]) -> dict[str, object]:
+        _replace_source_goal(registry, INSTANCE_B)
+        return _host_result(plan)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=stale_host_result,
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+    journal = _journal(runtime_root)
+    assert "host_result" not in journal
+    assert journal["completed_phases"] == []
+
+
+def test_stale_source_plan_is_rejected_before_host_start(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+    _replace_source_goal(registry, INSTANCE_B)
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    runtime_root = tmp_path / "runtime"
+
+    def forbidden_host(_request: Mapping[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=forbidden_host,
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    assert (
+        turn_journal_path(
+            runtime_root,
+            goal_id="fixture-goal",
+            turn_key=str(transaction["turn_key"]),
+        ).exists()
+        is False
+    )
+
+
+def test_cached_host_result_cannot_resume_after_goal_recreation(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    runtime_root = tmp_path / "runtime"
+    path = turn_journal_path(
+        runtime_root,
+        goal_id="fixture-goal",
+        turn_key=str(transaction["turn_key"]),
+    )
+    journal = {
+        "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+        "turn_key": transaction["turn_key"],
+        "goal_id": "fixture-goal",
+        "status": "in_progress",
+        "host": {"kind": "generic-cli"},
+        "completed_phases": [],
+        "plan": plan,
+    }
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+
+    def write_source_journal() -> None:
+        with admission.source_journal_admission() as source_admission:
+            assert source_admission is not None
+            turn_executor._write_journal(
+                path,
+                journal,
+                source_admission=source_admission,
+            )
+
+    write_source_journal()
+    journal.update(
+        completed_phases=list(TRANSACTION_PHASES[:2]),
+        host_result=_host_result(plan),
+        result_kind="validated_progress",
+    )
+    write_source_journal()
+    _replace_source_goal(registry, INSTANCE_B)
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=lambda _request: pytest.fail(
+                "cached host result must not relaunch the Host"
+            ),
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+
+
 def test_host_result_requires_bounded_public_material_fields() -> None:
     plan = _plan()
     result = _host_result(plan)
@@ -295,6 +705,415 @@ def test_host_result_requires_bounded_public_material_fields() -> None:
 
     assert validation["ok"] is False
     assert "unsupported host result fields" in " ".join(validation["errors"])
+
+
+def test_child_receipt_schema_excludes_registered_peer_authority() -> None:
+    schema = child_execution_receipts_json_schema()
+    item_schema = schema["items"]
+    properties = item_schema["properties"]
+
+    assert properties["execution_kind"]["enum"] == ["ephemeral_child"]
+    assert {"agent_id", "session_ref", "task_lease_ref"}.isdisjoint(properties)
+    assert {"agent_id", "session_ref", "task_lease_ref"}.isdisjoint(
+        item_schema["required"]
+    )
+    assert properties["worker_ref"]["pattern"] == OPAQUE_REF_PATTERN
+    assert (
+        properties["evidence_refs"]["items"]["pattern"]
+        == OPAQUE_REF_PATTERN
+    )
+    assert properties["evidence_refs"]["minItems"] == 1
+
+
+def test_child_receipt_rejects_unknown_context_mode() -> None:
+    plan = _adaptive_observation_plan()
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [
+        {
+            **_child_execution_receipt(plan),
+            "context_mode": "implicit_parent_history",
+        }
+    ]
+
+    validation = validate_loopx_turn_host_result(plan, result)
+
+    assert validation["ok"] is False
+    assert "context_mode is unsupported" in " ".join(validation["errors"])
+
+
+def test_host_result_reconciles_aligned_child_receipt() -> None:
+    plan = _adaptive_observation_plan()
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [_child_execution_receipt(plan)]
+
+    validation = validate_loopx_turn_host_result(plan, result)
+
+    assert validation["ok"] is True
+    reconciliation = validation["result"]["subagent_reconciliation"]
+    assert reconciliation["status"] == "reconciled"
+    assert reconciliation["observation_only"] is True
+    assert reconciliation["settlement_enforced"] is False
+    assert reconciliation["child_guard"] == {
+        "schema_version": "child_execution_guard_v0",
+        "enforced_boundaries": ["pre_spawn_task_packet"],
+        "validated_observations": [
+            "receipt_task_packet_binding",
+            "context_mode_binding",
+            "workspace_boundary",
+            "effect_boundary",
+        ],
+        "projected_dispositions": [
+            "stop_child",
+            "quarantine_evidence",
+            "continue_parent",
+            "fallback_actions",
+        ],
+        "unsupported_boundaries": [
+            "evidence_acceptance_enforcement",
+            "live_host_tool_interception",
+            "automatic_host_child_termination",
+        ],
+        "parent_acceptance_required": True,
+    }
+    assert reconciliation["parent_blocked"] is False
+    assert reconciliation["parent_continuation"] == "continue"
+    assert reconciliation["counts"] == {
+        "planned": 1,
+        "pre_spawn_rejected": 0,
+        "observed": 1,
+        "aligned": 1,
+        "incomplete": 0,
+        "rejected": 0,
+        "cancelled": 0,
+        "drifted": 0,
+        "orphaned": 0,
+    }
+    lane = reconciliation["lanes"][0]
+    assert lane["status"] == "aligned"
+    assert lane["evidence_disposition"] == "candidate_for_parent_acceptance"
+    assert lane["recommended_child_action"] == "return_to_parent"
+    assert lane["parent_blocked"] is False
+    assert lane["candidate_evidence_refs"] == ["artifact:fixture-review"]
+    assert "quarantined_evidence_refs" not in lane
+
+
+def test_pre_spawn_rejection_remains_visible_without_blocking_parent() -> None:
+    plan = _adaptive_observation_plan()
+    topology = plan["subagent_execution_topology"]
+    topology["pre_spawn_rejections"] = [
+        {
+            "schema_version": "child_execution_rejection_v0",
+            "todo_id": "todo_child002",
+            "stage": "pre_spawn",
+            "reason_codes": ["child_task_packet_incomplete"],
+            "launch_allowed": False,
+            "recommended_child_action": "do_not_launch",
+            "parent_blocked": False,
+            "parent_continuation": "continue",
+            "fallback_actions": [
+                "retry_fresh",
+                "replace_child",
+                "serial_takeover",
+                "ignore_optional_result",
+            ],
+        }
+    ]
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [_child_execution_receipt(plan)]
+
+    validation = validate_loopx_turn_host_result(plan, result)
+
+    assert validation["ok"] is True
+    reconciliation = validation["result"]["subagent_reconciliation"]
+    assert reconciliation["status"] == "guarded"
+    assert reconciliation["counts"]["pre_spawn_rejected"] == 1
+    assert reconciliation["parent_blocked"] is False
+    assert reconciliation["pre_spawn_rejections"] == topology[
+        "pre_spawn_rejections"
+    ]
+
+
+def test_host_result_observes_missing_and_drifted_child_receipts() -> None:
+    plan = _adaptive_observation_plan()
+    missing = validate_loopx_turn_host_result(plan, _host_result(plan))
+
+    assert missing["ok"] is True
+    assert missing["result"]["subagent_reconciliation"]["status"] == "incomplete"
+    assert missing["result"]["subagent_reconciliation"]["lanes"][0][
+        "reason_codes"
+    ] == ["worker_receipt_missing"]
+
+    drifted_result = _host_result(plan)
+    drifted_result["child_execution_receipts"] = [
+        _child_execution_receipt(
+            plan,
+            effect_classes=["external_write"],
+        )
+    ]
+    drifted = validate_loopx_turn_host_result(plan, drifted_result)
+
+    assert drifted["ok"] is True
+    reconciliation = drifted["result"]["subagent_reconciliation"]
+    assert reconciliation["status"] == "drifted"
+    assert reconciliation["lanes"][0]["reason_codes"] == [
+        "side_effect_boundary_exceeded"
+    ]
+    assert reconciliation["lanes"][0]["evidence_disposition"] == "quarantined"
+    assert reconciliation["lanes"][0]["recommended_child_action"] == "stop_child"
+    assert reconciliation["lanes"][0]["parent_blocked"] is False
+    assert reconciliation["lanes"][0]["quarantined_evidence_refs"] == [
+        "artifact:fixture-review"
+    ]
+    assert "candidate_evidence_refs" not in reconciliation["lanes"][0]
+    assert reconciliation["lanes"][0]["fallback_actions"] == [
+        "retry_fresh",
+        "replace_child",
+        "serial_takeover",
+        "ignore_optional_result",
+    ]
+
+    packet_mismatch_result = _host_result(plan)
+    packet_mismatch_result["child_execution_receipts"] = [
+        {
+            **_child_execution_receipt(plan),
+            "task_packet_digest": "sha256:" + "0" * 64,
+        }
+    ]
+    packet_mismatch = validate_loopx_turn_host_result(
+        plan, packet_mismatch_result
+    )
+    assert packet_mismatch["ok"] is True
+    assert packet_mismatch["result"]["subagent_reconciliation"]["lanes"][0][
+        "reason_codes"
+    ] == ["task_packet_mismatch"]
+
+    context_mismatch_result = _host_result(plan)
+    context_mismatch_result["child_execution_receipts"] = [
+        {
+            **_child_execution_receipt(plan),
+            "context_mode": "forked_snapshot",
+        }
+    ]
+    context_mismatch = validate_loopx_turn_host_result(
+        plan, context_mismatch_result
+    )
+    assert context_mismatch["ok"] is True
+    context_lane = context_mismatch["result"]["subagent_reconciliation"]["lanes"][0]
+    assert context_lane["reason_codes"] == ["context_mode_mismatch"]
+    assert context_lane["evidence_disposition"] == "quarantined"
+
+    no_evidence_result = _host_result(plan)
+    no_evidence_result["child_execution_receipts"] = [
+        _child_execution_receipt(plan, evidence_refs=[])
+    ]
+    no_evidence = validate_loopx_turn_host_result(plan, no_evidence_result)
+    assert no_evidence["ok"] is True
+    assert no_evidence["result"]["subagent_reconciliation"]["lanes"][0][
+        "reason_codes"
+    ] == ["aggregate_settlement_without_lane_evidence"]
+
+
+@pytest.mark.parametrize(
+    ("receipt_status", "lane_status"),
+    [
+        ("failed", "rejected"),
+        ("rejected", "rejected"),
+        ("cancelled", "cancelled"),
+    ],
+)
+def test_host_result_guards_terminal_unsuccessful_child_receipts(
+    receipt_status: str,
+    lane_status: str,
+) -> None:
+    plan = _adaptive_observation_plan()
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [
+        {
+            **_child_execution_receipt(plan),
+            "status": receipt_status,
+        }
+    ]
+
+    validation = validate_loopx_turn_host_result(plan, result)
+
+    assert validation["ok"] is True
+    reconciliation = validation["result"]["subagent_reconciliation"]
+    assert reconciliation["status"] == "guarded"
+    assert reconciliation["parent_blocked"] is False
+    lane = reconciliation["lanes"][0]
+    assert lane["status"] == lane_status
+    assert lane["evidence_disposition"] == "quarantined"
+    assert lane["recommended_child_action"] == "stop_child"
+
+
+def test_terminal_unsuccessful_child_takes_priority_over_incomplete_sibling() -> None:
+    plan = _adaptive_observation_plan()
+    topology = plan["subagent_execution_topology"]
+    lanes = topology["lanes"]
+    assert isinstance(lanes, list)
+    sibling = {
+        **lanes[0],
+        "lane_id": "lane_sibling",
+        "todo_id": "todo_sibling",
+    }
+    lanes.append(sibling)
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [
+        {
+            **_child_execution_receipt(plan),
+            "status": "failed",
+        }
+    ]
+
+    validation = validate_loopx_turn_host_result(plan, result)
+
+    assert validation["ok"] is True
+    reconciliation = validation["result"]["subagent_reconciliation"]
+    assert reconciliation["status"] == "guarded"
+    assert reconciliation["counts"]["rejected"] == 1
+    assert reconciliation["counts"]["incomplete"] == 1
+
+
+def test_host_result_requires_planned_workspace_for_writing_child() -> None:
+    plan = _adaptive_observation_plan(required_write_scopes=["src/**"])
+    topology = plan["subagent_execution_topology"]
+    lane = topology["lanes"][0]
+    receipt = _child_execution_receipt(
+        plan,
+        effect_classes=["local_read", "held_workspace_write"],
+    )
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [receipt]
+
+    missing_workspace = validate_loopx_turn_host_result(plan, result)
+    assert missing_workspace["ok"] is True
+    assert missing_workspace["result"]["subagent_reconciliation"]["lanes"][0][
+        "reason_codes"
+    ] == ["workspace_mismatch"]
+
+    receipt["workspace_ref"] = lane["workspace_ref"]
+    aligned = validate_loopx_turn_host_result(plan, result)
+    assert aligned["ok"] is True
+    assert aligned["result"]["subagent_reconciliation"]["status"] == "reconciled"
+
+
+def test_disabled_host_result_rejects_unadmitted_child_receipt() -> None:
+    plan = _plan()
+    receipt = {
+        "schema_version": "subagent_host_execution_receipt_v0",
+        "bundle_id": "bundle_unadmitted",
+        "lane_id": "lane_unadmitted",
+        "goal_id": "fixture-goal",
+        "todo_id": "todo_unadmitted",
+        "execution_kind": "ephemeral_child",
+        "runtime_id": "generic-cli",
+        "worker_ref": "worker:unadmitted",
+        "source_state_ref": "sha256:fixture",
+        "task_packet_digest": "sha256:" + "f" * 64,
+        "context_mode": "fresh",
+        "workspace_ref": None,
+        "status": "completed",
+        "effect_classes": ["local_read"],
+        "evidence_refs": ["artifact:unadmitted"],
+        "raw_transcript_copied": False,
+    }
+    result = _host_result(plan)
+    result["child_execution_receipts"] = [receipt]
+
+    rejected = validate_loopx_turn_host_result(plan, result)
+    assert rejected["ok"] is False
+    assert "unsupported host result fields: child_execution_receipts" in (
+        " ".join(rejected["errors"])
+    )
+    assert "subagent_reconciliation" not in rejected["result"]
+
+
+def test_enabled_host_result_rejects_receipt_local_path() -> None:
+    plan = _adaptive_observation_plan()
+    result = _host_result(plan)
+    receipt = _child_execution_receipt(plan)
+    receipt["workspace_ref"] = "/Users/example/raw-worker-path"
+    result["child_execution_receipts"] = [receipt]
+
+    rejected = validate_loopx_turn_host_result(plan, result)
+    assert rejected["ok"] is False
+    assert "absolute local path" in " ".join(rejected["errors"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        # A drive-qualified path is now recognized as a local path, so the
+        # shared public-safety rule reports it before the opaque-shape check.
+        # Both rules reject the value; only the diagnostic differs.
+        (
+            "worker_ref",
+            "C:/workspace/private/worker.json",
+            "contains an absolute local path",
+        ),
+        (
+            "evidence_refs",
+            ["file:/tmp/private-result.json"],
+            "opaque 1-192 character public-safe reference",
+        ),
+    ],
+)
+def test_enabled_host_result_rejects_path_shaped_opaque_refs(
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    plan = _adaptive_observation_plan()
+    result = _host_result(plan)
+    receipt = _child_execution_receipt(plan)
+    receipt[field] = value
+    result["child_execution_receipts"] = [receipt]
+
+    rejected = validate_loopx_turn_host_result(plan, result)
+
+    assert rejected["ok"] is False
+    assert expected_error in " ".join(rejected["errors"])
+    assert "child_execution_receipts" not in rejected["result"]
+    rejected_value = value[0] if isinstance(value, list) else value
+    assert rejected_value not in json.dumps(
+        rejected["result"],
+        ensure_ascii=False,
+    )
+    reconciliation = rejected["result"]["subagent_reconciliation"]
+    assert reconciliation["counts"]["observed"] == 0
+    assert reconciliation["lanes"][0]["receipt_present"] is False
+
+
+def test_observation_only_reconciliation_does_not_change_settlement(
+    tmp_path: Path,
+) -> None:
+    plan = _adaptive_observation_plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    committed = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+    )
+
+    assert committed["ok"] is True
+    assert committed["status"] == "committed"
+    assert committed["subagent_reconciliation"]["status"] == "incomplete"
+    assert committed["subagent_reconciliation"]["settlement_enforced"] is False
+    assert committed["subagent_reconciliation"]["parent_blocked"] is False
+    assert _journal(tmp_path / "runtime")["host_result"][
+        "subagent_reconciliation"
+    ] == committed["subagent_reconciliation"]
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
 
 def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None:
@@ -319,6 +1138,223 @@ def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None
         "scheduler_acknowledged": False,
     }
     assert not (tmp_path / "runtime").exists()
+
+
+def test_managed_start_waits_before_host_and_replay_needs_no_new_admission(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    def wait(_identity: object) -> dict[str, object]:
+        calls["admit"] += 1
+        return {"admitted": False, "reason": "minimum_interval_wait", "next_eligible_at_ms": 9000}
+
+    common = dict(
+        host_runner=host, project=tmp_path, runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal", timeout_seconds=5, execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback, spend=spend, scheduler=scheduler,
+    )
+    denied = run_loopx_turn_once(plan, admit_start=wait, **common)
+    assert denied["status"] == "interval_wait"
+    assert denied["admission"]["next_eligible_at_ms"] == 9000
+    assert denied["effects"]["host_invoked"] is False
+    assert calls == {"host": 0, "admit": 1, "writeback": 0, "spend": 0, "scheduler": 0}
+    assert not list((tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json"))
+
+    def allow(_identity: object) -> dict[str, object]:
+        calls["admit"] += 1
+        return {"admitted": True, "reserved": True, "reason": "admitted"}
+
+    committed = run_loopx_turn_once(plan, admit_start=allow, **common)
+    assert committed["status"] == "committed"
+    assert calls["host"] == 1
+    replay = run_loopx_turn_once(plan, admit_start=wait, **common)
+    assert replay["replayed"] is True
+    assert calls["admit"] == 2
+    assert calls["host"] == 1
+
+
+def _configure_managed_floor(runtime_root: Path, *, minutes_value: int) -> None:
+    """Write the owner floor through the shipped TypeScript cadence store."""
+
+    configured = effect_runtime_result(
+        "quota.automation_cadence.manage",
+        {
+            "runtime_root": str(runtime_root),
+            "goal_id": "fixture-goal",
+            "agent_id": None,
+            "automation_id": None,
+            "operation": "configure",
+            "expected_revision": 0,
+            "min_interval_minutes": minutes_value,
+            "owner_reference": "fixture-owner",
+            "execute": True,
+        },
+    )
+    assert configured["min_interval_minutes"] == minutes_value, configured
+
+
+def _cadence_starts(runtime_root: Path) -> list[dict[str, object]]:
+    """Read the real TypeScript cadence store that admits managed starts."""
+
+    stores = []
+    for path in sorted(runtime_root.rglob("*.json")):
+        if path.name.endswith(".lock.holder.json"):
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            isinstance(payload, dict)
+            and str(payload.get("schema_version", "")).startswith("automation_cadence_store")
+            and payload.get("goal_id") == "fixture-goal"
+        ):
+            stores.append(payload)
+    assert len(stores) == 1, stores
+    return list(stores[0]["starts"])
+
+
+class _FrozenTurnClock:
+    """Freeze the managed-start clock so a test can cross the owner floor."""
+
+    def __init__(self, now_ms: int) -> None:
+        self._now_ns = now_ms * 1_000_000
+
+    def time_ns(self) -> int:
+        return self._now_ns
+
+
+def _managed_cadence(runtime_root: Path) -> ManagedCadenceStart:
+    return managed_cadence_start(
+        runtime_root=runtime_root,
+        goal_id="fixture-goal",
+        agent_id="codex-fixture",
+        automation_id=None,
+        manual_reason=None,
+    )
+
+
+def _managed_start_fixture(
+    tmp_path: Path,
+) -> tuple[dict[str, object], Path, dict[str, int], dict[str, object]]:
+    plan = _plan()
+    runtime_root = tmp_path / "runtime"
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    _configure_managed_floor(runtime_root, minutes_value=1)
+    return (
+        plan,
+        runtime_root,
+        calls,
+        {
+            "host_runner": host,
+            "project": tmp_path,
+            "runtime_root": runtime_root,
+            "goal_id": "fixture-goal",
+            "timeout_seconds": 5,
+            "execute": True,
+            "task_validator": _passing_validator,
+            "writeback": writeback,
+            "spend": spend,
+            "scheduler": scheduler,
+        },
+    )
+
+
+def test_reserved_managed_start_recovers_after_death_before_the_first_journal_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash between the cadence reservation and the journal must not strand a Turn.
+
+    The reservation is written by the real TypeScript cadence store and the
+    process is interrupted before any Turn journal write, so the restart asks
+    with the same request identity.
+    """
+
+    plan, runtime_root, calls, common = _managed_start_fixture(tmp_path)
+    turn_key = str(plan["transaction"]["turn_key"])  # type: ignore[index]
+
+    def die_after_reservation(identity: Mapping[str, object]) -> dict[str, object]:
+        reservation = _managed_cadence(runtime_root).admit(identity)
+        assert reservation["admitted"] is True and reservation["reserved"] is True
+        raise RuntimeError("simulated process death after the cadence reservation")
+
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        run_loopx_turn_once(plan, admit_start=die_after_reservation, **common)
+
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("reserved", f"{turn_key}:1")
+    ]
+    assert not list((runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json"))
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+
+    started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    restart = _managed_cadence(runtime_root)
+    recovered = run_loopx_turn_once(
+        plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
+    )
+
+    assert recovered["status"] == "committed", recovered
+    assert recovered["admission"]["resumed"] is True
+    assert calls == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("started", f"{turn_key}:1")
+    ]
+
+
+def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same recovery holds when the journal exists without an attempt."""
+
+    plan, runtime_root, calls, common = _managed_start_fixture(tmp_path)
+    turn_key = str(plan["transaction"]["turn_key"])  # type: ignore[index]
+    cadence = _managed_cadence(runtime_root)
+    journal_writes = turn_executor._write_journal
+
+    def die_before_attempt_record(path: Path, journal: dict[str, object]) -> None:
+        if "host_attempt_count" in journal:
+            raise RuntimeError("simulated process death before the attempt record")
+        journal_writes(path, journal)
+
+    monkeypatch.setattr(turn_executor, "_write_journal", die_before_attempt_record)
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        run_loopx_turn_once(
+            plan, admit_start=cadence.admit, confirm_start=cadence.confirm, **common
+        )
+    monkeypatch.setattr(turn_executor, "_write_journal", journal_writes)
+
+    journal = _journal(runtime_root)
+    assert "host_attempt_count" not in journal
+    assert journal["admission"]["reserved"] is True
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("reserved", f"{turn_key}:1")
+    ]
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+
+    started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    restart = _managed_cadence(runtime_root)
+    recovered = run_loopx_turn_once(
+        plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
+    )
+
+    assert recovered["status"] == "committed", recovered
+    assert calls == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("started", f"{turn_key}:1")
+    ]
 
 
 def test_run_once_rejects_oversized_built_in_host_result(tmp_path: Path) -> None:
@@ -350,7 +1386,7 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
     tmp_path: Path,
 ) -> None:
     plan = _plan()
-    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)
 
     def host(_request: dict[str, object]) -> dict[str, object]:
@@ -358,6 +1394,11 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
         if calls["host"] == 1:
             raise BuiltInHostError("codex_cli_model_requires_newer_codex")
         return _host_result(plan)
+
+    def admit(identity: dict[str, object]) -> dict[str, object]:
+        calls["admit"] += 1
+        assert identity["attempt"] == (1 if calls["admit"] == 1 else 2)
+        return {"admitted": calls["admit"] != 2, "reason": "minimum_interval_wait"}
 
     kwargs = {
         "host_runner": host,
@@ -370,9 +1411,11 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
         "writeback": writeback,
         "spend": spend,
         "scheduler": scheduler,
+        "admit_start": admit,
     }
     failed = run_loopx_turn_once(plan, **kwargs)
     replayed = run_loopx_turn_once(plan, **kwargs)
+    waiting = run_loopx_turn_once(plan, retry_failed=True, **kwargs)
     recovered = run_loopx_turn_once(plan, retry_failed=True, **kwargs)
 
     assert failed["reason"] == "codex_cli_model_requires_newer_codex"
@@ -380,8 +1423,38 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
     assert failed["receipt"]["result_kind"] == "host_failure"
     assert failed["receipt"]["failed_phase"] == "host_execute"
     assert replayed["replayed"] is True
+    assert waiting["status"] == "interval_wait"
+    assert waiting["effects"]["host_invoked"] is False
     assert recovered["status"] == "committed"
-    assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert calls == {"host": 2, "admit": 3, "writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_invalid_host_result_reinvocation_reenters_admission(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return {"invalid": True} if calls["host"] == 1 else _host_result(plan)
+
+    def admit(identity: dict[str, object]) -> dict[str, object]:
+        calls["admit"] += 1
+        assert identity["attempt"] == (1 if calls["admit"] == 1 else 2)
+        return {"admitted": calls["admit"] != 2, "reason": "minimum_interval_wait"}
+
+    common = dict(host_runner=host, admit_start=admit, project=tmp_path,
+        runtime_root=tmp_path / "runtime", goal_id="fixture-goal", timeout_seconds=5,
+        execute=True, task_validator=_passing_validator, writeback=writeback,
+        spend=spend, scheduler=scheduler)
+    first = run_loopx_turn_once(plan, **common)
+    waiting = run_loopx_turn_once(plan, retry_failed=True, **common)
+    recovered = run_loopx_turn_once(plan, retry_failed=True, **common)
+
+    assert first["result_kind"] == "validation_failed"
+    assert waiting["status"] == "interval_wait" and waiting["effects"]["host_invoked"] is False
+    assert recovered["status"] == "committed"
+    assert calls == {"host": 2, "admit": 3, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
 def test_run_once_bounds_provider_capacity_retries_without_spending_quota(
@@ -424,6 +1497,47 @@ def test_run_once_bounds_provider_capacity_retries_without_spending_quota(
         run_loopx_turn_once(plan, retry_failed=True, **common)
     assert exc_info.value.decision["reason"] == "host_retry_budget_exhausted"
     assert calls == {"host": 3, "writeback": 0, "spend": 0, "scheduler": 0}
+
+
+def test_run_once_never_blindly_retries_output_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        raise BuiltInHostError(
+            "dsh_output_budget_exhausted_no_final",
+            failure_kind="output_budget_exhausted",
+        )
+
+    common = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+
+    failed = run_loopx_turn_once(plan, **common)
+
+    assert failed["reason"] == "dsh_output_budget_exhausted_no_final"
+    assert failed["host_failure"] == {
+        "schema_version": "loopx_turn_host_failure_v0",
+        "kind": "output_budget_exhausted",
+        "attempt": 1,
+        "retryable": False,
+    }
+    with pytest.raises(TurnRecoveryBlockedError) as exc_info:
+        run_loopx_turn_once(plan, retry_failed=True, **common)
+    assert exc_info.value.decision["reason"] == "host_retry_not_available"
+    assert calls == {"host": 1, "writeback": 0, "spend": 0, "scheduler": 0}
 
 
 def test_run_once_resumes_session_observed_by_recoverable_failed_turn(
@@ -645,6 +1759,20 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(
     assert not any(replay["effects"].values())
     assert count_path.read_text(encoding="utf-8") == "1"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+    # The route is a persisted compatibility surface, not just in-process state.
+    # Exercise the actual TypeScript-backed journal writer and Python resume reader.
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    turn_key = str(transaction["turn_key"])
+    stored = json.loads(turn_journal_path(
+        tmp_path / "runtime", goal_id="fixture-goal", turn_key=turn_key,
+    ).read_text(encoding="utf-8"))
+    assert stored["plan"]["route"]["kind"] == "ready_for_host"
+    resumed = load_loopx_turn_plan_from_journal(
+        tmp_path / "runtime", goal_id="fixture-goal", turn_key=turn_key,
+    )
+    assert resumed["route"] == stored["plan"]["route"]
 
 
 def test_provider_can_commit_before_its_journal_checkpoint(
@@ -1869,11 +2997,14 @@ def test_material_result_cannot_use_not_required_validation_receipt(
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
-def test_run_once_stops_without_writeback_or_spend(tmp_path: Path) -> None:
+@pytest.mark.parametrize("result_kind", ["wait", "iteration_failed"])
+def test_run_once_stops_without_writeback_or_spend(
+    tmp_path: Path, result_kind: str
+) -> None:
     plan = _plan()
     result_path = tmp_path / "result.json"
     result_path.write_text(
-        json.dumps(_host_result(plan, kind="wait")), encoding="utf-8"
+        json.dumps(_host_result(plan, kind=result_kind)), encoding="utf-8"
     )
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)
@@ -1995,3 +3126,110 @@ def test_run_once_resumes_scheduler_without_repeating_committed_effects(
         turn_key=str(transaction["turn_key"]),
     )
     assert audited["last_recovery"] == resumed["recovery"]
+
+
+def test_run_once_fails_closed_when_the_managed_executor_cannot_launch(tmp_path):
+    plan = _managed_plan(runtime_available=False)
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    runtime_root = tmp_path / "runtime"
+    journal = turn_journal_path(
+        runtime_root,
+        goal_id="fixture-goal",
+        turn_key=str(transaction["turn_key"]),
+    )
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: pytest.fail("an unavailable executor must not run"),
+        project=tmp_path,
+        runtime_root=runtime_root,
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "unavailable"
+    assert payload["reason"] == "dsh_runtime_unavailable"
+    assert payload["effects"] == {
+        "host_invoked": False,
+        "state_written": False,
+        "quota_spent": False,
+        "scheduler_acknowledged": False,
+    }
+    assert payload["quota_slot_spend_count"] == 0
+    assert payload["managed_executor"] == plan["managed_executor"]
+    assert journal.exists() is False
+
+
+def test_run_once_preview_reports_the_managed_executor_without_refusing(tmp_path):
+    plan = _managed_plan(runtime_available=False)
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: pytest.fail("preview must not run the host"),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=False,
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "preview"
+    assert payload["managed_executor"]["available"] is False
+    assert payload["managed_executor"]["unavailable_reason"] == "dsh_runtime_unavailable"
+
+
+def test_run_once_does_not_refuse_a_launchable_managed_executor(tmp_path):
+    plan = _managed_plan(runtime_available=True)
+
+    # The refusal is the only guard under test here: without writeback, spend,
+    # and scheduler callbacks the executor stops at its own contract instead.
+    with pytest.raises(ValueError, match="requires writeback, spend, and scheduler"):
+        run_loopx_turn_once(
+            plan,
+            host_runner=lambda _request: pytest.fail("host must not run without callbacks"),
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+        )
+
+
+def test_real_host_duration_is_observed_but_settlement_replay_is_not(tmp_path, monkeypatch):
+    """Production Turn entrypoint, actual Host subprocess and detached TS state."""
+    import time
+    from loopx import usage_ping
+
+    machine = tmp_path / "machine"
+    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", machine)
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    usage_ping.control("enable")
+    plan = _plan()
+    host_file = tmp_path / "host.py"
+    host_file.write_text("import json, sys, time\njson.load(sys.stdin)\ntime.sleep(0.08)\nprint(" + repr(json.dumps(_host_result(plan))) + ")\n")
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    options = dict(host_argv=[sys.executable, str(host_file)], project=tmp_path,
+                   runtime_root=tmp_path / "runtime", goal_id="fixture-goal",
+                   timeout_seconds=5, execute=True, task_validator=_passing_validator,
+                   writeback=writeback, spend=spend, scheduler=scheduler)
+    result = run_loopx_turn_once(plan, **options)
+    assert result["ok"], result
+    local = machine / "usage-ping.json.goals"
+    deadline = time.monotonic() + 5
+    while not local.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    before = json.loads(local.read_text())
+    intervals = before["goals"][0]["intervals"]
+    assert sum(end - start for start, end in intervals) >= 80
+    assert "fixture-goal" not in local.read_text()
+    assert run_loopx_turn_once(plan, **options)["ok"]
+    time.sleep(0.15)
+    assert json.loads(local.read_text()) == before
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}

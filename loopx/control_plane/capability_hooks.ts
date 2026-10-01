@@ -1,5 +1,16 @@
 import type { JsonObject } from "./effect_program.ts";
 import {
+  CAPABILITY_HOOK_INTENT_SCHEMA,
+  CAPABILITY_HOOK_INTERACTION_RESULT_SCHEMA,
+  CAPABILITY_HOOK_POST_WRITEBACK_INPUT_SCHEMA,
+  CAPABILITY_HOOK_POST_WRITEBACK_RECEIPT_SCHEMA,
+  CAPABILITY_HOOK_POST_WRITEBACK_REGISTRATION_SCHEMA,
+  CAPABILITY_HOOK_POST_WRITEBACK_RESULT_SCHEMA,
+  CAPABILITY_HOOK_REGISTRATION_SCHEMA,
+  CAPABILITY_HOOK_TURN_START_REGISTRATION_SCHEMA,
+  CAPABILITY_HOOK_TURN_START_RESULT_SCHEMA,
+} from "./coordination/coordination_state_contract.generated.ts";
+import {
   requireBoolean,
   requireInteger,
   requireJsonObject as requiredObject,
@@ -10,22 +21,22 @@ import { projectRepositoryDeliveryGate } from "./work_items/repository_delivery.
 import { projectPendingCapabilityIntent } from "./work_items/pending_capability_intent.ts";
 
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =
-  "loopx_capability_hook_registration_v0";
+  CAPABILITY_HOOK_REGISTRATION_SCHEMA;
 export const INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION =
-  "loopx_interaction_projection_hook_result_v0";
+  CAPABILITY_HOOK_INTERACTION_RESULT_SCHEMA;
 export const TURN_START_HOOK_REGISTRATION_SCHEMA_VERSION =
-  "loopx_turn_start_capability_hook_registration_v0";
+  CAPABILITY_HOOK_TURN_START_REGISTRATION_SCHEMA;
 export const TURN_START_HOOK_RESULT_SCHEMA_VERSION =
-  "loopx_turn_start_capability_hook_result_v0";
+  CAPABILITY_HOOK_TURN_START_RESULT_SCHEMA;
 export const POST_WRITEBACK_HOOK_REGISTRATION_SCHEMA_VERSION =
-  "loopx_post_writeback_capability_hook_registration_v0";
+  CAPABILITY_HOOK_POST_WRITEBACK_REGISTRATION_SCHEMA;
 export const POST_WRITEBACK_HOOK_INPUT_SCHEMA_VERSION =
-  "loopx_post_writeback_capability_hook_input_v0";
+  CAPABILITY_HOOK_POST_WRITEBACK_INPUT_SCHEMA;
 export const POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION =
-  "loopx_post_writeback_capability_hook_result_v0";
+  CAPABILITY_HOOK_POST_WRITEBACK_RESULT_SCHEMA;
 export const POST_WRITEBACK_HOOK_RECEIPT_SCHEMA_VERSION =
-  "loopx_post_writeback_capability_hook_receipt_v0";
-export const CAPABILITY_INTENT_SCHEMA_VERSION = "loopx_capability_intent_v0";
+  CAPABILITY_HOOK_POST_WRITEBACK_RECEIPT_SCHEMA;
+export const CAPABILITY_INTENT_SCHEMA_VERSION = CAPABILITY_HOOK_INTENT_SCHEMA;
 
 const REGISTRATION_FIELDS = new Set([
   "schema_version",
@@ -60,6 +71,13 @@ const TURN_START_REGISTRATION_FIELDS = new Set([
   "failure_policy",
   "requested_read_scope",
   "requested_write_scope",
+  "required_read",
+]);
+const TURN_START_REQUIRED_READ_FIELDS = new Set([
+  "kind",
+  "command",
+  "reason",
+  "ordering",
 ]);
 const TURN_START_RESULT_FIELDS = new Set([
   "schema_version",
@@ -145,6 +163,7 @@ const POST_WRITEBACK_SIDECAR_RECEIPT_FIELDS = new Set([
   "recorded_at",
 ]);
 const TURN_START_WRITE_SCOPES = new Set([
+  "agent_private_capability_memory",
   "owner_private_inbox",
   "owner_private_cursor",
   "provider_message_reaction",
@@ -332,6 +351,15 @@ export function validateInteractionProjectionHookInvocation(input: {
   };
 }
 
+/** Optional per-read prompt allowance; never execution or effect authority. */
+export function turnStartPromptBudgetBytes(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2_048) {
+    throw new Error("turn-start prompt budget must be an integer from 1 to 2048 bytes");
+  }
+  return value;
+}
+
 export function validateTurnStartHookRegistration(
   value: unknown,
 ): JsonObject & {
@@ -339,6 +367,7 @@ export function validateTurnStartHookRegistration(
   capability_id: string;
   max_result_bytes: number;
   requested_write_scope: string[];
+  required_read: JsonObject | null;
 } {
   const registration = requiredObject(value, "turn-start hook registration");
   requireExactFields(
@@ -387,12 +416,55 @@ export function validateTurnStartHookRegistration(
   if (maxInvocations !== 1 || maxResultBytes < 1024 || maxResultBytes > 65_536) {
     throw new Error("turn-start hook budget is outside the admitted envelope");
   }
+  let requiredRead: JsonObject | null = null;
+  if (registration.required_read !== null) {
+    const candidate = requiredObject(
+      registration.required_read,
+      "turn-start hook required_read",
+    );
+    const readFields = new Set(TURN_START_REQUIRED_READ_FIELDS);
+    if ("prompt_budget_bytes" in candidate) readFields.add("prompt_budget_bytes");
+    requireExactFields(candidate, readFields, "turn-start hook required_read");
+    const promptBudget = turnStartPromptBudgetBytes(candidate.prompt_budget_bytes);
+    const kind = requiredString(candidate.kind, "turn-start hook required_read kind");
+    const command = requiredString(
+      candidate.command,
+      "turn-start hook required_read command",
+    ).trim();
+    const reason = requiredString(
+      candidate.reason,
+      "turn-start hook required_read reason",
+    ).trim();
+    const containsControlCharacter = /[\u0000-\u001f\u007f]/;
+    if (
+      !TOKEN_RE.test(kind) ||
+      // Bound explicit registry/runtime routes too; two legitimate absolute
+      // paths can exceed the old 360-byte display-oriented budget.
+      new TextEncoder().encode(command).byteLength > 1024 ||
+      reason.length > 240 ||
+      containsControlCharacter.test(command) ||
+      containsControlCharacter.test(reason)
+    ) {
+      throw new Error("turn-start hook required_read is outside the admitted envelope");
+    }
+    if (candidate.ordering !== "before_work") {
+      throw new Error("turn-start hook required_read ordering is invalid");
+    }
+    requiredRead = { kind, command, reason, ordering: "before_work" };
+    if (promptBudget) {
+      requiredRead.prompt_budget_bytes = promptBudget;
+      if (Buffer.byteLength(JSON.stringify(requiredRead), "utf8") > promptBudget) {
+        throw new Error("turn-start required read exceeds its declared prompt budget");
+      }
+    }
+  }
   return {
     ...registration,
     hook_id: hookId,
     capability_id: capabilityId,
     max_result_bytes: maxResultBytes,
     requested_write_scope: writeScope,
+    required_read: requiredRead,
   };
 }
 
@@ -492,7 +564,42 @@ export function validateTurnStartHookInvocation(input: {
   if (["unavailable", "failed"].includes(status) && result.agent_read_required) {
     throw new Error("unavailable turn-start hook cannot require unread evidence");
   }
+  if (result.agent_read_required && registration.required_read === null) {
+    throw new Error("turn-start hook required read route is missing");
+  }
   return { ...result };
+}
+
+/** Transport failed context observations to the executor, not only diagnostics.
+ * Missing context never means empty context or a grant to use a stale cache.
+ */
+export function projectTurnStartUnavailableContext(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const dispatch = requiredObject(value, "turn-start dispatch");
+  const affected: JsonObject[] = [];
+  for (const field of ["results", "failures"] as const) {
+    const rows = dispatch[field] ?? [];
+    if (!Array.isArray(rows)) throw new TypeError(`turn-start ${field} must be an array`);
+    for (const raw of rows) {
+      const row = requiredObject(raw, `turn-start ${field} entry`);
+      const status = field === "failures" ? "failed" : row.status;
+      if (!["partial", "unavailable", "failed"].includes(String(status))) continue;
+      const identity: JsonObject = {};
+      for (const key of ["hook_id", "capability_id", "error_code"] as const) {
+        const token = requiredString(row[key], `turn-start ${key}`);
+        if (token.length > 160 || !TOKEN_RE.test(token)) throw new TypeError(`invalid turn-start ${key}`);
+        identity[key] = token;
+      }
+      affected.push({...identity, status});
+    }
+  }
+  if (affected.length === 0) return null;
+  return {
+    affected_hooks: affected,
+    cache_policy: "invalidate_affected_hook_context",
+    dependent_action_policy: "hold_until_fresh_context",
+    independent_work_policy: "preserve_existing_authority",
+  };
 }
 
 export function validatePostWritebackHookRegistration(
@@ -632,6 +739,12 @@ export function validatePostWritebackHookInput(input: {
   const identity = requiredObject(hookInput.identity, "post-writeback identity");
   requireExactFields(identity, POST_WRITEBACK_IDENTITY_FIELDS, "post-writeback identity");
   for (const field of POST_WRITEBACK_IDENTITY_FIELDS) {
+    if (field === "todo_id") {
+      if (identity[field] !== null) {
+        requiredString(identity[field], `post-writeback identity ${field}`);
+      }
+      continue;
+    }
     requiredString(identity[field], `post-writeback identity ${field}`);
   }
   requiredString(hookInput.state_version, "post-writeback state_version");

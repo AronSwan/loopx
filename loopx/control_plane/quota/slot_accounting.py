@@ -1,7 +1,8 @@
 from __future__ import annotations
+from .effective_action import EffectiveAction
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,6 @@ from ..agents.workspace_guard import (
     build_delivery_workspace_guard,
     delivery_workspace_identity,
 )
-from ..runtime.run_artifacts import (
-    next_run_artifact_paths,
-    reserve_run_artifact_paths,
-    run_file_stem,
-)
-from ..runtime.time import now_local_iso
 from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
@@ -25,9 +20,9 @@ from ..work_items.delivery_outcome import (
     normalize_delivery_outcome,
     qualifies_turn_scoped_settlement,
 )
-from .decision_summary import compact_quota_decision, quota_decision_agent_id
 from .monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .scheduler_ack import QUOTA_SCHEDULER_ACK_CLASSIFICATION
+from ..effect_program import SettlementBindingKind
 from .settlement import (
     SettlementFailureKind,
     SettlementIdentity,
@@ -46,12 +41,16 @@ from .settlement_validation import completion_validation_spend_error
 from .spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
     TURN_SCOPED_SLOT_SPEND_SOURCES,
-    VALID_SLOT_SPEND_SOURCES,
     VISIBLE_GOAL_SLOT_SPEND_SOURCE,
 )
 from .spend_commit import (
     build_quota_slot_spend_event as build_quota_slot_spend_event,
     record_quota_slot_spend_from_preview as record_quota_slot_spend_from_preview,
+)
+from .void_commit import (
+    build_quota_slot_void_event as build_quota_slot_void_event,
+    build_quota_slot_void_preview_for_decision as build_quota_slot_void_preview_for_decision,
+    record_quota_slot_void_from_preview as record_quota_slot_void_from_preview,
 )
 
 QUOTA_SLOT_SPENT_CLASSIFICATION = "quota_slot_spent"
@@ -71,6 +70,7 @@ def _todo_binding_error(
     requested_replan_obligation_id: str | None,
     agent_id: str | None,
     settlement_identity: SettlementIdentity | None = None,
+    delivery_run: dict[str, Any] | None = None,
 ) -> str | None:
     selected = (
         before.get("selected_todo")
@@ -94,6 +94,7 @@ def _todo_binding_error(
             todo_id=requested_todo_id,
             agent_id=agent_id,
             selected_todo=selected,
+            delivery_run=delivery_run,
         )
     selected_todo_id = normalize_todo_id(selected.get("todo_id"))
     if requested_todo_id and selected_todo_id and requested_todo_id != selected_todo_id:
@@ -118,6 +119,21 @@ def _todo_binding_error(
         todo_id=requested_todo_id,
         agent_id=agent_id,
         selected_todo=selected,
+        delivery_run=None,
+    )
+
+
+def _receipt_committed(
+    result: SettlementResult[Any] | None,
+    step_kind: SettlementStepKind,
+) -> bool:
+    """Report whether one settlement step already owns a committed receipt."""
+
+    if result is None or result.failure is not None:
+        return False
+    return any(
+        receipt.step_kind is step_kind and receipt.status == "committed"
+        for receipt in result.receipts
     )
 
 
@@ -163,6 +179,21 @@ def _resolve_preview_settlement(
     )
     if readback is None:
         return {}
+    if (
+        isinstance(readback.progress, dict)
+        and readback.progress.get("closeout_kind")
+        == "typed_blocked_writeback_no_spend"
+    ):
+        return {
+            "identity": readback.identity.value,
+            "result": readback.settlement,
+            "delivery_run": readback.writeback_run,
+            "reason": (
+                "this Turn already closed with an exact typed blocked writeback "
+                "and must not consume a quota slot; retry the Todo only after "
+                "its external blocker changes or a bounded backoff"
+            ),
+        }
     result = readback.identity
     identity = result.value if result.failure is None else None
     if identity is not None:
@@ -173,6 +204,12 @@ def _resolve_preview_settlement(
         "delivery_run": result.value if result.failure is None else None,
         "delivery_workspace_causality": readback.workspace_causality,
         "reason": result.failure.reason if result.failure is not None else None,
+        "writeback_committed": _receipt_committed(
+            readback.writeback, SettlementStepKind.DURABLE_WRITEBACK
+        ),
+        "spend_committed": _receipt_committed(
+            readback.spend, SettlementStepKind.QUOTA_SPEND
+        ),
     }
 
 
@@ -249,10 +286,6 @@ def _repair_settlement_workspace_causality(
     return repaired or causality
 
 
-def _now_local() -> str:
-    return now_local_iso()
-
-
 def _validate_goal_id_path_segment(goal_id: str) -> str:
     value = goal_id.strip()
     if not value:
@@ -315,7 +348,7 @@ def _load_goal_run_index_records(runtime_root: Path, goal_id: str) -> list[dict[
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return []
     for line in lines:
@@ -496,6 +529,41 @@ def _missing_delivery_workspace_preview(
     }
 
 
+DELIVERY_COMPLETION_SPEND_STATES = frozenset(
+    {"waiting", "focus_wait", "operator_gate", "eligible"}
+)
+TERMINAL_NO_FOLLOWUP_DECISION_STATE = "terminal_no_followup"
+
+
+def _admits_delivery_completion_spend_state(
+    *,
+    before: Mapping[str, Any],
+    identity: SettlementIdentity | None,
+    settlement: Mapping[str, Any],
+) -> bool:
+    """Admit the decision states one delivery-completion spend may settle from.
+
+    ``terminal_no_followup`` is admitted only for the autonomous-replan
+    settlement whose own durable writeback derived that frontier and which has
+    not yet recorded its spend. The terminal guard therefore stays strict for
+    every new, unrelated, or already-accounted spend, while the remaining step
+    of the settlement that produced the terminal frontier is no longer
+    stranded. See the ``terminal_settlement_ordering_gap`` repair pattern.
+    """
+
+    state = str(before.get("state") or "")
+    if state in DELIVERY_COMPLETION_SPEND_STATES:
+        return True
+    if state != TERMINAL_NO_FOLLOWUP_DECISION_STATE:
+        return False
+    return (
+        identity is not None
+        and identity.binding_kind is SettlementBindingKind.AUTONOMOUS_REPLAN
+        and settlement.get("writeback_committed") is True
+        and settlement.get("spend_committed") is not True
+    )
+
+
 def build_quota_slot_preview_for_decision(
     status_payload: dict[str, Any],
     *,
@@ -594,6 +662,9 @@ def build_quota_slot_preview_for_decision(
         requested_replan_obligation_id=normalized_replan_obligation_id,
         agent_id=safe_requested_agent_id,
         settlement_identity=settlement_identity,
+        delivery_run=(
+            delivery_completion_run if settlement_identity is not None else None
+        ),
     )
     if binding_error:
         return {
@@ -613,13 +684,13 @@ def build_quota_slot_preview_for_decision(
         (
             before.get("state") == "operator_gate"
             or before.get("recovery_delivery_allowed") is True
-            or before.get("effective_action") == "outcome_floor_recovery"
+            or before.get("effective_action") == EffectiveAction.OUTCOME_FLOOR_RECOVERY.value
         )
         and before.get("safe_bypass_allowed") is True
     )
     self_repair_spend = before.get("effective_action") in self_repair_spend_actions
     capability_repair_spend = (
-        before.get("effective_action") == "capability_bridge_repair"
+        before.get("effective_action") == EffectiveAction.CAPABILITY_BRIDGE_REPAIR.value
         and before.get("capability_repair_allowed") is True
     )
     delivery_completion_run = delivery_completion_run or (
@@ -722,7 +793,7 @@ def build_quota_slot_preview_for_decision(
         }
     delivery_workspace_validated = bool(delivery_workspace)
     workspace_repair_no_spend = (
-        before.get("effective_action") == "agent_workspace_repair"
+        before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
         and before.get("workspace_repair_allowed") is True
         and not delivery_workspace_validated
     )
@@ -752,15 +823,19 @@ def build_quota_slot_preview_for_decision(
         and (
             settlement_identity is not None
             or not before.get("should_run")
-            or before.get("effective_action") == "external_evidence_observe"
+            or before.get("effective_action") == EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.value
             or (
-                before.get("effective_action") == "agent_workspace_repair"
+                before.get("effective_action") == EffectiveAction.AGENT_WORKSPACE_REPAIR.value
                 and delivery_workspace_validated
             )
         )
-        and before.get("effective_action") != "automation_prompt_upgrade_required"
+        and before.get("effective_action") != EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value
         and not safe_bypass_spend
-        and str(before.get("state") or "") in {"waiting", "focus_wait", "operator_gate", "eligible"}
+        and _admits_delivery_completion_spend_state(
+            before=before,
+            identity=settlement_identity,
+            settlement=settlement,
+        )
     )
     if delivery_completion_spend:
         capability_repair_spend = False
@@ -840,10 +915,18 @@ def build_quota_slot_preview_for_decision(
                 f"{safe_goal_id} from {before.get('state')} to {after.get('state')}"
             )
         ),
+        "accounting_projection": {
+            "schema_version": "quota_slot_accounting_projection_v0",
+            "settlement_event_semantics": "append_only",
+            "spent_slots_semantics": "rolling_window_aggregate",
+            "before_after_semantics": "same_status_payload_projection",
+            "window_hours": _int_number(before_quota.get("window_hours"), default=0),
+        },
         "rolling_window_note": (
             "before -> after is a same-status-payload projection. Later quota status "
             "recomputes spent_slots from quota_slot_spent events still inside window_hours, "
-            "so the visible total can stay flat if an older spend expires."
+            "so the visible total can stay flat or decrease as older spends expire; that "
+            "does not replay or undo the appended settlement event."
         ),
         "todo_id": normalized_todo_id,
         "replan_obligation_id": normalized_replan_obligation_id,
@@ -885,26 +968,6 @@ def build_quota_slot_preview_for_decision(
     }
 
 
-def _find_quota_spend_run(
-    runtime_root: Path,
-    *,
-    goal_id: str,
-    generated_at: str,
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    for run in reversed(_load_goal_run_index_records(runtime_root, goal_id)):
-        if str(run.get("goal_id") or goal_id) != goal_id:
-            continue
-        if str(run.get("generated_at") or "") != generated_at:
-            continue
-        if str(run.get("classification") or "") != QUOTA_SLOT_SPENT_CLASSIFICATION:
-            continue
-        event = load_quota_event_from_run(run)
-        if not event or str(event.get("event_type") or "") != QUOTA_SLOT_SPENT_CLASSIFICATION:
-            continue
-        return run, event
-    return None
-
-
 def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
     if str(run.get("classification") or "") not in {
         QUOTA_SLOT_SPENT_CLASSIFICATION,
@@ -931,181 +994,53 @@ def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
     return event
 
 
-def build_quota_slot_void_preview_for_decision(
-    status_payload: dict[str, Any],
-    *,
-    goal_id: str,
-    voided_run_generated_at: str,
-    before: dict[str, Any],
-) -> dict[str, Any]:
-    safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
-    safe_voided_at = str(voided_run_generated_at or "").strip()
-    if not safe_voided_at:
-        return {
-            "ok": False,
-            "mode": "void-slot",
-            "dry_run": True,
-            "goal_id": safe_goal_id,
-            "appended": False,
-            "registry_mutated": False,
-            "reason": "`quota void-slot` requires --void-generated-at",
-        }
+def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
+    """Classify one run's contribution to the rolling-window slot ledger.
 
-    raw_runtime_root = status_payload.get("runtime_root")
-    if not raw_runtime_root:
-        raise ValueError("status payload does not include runtime_root")
-    runtime_root = Path(str(raw_runtime_root)).expanduser()
-    target = _find_quota_spend_run(runtime_root, goal_id=safe_goal_id, generated_at=safe_voided_at)
-    if target is None:
-        return {
-            "ok": False,
-            "mode": "void-slot",
-            "dry_run": True,
-            "goal_id": safe_goal_id,
-            "voided_run_generated_at": safe_voided_at,
-            "appended": False,
-            "registry_mutated": False,
-            "reason": "target quota_slot_spent run was not found in the goal runtime index",
-        }
-    target_run, target_event = target
-    slots = max(1, _int_number(target_event.get("slots"), default=1))
-    before_quota = before.get("quota") if isinstance(before.get("quota"), dict) else {}
-    after = deepcopy(before)
-    after_quota = deepcopy(before_quota)
-    after_quota["spent_slots"] = max(0, _int_number(before_quota.get("spent_slots"), default=0) - slots)
-    after["quota"] = after_quota
+    ``goal_quota_with_spend_ledger`` enforces quota from this rule and the
+    usage summary reports from it, so both read an event the same way: the
+    quota event's ``event_type`` decides, a spend is keyed by the run it was
+    recorded against, and a void by the run it targets. A run with no usable
+    event contributes no slot rather than a default one, which is what the
+    ledger already assumed.
+    """
+
+    event = load_quota_event_from_run(run)
+    if not event:
+        return None
+    slots = max(0, _int_number(event.get("slots"), default=0))
+    if slots <= 0:
+        return None
+    event_type = str(event.get("event_type") or "")
+    if event_type == QUOTA_SLOT_SPENT_CLASSIFICATION:
+        run_key = str(event.get("run_generated_at") or run.get("generated_at") or "")
+        if not run_key:
+            return None
+        return ("spent", run_key, slots)
+    if event_type == QUOTA_SLOT_VOIDED_CLASSIFICATION:
+        voided_run_generated_at = str(event.get("voided_run_generated_at") or "")
+        if not voided_run_generated_at:
+            return None
+        return ("voided", voided_run_generated_at, slots)
+    return None
+
+
+def net_quota_slot_spend(
+    contributions: Iterable[tuple[Any, str, int]],
+) -> dict[Any, int]:
+    """Clamp each spend bucket against the voids that target it.
+
+    A void only cancels the spend recorded against the key it names, so a
+    window that no longer holds that spend is never pushed negative and a void
+    never cancels an unrelated spend.
+    """
+
+    spent: dict[Any, int] = {}
+    voided: dict[Any, int] = {}
+    for bucket, kind, slots in contributions:
+        target = spent if kind == "spent" else voided
+        target[bucket] = target.get(bucket, 0) + slots
     return {
-        "ok": True,
-        "mode": "void-slot",
-        "dry_run": True,
-        "goal_id": safe_goal_id,
-        "slots": slots,
-        "voided_run_generated_at": safe_voided_at,
-        "voided_run_classification": target_run.get("classification"),
-        "voided_run_json_path": target_run.get("json_path"),
-        "appended": False,
-        "registry_mutated": False,
-        "before": before,
-        "after": after,
-        "would_throttle": False,
-        "reason": (
-            f"dry-run preview: voiding {slots} slot(s) from {safe_goal_id} "
-            f"quota spend run {safe_voided_at}"
-        ),
-        "rolling_window_note": (
-            "quota void-slot appends a quota_slot_voided accounting event. It does not delete the "
-            "original spend event; rolling-window ledgers subtract the void only when the target "
-            "spend event is inside the same accounting window."
-        ),
-        "classification": QUOTA_SLOT_VOIDED_CLASSIFICATION,
+        bucket: max(0, slots - voided.get(bucket, 0))
+        for bucket, slots in spent.items()
     }
-
-
-def build_quota_slot_void_event(
-    preview: dict[str, Any],
-    *,
-    source: str = DEFAULT_SLOT_SPEND_SOURCE,
-    reason_summary: str | None = None,
-    generated_at: str | None = None,
-) -> dict[str, Any]:
-    if not preview.get("ok"):
-        raise ValueError(preview.get("reason") or "quota slot void requires a valid preview")
-    safe_source = str(source or DEFAULT_SLOT_SPEND_SOURCE).strip()
-    if safe_source not in VALID_SLOT_SPEND_SOURCES:
-        raise ValueError(f"quota slot void source must be one of: {', '.join(sorted(VALID_SLOT_SPEND_SOURCES))}")
-    safe_reason = str(reason_summary or "").strip() or "void duplicate or invalid quota slot spend event"
-    before = preview.get("before") if isinstance(preview.get("before"), dict) else {}
-    after = preview.get("after") if isinstance(preview.get("after"), dict) else {}
-    safe_agent_id = quota_decision_agent_id(before)
-    record = {
-        "generated_at": generated_at or _now_local(),
-        "goal_id": preview.get("goal_id"),
-        "classification": QUOTA_SLOT_VOIDED_CLASSIFICATION,
-        "recommended_action": safe_reason,
-        "health_check": "quota slot void event public-safe; original spend preserved for audit",
-        "quota_event": {
-            "event_type": QUOTA_SLOT_VOIDED_CLASSIFICATION,
-            "source": safe_source,
-            "slots": max(1, _int_number(preview.get("slots"), default=1)),
-            "reason_summary": safe_reason,
-            "voided_run_generated_at": preview.get("voided_run_generated_at"),
-            "voided_run_classification": preview.get("voided_run_classification"),
-            "before": compact_quota_decision(before) if before else {},
-            "after": compact_quota_decision(after) if after else {},
-        },
-    }
-    if safe_agent_id:
-        record["agent_id"] = safe_agent_id
-        record["quota_event"]["agent_id"] = safe_agent_id
-    return record
-
-
-def record_quota_slot_void_from_preview(
-    preview: dict[str, Any],
-    status_payload: dict[str, Any],
-    *,
-    goal_id: str,
-    render_markdown: Callable[[dict[str, Any]], str],
-    execute: bool = False,
-    source: str = DEFAULT_SLOT_SPEND_SOURCE,
-    reason_summary: str | None = None,
-) -> dict[str, Any]:
-    safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
-    if not preview.get("ok"):
-        return preview
-
-    generated_at = _now_local()
-    record = build_quota_slot_void_event(
-        preview,
-        source=source,
-        reason_summary=reason_summary,
-        generated_at=generated_at,
-    )
-    raw_runtime_root = status_payload.get("runtime_root")
-    if not raw_runtime_root:
-        raise ValueError("status payload does not include runtime_root")
-    runtime_root = Path(str(raw_runtime_root)).expanduser()
-    runs_dir = runtime_root / "goals" / safe_goal_id / "runs"
-    stem = run_file_stem(generated_at)
-    path_allocator = reserve_run_artifact_paths if execute else next_run_artifact_paths
-    json_path, markdown_path = path_allocator(runs_dir, stem, "quota-slot-voided")
-    index_path = runs_dir / "index.jsonl"
-    index_record = {
-        "generated_at": generated_at,
-        "goal_id": safe_goal_id,
-        "classification": QUOTA_SLOT_VOIDED_CLASSIFICATION,
-        "recommended_action": record["recommended_action"],
-        "health_check": record["health_check"],
-        "json_path": str(json_path),
-        "markdown_path": str(markdown_path),
-    }
-    if record.get("agent_id"):
-        index_record["agent_id"] = record["agent_id"]
-    payload = {
-        **preview,
-        "dry_run": not execute,
-        "appended": execute,
-        "registry_mutated": False,
-        "source": record["quota_event"]["source"],
-        "classification": QUOTA_SLOT_VOIDED_CLASSIFICATION,
-        "generated_at": generated_at,
-        "agent_id": record.get("agent_id"),
-        "quota_event": record["quota_event"],
-        "json_path": str(json_path),
-        "markdown_path": str(markdown_path),
-        "index_path": str(index_path),
-        "reason": (
-            f"{'appended' if execute else 'dry-run preview'} quota slot void event: "
-            f"{safe_goal_id} voided {record['quota_event']['slots']} slot(s) from "
-            f"{record['quota_event']['voided_run_generated_at']}"
-        ),
-    }
-    if execute:
-        payload["before"] = record["quota_event"]["before"]
-        payload["after"] = record["quota_event"]["after"]
-    if execute:
-        json_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        markdown_path.write_text(render_markdown(payload) + "\n", encoding="utf-8")
-        with index_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(index_record, ensure_ascii=False) + "\n")
-    return payload

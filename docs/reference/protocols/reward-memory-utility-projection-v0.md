@@ -15,6 +15,24 @@ The input object contains exactly `observations`, `scope`,
 identity check only; callers still provide the complete observation stream so
 reduction is reproducible after restart.
 
+## Ownership and entry point
+
+Stage 1 observation validation and the Stage 2 reducer/readback remain one
+Python semantic owner inside the existing `reward_memory` capability. The
+explicit CLI is the only caller in this slice; it adds no configuration,
+automatic recall, or provider path. This keeps a domain-local projection out of
+the control-plane kernel and avoids a parallel TypeScript reducer. A future
+shared consumer must reuse this owner or move the complete transaction and
+remove the Python rule.
+
+This CLI-only slice needs no frontend or Lark control because it changes no
+configuration or user-facing automation. If a future delivery enables automatic
+use, ranking, or broader adoption, it must add the existing shared projection
+and relevant user controls in that delivery. Scope and snapshot references
+bind identity, but do not establish source freshness or coverage; this packet
+has no projection envelope, so consumers must treat freshness and coverage as
+unknown.
+
 ## Projection identity
 
 The reducer identity is derived from:
@@ -58,16 +76,20 @@ requires exact scope and snapshot matches. It then applies these rules:
 
 Utility is bounded to `[-1.0, 1.0]`; confidence and uncertainty are bounded to
 `[0.0, 1.0]`. Support counters retain all four labels and all five evidence
-tiers. The projection records the latest accepted observation identity and
-time, plus a bounded public-safe observation history. When the history budget
-is exceeded, it retains the latest entry for every subject and fills the
-remaining slots with the newest entries, so subject latest fields remain
-auditable after truncation.
+tiers. Each subject also retains a sparse `evidence_label_summary` containing
+the count and combined confidence for every observed evidence-tier/utility-label
+pair. The projection records the latest accepted observation identity and time,
+plus a bounded public-safe observation history. When the history budget is
+exceeded, it retains the latest entry for every subject and fills the remaining
+slots with the newest entries, so subject latest fields remain auditable after
+truncation.
 
 Readback validation remains fail-closed after truncation: it derives the
-strongest evidence tier from the aggregate counters and requires every
-effective directional label to have support (with an explicit same-tier
-conflict exception for `unknown`). Projection timestamps must also remain
+strongest evidence tier, effective label, confidence, and review state from the
+joint `evidence_label_summary`, and verifies that the joint counts reproduce the
+label and evidence-tier marginals. This prevents a strongest-tier harmful or
+unknown result from being relabeled using only weaker support after its source
+history entry has been truncated. Projection timestamps must also remain
 canonical; surrounding whitespace is rejected.
 
 ## Review and safety boundary
@@ -108,7 +130,7 @@ counters for accepted, duplicate, conflicting, and rejected deliveries;
 quarantine metadata; and `observation_history`. A subject carries
 its attribution level, digest set, effective label and evidence basis, bounded
 utility/confidence/uncertainty, support counters, evidence-strength counters,
-latest observation, and review state.
+the sparse evidence-label summary, latest observation, and review state.
 
 The projection is deterministic for the same semantic observation stream,
 scope, snapshots, and reducer version, independent of input order.

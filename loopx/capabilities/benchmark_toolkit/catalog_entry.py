@@ -293,6 +293,84 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             ),
         },
         {
+            "command": (
+                "loopx benchmark study-validate "
+                "--manifest-json <study-manifest.json> --format json"
+            ),
+            "purpose": (
+                "Validate provider-neutral case, arm, factor, native-metric, and "
+                "source-revision intent before producing upload records."
+            ),
+            "write_boundary": (
+                "read-only local manifest validation; grants no runner, scorer, "
+                "network, upload, or publication authority"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark upload-envelope "
+                "--payload-json <public-safe-record.json> "
+                "--record-kind <allowlisted-kind> --producer-id <adapter-id> "
+                "--producer-version <version> --benchmark-id <benchmark-id> "
+                "--study-id <study-id> --idempotency-key <stable-key> "
+                "--observed-at <timestamp> --source-revision <revision> "
+                "--format json"
+            ),
+            "purpose": (
+                "Normalize one allowlisted record and bind it to stable producer, "
+                "study, idempotency, source, and payload-digest identity."
+            ),
+            "write_boundary": (
+                "read-only envelope construction; accepts no credentials and "
+                "performs no local or external write"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark upload-local "
+                "--envelope-json <public-safe-envelope.json> "
+                "--store <simulation.jsonl> [--execute] --format json"
+            ),
+            "purpose": (
+                "Preview or locally simulate digest-bound upload and readback "
+                "before implementing an independently authorized provider."
+            ),
+            "write_boundary": (
+                "preview by default; execute writes only the caller-selected local "
+                "JSONL simulation store and performs no network or external write"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark study-dashboard "
+                "--manifest-json <study-manifest.json> "
+                "--store <simulation.jsonl> "
+                "[--four-arm-contract-json <compact-contract.json>] --format json"
+            ),
+            "purpose": (
+                "Derive campaign, arm, case, run, matched-pair, and optional "
+                "factorial projections with explicit denominators."
+            ),
+            "write_boundary": (
+                "read-only local reducer; experiment-board and factorial contracts "
+                "remain the scoring and comparison authorities"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark upload-readback --store <simulation.jsonl> "
+                "--record-id <record-id> --format json"
+            ),
+            "purpose": (
+                "Verify the exact record id, payload digest, provider revision, "
+                "and supersession state in the local simulation."
+            ),
+            "write_boundary": (
+                "read-only local receipt; returns no store path and performs no "
+                "network or external write"
+            ),
+        },
+        {
             "command": "loopx capability show benchmark-toolkit --format json",
             "purpose": (
                 "Read the post-run analyst hint and benchmark_case_insight_v0 "
@@ -386,6 +464,37 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "Keep diagnostic-only explore rows separate and make paired claims "
             "only from matched_pair_countable comparisons."
         ),
+        "study_projection_workflow": {
+            "sequence": [
+                "validate_provider_neutral_study_manifest",
+                "wrap_one_allowlisted_public_safe_record_per_envelope",
+                "upload_exact_terminal_run_before_its_redacted_case_insight",
+                "preview_local_upload_without_writing",
+                "execute_local_simulation_when_explicitly_requested",
+                "verify_record_id_digest_and_provider_revision_by_readback",
+                "derive_read_only_dashboard_packet",
+            ],
+            "case_insight_upload": {
+                "schema_version": "benchmark_case_insight_projection_v0",
+                "precondition": (
+                    "one active exact-run board record is terminal, has complete "
+                    "post-run analysis status, and matches case/run/outcome identity"
+                ),
+                "authority_boundary": (
+                    "the projection contains no score, countability, integrity, or "
+                    "treatment-fidelity fields and cannot mutate run authority"
+                ),
+                "evidence_boundary": (
+                    "only bounded redacted analysis and public-safe evidence handles "
+                    "or digests; raw trajectory and evaluator material stay private"
+                ),
+            },
+            "external_provider_boundary": (
+                "The local simulation proves contract and readback behavior only. "
+                "Authentication, remote transport, retention, and publication need "
+                "a separately activated provider and explicit authority."
+            ),
+        },
     },
     "four_arm_study": {
         "benchmark_start_hint": (
@@ -515,9 +624,32 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "matched_pair_count",
                 "aggregate_primary_metric_by_arm",
                 "binary_outcome_by_arm_when_available",
+                "feature_metric_by_arm_when_available",
+                "preservation_guardrail_by_arm_when_available",
                 "improved_flat_regressed_pair_counts",
+                "baseline_effort_strata_when_available",
                 "new_case_insights_and_next_probe",
             ],
+            "effort_stratification": {
+                "default_reference_arm": "baseline",
+                "default_reference_field": "effort.duration_ms",
+                "candidate_duration_affects_bucket": False,
+                "interpretation": "descriptive_sensitivity_only",
+                "report_per_stratum": [
+                    "matched_pair_count",
+                    "binary_outcome_by_arm_when_available",
+                    "aggregate_primary_metric_by_arm",
+                    "feature_metric_by_arm_when_available",
+                    "preservation_guardrail_by_arm_when_available",
+                    "improved_flat_regressed_pair_counts",
+                ],
+                "boundary_policy": (
+                    "Preregister benchmark-appropriate fixed boundaries before "
+                    "reading candidate durations. Use the same baseline-side case "
+                    "bucket for every arm in a matched comparison; never define "
+                    "difficulty from treatment duration."
+                ),
+            },
             "unchanged_policy": (
                 "Do not send a repetitive user update when no score, coverage, "
                 "direction, insight, or material runner state changed."
@@ -544,6 +676,13 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "Classify startup_only only after a complete authorized post-run "
                 "review observes qualified startup and zero post-start semantic "
                 "control transitions; otherwise absence remains unknown."
+            ),
+            "persistence_rule": (
+                "Only task-facing Todo transitions and technical replans that "
+                "change the solving course before the result is fixed establish "
+                "sustained control. Terminal-only Todo settlement, replan "
+                "bookkeeping, and closeout remain recorded as closeout events but "
+                "do not establish persistence."
             ),
             "observation_template": {
                 "schema_version": (
@@ -606,6 +745,51 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "clean_worktree_alone",
                 "raw_log_error_count_alone",
             ],
+        },
+        "active_case_observation": {
+            "status": "provisional_only",
+            "purpose": (
+                "Preserve traceable runtime evidence while a case or campaign is "
+                "still active without presenting it as an official scored insight."
+            ),
+            "artifact_template": {
+                "schema_version": "benchmark_case_observation_v0",
+                "case": {
+                    "benchmark_id": "<public-id>",
+                    "case_id": "<public-id>",
+                    "arm": "<baseline-or-treatment>",
+                },
+                "run_status": "<planned-running-or-terminal>",
+                "runtime_outcome": "<ok-error-in_progress-or-unknown>",
+                "duration_ms": "<non-negative-integer-or-null>",
+                "evidence_refs": [
+                    {
+                        "kind": "<trace-log-artifact-report-or-other>",
+                        "trace_id": "<opaque-id-or-null>",
+                        "span_id": "<opaque-id-or-null>",
+                        "env": "<environment-token-or-null>",
+                        "artifact_ref": "<private-pointer-or-null>",
+                    }
+                ],
+                "hypothesis": "<provisional-causal-explanation>",
+                "confidence": "<high-medium-or-low>",
+                "promotion_state": "pending_terminal_score_review",
+            },
+            "score_boundary": (
+                "A provisional observation must not invent an official score or "
+                "treat request success, progress, or runtime status as case quality."
+            ),
+            "promotion_rule": (
+                "After terminal scoring, re-read the complete authorized evidence "
+                "and write a separate benchmark_case_insight_v0; do not relabel the "
+                "provisional artifact as final."
+            ),
+            "privacy_boundary": (
+                "Keep raw evidence references in private benchmark storage. The "
+                "public experiment board may expose only a compact classification "
+                "or private artifact handle, never trace IDs, spans, URLs, paths, "
+                "or provider-specific session identifiers."
+            ),
         },
         "hint": (
             "After the solver has stopped and scoring is complete, read the task, "
@@ -676,6 +860,15 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "grader_or_verifier",
                 "failure_and_score_details",
             ],
+            "evidence_refs": [
+                {
+                    "kind": "<trace-log-artifact-report-or-other>",
+                    "trace_id": "<opaque-id-or-null>",
+                    "span_id": "<opaque-id-or-null>",
+                    "env": "<environment-token-or-null>",
+                    "artifact_ref": "<private-pointer-or-null>",
+                }
+            ],
             "insight": {
                 "approach_summary": "<what-the-solver-tried>",
                 "decisive_evidence": ["<specific-observation>"],
@@ -692,6 +885,31 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
     },
     "implemented_protocols": [
+        {
+            "schema_version": "benchmark_study_manifest_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.study_projection",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_upload_envelope_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.study_projection",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_upload_readback_receipt_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.study_projection",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_case_insight_projection_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.study_projection",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_study_dashboard_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.study_projection",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
         {
             "schema_version": "benchmark_treatment_continuation_receipt_v0",
             "module": "loopx.capabilities.benchmark_toolkit.treatment_continuation",
@@ -774,6 +992,11 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         {
             "schema_version": "run_permission_policy_v0",
             "module": "loopx.capabilities.benchmark_toolkit.run_permissions",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_case_observation_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.catalog_entry",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
         },
         {

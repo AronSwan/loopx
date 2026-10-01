@@ -22,6 +22,7 @@ from .utility_reducer import (
     _LABEL_DIRECTIONS,
     _REVIEW_ACTIONS,
     _REVIEW_STATES,
+    _UTILITY_LABEL_ORDER,
     _bounded,
     _exact_fields,
     _enum,
@@ -53,6 +54,7 @@ def _validate_subject(
             "uncertainty",
             "support",
             "evidence_strength",
+            "evidence_label_summary",
             "observation_count",
             "last_observed_at",
             "last_observation_id",
@@ -108,6 +110,9 @@ def _validate_subject(
         f"{label}.support",
     )
     _counts(subject["evidence_strength"], _EVIDENCE_ORDER, f"{label}.evidence_strength")
+    evidence_label_summary = _validate_evidence_label_summary(
+        subject["evidence_label_summary"], f"{label}.evidence_label_summary"
+    )
     count = subject["observation_count"]
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError(f"{label}.observation_count is invalid")
@@ -115,6 +120,17 @@ def _validate_subject(
         raise ValueError(f"{label}.support does not match observation_count")
     if sum(subject["evidence_strength"].values()) != count:
         raise ValueError(f"{label}.evidence_strength does not match observation_count")
+    summary_support = {utility_label: 0 for utility_label in UTILITY_LABELS}
+    summary_evidence = {basis: 0 for basis in EVIDENCE_BASES}
+    for (basis, utility_label), entry in evidence_label_summary.items():
+        summary_support[utility_label] += entry["observation_count"]
+        summary_evidence[basis] += entry["observation_count"]
+    if summary_support != subject["support"]:
+        raise ValueError(f"{label}.evidence_label_summary does not match support")
+    if summary_evidence != subject["evidence_strength"]:
+        raise ValueError(
+            f"{label}.evidence_label_summary does not match evidence_strength"
+        )
     if subject["evidence_strength"][subject["effective_evidence_basis"]] < 1:
         raise ValueError(
             f"{label}.effective_evidence_basis has no supporting observation"
@@ -168,20 +184,138 @@ def _validate_aggregate_subject_semantics(
     if subject["effective_evidence_basis"] != strongest_basis:
         raise ValueError(f"{label}.effective_evidence_basis is inconsistent")
 
-    support = subject["support"]
-    effective_label = subject["effective_utility_label"]
-    if effective_label in _LABEL_DIRECTIONS and support[effective_label] < 1:
-        raise ValueError(
-            f"{label}.effective_utility_label has no supporting observation"
+    summary = _validate_evidence_label_summary(
+        subject["evidence_label_summary"], f"{label}.evidence_label_summary"
+    )
+    strongest_labels = {
+        utility_label for basis, utility_label in summary if basis == strongest_basis
+    }
+    directional = strongest_labels & set(_LABEL_DIRECTIONS)
+    has_lower_direction = any(
+        utility_label in _LABEL_DIRECTIONS
+        and _EVIDENCE_RANK[basis] < _EVIDENCE_RANK[strongest_basis]
+        for basis, utility_label in summary
+    )
+
+    expected_label: str
+    expected_confidence: float
+    expected_review: tuple[str, str, list[str]]
+    if subject["attribution_level"] == "none":
+        expected_label = "unknown"
+        expected_confidence = 0.0
+        expected_review = (
+            "unresolved_attribution",
+            "collect_attribution",
+            ["attribution_not_established"],
         )
-    if effective_label == "unknown" and support["unknown"] == 0:
-        review = subject["review"]
-        if (
-            review["state"] != "conflict"
-            or "same_evidence_tier_conflict" not in review["reason_codes"]
-            or evidence_strength[strongest_basis] < 2
-        ):
-            raise ValueError(f"{label}.unknown utility has no supporting evidence")
+    elif "unknown" in strongest_labels:
+        expected_label = "unknown"
+        expected_confidence = 0.0
+        reasons: list[str] = []
+        if directional or has_lower_direction:
+            reasons.append("strongest_evidence_unknown")
+        if len(directional) > 1:
+            reasons.append("same_evidence_tier_conflict")
+        expected_review = (
+            "conflict" if reasons else "none",
+            "manual_review" if reasons else "none",
+            sorted(reasons),
+        )
+    elif len(directional) != 1:
+        expected_label = "unknown"
+        expected_confidence = 0.0
+        expected_review = (
+            "conflict",
+            "manual_review",
+            ["same_evidence_tier_conflict"],
+        )
+    else:
+        expected_label = next(iter(directional))
+        expected_confidence = summary[(strongest_basis, expected_label)][
+            "combined_confidence"
+        ]
+        expected_review = (
+            "attenuation_proposed" if expected_label == "harmful" else "none",
+            "attenuate_or_review" if expected_label == "harmful" else "none",
+            ["negative_utility_requires_review"] if expected_label == "harmful" else [],
+        )
+
+    review = subject["review"]
+    observed_review = (
+        review["state"],
+        review["proposed_action"],
+        review["reason_codes"],
+    )
+    observed_label = subject["effective_utility_label"]
+    if (
+        observed_label in _LABEL_DIRECTIONS
+        and (strongest_basis, observed_label) not in summary
+    ):
+        raise ValueError(
+            f"{label}.effective_utility_label has no supporting observation "
+            "in the strongest-tier joint evidence summary"
+        )
+    if (
+        observed_label != expected_label
+        or subject["confidence"] != expected_confidence
+        or observed_review != expected_review
+    ):
+        raise ValueError(f"{label} is inconsistent with joint evidence summary")
+
+
+def _validate_evidence_label_summary(
+    value: object, label: str
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= (
+        len(EVIDENCE_BASES) * len(UTILITY_LABELS)
+    ):
+        raise ValueError(f"{label} must be a bounded non-empty list")
+    result: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for index, item_value in enumerate(value):
+        item_label = f"{label}[{index}]"
+        item = _object(item_value, item_label)
+        _exact_fields(
+            item,
+            frozenset(
+                {
+                    "evidence_basis",
+                    "utility_label",
+                    "observation_count",
+                    "combined_confidence",
+                }
+            ),
+            item_label,
+        )
+        basis = _enum(
+            item["evidence_basis"],
+            EVIDENCE_BASES,
+            f"{item_label}.evidence_basis",
+        )
+        utility_label = _enum(
+            item["utility_label"], UTILITY_LABELS, f"{item_label}.utility_label"
+        )
+        count = item["observation_count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError(f"{item_label}.observation_count is invalid")
+        confidence = _finite_float(
+            item["combined_confidence"], f"{item_label}.combined_confidence"
+        )
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"{item_label}.combined_confidence is out of bounds")
+        key = (basis, utility_label)
+        if key in result:
+            raise ValueError(f"{label} contains a duplicate evidence-label pair")
+        result[key] = item
+    expected_order = sorted(
+        result,
+        key=lambda item: (
+            _EVIDENCE_RANK[item[0]],
+            _UTILITY_LABEL_ORDER.index(item[1]),
+        ),
+    )
+    if list(result) != expected_order:
+        raise ValueError(f"{label} is not canonically ordered")
+    return result
 
 
 def _counts(value: object, keys: Sequence[str], label: str) -> None:

@@ -25,12 +25,13 @@ from hashlib import sha256
 import json
 import os
 import shlex
+import signal
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -42,7 +43,7 @@ from loopx.extensions.process_runtime import (  # noqa: E402
 )
 
 SCHEDULER_DETAIL_KEY = "local_scheduler"
-TERMINAL_ACTIONS = frozenset({"stop_until_explicit_resume"})
+LOCAL_SCHEDULER_STOP_DIRECTIVE = "stop"
 PROCESS_OUTPUT_LIMIT_BYTES = 1_000_000
 
 
@@ -89,9 +90,36 @@ def _extract_reset_token(payload: dict[str, Any]) -> str:
     return str(reset_policy.get("reset_token") or "").strip()
 
 
+def _local_scheduler_directive(hint: dict[str, Any]) -> str:
+    unchanged_poll = _mapping(hint.get("unchanged_poll"))
+    return str(unchanged_poll.get(SCHEDULER_DETAIL_KEY) or "").strip()
+
+
 def parse_tick(payload: dict[str, Any]) -> TickDecision:
     hint = _mapping(payload.get("scheduler_hint"))
     action = str(hint.get("action") or "").strip()
+    cadence_class = str(hint.get("cadence_class") or "").strip()
+    reason = str(hint.get("reason") or payload.get("state") or "").strip()
+    should_run = bool(payload.get("should_run"))
+    if _local_scheduler_directive(hint) == LOCAL_SCHEDULER_STOP_DIRECTIVE:
+        # Terminal packets intentionally omit cold-path cadence detail: no
+        # further wake is legal, so an interval cannot affect the decision.
+        # The producer-owned directive covers every stop action without a
+        # second consumer-side action vocabulary.
+        return TickDecision(
+            should_run=should_run,
+            action=action,
+            cadence_class=cadence_class,
+            reason=reason,
+            interval_minutes=1,
+            progression=(1,),
+            unchanged_limit=None,
+            after_limit="stop_tick_loop",
+            final_probe_enabled=False,
+            final_probe_action="",
+            reset_token=_extract_reset_token(payload),
+            terminal=True,
+        )
     local = _extract_local_scheduler(payload)
 
     progression_values = local.get("example_progression_minutes")
@@ -125,10 +153,6 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
             "action rerun_quota_should_run_once"
         )
 
-    cadence_class = str(hint.get("cadence_class") or "").strip()
-    reason = str(hint.get("reason") or payload.get("state") or "").strip()
-    should_run = bool(payload.get("should_run"))
-
     return TickDecision(
         should_run=should_run,
         action=action,
@@ -141,7 +165,7 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
         final_probe_enabled=bool(final_probe.get("enabled")),
         final_probe_action=str(final_probe.get("action") or "").strip(),
         reset_token=_extract_reset_token(payload),
-        terminal=action in TERMINAL_ACTIONS,
+        terminal=False,
     )
 
 
@@ -245,6 +269,7 @@ def _run_wake(command: str, *, timeout_seconds: float) -> CappedProcessResult:
         stdin=b"",
         timeout_seconds=max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
+        termination_grace_seconds=10,
     )
 
 
@@ -290,7 +315,11 @@ def _scheduler_contract_identity(
     )
 
 
-def run_worker(args: argparse.Namespace) -> int:
+def run_worker(
+    args: argparse.Namespace,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
     should_run_command = build_should_run_command(args)
     state_path = resolve_state_path(args)
     once = bool(args.once)
@@ -310,7 +339,7 @@ def run_worker(args: argparse.Namespace) -> int:
             _log(f"status=tick_error error={shlex.quote(str(exc))}")
             if once:
                 return 2
-            time.sleep(max(5, args.error_backoff_seconds))
+            sleep(max(5, args.error_backoff_seconds))
             continue
 
         retry_after_error = False
@@ -383,7 +412,7 @@ def run_worker(args: argparse.Namespace) -> int:
                         "status=wake_failed_backoff "
                         f"backoff_seconds={max(5, int(args.error_backoff_seconds))}"
                     )
-                    time.sleep(max(5, args.error_backoff_seconds))
+                    sleep(max(5, args.error_backoff_seconds))
                     retry_after_error = True
                 else:
                     unchanged_count = 0
@@ -426,7 +455,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     _log(f"status=tick_error error={shlex.quote(str(exc))}")
                     if once:
                         return 2
-                    time.sleep(max(5, args.error_backoff_seconds))
+                    sleep(max(5, args.error_backoff_seconds))
                     retry_after_error = True
                     break
                 changed = _scheduler_contract_identity(
@@ -471,7 +500,7 @@ def run_worker(args: argparse.Namespace) -> int:
 
         if once:
             return 0
-        time.sleep(max(5, interval_minutes * 60))
+        sleep(max(5, interval_minutes * 60))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -531,4 +560,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    def cancelled(signum, frame):
+        raise KeyboardInterrupt("scheduler cancelled")
+
+    signal.signal(signal.SIGTERM, cancelled)
     raise SystemExit(main())

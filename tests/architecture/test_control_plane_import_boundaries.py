@@ -31,6 +31,10 @@ OPERATOR_INBOX_MODULE = CONTROL_PLANE_ROOT / "work_items" / "operator_inbox.py"
 QUOTA_CLI_MODULE = PACKAGE_ROOT / "cli_commands" / "quota.py"
 TURN_CLI_MODULE = PACKAGE_ROOT / "cli_commands" / "turn.py"
 LARK_INBOX_CLI_MODULE = PACKAGE_ROOT / "cli_commands" / "lark_inbox.py"
+PERIODIC_REPORT_REQUEST_ACTION_MODULE = (
+    PACKAGE_ROOT / "capabilities" / "periodic_report" / "request_action.py"
+)
+EXTENSION_HOOK_ADAPTERS_MODULE = PACKAGE_ROOT / "extensions" / "hook_adapters.py"
 ISSUE_FIX_REVIEWER_CLI_MODULE = (
     PACKAGE_ROOT / "capabilities" / "issue_fix" / "reviewer_cli.py"
 )
@@ -51,7 +55,6 @@ STATUS_FORBIDDEN_DEPENDENCY_PREFIXES = (
     "loopx.benchmark_adapters",
     "loopx.presentation",
 )
-STATUS_OUTWARD_DEPENDENCY_DEBT: set[tuple[str, str]] = set()
 
 
 def _module_name(path: Path) -> str:
@@ -153,13 +156,34 @@ def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
     for root in PUBLIC_CONTRACT_ROOTS:
         for path in root.rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            # Aliases such as ``from loopx import status as status_module`` are a
+            # real consumer of a facade export, reached by attribute access
+            # rather than a from-import. Without this map the audit would report
+            # a live consumer as missing evidence.
+            module_aliases: dict[str, str] = {}
             for node in ast.walk(tree):
-                if not isinstance(node, ast.ImportFrom):
+                if not isinstance(node, ast.ImportFrom) or node.level:
                     continue
-                if node.module not in PUBLIC_COMPAT_FACADES:
-                    continue
+                module = node.module or ""
                 for alias in node.names:
-                    evidence.setdefault((node.module, alias.name), set()).add(
+                    # ``from loopx import status`` binds the facade itself; a
+                    # from-import of a facade also binds the facade's exports.
+                    candidate = alias.name if not module else f"{module}.{alias.name}"
+                    if candidate in PUBLIC_COMPAT_FACADES:
+                        module_aliases[alias.asname or alias.name] = candidate
+                        continue
+                    if module in PUBLIC_COMPAT_FACADES:
+                        evidence.setdefault((module, alias.name), set()).add(
+                            str(path.relative_to(REPOSITORY_ROOT))
+                        )
+            if not module_aliases:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute) or not isinstance(node.ctx, ast.Load):
+                    continue
+                facade_name = module_aliases.get(getattr(node.value, "id", ""))
+                if facade_name is not None:
+                    evidence.setdefault((facade_name, node.attr), set()).add(
                         str(path.relative_to(REPOSITORY_ROOT))
                     )
     for path in (REPOSITORY_ROOT / "docs").rglob("*.md"):
@@ -219,6 +243,23 @@ def test_periodic_report_hook_does_not_break_cold_imports() -> None:
             capture_output=True,
             check=False,
             text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
+def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
+    # Run independently: an earlier test importing a writer must not hide an
+    # accidental cold-start dependency of a read-only entrypoint.
+    for module, unrelated in (
+        ("loopx.control_plane.coordination.local_authority", "loopx.history"),
+        ("loopx.cli_commands.status", "loopx.state_refresh"),
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-c", (
+                f"import sys; import {module}; "
+                f"assert {unrelated!r} not in sys.modules, {unrelated!r}"
+            )],
+            cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
         )
         assert completed.returncode == 0, completed.stderr
 
@@ -319,7 +360,7 @@ def test_public_facade_compatibility_entries_have_contract_evidence() -> None:
     )
 
 
-def test_status_outward_dependency_debt_only_shrinks() -> None:
+def test_status_has_no_forbidden_outward_dependencies() -> None:
     outward_dependencies = {
         (_module_name(STATUS_MODULE), dependency)
         for dependency in _resolved_imports(STATUS_MODULE)
@@ -329,15 +370,9 @@ def test_status_outward_dependency_debt_only_shrinks() -> None:
         )
     }
 
-    unexpected = outward_dependencies - STATUS_OUTWARD_DEPENDENCY_DEBT
-    stale_debt = STATUS_OUTWARD_DEPENDENCY_DEBT - outward_dependencies
-    assert not unexpected, (
-        "loopx.status must not gain new benchmark-adapter or presentation dependencies; "
-        f"unexpected edges: {sorted(unexpected)}"
-    )
-    assert not stale_debt, (
-        "remove resolved loopx.status edges from STATUS_OUTWARD_DEPENDENCY_DEBT; "
-        f"stale entries: {sorted(stale_debt)}"
+    assert not outward_dependencies, (
+        "loopx.status must not depend on benchmark-adapter or presentation layers; "
+        f"unexpected edges: {sorted(outward_dependencies)}"
     )
 
 
@@ -352,6 +387,25 @@ def test_quota_receives_lark_urgency_only_through_cli_composition() -> None:
 
     assert "loopx.cli_commands.lark_inbox" in _resolved_imports(QUOTA_CLI_MODULE)
     assert "loopx.cli_commands.lark_inbox" in _resolved_imports(TURN_CLI_MODULE)
+
+
+def test_periodic_report_request_ports_are_manifest_discovered_outside_kernel() -> None:
+    generic_modules = (
+        PERIODIC_REPORT_REQUEST_ACTION_MODULE,
+        EXTENSION_HOOK_ADAPTERS_MODULE,
+        QUOTA_CLI_MODULE,
+    )
+    for module in generic_modules:
+        assert not any(
+            dependency == "loopx.extensions.lark"
+            or dependency.startswith("loopx.extensions.lark.")
+            for dependency in _resolved_imports(module)
+        )
+    assert not any(
+        dependency == "loopx.control_plane"
+        or dependency.startswith("loopx.control_plane.")
+        for dependency in _resolved_imports(EXTENSION_HOOK_ADAPTERS_MODULE)
+    )
 
 
 def test_lark_operator_inbox_contract_is_extension_owned() -> None:

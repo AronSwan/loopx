@@ -15,8 +15,26 @@ import {
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
 } from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
 import { evaluateTaskLeaseLifecycleDecision } from "../../loopx/control_plane/work_items/task_lease_lifecycle_decision.ts";
+import { shadowManagementStatePath } from "../../loopx/control_plane/coordination/shadow_management.ts";
 
 const ACQUIRE_NOW = new Date("2026-09-01T03:00:00.000Z");
+
+test("maintenance corruption blocks native acquire and release before lease mutation", async (t) => {
+  const root = await workspace(t);
+  const acquired = await executeTaskLeaseAcquire(await acquireRequest(root));
+  assert.equal(acquired.ok, true);
+  const path = join(root, "runtime", "goals", "goal-a", "task-leases", "todo_target.json");
+  const before = await readFile(path, "utf8");
+  await atomicWriteJson(shadowManagementStatePath(join(root, "runtime"), "goal-a"), {});
+  const released = await executeTaskLeaseLifecycle(await lifecycleRequest(root, "release"));
+  assert.equal(released.ok, false);
+  assert.equal(released.error_code, "shadow_management_state_invalid");
+  assert.equal(await readFile(path, "utf8"), before);
+  const retry = await executeTaskLeaseAcquire(await acquireRequest(root, {idempotency_key: "new-key"}));
+  assert.equal(retry.ok, false);
+  assert.equal(retry.error_code, "shadow_management_state_invalid");
+  assert.equal(await readFile(path, "utf8"), before);
+});
 
 function lifecycleDecision(
   operation: "renew" | "transfer" | "release",
@@ -93,6 +111,43 @@ test("pure lifecycle decision keeps provider executions behind the same gates", 
   });
   assert.equal(softClaim.outcome, "rejected");
   assert.equal(softClaim.code, "handoff_mode_forbids_lease");
+});
+
+for (const operation of ["renew", "transfer", "release"] as const) {
+  test(`native ${operation} rejects contradictory lease facts before mode and CAS`, () => {
+    for (const contradiction of [{present: false}, {status: "released"}]) {
+      const result = lifecycleDecision(operation, {
+        handoff_mode: "soft_claim",
+        lease: {present: true, active: true, status: "active", owner: "agent-a",
+          idempotency_key: "lease-a", version: 3, lease_epoch: 7,
+          write_scopes: [], acquire_ttl_seconds: 300, ...contradiction},
+        command: {operation, owner: "agent-a", idempotency_key: "lease-a",
+          expected_version: null, ttl_seconds: null, new_owner: null,
+          new_idempotency_key: null},
+      });
+      assert.equal(result.outcome, "rejected");
+      assert.equal(result.code, "invalid_lease_snapshot");
+      assert.equal(result.next_lease, null);
+    }
+  });
+}
+
+test("soft-claim rejects renew and transfer before missing version; release keeps its fence", () => {
+  for (const operation of ["renew", "transfer", "release"] as const) {
+    const result = lifecycleDecision(operation, {
+      handoff_mode: "soft_claim",
+      command: {operation, owner: "agent-a", idempotency_key: "lease-a",
+        expected_version: null, ttl_seconds: null, new_owner: null,
+        new_idempotency_key: null},
+    });
+    assert.equal(result.outcome, "rejected");
+    assert.equal(result.code, operation === "release" ? "version_required" : "handoff_mode_forbids_lease");
+  }
+  const cleanup = lifecycleDecision("release", {handoff_mode: "soft_claim"});
+  assert.equal(cleanup.outcome, "apply");
+  assert.equal(cleanup.next_lease?.status, "released");
+  assert.equal(cleanup.next_lease?.version, 3);
+  assert.equal(cleanup.next_lease?.lease_epoch, 7);
 });
 
 async function workspace(t: TestContext): Promise<string> {
@@ -369,6 +424,26 @@ test("lifecycle rejects stale versions and expired leases before writeback", asy
   assert.equal((await lease(root)).version, 1);
 });
 
+test("lifecycle accepts active leases with high-precision fractional seconds", async (t) => {
+  const root = await workspace(t);
+  await executeTaskLeaseAcquire(await acquireRequest(root), { now: () => ACQUIRE_NOW });
+  const existing = await lease(root);
+  existing.expires_at = "2026-09-01T03:10:00.123456789Z";
+  await writeFile(
+    join(root, "runtime", "goals", "goal-a", "task-leases", "todo_target.json"),
+    JSON.stringify(existing),
+    "utf8",
+  );
+
+  const renewed = await executeTaskLeaseLifecycle(
+    await lifecycleRequest(root, "renew"),
+    { now: () => new Date("2026-09-01T03:01:00.000Z") },
+  );
+
+  assert.equal(renewed.ok, true);
+  assert.equal(renewed.renewed, true);
+});
+
 test("holder verification is hard-lease-only and fence close releases only its verified lease", async (t) => {
   const root = await workspace(t);
   const hardAuthority = await authority(root, {
@@ -598,6 +673,10 @@ test("fence close write failure leaves the lease unchanged and unlocks", async (
 
 test("user-gate auto-acquire returns a persistent fence that can be closed", async (t) => {
   const root = await workspace(t);
+  const runtimeShadow = {
+    schema_version: "loopx_coordination_runtime_shadow_binding_v0",
+    provider: "file_v0",
+  };
   const facts = await authority(root, {
     todos: [{
       todo_id: "todo_target",
@@ -615,10 +694,16 @@ test("user-gate auto-acquire returns a persistent fence that can be closed", asy
       idempotency_key: null,
       expected_version: null,
       allow_user_gate_auto_acquire: true,
+      runtime_shadow: runtimeShadow,
     }),
     { now: () => ACQUIRE_NOW },
   );
   assert.equal(checked.ok, true);
+  const autoCapture = checked.coordination_runtime_shadow_capture as Record<string, unknown>;
+  assert.equal(autoCapture.entry_id, null);
+  assert.equal(autoCapture.seq, null);
+  assert.equal(autoCapture.skipped_reason, "bootstrap_required");
+  assert.equal(autoCapture.failure, null);
   const fence = checked.fence as Record<string, unknown>;
   assert.equal(fence.auto_acquired, true);
   assert.equal((await lease(root)).status, "active");
@@ -635,10 +720,16 @@ test("user-gate auto-acquire returns a persistent fence that can be closed", asy
       fence_owner: "agent-a",
       fence_idempotency_key: (await lease(root)).idempotency_key,
       fence_expected_version: (await lease(root)).version,
+      runtime_shadow: runtimeShadow,
     }),
   }, { now: () => new Date("2026-09-01T03:01:00.000Z") });
   assert.equal(closed.ok, true);
   assert.equal(closed.released, true);
+  const closeCapture = closed.coordination_runtime_shadow_capture as Record<string, unknown>;
+  assert.equal(closeCapture.entry_id, null);
+  assert.equal(closeCapture.seq, null);
+  assert.equal(closeCapture.skipped_reason, "bootstrap_required");
+  assert.equal(closeCapture.failure, null);
   assert.equal((await lease(root)).status, "released");
 });
 
@@ -1578,3 +1669,85 @@ test("lifecycle boundary rejects non-boolean flags and unsafe fence tokens", asy
   assert.equal(invalidToken.ok, false);
   assert.equal(invalidToken.error_code, "invalid_lock_token");
 });
+
+test("fence close keeps its held fence when the authority source changed", async (t) => {
+  const root = await workspace(t);
+  const runtimeShadow = {
+    schema_version: "loopx_coordination_runtime_shadow_binding_v0",
+    provider: "file_v0",
+  };
+  const hardAuthority = await authority(root, {
+    todos: [{
+      todo_id: "todo_target",
+      status: "open",
+      claimed_by: "agent-a",
+      excluded_agents: [],
+    }],
+  });
+  await executeTaskLeaseAcquire(
+    await acquireRequest(root, { authority: hardAuthority }),
+    { now: () => ACQUIRE_NOW },
+  );
+  const checked = await executeTaskLeaseLifecycle(
+    await lifecycleRequest(root, "holder_verify", {
+      authority: hardAuthority,
+      idempotency_key: null,
+      expected_version: null,
+      owner: "agent-a",
+    }),
+    { now: () => new Date("2026-09-01T03:01:00.000Z") },
+  );
+  assert.equal(checked.ok, true);
+  const fence = checked.fence as Record<string, unknown>;
+
+  const closeRequest = await lifecycleRequest(root, "fence_close", {
+    authority: hardAuthority,
+    owner: null,
+    idempotency_key: null,
+    expected_version: null,
+    lock_token: fence.lock_token,
+    committed: true,
+    release_lease: true,
+    fence_owner: "agent-a",
+    fence_idempotency_key: null,
+    fence_expected_version: 1,
+    runtime_shadow: runtimeShadow,
+  });
+  // An equivalent rewrite of the canonical registry after the close snapshot.
+  // The decision facts are unchanged; only the source bytes moved.
+  const rewritten = await authoritySource(root, "authority-v2");
+
+  const stale = await executeTaskLeaseLifecycle(closeRequest, {
+    now: () => new Date("2026-09-01T03:02:00.000Z"),
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error_code, "authority_source_changed");
+  assert.equal((await lease(root)).status, "active");
+
+  // The adapter answers a source mismatch by re-reading the graph and retrying
+  // the same held fence.  A retryable precondition must not have consumed it.
+  const retried = await executeTaskLeaseLifecycle({
+    ...closeRequest,
+    authority: { ...hardAuthority, source_receipts: [rewritten] },
+  }, { now: () => new Date("2026-09-01T03:02:01.000Z") });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.released, true);
+  assert.equal((await lease(root)).status, "released");
+});
+
+for (const dimension of ["version", "epoch"] as const) {
+  test(`legacy lifecycle rejects exhausted ${dimension} before persistent mutation`, async t => {
+    const root = await workspace(t);
+    const acquired = await executeTaskLeaseAcquire(await acquireRequest(root)); assert.equal(acquired.ok, true);
+    const path = join(root, "runtime", "goals", "goal-a", "task-leases", "todo_target.json");
+    const lease = JSON.parse(await readFile(path, "utf8"));
+    lease[dimension === "version" ? "version" : "lease_epoch"] = Number.MAX_SAFE_INTEGER;
+    await writeFile(path, JSON.stringify(lease)); const before = await readFile(path, "utf8");
+    const result = await executeTaskLeaseLifecycle(await lifecycleRequest(root, dimension === "version" ? "renew" : "transfer", {
+      expected_version: lease.version,
+      ...(dimension === "epoch" ? {new_owner: "agent-b", new_idempotency_key: "lease-b"} : {}),
+    }));
+    assert.equal(result.error_code, "lease_generation_exhausted", JSON.stringify(result));
+    assert.equal(await readFile(path, "utf8"), before);
+  });
+}

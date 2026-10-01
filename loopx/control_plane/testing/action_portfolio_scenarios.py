@@ -4,7 +4,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..quota.cli_projection import compact_quota_should_run_cli_payload
+from ..quota.effective_action import EffectiveAction
 from ..quota.should_run import build_quota_should_run
+from ..work_items.interaction_contract import build_interaction_contract
 from ..quota.turn_envelope import quota_action_signature_document
 from .quota_fixtures import quota_status_payload, quota_todo_item
 
@@ -321,3 +323,59 @@ def validate_external_wait_fallback_scenario(
             "external-wait scenario must expose the pending P0 condition while "
             "executing the bounded fallback from the compact default packet"
         )
+
+
+def turn_scenario_source(
+    *,
+    human_gate: bool,
+    agent_id: str = ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+    continuation_policy: str | None = None,
+) -> dict[str, Any]:
+    selected_todo = None
+    if not human_gate:
+        selected_todo = {
+            "todo_id": "todo_portfolio001",
+            "status": "open",
+            "task_class": "advancement_task",
+            "claimed_by": agent_id,
+            "text": "Implement one bounded public-safe slice.",
+        }
+        if continuation_policy:
+            selected_todo["continuation_policy"] = continuation_policy
+    payload: dict[str, Any] = {
+        "ok": True,
+        "mode": "should-run",
+        "goal_id": ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+        "decision": "skip" if human_gate else "run",
+        "should_run": not human_gate,
+        "effective_action": EffectiveAction.OPERATOR_GATE_NOTIFY.value if human_gate else EffectiveAction.NORMAL_RUN.value,
+        "state": "operator_gate" if human_gate else "eligible",
+        "requires_user_action": human_gate,
+        "gate_prompt": ("Approve the bounded public release." if human_gate else None),
+        "recommended_action": (
+            "Approve the bounded public release."
+            if human_gate
+            else "Implement one bounded public-safe slice."
+        ),
+        "selected_todo": selected_todo,
+        "agent_identity": {"agent_id": agent_id},
+        "execution_obligation": {
+            "must_attempt_work": not human_gate,
+            "delivery_allowed": not human_gate,
+        },
+        "normal_delivery_allowed": not human_gate,
+        "heartbeat_recommendation": {
+            "notify": "NOTIFY" if human_gate else "DONT_NOTIFY"
+        },
+        "goal_boundary": {
+            "write_scope": ["loopx/**", "tests/**"],
+            "guards": ["stop before external writes"],
+        },
+    }
+    payload["interaction_contract"] = build_interaction_contract(
+        payload,
+        available_capabilities=["network"],
+    )
+    payload["action_required"] = human_gate
+    payload["open_count"] = 1 if human_gate else 0
+    return payload

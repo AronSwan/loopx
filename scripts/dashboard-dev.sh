@@ -12,6 +12,10 @@ CODEX_BIN="codex"
 CLAUDE_BIN="claude"
 LARK_CLI_BIN=""
 LARK_CLI_ARGS=()
+GOAL_SUBAGENT_ARGS=()
+if [[ "${LOOPX_ENABLE_GOAL_SUBAGENT_CONFIGURATION:-0}" = "1" ]]; then
+  GOAL_SUBAGENT_ARGS=(--enable-goal-subagent-configuration)
+fi
 
 node_is_supported() {
   "$1" -e '
@@ -116,9 +120,10 @@ trap cleanup EXIT INT TERM
 
 if ! PYTHON_BIN="$(bash "${SCRIPT_DIR}/loopx-python.sh")"; then
   echo "LoopX requires Python 3.11 or newer to start status and Chat services." >&2
-  echo "Install Python 3.11+ (for example: brew install python@3.12), or set" >&2
-  echo "LOOPX_PYTHON to an existing Python 3.11+ executable and retry, e.g.:" >&2
-  echo "  LOOPX_PYTHON=/path/to/python3.12 npm run dev" >&2
+  echo "From the repository root, prepare a project environment and retry:" >&2
+  echo "  uv sync --extra test" >&2
+  echo "  uv run --extra test bash scripts/dashboard-dev.sh" >&2
+  echo "Or set LOOPX_PYTHON to an existing Python 3.11+ executable." >&2
   echo "Starting the Vite UI only; use 'npm run dev:web' for the same UI-only preview." >&2
   cd "${DASHBOARD_DIR}"
   exec npm run dev:web
@@ -217,10 +222,13 @@ else
 fi
 
 cd "${REPO_ROOT}"
+"${PYTHON_BIN}" "${REPO_ROOT}/scripts/chat_bundle.py" ensure || exit 1
+
 "${PYTHON_BIN}" -m loopx.cli serve-status \
   --global-registry \
   --host 127.0.0.1 \
   --port 8766 \
+  ${GOAL_SUBAGENT_ARGS[@]+"${GOAL_SUBAGENT_ARGS[@]}"} \
   --limit 80 &
 STATUS_PID=$!
 
@@ -230,6 +238,7 @@ STATUS_PID=$!
   --port 8767 \
   --codex-bin "${CODEX_BIN}" \
   --claude-bin "${CLAUDE_BIN}" \
+  ${GOAL_SUBAGENT_ARGS[@]+"${GOAL_SUBAGENT_ARGS[@]}"} \
   ${LARK_CLI_ARGS[@]+"${LARK_CLI_ARGS[@]}"} \
   --no-open &
 CHAT_PID=$!

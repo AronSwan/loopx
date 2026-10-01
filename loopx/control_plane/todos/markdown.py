@@ -5,7 +5,54 @@ from typing import Any
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
 
+def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
+    """Render the typed rejection's guidance without deciding lease eligibility."""
+    recovery = payload.get("recovery")
+    if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
+        return []
+    lines = [f"- handoff_mode: `{payload['handoff_mode']}`", f"- recovery: {recovery['reason']}"]
+    for step in ("inspect", "acquire", "retry", "release"):
+        instruction = recovery.get(step)
+        if isinstance(instruction, dict) and instruction.get("command"):
+            lines.append(f"- {step}: `{instruction['command']}`")
+    lines.append("- Use `--format json` for the recovery arguments and current-version requirements.")
+    return lines
+
+
+def _render_settlement_plan(plan: object) -> list[str]:
+    """Project the TS-owned recovery plan without adding admission decisions."""
+    if not isinstance(plan, dict) or plan.get("schema_version") != "quota_settlement_plan_v1":
+        return []
+    lines = ["", "## Same-Turn settlement plan", ""]
+    for step in plan.get("ordered_steps", []):
+        if not isinstance(step, dict):
+            continue
+        condition = step.get("command_condition") or ("conditional" if step.get("conditional") else "")
+        lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
+        if step.get("command_template"):
+            lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+    return lines
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
+    if payload.get("command") == "project-markdown":
+        return "\n".join(
+            [
+                "# LoopX Todo Markdown Projection",
+                "",
+                f"- ok: `{payload.get('ok')}`",
+                f"- goal_id: `{payload.get('goal_id')}`",
+                f"- dry_run: `{payload.get('dry_run')}`",
+                f"- executed: `{payload.get('executed')}`",
+                f"- changed: `{payload.get('changed')}`",
+                f"- source_authority: `{payload.get('source_authority')}`",
+                f"- provider_revision: `{payload.get('provider_revision')}`",
+                f"- todo_count: `{payload.get('todo_count')}`",
+                f"- parse_render_parity: `{payload.get('parse_render_parity')}`",
+                f"- narrative_preserved: `{payload.get('narrative_preserved')}`",
+                f"- error: `{payload.get('error')}`" if payload.get("error") else "",
+            ]
+        ).rstrip()
     if payload.get("command") == "list":
         if payload.get("thin"):
             field_projection = payload.get("todo_list_field_projection")
@@ -100,18 +147,6 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         if isinstance(projection, dict):
             lines.append(
                 f"- returned_todo_count: `{payload.get('returned_todo_count')}`"
-            )
-        state_event_projection = payload.get("state_event_projection")
-        if isinstance(state_event_projection, dict):
-            lines.extend(
-                [
-                    f"- event_log: `{state_event_projection.get('event_log')}`",
-                    (
-                        "- source_event_count: `"
-                        f"{state_event_projection.get('source_event_count')}`"
-                    ),
-                    f"- last_event_id: `{state_event_projection.get('last_event_id')}`",
-                ]
             )
         for key, heading in (
             ("user_todos", "User Todo"),
@@ -213,6 +248,8 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        lines.extend(_render_lease_recovery(payload))
+        lines.extend(_render_settlement_plan(payload.get("settlement_plan")))
         if payload.get("operator_action"):
             action = payload["operator_action"]
             lines.append(f"- error_code: `{payload.get('error_code')}`")

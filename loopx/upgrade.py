@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from .agent_registry import (
 )
 from .execution_profile import execution_profile_turn_granularity
 from .heartbeat_prompt import build_heartbeat_prompt
+from .control_plane.reward_memory import reward_memory_goal_policy
 from .history import load_registry
 from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
@@ -55,10 +57,60 @@ STAGE_DEFERRED_ATTENTION_STATUSES = {
 STAGE_DEFERRED_ADAPTER_STATUSES = {
     "planned",
 }
+_AUTOMATION_PARSE_ERROR_LIMIT = 20
 
 
 def prompt_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def goal_heartbeat_prompt(
+    goal: dict[str, Any],
+    *,
+    cli_bin: str,
+    mode: str,
+    agent_id: str | None,
+    available_capabilities: Any = None,
+) -> dict[str, Any]:
+    """Build the prompt one Goal's ``mode`` heartbeat target installs.
+
+    The prompt inputs come from the Goal's own registration (state file, agent
+    profile, registered agents, turn granularity, Reward Memory policy), so the
+    upgrade plan and every release check that must agree with it byte-for-byte
+    have to build the prompt through this single owner. Rebuilding the argument
+    list at a second call site is how a digest check drifts the moment the
+    product gains one more input.
+    """
+    goal_id = str(goal.get("id") or "")
+    repo = Path(str(goal.get("repo") or ".")).expanduser()
+    state_file = resolve_state_file(repo, goal.get("state_file"))
+    registered_agents = registered_agent_ids_for_goal(goal)
+    reward_memory_policy = reward_memory_goal_policy(goal)
+    reward_memory_enabled = bool(
+        reward_memory_policy["enabled"]
+        and reward_memory_policy["automation"].get("automatic_ingest") is True
+    )
+    return build_heartbeat_prompt(
+        goal_id=goal_id,
+        active_state=None,
+        active_state_source="registry",
+        resolved_active_state=state_file,
+        compact=mode == "compact",
+        brief=mode == "brief",
+        thin=mode == "thin",
+        cli_bin=cli_bin,
+        agent_id=agent_id,
+        agent_profile=agent_profile_for_goal(goal, agent_id),
+        registered_agents=registered_agents or None,
+        available_capabilities=available_capabilities,
+        runtime_profile="codex_app_heartbeat",
+        turn_granularity=execution_profile_turn_granularity(
+            goal.get("execution_profile")
+            if isinstance(goal.get("execution_profile"), dict)
+            else None
+        ),
+        reward_memory_enabled=reward_memory_enabled,
+    )
 
 
 def prompt_summary(prompt: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -177,27 +229,7 @@ def codex_home() -> Path:
 
 
 def parse_automation_toml(path: Path) -> dict[str, Any]:
-    values: dict[str, Any] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, raw_value = line.split("=", 1)
-        key = key.strip()
-        value = raw_value.strip()
-        if value.startswith('"') and value.endswith('"'):
-            try:
-                values[key] = json.loads(value)
-            except json.JSONDecodeError:
-                values[key] = value[1:-1]
-        elif value in {"true", "false"}:
-            values[key] = value == "true"
-        else:
-            try:
-                values[key] = int(value)
-            except ValueError:
-                values[key] = value
-    return values
+    return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
 def infer_goal_id_from_prompt(prompt: str) -> str | None:
@@ -243,6 +275,7 @@ def infer_available_capabilities_from_prompt(prompt: str) -> list[str]:
 
 
 def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, Any]:
+    from .control_plane.heartbeat.automation_upgrade import bootstrap_binding
     home = root or codex_home()
     automations_root = home / "automations"
     if not automations_root.exists():
@@ -252,13 +285,34 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
             "entries": [],
             "reason": "no installed automation manifest provided and Codex App automations directory does not exist",
             "source": "codex_app_automations",
+            "parse_error_count": 0,
+            "parse_errors": [],
+            "parse_errors_complete": True,
         }
 
     entries: list[dict[str, Any]] = []
+    parse_errors: list[dict[str, str]] = []
+    parse_error_count = 0
     for path in sorted(automations_root.glob("*/automation.toml")):
         try:
             automation = parse_automation_toml(path)
         except OSError:
+            parse_error_reason = "unreadable"
+        except UnicodeError:
+            parse_error_reason = "invalid_utf8"
+        except tomllib.TOMLDecodeError:
+            parse_error_reason = "invalid_toml"
+        else:
+            parse_error_reason = None
+        if parse_error_reason is not None:
+            parse_error_count += 1
+            if len(parse_errors) < _AUTOMATION_PARSE_ERROR_LIMIT:
+                parse_errors.append(
+                    {
+                        "automation_id": path.parent.name,
+                        "reason": parse_error_reason,
+                    }
+                )
             continue
         if automation.get("kind") != "heartbeat":
             continue
@@ -270,6 +324,7 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
             continue
         agent_id = infer_agent_id_from_prompt(prompt)
         status = str(automation.get("status") or "ACTIVE")
+        binding = bootstrap_binding(prompt)
         entries.append(
             {
                 "automation_id": str(automation.get("id") or path.parent.name),
@@ -290,6 +345,9 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
                 "status": status,
                 "installed": status.upper() != "DELETED",
                 "source": "codex_app_automation_toml",
+                "runtime_thin_bootstrap": {
+                    **binding, "registry": str(binding["registry"]),
+                } if binding else None,
                 "path": str(path),
             }
         )
@@ -299,7 +357,18 @@ def load_codex_app_automation_manifest(root: Path | None = None) -> dict[str, An
         "path": str(automations_root),
         "entries": entries,
         "source": "codex_app_automations",
-        "reason": None if entries else "no LoopX heartbeat automations discovered",
+        "reason": (
+            None
+            if entries
+            else (
+                "no readable LoopX heartbeat automations discovered"
+                if parse_error_count
+                else "no LoopX heartbeat automations discovered"
+            )
+        ),
+        "parse_error_count": parse_error_count,
+        "parse_errors": parse_errors,
+        "parse_errors_complete": parse_error_count == len(parse_errors),
     }
 
 
@@ -332,7 +401,7 @@ def resolve_codex_app_automation_rrule(
         and str(entry.get("rrule") or "").strip()
     ]
     if len(candidates) != 1:
-        return {
+        result = {
             "available": False,
             "reason": (
                 "Codex App heartbeat RRULE is ambiguous"
@@ -341,6 +410,14 @@ def resolve_codex_app_automation_rrule(
             ),
             "candidate_count": len(candidates),
         }
+        parse_error_count = int(manifest.get("parse_error_count") or 0)
+        if parse_error_count:
+            result["manifest_parse_error_count"] = parse_error_count
+            result["manifest_parse_errors"] = manifest.get("parse_errors") or []
+            result["manifest_parse_errors_complete"] = (
+                manifest.get("parse_errors_complete") is True
+            )
+        return result
     entry = candidates[0]
     return {
         "available": True,
@@ -689,11 +766,6 @@ def build_upgrade_plan(
             deferred.append(stage_deferred_goal_summary(goal, state_file))
             continue
         registered_agents = registered_agent_ids_for_goal(goal)
-        turn_granularity = execution_profile_turn_granularity(
-            goal.get("execution_profile")
-            if isinstance(goal.get("execution_profile"), dict)
-            else None
-        )
         prompt_summaries: dict[str, dict[str, Any]] = {}
         installed: dict[str, dict[str, Any]] = {}
         prompt_targets = [
@@ -709,22 +781,12 @@ def build_upgrade_plan(
                 entry = installed_by_key.get((goal_id, mode, ""))
                 legacy_unscoped = entry is not None
             available_capabilities = installed_entry_available_capabilities(entry)
-            agent_profile = agent_profile_for_goal(goal, agent_id)
-            prompt = build_heartbeat_prompt(
-                goal_id=goal_id,
-                active_state=None,
-                active_state_source="registry",
-                resolved_active_state=state_file,
-                compact=mode == "compact",
-                brief=mode == "brief",
-                thin=mode == "thin",
+            prompt = goal_heartbeat_prompt(
+                goal,
                 cli_bin=cli_bin,
+                mode=mode,
                 agent_id=agent_id,
-                agent_profile=agent_profile,
-                registered_agents=registered_agents or None,
                 available_capabilities=available_capabilities,
-                runtime_profile="codex_app_heartbeat",
-                turn_granularity=turn_granularity,
             )
             summary = prompt_summary(prompt, mode)
             summary["agent_id"] = agent_id
@@ -733,11 +795,21 @@ def build_upgrade_plan(
             expected_digest = str(summary.get("sha256") or "")
             not_installed = entry_declares_not_installed(entry)
             actual_digest = None if not_installed else installed_entry_digest(entry) if entry else None
+            bootstrap = entry.get("runtime_thin_bootstrap") if entry else None
+            live_thin = bool(
+                isinstance(bootstrap, dict)
+                and mode == "thin"
+                and bootstrap.get("goal_id") == goal_id
+                and bootstrap.get("agent_id") == agent_id
+                and bootstrap.get("cli_bin", "loopx") == cli_bin
+                and bootstrap.get("runtime_root") == (str(Path(runtime_root_override).expanduser().resolve()) if runtime_root_override else None)
+                and Path(str(bootstrap.get("registry"))).resolve() == Path(registry_path).resolve()
+            )
             status = "unknown"
             if not_installed:
                 status = "not_installed"
             elif entry:
-                status = "current" if actual_digest == expected_digest else "stale"
+                status = "current" if live_thin or actual_digest == expected_digest else "stale"
             policy_audit = (
                 {
                     "available": False,
@@ -905,6 +977,9 @@ def build_upgrade_plan(
         "installed_manifest_available": manifest.get("available"),
         "installed_manifest_source": manifest.get("source"),
         "installed_manifest_entry_count": len(manifest_entries),
+        "installed_manifest_parse_error_count": int(
+            manifest.get("parse_error_count") or 0
+        ),
         "installed_manifest_task_body_count": manifest_task_body_count,
         "installed_manifest_has_task_body": manifest_task_body_count > 0,
         "installed_prompt_policy_warning_count": policy_warning_count,
@@ -954,6 +1029,7 @@ def render_upgrade_plan_markdown(payload: dict[str, Any]) -> str:
         f"- stage_deferred_goal_count: `{summary.get('stage_deferred_goal_count')}`",
         f"- installed_manifest_source: `{summary.get('installed_manifest_source')}`",
         f"- installed_manifest_entry_count: `{summary.get('installed_manifest_entry_count')}`",
+        f"- installed_manifest_parse_error_count: `{summary.get('installed_manifest_parse_error_count')}`",
         f"- installed_manifest_has_task_body: `{summary.get('installed_manifest_has_task_body')}`",
         f"- installed_prompt_policy_warning_count: `{summary.get('installed_prompt_policy_warning_count')}`",
         f"- installed_prompt_policy_warning_prompt_count: `{summary.get('installed_prompt_policy_warning_prompt_count')}`",
@@ -971,8 +1047,17 @@ def render_upgrade_plan_markdown(payload: dict[str, Any]) -> str:
             f"- available: `{manifest.get('available')}`",
             f"- path: `{manifest.get('path')}`",
             f"- reason: `{manifest.get('reason')}`",
+            f"- parse_error_count: `{manifest.get('parse_error_count')}`",
+            f"- parse_errors_complete: `{manifest.get('parse_errors_complete')}`",
         ]
     )
+    for error in manifest.get("parse_errors") or []:
+        if not isinstance(error, dict):
+            continue
+        lines.append(
+            f"- parse_error automation_id=`{error.get('automation_id')}` "
+            f"reason=`{error.get('reason')}`"
+        )
     propagation = (
         payload.get("default_upgrade_propagation")
         if isinstance(payload.get("default_upgrade_propagation"), dict)

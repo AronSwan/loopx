@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .doubao_model_behavior_actor import (
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_2_1_TURBO_MODEL,
+    ALLOWED_MODEL_BEHAVIOR_MODELS,
     DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
     DoubaoActorTransport,
     DoubaoActorTransportError,
@@ -42,7 +41,14 @@ EXEC_COMMAND_TOOL = {
 
 MAX_TOOL_ARGUMENT_BYTES = 8_192
 MAX_PROVIDER_TOKENS = 2_048
-ALLOWED_MODELS = {DOUBAO_2_1_PRO_MODEL, DOUBAO_2_1_TURBO_MODEL}
+
+QUOTA_FIRST_TOOL_INSTRUCTION = (
+    "Before any workspace read, diagnostic, discovery, clock lookup, or state "
+    "inspection, the first tool call must execute the exact quota guard command "
+    "shown in the heartbeat task. It may set only LOOPX_TURN inline before that "
+    "guard; do not prepend export, echo, or any other shell command. Treat the "
+    "returned interaction_contract as the authority for every later action. "
+)
 
 
 @dataclass(frozen=True)
@@ -203,10 +209,8 @@ class DoubaoExecToolClient:
     ) -> None:
         if not api_key.strip():
             raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in ALLOWED_MODELS:
-            raise ValueError(
-                "Doubao actor model must be an allowlisted Doubao 2.1 model"
-            )
+        if model not in ALLOWED_MODEL_BEHAVIOR_MODELS:
+            raise ValueError("Doubao actor model must be explicitly allowlisted")
         if timeout_seconds <= 0 or timeout_seconds > 300:
             raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
         self._api_key = api_key
@@ -221,17 +225,24 @@ class DoubaoExecToolClient:
     def next_tool_call(
         self,
         messages: list[dict[str, Any]],
+        *,
+        tool_description: str | None = None,
     ) -> ExecToolCall | None:
-        return self.next_step(messages).tool_call
+        return self.next_step(messages, tool_description=tool_description).tool_call
 
     def next_step(
         self,
         messages: list[dict[str, Any]],
+        *,
+        tool_description: str | None = None,
     ) -> ExecToolStep:
         body = {
             "model": self._model,
             "messages": messages,
-            "tools": [EXEC_COMMAND_TOOL],
+            "tools": [EXEC_COMMAND_TOOL if tool_description is None else {
+                **EXEC_COMMAND_TOOL,
+                "function": {**EXEC_COMMAND_TOOL["function"], "description": tool_description},
+            }],
             "tool_choice": "auto",
             "thinking": {"type": "disabled"},
             "temperature": 0,
@@ -523,12 +534,12 @@ def execute_loopx_cli(
         else os.pathsep.join((str(source_root), existing_pythonpath))
     )
     completed = subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *argv],
+        [sys.executable, "-P", "-m", "loopx.cli", *argv],
         cwd=project_root,
         env=env,
         check=False,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=timeout_seconds,
     )
     if completed.returncode not in accepted_return_codes:
@@ -536,8 +547,13 @@ def execute_loopx_cli(
         bounded_detail = (
             detail if len(detail) <= 1_000 else detail[:500] + "\n...\n" + detail[-500:]
         )
-        raise RuntimeError(
-            "LoopX CLI command failed with "
-            f"exit={completed.returncode}: {bounded_detail}"
-        )
+        raise LoopxCliExecutionError(completed.returncode, bounded_detail)
     return completed.stdout
+
+
+class LoopxCliExecutionError(RuntimeError):
+    """An executed CLI returned nonzero; this does not imply state rollback."""
+
+    def __init__(self, returncode: int, detail: str) -> None:
+        super().__init__(f"LoopX CLI command failed with exit={returncode}: {detail}")
+        self.returncode = returncode

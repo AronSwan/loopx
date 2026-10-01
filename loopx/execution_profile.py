@@ -3,8 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .control_plane.goals.goal_vision_policy import (
+    COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
+    completed_todo_replan_threshold,
+    normalize_completed_todo_replan_threshold,
+)
 from .control_plane.work_items.delivery_outcome import DeliveryOutcome
-
 
 DEFAULT_EXECUTION_PROFILE: dict[str, Any] = {
     "cadence": "bounded_progress_segment",
@@ -150,6 +154,10 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return profile
 
+    threshold = completed_todo_replan_threshold(value)
+    if threshold != COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD:
+        profile["replan_after_completed_todos"] = threshold
+
     if "turn_granularity" in value:
         turn_granularity = normalize_turn_granularity(value.get("turn_granularity"))
         if turn_granularity == TURN_GRANULARITY_FINE:
@@ -188,6 +196,67 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     if execution_profile_is_fine_grained(profile):
         _apply_fine_grained_contract(profile)
     return profile
+
+
+def configure_execution_profile(
+    profile: Any,
+    *,
+    turn_granularity: str | None = None,
+    replan_after_completed_todos: int | None = None,
+) -> dict[str, Any]:
+    normalized = compact_execution_profile(profile)
+    if turn_granularity is not None:
+        normalized = execution_profile_with_turn_granularity(normalized, turn_granularity)
+    requested_threshold = (
+        replan_after_completed_todos
+        if replan_after_completed_todos is not None
+        else profile.get("replan_after_completed_todos") if isinstance(profile, dict) else None
+    )
+    configured_threshold = (
+        normalize_completed_todo_replan_threshold(requested_threshold)
+        if requested_threshold is not None
+        else None
+    )
+    if configured_threshold is not None:
+        normalized["replan_after_completed_todos"] = configured_threshold
+    configured = compact_execution_profile(normalized)
+    if configured_threshold is not None:
+        # The default value still represents an explicit Goal override. Keep the
+        # field so a machine default can change without silently changing this Goal.
+        configured["replan_after_completed_todos"] = configured_threshold
+    return configured
+
+
+def apply_goal_execution_profile_change(
+    goal: dict[str, Any],
+    *,
+    turn_granularity: str | None,
+    replan_after_completed_todos: int | None,
+    clear_replan_after_completed_todos: bool,
+) -> None:
+    if (
+        clear_replan_after_completed_todos
+        and replan_after_completed_todos is not None
+    ):
+        raise ValueError(
+            "--clear-execution-replan-after-todos cannot be combined with "
+            "--execution-replan-after-todos"
+        )
+    raw = goal.get("execution_profile")
+    profile = dict(raw) if isinstance(raw, dict) else {}
+    if (
+        turn_granularity is None
+        and replan_after_completed_todos is None
+        and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
+    ):
+        return
+    if clear_replan_after_completed_todos:
+        profile.pop("replan_after_completed_todos", None)
+    goal["execution_profile"] = configure_execution_profile(
+        profile,
+        turn_granularity=turn_granularity,
+        replan_after_completed_todos=replan_after_completed_todos,
+    )
 
 
 def normalize_turn_granularity(value: Any) -> str:
@@ -283,4 +352,8 @@ def execution_profile_summary(profile: dict[str, Any] | None) -> str:
         f"small_streak_threshold={policy.get('small_scale_streak_threshold')}"
         f"{floor_suffix}"
         f"{turn_suffix}"
+        + (
+            f" replan_after_completed_todos={normalized['replan_after_completed_todos']}"
+            if "replan_after_completed_todos" in normalized else ""
+        )
     )

@@ -22,6 +22,47 @@ any external provider binding, host permissions, and user gates.
   experiment-board-upsert, source-revision-fence, integrity-qualification,
   classify-artifacts).
 
+## Share a study through the public-safe contract
+
+When another benchmark developer needs portable study data, use the capability's
+typed study flow rather than sharing a runner-specific ledger or raw evidence:
+
+1. Validate `benchmark_study_manifest_v0` with `benchmark study-validate`.
+2. Wrap one allowlisted manifest, experiment-board row, redacted insight, or runtime
+   observation with `benchmark upload-envelope`.
+3. Run `benchmark upload-local` without `--execute` first, then explicitly execute
+   against a caller-selected local JSONL store.
+4. Verify the record/digest/revision binding with `benchmark upload-readback`.
+5. Derive the campaign/arm/case/run packet with `benchmark study-dashboard`; pass a
+   compact four-arm contract only when the study preregistered that design.
+
+For `case_insight_projection`, first upload the same run's active terminal
+experiment-board row with `insight.status=complete`. The case, run, and outcome
+must match; the run row remains the only arm, score, countability, integrity, and
+treatment-fidelity authority. Reduce private post-run evidence to bounded prose
+and public-safe handles or digests before building the envelope.
+
+The local provider is a no-network simulation. It does not grant remote upload,
+publication, credentials, retention, or benchmark submission authority. Adapters
+keep their native metric names and reduce private post-run evidence before envelope
+construction.
+
+## Share exploratory behavior findings
+
+When the owner authorizes selected behavioral observations but not a complete
+study release, use `behavior_finding` records and `benchmark behavior-report`.
+See `docs/reference/benchmark-behavior-findings.md` for the contract. These records
+require selection rules, sample denominators, observations, interpretations,
+limitations, counterevidence, and evidence digests; they require neither a run-row
+upload nor a full study manifest and have no score authority.
+
+Freeze the authorized disclosure projection before rendering. Review the same
+scope in visible text, foldouts, embedded data, downloads, and PR attachments.
+Permission to share duration does not grant permission to share outcome totals
+or deltas. Schema validity and a producer redaction attestation are not publication
+approval or verification of unshared evidence. Keep selected-case observations
+explicitly exploratory and retain the relevant limitations and counterexamples.
+
 ## Select the operating lane
 
 - **Inspect or explain:** use `capability show` and `benchmark --help`; remain

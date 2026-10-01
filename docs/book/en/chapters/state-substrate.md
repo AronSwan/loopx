@@ -1,5 +1,11 @@
 # Durable State and Read-Only Projections
 
+> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
+> examples below describe a retired experiment. Current Todos use legacy Markdown
+> or the selected File/SQLite authority. See the
+> [retirement contract](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md).
+
+
 Long-running work does not recover because a system stores more conversation. It recovers because each
 important fact has a stable owner and can be projected into a fresh decision. This chapter establishes
 the LoopX state substrate: which surfaces own facts, which surfaces only help readers, and why a page or
@@ -93,7 +99,7 @@ It owns connection and policy facts, not execution receipts.
 
 ### 2. Event ledger: what happened
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 represents Todo, Gate, run, evidence, projection, and quota changes as append-only events.
 
 At least four invariants matter:
@@ -118,7 +124,7 @@ During migration or compatibility windows, Markdown may still participate in Tod
 should still pass through LoopX lifecycle commands and controlled writeback so they form governed events.
 Editing a projected paragraph does not automatically perform a lifecycle transition.
 
-[`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+[`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
 defines a typed, read-only view of Todos, Gates, and Next Action from that workbench. The contract preserves
 several boundaries:
 
@@ -163,7 +169,7 @@ They must not:
 - let card or graph edits bypass the write API;
 - treat a stale external observation as a current fact.
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 is explicit about this boundary. Relationships such as `blocks`, `validates`, `continues`, and
 `hands_off_to` are derived graph edges, not new scheduling commands.
 
@@ -223,7 +229,7 @@ run history, and runtime state live in project-local or user-local storage. This
 file the authority by itself, and replacing files with a database does not automatically create correct
 concurrency or recovery semantics.
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 allows JSONL, SQLite, or another local-first append-only implementation when it preserves:
 
 - stable event ids and ordered replay;
@@ -232,7 +238,7 @@ allows JSONL, SQLite, or another local-first append-only implementation when it 
 - public-safe, local-private, and private-pointer partitions;
 - Markdown as a workbench or projection rather than an arbitrary write API.
 
-[`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
+[`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
 is currently marked as a public-safe protocol draft. Its stronger write-correctness target separates
 `prepare -> preview -> apply -> record -> project`:
 
@@ -252,9 +258,17 @@ authority answer "which transition is legal?"
 
 ### Shipped Boundary Versus Design Boundary
 
-The current public architecture keeps the CLI as the compatibility baseline and describes a local
-server/daemon as a roadmap. Detailed multi-Host authority, offline queue, and shared-control-plane designs
-live in an RFC whose status is **Draft**. They are not installed cloud features.
+Shared-authority work in `v0.5.4` is more than a paper design: the repository contains a
+provider-neutral TypeScript `AuthorityStore` contract plus staged file, NoKV, and PostgreSQL candidates
+with conformance evidence. That is still not an enabled shared control plane. The release does not wire
+these candidates into the default runtime or ship a ready-to-enable remote authority service. Installing
+a Provider does not change a Goal's source of truth.
+
+Post-`v0.5.4` `main` may contain further default-off shadow, parity, fencing, or provider-first cutover
+slices. They prove migration mechanics; they are not evidence that `v0.5.4` shipped cloud collaboration.
+Use the matching tag and release notes for stable behavior and the current stage in the
+[Shared Control-Plane Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)
+for experimental status.
 
 You can currently rely on:
 
@@ -263,6 +277,8 @@ You can currently rely on:
   idempotency behavior;
 - registered peers, soft claims, optional task leases, and independent-worktree guards;
 - several Hosts reading one registry and Goal through controlled writeback.
+- staged file, NoKV, and PostgreSQL candidates for development and qualification; they do not acquire
+  runtime authority automatically.
 
 Do not currently promise:
 
@@ -273,8 +289,8 @@ Do not currently promise:
 
 A future cross-device control plane should retain one canonical LoopX authority, revision-bound idempotent
 commands and receipts, and separate message delivery, context memory, and state authority. Until the Draft
-is promoted and validated, this book teaches those boundaries rather than a fictional cloud-mode
-quickstart.
+has an independently reviewed promotion, runtime wiring, and release validation, this book teaches those
+boundaries rather than a fictional cloud-mode quickstart.
 
 ## Three layers of integrity for historical artifacts
 
@@ -292,7 +308,7 @@ fresh. Research notes, test results, and PR readbacks need stable join keys and 
 after material inputs change. When applicability is unknown, retain the artifact as a historical
 observation or stale evidence instead of deleting it or treating it as current authority.
 
-[`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
+[`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
 provides a bounded, read-only Agent chronology for replan and handoff. It does not replace current status,
 a quota decision, or external-system readback.
 
@@ -357,17 +373,17 @@ boundary probably needs to be split first.
 
 This chapter owns the learning sequence, not the complete schemas. For state changes, start with:
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+- [`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
   for events, replay, ordering, and privacy;
-- [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read model over the Markdown workbench;
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
   for the read-only relation graph;
-- [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)
+- [`long_horizon_agent_state_protocol_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)
   for source and projection ownership, concurrent Agents, and lifecycle in long-running work;
-- [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
+- [`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
   for the Agent-scoped chronological read model used before replan and handoff;
-- the [Status Data Contract](https://github.com/huangruiteng/loopx/blob/main/docs/status-data-contract.md)
+- the [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)
   for Agent and operator-facing aggregation.
 
 If you plan to change registry, event, Domain State, replay, or projection builders, continue to

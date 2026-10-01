@@ -5,8 +5,8 @@ tool. You do not need to read the LoopX Kernel source or learn every CLI subcomm
 
 ## What you will accomplish
 
-The first six chapters establish one control-plane model. The book then branches into two independent
-practice paths:
+Six numbered chapters plus one state-machine map establish one control-plane model. The book then
+branches into two independent practice paths:
 
 ```text
 Control-plane foundations
@@ -23,6 +23,8 @@ The foundation sequence covers:
 2. which state belongs to an agent session, a Host Goal, and LoopX;
 3. canonical state, workbenches, events, and read-only projections;
 4. Todo graphs, Gates, claims, leases, authority, and peer collaboration;
+   then [Core state machines and transitions](./core-state-machines.md) connects source state, derived
+   decisions, projections, and the nine cooperating state-machine families in one map;
 5. how one governed Turn is decided, executed, validated, and written back;
 6. retry, replan, self-repair, terminal closure, and runtime boundaries.
 
@@ -51,10 +53,12 @@ Developers ready to enter Kernel implementation can go directly to the
   [Lesson 1: Harness is the effectful program](/loopx/docs/development/control-plane-course/01-agent-loop-effectful-program/),
   and [Lesson 2](/loopx/docs/development/control-plane-course/02-goal-control-plane-architecture/), then walk
   through a real Loop in [Lesson 3](/loopx/docs/development/control-plane-course/03-first-real-loop/).
-- **Who owns state, the work graph, and authority?** Read Chapters 3 and 4, then descend into
+- **Who owns state, the work graph, and authority?** Read Chapters 3 and 4 plus
+  [Core state machines and transitions](./core-state-machines.md), then descend into
   [Lesson 4](/loopx/docs/development/control-plane-course/04-state-substrate/) and
   [Lesson 5](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/).
-- **Which rule wins when a Gate, Monitor, and Replan coexist?** Read Chapter 5, then descend into
+- **Which rule wins when a Gate, Monitor, and Replan coexist?** Read
+  [Core state machines and transitions](./core-state-machines.md) and Chapter 5, then descend into
   [Lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/) and
   [Lesson 7](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/).
 - **How does long-running work avoid drift and local loops?** Read Chapter 6, then descend into
@@ -68,6 +72,8 @@ Developers ready to enter Kernel implementation can go directly to the
 
 After those chapters:
 
+- to learn the daily 1.0 operator surface first, start with
+  [Operate the LoopX 1.0 Workspace](./workspace-v1.md);
 - to manage your own repository, start with
   [Connect an existing Git project](./05-connect-existing-project.md);
 - to make any public LoopX contribution, start with the
@@ -114,8 +120,8 @@ Do not bypass a newer permission or lifecycle check just to make an older exampl
 
 ## Version baseline
 
-The current release anchor is LoopX GitHub release `v0.5.3`. Local command examples were checked against
-the public `loopx 0.5.3` CLI and protocol surface. This release requires Python 3.11+ and Node.js 22.6+.
+This book targets LoopX release `v1.2.3`. Local command examples were checked against
+the public `loopx 1.2.3` CLI and protocol surface. It requires Python 3.11+ and Node.js 22.22.3+.
 LoopX starts and reuses its managed, idle-exiting TypeScript Effect runtime automatically; users do not
 operate that runtime as a manual daemon.
 
@@ -143,10 +149,11 @@ different version identifiers imply.
 
 ### How to read the TypeScript migration
 
-`v0.5.3` does not mean that all of LoopX has been rewritten in TypeScript. The current release baseline is:
+`v0.5.4` does not mean that all of LoopX has been rewritten in TypeScript. The current release baseline is:
 
-- TypeScript owns the canonical semantics for migrated slices of the Effect Program, Turn settlement,
-  Todo completion, quota delivery routing, workspace causality, and scheduler transition/state;
+- TypeScript owns the canonical semantics for migrated slices of the Effect Program, Turn and Host Todo
+  settlement, Todo completion, quota delivery/spend/void/monitor-poll, the local task-lease lifecycle,
+  Vision refresh, governed capability validation, and scheduler heartbeat/state;
 - during the migration, the Python CLI still owns transport, legacy response projection, explicit
   external Provider calls, and some Markdown/event writeback;
 - each migrated rule has one semantic owner. A Python facade adapts a TypeScript transaction; it must not
@@ -154,24 +161,36 @@ different version identifiers imply.
 - current `main` is in the transaction-payoff phase: later progress is measured by complete transaction
   cutovers and deleted legacy semantics, not by accumulating leaf helpers and bridge calls.
 
-Treat the `v0.5.3` tag and release notes as the shipped baseline. Use the current status of the
+Treat the `v0.5.4` tag and release notes as the shipped baseline. Use the current status of the
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-for later cutovers and final CLI/App convergence. RFC Stages 3 and 4 remain future direction, not shipped
-behavior.
+for later cutovers and final CLI/App convergence. `v0.5.4` ships only the first receipt-bound scheduler
+follow-up slice of Stage 3; broader CLI/App convergence and Stage 4 distribution cleanup remain future
+work.
 
-### Updating your mental model from `v0.4.4` to `v0.5.3`
+### Updating your mental model from `v0.4.4` to `v0.5.4`
 
 If you read an earlier edition of the Dev Book, recalibrate these four areas first:
 
-| Area | Shipped in `v0.5.3` | Continue with |
+| Area | Shipped in `v0.5.4` | Continue with |
 | --- | --- | --- |
-| Control Plane | Several high-risk decisions and effects have typed TypeScript transaction owners; Python facades still carry migration-time boundaries | [Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
-| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.3/apps/presentation/dashboard/README.md) |
+| Control Plane | Complete Turn/Host Todo settlement, quota commit, task-lease lifecycle, Vision refresh, and scheduler-heartbeat transactions have typed TypeScript owners; Python facades still carry migration-time boundaries | [Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
+| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
 | Host runtime | Codex, Claude Code, OpenCode, Pi, KunlunCode, DeepSeek Harness, and custom runners have distinct activation and stop contracts | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
 | Capability and Provider | A Capability is defined by a package-owned catalog entry, a real command, and durable validation; a Provider or Extension does not inherit Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
+| Shared authority | File, NoKV, and PostgreSQL providers remain staged candidates; installing a Provider does not change the default local authority | [Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/) |
 
 This table is a reading map, not a copy of the release notes. Confirm whether a surface is usable through
 the installed release's `doctor`, `capability show`, Host readback, and versioned documentation.
+
+### From `v0.5.4` into the `v1.0.0` Workspace
+
+The `v1.0.0` product milestone is the Personal Workspace, not blanket promotion of every staged
+authority path or optional Provider. It brings cross-Goal overview, Agent lanes, completed work,
+Capability settings, verified reports, Goal Channels, and desktop recovery into one operator surface
+while preserving the authority of the CLI, typed Kernel, and project state. Follow the
+[1.0 Workspace operations chapter](./workspace-v1.md) through startup, readback,
+preview/apply/receipt, configuration, and disable checks before entering the project-onboarding or
+developer-contribution path.
 
 ## Deliberate scope
 

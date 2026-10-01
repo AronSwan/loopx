@@ -117,6 +117,14 @@ token value, cookie, authorization header, private SSH key, session dump, or
 redaction that still preserves enough characters to reconstruct the secret
 ```
 
+The rule that decides whether control-plane text looks private has one owner:
+`loopx/public_safe_text.py`, mirrored by the TypeScript Vision checkpoint.
+It rejects credential shapes, including the header, assignment, and
+quoted-JSON key forms, while ordinary governance prose such as "needs owner
+authorization" stays public-safe. Both runtimes are pinned to the shared corpus
+in `tests/fixtures/public_safe_text_corpus.json`; extend that corpus rather
+than adding a per-file exception.
+
 ### Compact Artifacts
 
 Safe compact artifact:
@@ -136,6 +144,12 @@ Unsafe artifact:
 raw uploaded files, screenshots with private data, unredacted logs, hidden
 provider payloads, or a public artifact that points back to private storage
 ```
+
+Structured public-output mappings use string field names, as JSON does.
+`validate_public_safe_value` rejects a non-string key before classifying the
+field or inspecting its value. String keys are classified after case, separator,
+and camelCase normalization; converting a non-string key with `str()` is not a
+safe substitute for a field name.
 
 ## Sub-Agent Data
 

@@ -69,6 +69,7 @@ class TestAgentTypeCatalog:
         assert catalog["ok"]
         types = {t["agent_type"] for t in catalog["canonical_agent_types"]}
         assert "codex-app" in types
+        assert "trae_app" in types
         assert "codex-cli" in types
         assert "claude-code" in types
         assert "opencode" in types
@@ -88,6 +89,7 @@ class TestAgentTypeCatalog:
 
     @pytest.mark.parametrize("surface,expected", [
         ("chat-box", "codex-app"),
+        ("trae_app", "trae_app"),
         ("codex-cli-tui", "codex-cli"),
         ("claude-code", "claude-code"),
         ("opencode", "opencode"),
@@ -113,6 +115,7 @@ class TestAgentTypeCatalog:
         host = {
             "ark-managed-agent",
             "deepseek-harness-native",
+            "trae_app",
             "traex-cli",
             "other-agent",
         }
@@ -129,6 +132,7 @@ class TestSchedulerBindings:
         expected = {
             "ark-managed-agent": "ark_managed_agent_goal",
             "codex-app": "codex_app_heartbeat",
+            "trae_app": "trae_app",
             "codex-app-ssh": "codex_app_ssh_goal",
             "codex-cli": "codex_cli",
             "codex-ide-plugin": "codex_cli",
@@ -158,8 +162,13 @@ class TestSchedulerBindings:
 
 class TestTurnHostIdentities:
     def test_supported_hosts(self):
-        assert SUPPORTED_HOSTS == {"codex-cli", "claude-code", "generic-cli"}
-        assert set(SUPPORTED_TURN_HOST_IDENTITIES) == SUPPORTED_HOSTS
+        assert SUPPORTED_HOSTS == {"codex-cli", "claude-code", "dsh", "generic-cli"}
+        assert set(SUPPORTED_TURN_HOST_IDENTITIES) == {
+            "codex-cli",
+            "claude-code",
+            "generic-cli",
+        }
+        assert "dsh" not in SUPPORTED_TURN_HOST_IDENTITIES
 
     def test_execution_modes(self):
         assert SUPPORTED_EXECUTION_MODES == {"interactive-visible",

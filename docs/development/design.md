@@ -24,6 +24,33 @@ LoopX should feel:
 The interface should read like excellent technical documentation that also
 communicates a confident product.
 
+### Earn The User's Attention
+
+Every visible element must provide at least one of these:
+
+1. **High-value information** that changes what the user understands or decides.
+2. **An essential interaction** needed at this point in the user's journey.
+3. **Expressive visual presentation** worth seeing: a clear composition, useful
+   visual comparison, or purposeful motion that improves understanding or delight.
+
+This is an OR rule, not a demand for three justifications per element or for
+maximum minimalism. Decorative density, raw protocol fields, duplicated status,
+and a button for every available capability do not earn attention by existing.
+Judge the whole viewport, including information repeated across components.
+
+Before implementation, inventory the visible elements and their value. Keep
+conversation, results, and decisions prominent; consolidate routine activity;
+offer one-step access to relevant controls and details without a chain of pages.
+Do not collapse failures, missing authority, uncertain observations, or actions
+requiring judgment into a reassuring success summary. Read models select facts;
+they must not invent execution, acceptance, or completion from prose or counts.
+
+Review realistic populated, quiet, blocked, and unavailable states on desktop
+and mobile. Show before/after views, name what earns attention and what was
+consolidated, and verify keyboard access and return to the original context.
+Record this in the PR's visual evidence section. The repository first-screen
+preview approval gate still applies.
+
 ## Source Of Truth
 
 - Use this file as the default visual contract for all new LoopX UI work.
@@ -172,12 +199,21 @@ Do not mix marketing pills and application squares in the same control group.
 - Use precise grids rather than masonry.
 - Avoid decorative cards with no information or action.
 
+- Theme and language choices use the same two-column grid in every workspace theme.
+- Omit secondary descriptive lines under workspace page titles, navigation labels, and display choices. Preserve operational status, errors, and action outcomes.
+- Capability navigation shows the localized name; omit the secondary internal identifier. Show Goal/machine badges only in mixed-scope catalogs, not when the page already selects one scope. Configuration forms use shared spacing and a full-width switch row; optional capability and field explanations live in a collapsed configuration-help section. Keep activation consequences and read-only restrictions visible. Goal and machine editors share the enable-row JSON entry point. Goal JSON accepts only registered editable fields and invalidates the previous preview whenever edited; applying still requires a new reviewed preview.
+- Present one Capability Center with an explicit device-default / single-Goal target. Goal entry points preselect their Goal; global entry points never silently choose one. Target changes discard the previous editor draft and preview, fetch the selected configuration, and preserve the existing revision-checked write owner. Distinguish configuration ownership from the currently selected target and editor permission: show device-only, Goal-only or device-default-with-Goal-override from the capability contract, even for read-only capabilities; keep writability in the existing editor status, and never list a machine-only capability in Goal scope. Show the affected scope and effective source before changes; do not turn storage boundaries into competing navigation entries.
+- Keep Steward a first-level destination for the host steward executor/model/effort and runtime grant. Navigation follows purpose; configuration scope does not dictate navigation. See the [per-capability scope decisions](../architecture/rfcs/desktop-execution-frontends-v0.md#settings-ownership-and-scope).
+- Scope each settings catalog to its owner: Goal settings include only capabilities with Goal scope, including Goal-scoped read-only entries. Machine-only capabilities belong in machine or steward settings even when a shared API catalog also describes them.
+
 ### Forms
 
 - White surface, ink text, hairline border, 6px radius.
 - Labels remain visible; placeholders do not replace labels.
 - Focus uses the blue link/focus token with sufficient contrast.
 - Errors use text and iconography in addition to color.
+
+- Settings titles omit eyebrow text. Settings occupy the dynamic viewport height. Capability detail cards shrink to their content and are capped by the available panel height. The settings sidebar, capability catalog, and capability detail scroll independently with contained overscroll. Other settings content scrolls inside the main panel. Narrow screens use a bounded horizontal capability catalog above the detail panel.
 
 ### Code And Terminal Surfaces
 
@@ -223,6 +259,12 @@ Do not shrink diagrams or code until they become illegible. Reflow or enable
 bounded horizontal scrolling.
 
 ## UI Reproduction Workflow
+
+For feature development, carry one user task through the
+[task-first delivery workflow](frontend-delivery.md#task-first-delivery--从用户任务开始).
+A visually consistent composition must also eliminate unnecessary re-entry and
+confirmation, identify the affected target, and show truthful state after action.
+
 
 For UI implementation, migration, or reproduction:
 

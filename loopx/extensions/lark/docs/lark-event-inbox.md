@@ -31,7 +31,34 @@ parent sender is the app id of the configured profile. A reply to a person,
 another app, or an unverifiable parent remains captured but does not wake the
 agent. The agent does not need to keep a websocket open.
 
+When Lark inbox and the same registered agent's Reward Memory are both enabled,
+a non-empty registry-routed drain can also return an advisory
+`reward_memory_feedback_review` hint. It asks the agent to review reusable
+feedback and preview the existing scoped `reward-memory ingest-event` command;
+it does not ingest chat, grant authority, or change settlement/ACK requirements.
+This explicit path does not require `automatic_ingest=true`. See the
+[Reward Memory inbox workflow](../../../capabilities/reward_memory/README.md#inbox-feedback-review-explicit-ingestion)
+for eligibility, source verification, write/readback and default-off behavior.
+
 ### Optional turn-start Agent reading hook
+
+Collector health does not prove that an Agent consumes every collected route.
+Verify the canonical project registry's Agent inbox pointer and the normal
+`lark-inbox drain --goal-id ... --agent-id ...` path together. For multiple
+configured chats, bind the collector configuration rather than one child inbox.
+An empty child inbox is not evidence that other routes have no updates.
+
+Connecting an async Goal Topic now fails with `agent_inbox_binding_conflict`
+before provider calls when it would replace a different enabled Agent inbox
+(including an inherited Goal inbox). Reconnecting the same inbox is unchanged.
+Reconcile route ownership explicitly through the canonical project registry;
+do not clear a multi-route binding just to make topic setup pass. This guard
+prevents silent replacement; it does not automatically merge Topic routes.
+
+Before continuing fallback work, review fresh dependency messages and write any
+resolved wait or priority change to the existing Todo/vision state. Settle the
+message after that durable effect; collection alone is not interpretation or
+permission to reply, deploy, or run work.
 
 Realtime collection is the preferred ingress, but a long-running Agent may also
 need a bounded provider-history tail at the beginning of every LoopX turn. The
@@ -53,13 +80,19 @@ turn-start hook
 
 Core owns the provider-neutral hook registration, output budget, allowed
 owner-private write scopes, the narrow `provider_message_reaction` external
-write scope, failure isolation, and `agent_read_required`
-contract. The Lark extension owns history pagination, provider-envelope
-validation, private cursors, and inbox readback. The CLI composition root runs
-the hook before status/quota projection. Raw content remains only in the local
-inbox and appears to the Agent only through the existing goal-bound
-`drain_command`; it never enters the public Goal registry, hook receipt, or
-quota packet.
+write scope, failure isolation, and `agent_read_required` contract. A hook that
+can require Agent reading must also register one bounded public-safe
+`required_read`; the generic kernel validates and deduplicates it, then the live
+decision mirrors it into both interaction channels with `ordering=before_work`.
+Fresh ordinary material notifies without replacing the selected work lane;
+durable material left unsettled preempts on the following turn, while direct
+questions and verified replies retain immediate reply-lane precedence.
+The Lark extension owns that drain descriptor, history pagination,
+provider-envelope validation, private cursors, and inbox readback. The CLI
+composition root runs the hook before status/quota projection. Raw content
+remains only in the local inbox and appears to the Agent only through the
+registered drain command; it never enters the public Goal registry, hook
+receipt, or quota packet.
 
 The distinction between `empty`, `provider_contract_error`, permission failure,
 and provider unavailability is mandatory. A success envelope whose message list
@@ -116,6 +149,19 @@ its local-private chat id, persists every message from that chat, and verifies
 the reply relation through message readback before scheduling a reply. Full-chat
 capture is not full-chat activation; unrelated conversation remains available
 to domain interpretation without being treated as addressed to the bot.
+
+Goal Channel connections do not treat a spawned `lark-cli` child as listener
+readiness. The runtime waits for the provider event bus `ready` marker (or a
+real typed event) before projecting `listening`; startup without that handshake
+remains non-ready and retryable. Multi-Agent onboarding creates an
+Agent-labelled Topic for each route. Users send requests inside the matching
+Topic. A group-level message with more than one eligible Agent route is
+deliberately rejected as ambiguous instead of guessing an Agent from prose.
+
+For a periodic-report request, semantic activation belongs to the Agent. After
+reading an exact item, the Agent calls `loopx periodic-report request` with its
+`message_id`. The Lark adapter validates binding and addressing evidence only;
+it never classifies the text or searches the inbox for weekly-report strings.
 
 ## Activate the provider
 
@@ -209,9 +255,10 @@ messages; use `configured_chat_all` for complete collaboration threads:
 For every reply-enabled Inbox, a missing `reply.received_reaction_emoji`
 defaults to `Get`. Set it explicitly to the empty string to disable this
 provider write. The reaction belongs to the same explicit sender boundary as
-source-thread replies, but only the Agent's turn-start hook may create it:
-realtime collection persists events without reacting, and the hook writes the
-reaction only after it has read and confirmed a still-pending human message.
+source-thread replies. The Agent's turn-start hook creates it after reading and
+confirming a still-pending human message; the synchronous manager route creates
+it immediately before invoking the manager. Realtime collection alone persists
+events without reacting.
 The receipt therefore means "read into the Agent processing chain"; it does not
 mean "collector stored the event", "the Bot was mentioned", "a reply is due",
 or "processing completed". Mention, reply, question, and material-review
@@ -238,9 +285,16 @@ received reaction. The default `Get` satisfies that requirement; when the read
 acknowledgement is explicitly disabled, processing reaction must also be
 disabled. When both are configured, the host should run
 `lark-inbox processing` immediately before interpreting an actionable item.
-LoopX first adds the processing reaction and then removes the received
-reaction. A verified source-thread reply removes any remaining lifecycle
-reaction. If the provider cannot delete a reaction, the operation fails with a
+`reply.received_reaction_policy` selects `transient` (the generic Inbox default)
+or `retain`. With `transient`, LoopX first adds the processing reaction and then
+removes the received reaction; a verified source-thread reply removes remaining
+lifecycle reactions. With `retain`, the received reaction remains visible during
+processing and after the answer; completion removes only processing reactions.
+Generated manager routes default to `retain`, so their `Get` receipt does not
+disappear when the answer arrives. Bound Goal routes keep `transient` behavior.
+Retention uses the existing private reaction ledger across restart and replay;
+it neither recreates reactions on historical messages nor means work completed.
+If the provider cannot delete a transient reaction, the operation fails with a
 retryable cleanup status instead of claiming completion.
 
 Reaction ids are stored only in an owner-private receipt ledger under the
@@ -259,12 +313,19 @@ can read the configured chat. A profile/app mismatch fails with
 `lark_inbox_reply_sender_identity_mismatch`; a profile that cannot access the
 configured chat fails with
 `lark_inbox_reply_sender_not_in_configured_chat`. Neither failure falls back
-to another app. Public results contain only compact status/receipt fields, not
-the profile, chat id, message id, reply text, or provider payload.
+to another app. Inbox and Goal Channel replies retry only the provider's
+explicit transient `verify_failed` Bot identity state, up to three checks.
+Command failures, malformed identity responses, and configured Bot name
+mismatches fail immediately; membership, provider preview, idempotency, send,
+and readback gates remain unchanged. Public results contain only compact
+status/receipt fields, not the profile, chat id, message id, reply text, or
+provider payload.
 
 ## Host collector lifecycle
 
-Keep the collector config ignored and untracked. It references the generic
+In Git projects, keep the collector config ignored and untracked. A non-Git
+project may keep it only below `.loopx/config`; parent Git boundaries and paths
+outside that private root remain rejected. The config references the generic
 inbox config but owns host-only details such as the chat id and supervisor:
 
 ```json
@@ -467,6 +528,26 @@ loopx lark-inbox material-review \
   --execute
 ```
 
+### Steward groups without mentions
+
+In App **Settings → Lark → edit the steward connection → When to respond**,
+select **Respond to group members without @** to admit new human messages in
+that one connected group. All group members can start a conversation in this
+mode. The Lark application must have permission to receive all group messages;
+a local switch cannot grant that provider permission. Save the connection and
+reopen it to verify the setting; select **Only when mentioned or replied to**
+to disable it. Existing connections default to that addressed-only mode.
+
+The persisted connection field is `routing.turn_trigger` (`addressed` or
+`human_messages`), exposed by the existing connection API. Capture scope remains
+independent. The shared TypeScript conversation admission rule consumes verified
+provider sender/addressing evidence; it does not inspect message keywords.
+Historical backfill and bot messages do not start turns in the no-mention mode;
+unknown senders without addressing stay context-only. Existing worker Topics
+keep route priority. The same durable inbox/effect/reply path prevents duplicate
+processing. Reception does not grant host tools, evidence access, delegation or
+protected operations; the external-audience runtime profile is unchanged.
+
 Urgency classification stays local. Under `configured_chat_all`, provider-native
 mention evidence is normalized into a compact `addressed_to_bot` flag before the
 event is persisted. Only that typed flag or a provider-verified direct reply can
@@ -486,6 +567,21 @@ top-level chat response, while an event already inside a topic receives a reply
 inside that source topic. Existing configs without the field retain the legacy
 `source_thread` policy. `reply.editorial_style=bullet_points_preferred` projects
 an operator hint for structured replies; the command preserves line breaks.
+
+Manager answers and delegated conclusions use a rich `post` with one Markdown
+node, preserving paragraphs, lists and code indentation. The extension supplies
+exact JSON to the existing CLI transport: it does not fetch Markdown images or
+rewrite the source text. Preview and readback verify the post type and content;
+plain-text lookalikes do not count as rich delivery. The frontend continues to
+render the same stored Markdown through its existing message renderer.
+
+Ordinary inbox CLI replies/notifications retain their text behavior. Structured
+mentions keep the existing identity-verified text path. If the provider preview
+exceeds the 30 KB rich-post request limit, the manager falls back **before any
+send** to the existing 150 KB text transport and reports `format_fallback` as
+`post_size_limit`; it does not truncate the answer. Format is bound into rich
+reply idempotency keys. This changes presentation only, not conversation scope,
+reply placement, authorization or ACK semantics.
 
 ```bash
 loopx lark-inbox reply \

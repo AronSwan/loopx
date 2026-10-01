@@ -7,8 +7,16 @@ import test, { type TestContext } from "node:test";
 
 import {
   executeTaskLeaseAcquire,
+  leaseInteger,
+  TaskLeaseAcquireError,
   TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION,
 } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
+import {
+  LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
+  LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+  LEGACY_COORDINATION_WRITE_CHECK_RESULT_SCHEMA,
+} from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
+import { engageLegacyCoordinationWriterFence } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 
 const FIXED_NOW = new Date("2026-08-27T03:00:00.000Z");
 
@@ -371,6 +379,61 @@ test("post-identity failures preserve the legacy validation receipt prefix", asy
   });
 });
 
+test("an engaged legacy writer fence rejects acquire before validation without receipts", async (t) => {
+  // Baseline reported a committed validation receipt and a durable_writeback
+  // failure for this rejection although no writeback was attempted; the
+  // fence is a terminal permission decision taken by the promoted authority
+  // before the first side effect (RFC section 5 `rejected`, section 5.6,
+  // Appendix C), so it is typed like every other validation-stage denial and
+  // like its renew/transfer/release siblings.
+  const root = await workspace(t);
+  await mkdir(join(root, "runtime"), { recursive: true });
+  await writeFile(join(root, "ACTIVE_GOAL_STATE.md"), "---\ngoal_id: goal-a\n---\n\n## Agent Todo\n\n", "utf8");
+  const engaged = await engageLegacyCoordinationWriterFence({
+    schema_version: LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
+    runtime_root: join(root, "runtime"),
+    goal_id: "goal-a",
+    state_path: join(root, "ACTIVE_GOAL_STATE.md"),
+    fence: {
+      schema_version: LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+      state: "engaged",
+      goal_id: "goal-a",
+      fence_id: "legacy-writer-fence:goal-a:state-1",
+      source_version: "state:1",
+      source_projection_sha256: "a".repeat(64),
+      expected_shadow_provider_revision: "file:1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+  });
+  assert.equal(engaged.status, "applied");
+
+  const fenced = await executeTaskLeaseAcquire(await request(root), { now: () => FIXED_NOW });
+
+  assert.equal(fenced.ok, false);
+  assert.equal(fenced.schema_version, "task_lease_v0");
+  assert.equal(fenced.error_code, "legacy_coordination_writer_fenced");
+  assert.equal(
+    fenced.error,
+    "legacy coordination writer is fenced; use the promoted canonical authority (file_v0) for goal goal-a; fence legacy-writer-fence:goal-a:state-1; the primary record was not changed",
+  );
+  assert.deepEqual(fenced.write_check, {
+    schema_version: LEGACY_COORDINATION_WRITE_CHECK_RESULT_SCHEMA,
+    status: "blocked",
+    reason_code: "legacy_coordination_writer_fenced",
+    authority_mode: "file_v0",
+    fence_id: "legacy-writer-fence:goal-a:state-1",
+  });
+  assert.deepEqual(fenced.settlement, {
+    effect_id: null,
+    receipts: [],
+    failure: {
+      step: "validation",
+      kind: "permission_denied",
+      code: "legacy_coordination_writer_fenced",
+    },
+  });
+  await assert.rejects(() => readFile(leasePath(root), "utf8"), { code: "ENOENT" });
+});
+
 test("invalid settlement identities fail validation without receipts", async (t) => {
   const root = await workspace(t);
   const invalidOwner = await executeTaskLeaseAcquire(
@@ -472,3 +535,169 @@ test("corrupt bool integers fail closed and legacy epoch advances", async (t) =>
   assert.equal(migrated.ok, true);
   assert.equal((await persistedLease(root)).lease_epoch, 2);
 });
+
+for (const acquireTtlSeconds of [0, -1]) {
+  test(`corrupt acquire TTL '${acquireTtlSeconds}' fails closed`, async (t) => {
+    const root = await workspace(t);
+    await mkdir(join(root, "runtime", "goals", "goal-a", "task-leases"), {
+      recursive: true,
+    });
+    const existing = {
+      schema_version: "task_lease_v0",
+      goal_id: "goal-a",
+      todo_id: "todo_target",
+      owner: "agent-b",
+      idempotency_key: "existing-owner",
+      write_scopes: ["loopx/**"],
+      acquire_ttl_seconds: acquireTtlSeconds,
+      version: 1,
+      lease_epoch: 1,
+      status: "active",
+      expires_at: "2030-01-01T00:00:00Z",
+    };
+    await writeFile(leasePath(root), JSON.stringify(existing), "utf8");
+
+    const result = await executeTaskLeaseAcquire(await request(root), {
+      now: () => FIXED_NOW,
+    });
+
+    assert.equal(result.error_code, "corrupt_lease");
+    assert.deepEqual(result.settlement, {
+      effect_id: null,
+      receipts: [],
+      failure: {
+        step: "validation",
+        kind: "permission_denied",
+        code: "corrupt_lease",
+      },
+    });
+    assert.throws(
+      () => leaseInteger(existing, "acquire_ttl_seconds"),
+      /acquire_ttl_seconds must be a positive integer/u,
+    );
+    assert.deepEqual(await persistedLease(root), existing);
+  });
+}
+
+for (const [label, stored, expected] of [
+  ["absent", undefined, null],
+  ["null", null, null],
+  ["integer", 120, 120],
+  ["legacy numeric string", "120", 120],
+] as const) {
+  test(`persisted acquire TTL ${label} remains compatible`, () => {
+    assert.equal(
+      leaseInteger({ acquire_ttl_seconds: stored }, "acquire_ttl_seconds"),
+      expected,
+    );
+  });
+}
+
+for (const stored of [0, -1, 1.5, true, "invalid", Number.MAX_SAFE_INTEGER + 1]) {
+  test(`persisted acquire TTL '${String(stored)}' is corrupt`, () => {
+    assert.throws(
+      () => leaseInteger({ acquire_ttl_seconds: stored }, "acquire_ttl_seconds"),
+      (error: unknown) =>
+        error instanceof TaskLeaseAcquireError && error.code === "corrupt_lease",
+    );
+  });
+}
+
+for (const expiresAt of [
+  "not-a-timestamp",
+  "0",
+  "2030-01-01junk",
+  "2099-02-30T00:00:00Z",
+  "2026-08-26T24:01:00Z",
+  "2026-08-26T24:00:00.0000001Z",
+]) {
+  test(`corrupt active expiration '${expiresAt}' fails closed`, async (t) => {
+    const root = await workspace(t);
+    await mkdir(join(root, "runtime", "goals", "goal-a", "task-leases"), { recursive: true });
+    const existing = {
+      schema_version: "task_lease_v0",
+      goal_id: "goal-a",
+      todo_id: "todo_target",
+      owner: "agent-b",
+      idempotency_key: "existing-owner",
+      write_scopes: ["loopx/**"],
+      acquire_ttl_seconds: 120,
+      version: 1,
+      lease_epoch: 1,
+      status: "active",
+      expires_at: expiresAt,
+    };
+    await writeFile(leasePath(root), JSON.stringify(existing), "utf8");
+
+    const result = await executeTaskLeaseAcquire(await request(root), { now: () => FIXED_NOW });
+
+    assert.equal(result.error_code, "corrupt_lease");
+    assert.deepEqual(await persistedLease(root), existing);
+  });
+}
+
+for (const { expiresAt, active } of [
+  { expiresAt: "2020-01-01", active: false },
+  { expiresAt: "2030-01-01", active: true },
+  { expiresAt: "0099-01-01T00:00:00Z", active: false },
+  { expiresAt: "2026-08-27T02:59:59.123456", active: false },
+  { expiresAt: "2026-08-27T02:59:59.123456+00:00", active: false },
+  { expiresAt: "2026-08-27T02:59:59.1234567Z", active: false },
+  { expiresAt: "2026-08-27T02:59:59.123456789+00:00", active: false },
+  { expiresAt: "2026-08-27T03:00:00.123456", active: true },
+  { expiresAt: "2026-08-27T03:00:00.123456Z", active: true },
+  { expiresAt: "2026-08-27T03:00:00.1234567", active: true },
+  { expiresAt: "2026-08-27T03:00:00.123456789Z", active: true },
+  { expiresAt: "2026-08-27T03:00:01", active: true },
+  { expiresAt: "2026-08-27T03:00:01.1Z", active: true },
+  { expiresAt: "2026-08-27T03:00:01.12+00:00", active: true },
+  { expiresAt: "2026-08-27T03:00:01.123", active: true },
+  { expiresAt: "2026-08-26T24:00:00Z", active: false },
+  { expiresAt: "2026-08-26T24:00:00.0000000Z", active: false },
+  { expiresAt: "2026-08-27T24:00Z", active: true },
+]) {
+  test(`valid ${active ? "active" : "expired"} lease timestamp '${expiresAt}' remains compatible`, async (t) => {
+    const root = await workspace(t);
+    await mkdir(join(root, "runtime", "goals", "goal-a", "task-leases"), { recursive: true });
+    const existing = {
+      schema_version: "task_lease_v0",
+      goal_id: "goal-a",
+      todo_id: "todo_target",
+      owner: "agent-b",
+      idempotency_key: "existing-owner",
+      write_scopes: ["loopx/**"],
+      acquire_ttl_seconds: 120,
+      version: 1,
+      lease_epoch: 1,
+      status: "active",
+      expires_at: expiresAt,
+    };
+    await writeFile(leasePath(root), JSON.stringify(existing), "utf8");
+
+    const result = await executeTaskLeaseAcquire(await request(root), { now: () => FIXED_NOW });
+
+    if (active) {
+      assert.equal(result.error_code, "todo_lease_conflict");
+      assert.deepEqual(await persistedLease(root), existing);
+    } else {
+      assert.equal(result.ok, true);
+      assert.equal((await persistedLease(root)).owner, "agent-a");
+    }
+  });
+}
+
+for (const field of ["version", "lease_epoch"] as const) {
+  test(`legacy acquisition rejects exhausted ${field} before durable writeback`, async t => {
+    const root = await workspace(t);
+    const command = await request(root);
+    assert.equal((await executeTaskLeaseAcquire(command, {now: () => FIXED_NOW})).ok, true);
+    const lease = {...await persistedLease(root), status: "released", [field]: Number.MAX_SAFE_INTEGER};
+    await writeFile(leasePath(root), JSON.stringify(lease));
+    const before = await readFile(leasePath(root), "utf8");
+    const result = await executeTaskLeaseAcquire({...command, idempotency_key: "next-execution"}, {now: () => FIXED_NOW});
+    assert.equal(result.error_code, "lease_generation_exhausted");
+    assert.deepEqual(result.settlement, {effect_id: null, receipts: [], failure: {
+      step: "validation", kind: "writeback_rejected", code: "lease_generation_exhausted"}});
+    assert.equal(await readFile(leasePath(root), "utf8"), before);
+  });
+}

@@ -19,7 +19,7 @@ from ..status.autonomous_replan_projection import (
 )
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.quota_summary import (
-    select_quota_todo_source_items,
+    select_planning_inventory_source_items,
     select_quota_todo_summary,
 )
 from ..todos.succession_warning import todo_succession_gap_items
@@ -31,7 +31,7 @@ from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
     project_todo_lifecycle_settlement_reentry,
 )
-from .progress_observation import semantic_delta_from_writeback
+from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
 from .repair_delta import (
     build_repair_delta_contract,
     repair_delta_kinds_have_accountable_progress,
@@ -84,7 +84,10 @@ def project_replan_writeback_rejection(
     compact_triggers = [
         {
             key: trigger.get(key)
-            for key in ("kind", "todo_id", "completion_turn_key")
+            for key in (
+                "kind", "todo_id", "completion_turn_key",
+                "reason_code", "component_checks", "resolution_hint",
+            )
             if trigger.get(key) is not None
         }
         for trigger in obligation.get("triggers") or []
@@ -193,6 +196,10 @@ def qualify_replan_writeback(
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
+    todo_fields: dict[str, Any] | None = None,
+    external_progress_review: Mapping[str, Any] | None = None,
+    guard_scoped: bool = False,
+    guard_semantic_replan_obligation_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -204,7 +211,10 @@ def qualify_replan_writeback(
     safe_agent_id = str(agent_id or "").strip()
     if not safe_agent_id:
         return None, None
-    todo_projection = parse_active_state_todos(state_text, item_limit=None)
+    todo_projection = todo_fields if todo_fields is not None else parse_active_state_todos(
+        state_text, item_limit=None,
+        goal={**(registry_goal or {}), "latest_runs": list(newest_first_runs or [])},
+    )
     registered_agent_ids = registered_agent_ids_for_goal(registry_goal)
     agent_identity = (
         build_quota_agent_identity(registry_goal, agent_id=safe_agent_id)
@@ -227,9 +237,10 @@ def qualify_replan_writeback(
         None,
         agent_identity=agent_identity,
     )
-    agent_todo_source_items = select_quota_todo_source_items(
+    agent_todo_source_items = select_planning_inventory_source_items(
         raw_agent_todos,
         None,
+        include_terminal=True,
     )
     agent_todo_completion_items = (
         [
@@ -244,6 +255,7 @@ def qualify_replan_writeback(
         newest_first_runs,
         agent_todos=agent_todos,
         agent_id=safe_agent_id,
+        external_progress_review=external_progress_review,
     )
     status_payload = {
         "run_history": {
@@ -266,7 +278,7 @@ def qualify_replan_writeback(
                 else {}
             )
         },
-        project_asset=None,
+        project_asset={"execution_profile": (registry_goal or {}).get("execution_profile")},
         user_todo_summary=user_todos,
         agent_todo_summary=agent_todos,
         agent_todo_source_items=agent_todo_source_items,
@@ -285,8 +297,25 @@ def qualify_replan_writeback(
             else None
         ),
     )
+    if guard_scoped and guard_semantic_replan_obligation_id:
+        transition_delta = guarded_replan_transition_delta(
+            guard_scoped=guard_scoped,
+            selected_obligation_id=guard_semantic_replan_obligation_id,
+            transition_acks=[context.get("run_replan_transition_ack"),
+                             context.get("replan_transition_ack")],
+        )
+        if transition_delta is not None:
+            # This closes only the selected Turn obligation. The freshly
+            # derived frontier obligation remains visible to the next guard.
+            return None, transition_delta
     obligation = context.get("replan_obligation")
     if not obligation:
+        # A validated Todo transition can discharge the read-model obligation
+        # before refresh. Preserve that evidence in this run so periodic review
+        # starts a new window rather than counting the same history again.
+        transition_ack = context.get("replan_transition_ack") or {}
+        if transition_ack.get("recorded") is True:
+            return None, transition_ack.get("semantic_delta")
         return None, None
     if _obligation_was_created_by_current_completion(
         obligation,
@@ -331,8 +360,19 @@ def enforce_open_replan_writeback(
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
+    guard_scoped: bool = False,
+    guard_semantic_replan_obligation_id: str | None = None,
+    todo_fields: dict[str, Any] | None = None,
+    external_progress_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Fail closed unless concrete typed evidence satisfies the open replan."""
+    """Fail closed unless concrete typed evidence satisfies the selected replan.
+
+    An exact Turn guard is the authority for work admitted in that Turn. When
+    ``guard_scoped`` is true, a replan obligation applies only if that guard
+    selected its exact generation. A different or newly derived obligation is
+    preserved for the next Turn instead of retroactively rejecting authorized
+    delivery.
+    """
 
     obligation, semantic_delta = qualify_replan_writeback(
         newest_first_runs=newest_first_runs,
@@ -341,11 +381,24 @@ def enforce_open_replan_writeback(
         goal_id=goal_id,
         progress_observation=progress_observation,
         registry_goal=registry_goal,
+        external_progress_review=external_progress_review,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
+        todo_fields=todo_fields,
+        guard_scoped=guard_scoped,
+        guard_semantic_replan_obligation_id=guard_semantic_replan_obligation_id,
     )
     if not obligation:
+        if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
+            if not guard_scoped or semantic_delta.get("obligation_id") == (
+                guard_semantic_replan_obligation_id
+            ):
+                return semantic_delta
+        return None
+    if guard_scoped and str(obligation.get("obligation_id") or "").strip() != str(
+        guard_semantic_replan_obligation_id or ""
+    ).strip():
         return None
     if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
         return semantic_delta
@@ -378,15 +431,19 @@ def qualify_refresh_replan_writeback(
     agent_id: str,
     dry_run: bool,
     settlement_todo_id: str | None,
+    settlement_guard_scoped: bool,
+    settlement_guard_semantic_replan_obligation_id: str | None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None,
     registry_goal: dict[str, Any] | None,
+    external_progress_review: Mapping[str, Any] | None = None,
     completion_todo_id: str | None,
     completion_turn_key: str | None,
     classification: str,
     delivery_outcome: str | None,
+    todo_fields: dict[str, Any] | None = None,
 ) -> RefreshReplanQualification:
     """Qualify one refresh's replan delta and accountable settlement outcome."""
 
@@ -401,8 +458,9 @@ def qualify_refresh_replan_writeback(
             active_state_next_action_update=active_state_next_action_update,
             agent_vision=agent_vision,
             existing_agent_vision=existing_agent_vision,
-            agent_todo_summary=parse_active_state_todos(
-                state_text, item_limit=None
+            agent_todo_summary=(
+                todo_fields if todo_fields is not None
+                else parse_active_state_todos(state_text, item_limit=None)
             ).get("agent_todos"),
             agent_id=agent_id or None,
             dry_run=dry_run,
@@ -443,9 +501,15 @@ def qualify_refresh_replan_writeback(
         goal_id=goal_id,
         progress_observation=progress_observation,
         registry_goal=registry_goal,
+        external_progress_review=external_progress_review,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
+        guard_scoped=settlement_guard_scoped,
+        todo_fields=todo_fields,
+        guard_semantic_replan_obligation_id=(
+            settlement_guard_semantic_replan_obligation_id
+        ),
     )
     if semantic_delta:
         effective_recorded = True

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { useWorkspaceI18n } from "./i18n";
+import type { WorkspaceTheme } from "./workspace-theme";
 
 export function WorkspaceShell({
   drawer,
@@ -8,18 +9,22 @@ export function WorkspaceShell({
   drawerOpen,
   main,
   mobileSidebarOpen = false,
+  notice,
   onCloseMobileSidebar,
   sidebar,
-  theme = "paper",
+  theme = "loopx",
 }: {
   drawer?: ReactNode;
   drawerMode?: "inspector" | "inspector-full" | "panel";
   drawerOpen: boolean;
   main: ReactNode;
   mobileSidebarOpen?: boolean;
+  // A service notice belongs to the main column: rendered outside the shell
+  // it pushed the full-height workspace below the viewport.
+  notice?: ReactNode;
   onCloseMobileSidebar?: () => void;
   sidebar: ReactNode;
-  theme?: "brutal" | "paper";
+  theme?: WorkspaceTheme;
 }) {
   const { t } = useWorkspaceI18n();
   const sidebarRef = useRef<HTMLElement>(null);
@@ -71,7 +76,7 @@ export function WorkspaceShell({
           {sidebar}
         </div>
       </aside>
-      <main aria-hidden={mobileSidebarOpen || undefined} className="personal-workspace-main" inert={mobileSidebarOpen || undefined}>{main}</main>
+      <main aria-hidden={mobileSidebarOpen || undefined} className={`personal-workspace-main${notice ? " has-notice" : ""}`} inert={mobileSidebarOpen || undefined}>{notice}{main}</main>
       {drawerOpen ? <aside className="personal-workspace-drawer" data-context-drawer data-drawer-mode={drawerMode}>{drawer}</aside> : null}
     </section>
   );

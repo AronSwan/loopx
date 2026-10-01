@@ -6,13 +6,25 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from ...extensions.runtime import (
     execute_extension_runtime_binding,
 )
+from ...history import load_registry
 from ...rollout_event_log import iter_rollout_events
 from .core import build_periodic_report_run
+from .machine_defaults import (
+    SUBSCRIPTION_ERROR_SCHEMA,
+    PeriodicReportSubscriptionConfigurationError,
+    build_goal_periodic_report_delivery_plan,
+)
+from .machine_store import (
+    configure_periodic_report_machine_defaults,
+    inspect_periodic_report_machine_defaults,
+    read_periodic_report_machine_defaults,
+    rollback_periodic_report_machine_defaults,
+)
 from .extension_envelope import build_openviking_archive_execution_envelope
 from .presets import (
     PERIODIC_REPORT_PROFILE_PRESET_ALIASES,
@@ -22,8 +34,11 @@ from .profile import build_periodic_report_activation
 from .runtime_producer import build_periodic_report_runtime_trigger_decision
 from .triggers import build_periodic_report_trigger_decision
 from .pending_intent import consume_pending_periodic_report_intent
+from .request_action import (
+    discover_periodic_report_request_ports,
+    record_periodic_report_request,
+)
 from ...paths import resolve_runtime_root
-from ...registry import read_json
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -31,10 +46,16 @@ PrintPayload = Callable[
 ]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
-ProviderCommandRegistrar = Callable[
-    [argparse._SubParsersAction, AddFormat],
-    None,
-]
+
+
+class ProviderCommandRegistrar(Protocol):
+    def __call__(
+        self,
+        subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+        add_subcommand_format: AddFormat,
+    ) -> None: ...
+
+
 ProviderCommandHandler = Callable[..., int | None]
 
 
@@ -89,17 +110,88 @@ def register_periodic_report_commands(
         required=True,
         help="Path to periodic_report_runtime_trigger_request_v0 JSON.",
     )
+    request = commands.add_parser(
+        "request",
+        help=(
+            "Record an Agent-authorized typed report request for one exact "
+            "provider source item."
+        ),
+    )
+    add_subcommand_format(request)
+    request.add_argument("--goal-id", required=True)
+    request.add_argument("--agent-id", required=True)
+    request.add_argument("--source-ref", required=True)
+    request.add_argument(
+        "--source-adapter-id",
+        help=(
+            "Select the manifest-discovered source adapter. Required when more "
+            "than one complete adapter is active."
+        ),
+    )
+    request.add_argument("--execute", action="store_true")
+    request.add_argument(
+        "--extension-state-file",
+        help="Override local extension activation state for this action.",
+    )
     consume_pending = commands.add_parser(
         "consume-pending",
         help=(
-            "Render one pending durable intent to local artifacts and create an "
-            "exact-payload approval gate without external delivery."
+            "Render one pending durable intent to frozen local artifacts and queue "
+            "its configured Goal Channel delivery under the active subscription."
         ),
     )
     add_subcommand_format(consume_pending)
     consume_pending.add_argument("--goal-id", required=True)
     consume_pending.add_argument("--agent-id", required=True)
     consume_pending.add_argument("--execute", action="store_true")
+    consume_pending.add_argument(
+        "--extension-state-file",
+        help="Override local extension activation state for source settlement.",
+    )
+    configure_machine_defaults = commands.add_parser(
+        "configure-machine-defaults",
+        help="Preview or apply the runtime-root machine periodic-report policy.",
+    )
+    add_subcommand_format(configure_machine_defaults)
+    configure_machine_defaults.add_argument(
+        "--config-json",
+        required=True,
+        help="Path to loopx_machine_configuration_v0 JSON; use '-' for stdin.",
+    )
+    configure_machine_defaults.add_argument("--execute", action="store_true")
+    configure_machine_defaults.add_argument(
+        "--expected-plan-revision",
+        help="Exact plan_revision returned by the preceding configuration preview.",
+    )
+    inspect_machine_defaults = commands.add_parser(
+        "inspect-machine-defaults",
+        help="Read back the runtime-root machine periodic-report policy.",
+    )
+    add_subcommand_format(inspect_machine_defaults)
+    rollback_machine_defaults = commands.add_parser(
+        "rollback-machine-defaults",
+        help="Preview or execute rollback of one exact machine-policy transaction.",
+    )
+    add_subcommand_format(rollback_machine_defaults)
+    rollback_machine_defaults.add_argument("--transaction-id", required=True)
+    rollback_machine_defaults.add_argument("--execute", action="store_true")
+    rollback_machine_defaults.add_argument(
+        "--expected-plan-revision",
+        help="Exact plan_revision returned by the preceding rollback preview.",
+    )
+    plan_goal_delivery = commands.add_parser(
+        "plan-goal-delivery",
+        help=(
+            "Preview delivery from a Goal override or the current machine default, "
+            "then select the preferred Agent executor."
+        ),
+    )
+    add_subcommand_format(plan_goal_delivery)
+    plan_goal_delivery.add_argument(
+        "--request-json",
+        required=True,
+        help="Path to periodic_report_goal_delivery_plan_request_v0 JSON.",
+    )
     evaluate_runtime.add_argument(
         "--rollout-events-jsonl",
         required=True,
@@ -224,6 +316,31 @@ def _archive_openviking(
 
 def render_periodic_report_markdown(payload: dict[str, object]) -> str:
     if not payload.get("ok"):
+        if payload.get("schema_version") == SUBSCRIPTION_ERROR_SCHEMA:
+            invalid_fields = payload.get("invalid_fields")
+            normalized_invalid_fields = (
+                [str(field) for field in invalid_fields]
+                if isinstance(invalid_fields, list)
+                else []
+            )
+            rendered_invalid_fields = ", ".join(
+                f"`{field}`" for field in normalized_invalid_fields
+            )
+            return "\n".join(
+                [
+                    "# Periodic Report Configuration Error",
+                    "",
+                    f"- error: {payload.get('error')}",
+                    f"- configuration_source: `{payload.get('configuration_source')}`",
+                    f"- invalid_fields: {rendered_invalid_fields}",
+                    f"- mutation_performed: `{payload.get('mutation_performed')}`",
+                    "",
+                    "## Remediation",
+                    "",
+                    str(payload.get("remediation") or ""),
+                    "",
+                ]
+            )
         return f"# Periodic Report Error\n\n- error: {payload.get('error')}\n"
     if payload.get("schema_version") == "periodic_report_activation_v0":
         profile = payload.get("profile")
@@ -273,6 +390,37 @@ def render_periodic_report_markdown(payload: dict[str, object]) -> str:
                 f"- intent_satisfied: `{payload.get('intent_satisfied')}`",
                 f"- sink_status: `{normalized_sink.get('status')}`",
                 f"- readback_verified: `{normalized_sink.get('readback_verified')}`",
+                "",
+            ]
+        )
+    if payload.get("schema_version") in {
+        "machine_configuration_update_plan_v0",
+        "machine_configuration_transaction_v0",
+        "machine_configuration_inspection_v0",
+        "machine_configuration_rollback_plan_v0",
+        "machine_configuration_rollback_receipt_v0",
+        "periodic_report_goal_delivery_plan_v0",
+    }:
+        machine_configuration = str(payload.get("schema_version") or "").startswith(
+            "machine_configuration_"
+        )
+        return "\n".join(
+            [
+                (
+                    "# Machine Configuration"
+                    if machine_configuration
+                    else "# Periodic Report Goal Plan"
+                ),
+                "",
+                f"- schema: `{payload.get('schema_version')}`",
+                f"- status: `{payload.get('status', 'preview')}`",
+                f"- action: `{payload.get('action', 'none')}`",
+                f"- writes_required: `{payload.get('writes_required', 0)}`",
+                *(
+                    [f"- plan_revision: `{payload.get('plan_revision')}`"]
+                    if payload.get("plan_revision")
+                    else []
+                ),
                 "",
             ]
         )
@@ -340,20 +488,106 @@ def handle_periodic_report_command(
                     strict=True,
                 ),
             )
+        elif args.periodic_report_command == "request":
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(
+                registry, runtime_root_arg, registry_path=registry_path
+            )
+            ports = discover_periodic_report_request_ports(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                extension_state_file=(
+                    Path(args.extension_state_file).expanduser()
+                    if args.extension_state_file
+                    else None
+                ),
+            )
+            payload = record_periodic_report_request(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                source_ref=args.source_ref,
+                request_ports=ports,
+                source_adapter_id=args.source_adapter_id,
+                execute=bool(args.execute),
+            )
         elif args.periodic_report_command == "consume-pending":
-            registry = read_json(registry_path)
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(
+                registry, runtime_root_arg, registry_path=registry_path
+            )
+            ports = discover_periodic_report_request_ports(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                extension_state_file=(
+                    Path(args.extension_state_file).expanduser()
+                    if args.extension_state_file
+                    else None
+                ),
+            )
             payload = consume_pending_periodic_report_intent(
                 registry_path=registry_path,
-                runtime_root=resolve_runtime_root(
-                    registry, runtime_root_arg, registry_path=registry_path
-                ),
+                runtime_root=runtime_root,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
                 execute=bool(args.execute),
+                provider_request_ports=ports,
+            )
+        elif args.periodic_report_command in {
+            "configure-machine-defaults",
+            "inspect-machine-defaults",
+            "rollback-machine-defaults",
+        }:
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(
+                registry, runtime_root_arg, registry_path=registry_path
+            )
+            if args.periodic_report_command == "configure-machine-defaults":
+                payload = configure_periodic_report_machine_defaults(
+                    runtime_root=runtime_root,
+                    machine_defaults=_load_json_object(args.config_json),
+                    execute=bool(args.execute),
+                    expected_plan_revision=args.expected_plan_revision,
+                )
+            elif args.periodic_report_command == "inspect-machine-defaults":
+                payload = inspect_periodic_report_machine_defaults(runtime_root)
+            else:
+                payload = rollback_periodic_report_machine_defaults(
+                    runtime_root=runtime_root,
+                    transaction_id=args.transaction_id,
+                    execute=bool(args.execute),
+                    expected_plan_revision=args.expected_plan_revision,
+                )
+        elif args.periodic_report_command == "plan-goal-delivery":
+            registry = load_registry(registry_path)
+            runtime_root = resolve_runtime_root(
+                registry, runtime_root_arg, registry_path=registry_path
+            )
+            payload = build_goal_periodic_report_delivery_plan(
+                _load_json_object(args.request_json),
+                machine_defaults=read_periodic_report_machine_defaults(runtime_root),
             )
         else:
             request = _load_json_object(args.request_json)
             payload = build_periodic_report_run(request)
+    except PeriodicReportSubscriptionConfigurationError as exc:
+        payload = {
+            "ok": False,
+            "schema_version": SUBSCRIPTION_ERROR_SCHEMA,
+            "command": args.periodic_report_command,
+            "error_kind": "subscription_configuration_invalid",
+            "goal_id": exc.goal_id,
+            "configuration_source": exc.configuration_source,
+            "invalid_fields": list(exc.invalid_fields),
+            "error": str(exc),
+            "remediation": exc.remediation,
+            "mutation_performed": False,
+        }
     except Exception as exc:
         payload = {
             "ok": False,

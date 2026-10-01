@@ -841,7 +841,7 @@ Detect
 ### 核心代码四之一：先从多个 Read Model 归一化 Facts
 
 入口
-`loopx/control_plane/goals/goal_frontier.py::derive_goal_frontier_replan_obligation_from_summaries`
+`loopx/control_plane/goals/goal_frontier/__init__.py::derive_goal_frontier_replan_obligation_from_summaries`
 并不直接对原始 Markdown 或聊天做判断。它先消费已经归一化的 user/agent Todo summary、
 work lane、Vision/Acceptance gap、既有 obligation 与最新 ACK：
 
@@ -952,7 +952,7 @@ def select_frontier_rule(facts):
 | 4 | `open_user_todo` | 存在真正阻塞当前路径的用户工作；系统应等待具体输入，不能把缺少 authority 误写成 Replan。 | 否 |
 | 5 | `todo_succession_gap` | Advancement 已完成，但没有 successor 或 `no_followup` 理由，且没有其他 advancement 接续；必须补上局部闭包。 | 是 |
 | 6 | `vision_acceptance_gap` | Acceptance 仍有缺口，但没有满足它的 selectable work，或 successor 需要 Vision 决策；必须重建方向与 Frontier。 | 是 |
-| 7 | `long_todo_chain` | 可选 Todo 链超过有界阈值；先做 Vision checkpoint、分组或裁剪，不能用无绑定 ACK 跳过。当前 obligation 只能由匹配其 id 的 semantic delta 闭合。 | 是 |
+| 7 | `long_todo_chain` | 当前 Agent 已认领的 Todo 链达到有界阈值；共享未认领候选不计入。先做 Vision checkpoint、分组或裁剪，不能用无绑定 ACK 跳过。当前 obligation 只能由匹配其 id 的 semantic delta 闭合。 | 是 |
 | 8 | `current_agent_blocker` | 当前 Agent 已有具体 blocker 解释为什么不能推进；下一步由 blocker 的 resume route 决定，而不是再造计划。 | 否 |
 | 9 | `monitor_no_change_streak` | Monitor-only lane 连续 unchanged 达到阈值；必须用 expiry、blocker、supersede 或 successor 结束热等待。 | 是 |
 | 10 | `not_monitor_only` | 当前 lane 并非纯 monitor 等待；monitor exhaustion 规则不适用，交还普通 advancement 路径处理。 | 否 |
@@ -1546,7 +1546,7 @@ LoopX 已经提供的通用机制包括：
 | Agent-facing packet | `loopx/control_plane/work_items/interaction_contract.py::build_interaction_contract` | selected work、gate、replan、terminal 是否完整投影 |
 | Goal frontier replan | `loopx/control_plane/goals/goal_frontier/replan_rules.py::select_goal_frontier_replan_rule` | runnable、gate、succession gap、monitor exhaustion 的优先级 |
 | Vision checkpoint | `loopx/state_refresh.py::build_vision_checkpoint` | material closeout 后如何防止局部目标替代长期方向 |
-| Todo succession | `loopx/control_plane/todos/succession_warning.py::build_open_parent_successor_advisory`、`loopx/control_plane/todos/completion_policy.py::resolve_completion_policy` | successor 为什么只记录 lineage，open parent 为什么仍需显式 complete/defer |
+| Todo succession | `loopx/control_plane/todos/succession_warning.py::build_open_parent_successor_advisory`、`loopx/control_plane/todos/completion_policy.ts::resolveTodoCompletionPolicy` | successor 为什么只记录 lineage，open parent 为什么仍需显式 complete/defer |
 | Turn transaction | `loopx/control_plane/turn_driver/executor.py::run_loopx_turn_once` | phase failure 怎样恢复，何时允许 commit |
 | Domain State seam | `loopx/domain_state.py::default_domain_state_file_path`、`upsert_domain_state_jsonl` | goal/pack 分区、稳定 key、原子 upsert 和 unchanged observation |
 | Issue lifecycle | `loopx/capabilities/issue_fix/pr_lifecycle.py::build_issue_fix_pr_lifecycle_monitor_packet` | 外部 PR observation 怎样变成有限 proposal |

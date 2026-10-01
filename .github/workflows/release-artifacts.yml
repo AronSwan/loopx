@@ -9,6 +9,11 @@ on:
       - "package.json"
       - "package-lock.json"
       - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
+      - "apps/presentation/dashboard/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/verify_installed_chat.py"
       - "README.md"
       - "scripts/release_artifacts.py"
       - "tsconfig.control-plane.json"
@@ -30,7 +35,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -55,7 +60,7 @@ jobs:
       - name: Set up the packaged TypeScript control-plane runtime
         uses: actions/setup-node@v6
         with:
-          node-version: "22.6"
+          node-version: "24"
 
       - name: Resolve and validate release identity
         id: identity
@@ -74,6 +79,11 @@ jobs:
           echo "RELEASE_TAG=${release_tag}" >> "${GITHUB_ENV}"
           echo "SOURCE_DATE_EPOCH=${source_date_epoch}" >> "${GITHUB_ENV}"
           echo "PYTHONHASHSEED=0" >> "${GITHUB_ENV}"
+
+      - name: Build exact release frontend with previous delivery assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/chat_bundle.py release-build --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
 
       - name: Install release build tools
         run: python -m pip install --disable-pip-version-check build==1.4.4 twine==6.2.0
@@ -194,6 +204,51 @@ jobs:
               )
               assert committed["appended"] is True, committed
               assert committed["replayed"] is False, committed
+          PY
+
+      - name: Verify installed frontend and sdist rebuild
+        run: |
+          python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+          python -m pip wheel --no-deps dist/packages/*.tar.gz --wheel-dir "${RUNNER_TEMP}/sdist-wheel"
+          "${RUNNER_TEMP}/loopx-wheel/bin/python" -m pip install --force-reinstall --no-deps "${RUNNER_TEMP}"/sdist-wheel/*.whl
+          python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+
+      - name: Exercise the installed page in a real browser
+        working-directory: apps/presentation/dashboard
+        env:
+          LOOPX_PYTHON_BIN: ${{ runner.temp }}/loopx-wheel/bin/python
+        run: |
+          ./node_modules/.bin/playwright install --with-deps chromium
+          npm run smoke:personal-workspace-packaged
+
+      - name: Verify wheel through the DSH managed-runtime install shape
+        run: |
+          set -euo pipefail
+          target="${RUNNER_TEMP}/loopx-wheel-target"
+          skills_dir="${RUNNER_TEMP}/loopx-wheel-target-skills"
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-deps \
+            --target "${target}" \
+            dist/packages/*.whl
+          (
+            cd "${RUNNER_TEMP}"
+            PYTHONPATH="${target}" python -m loopx.cli --format json \
+              workflow-skills --skills-dir "${skills_dir}" \
+              --host-surface deepseek-harness-native \
+              > "${RUNNER_TEMP}/loopx-wheel-target-inspect.json"
+          )
+          python - "${RUNNER_TEMP}/loopx-wheel-target-inspect.json" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert payload["ok"] is True, payload
+          assert payload["operation"] == "inspect", payload
+          assert payload["host_surface"] == "deepseek-harness-native", payload
+          assert payload["source"]["kind"] == "python_distribution", payload
+          assert payload["install_required"] is True, payload
           PY
           export CODEX_HOME="${RUNNER_TEMP}/loopx-wheel-codex"
           skills_dir="${CODEX_HOME}/skills"
@@ -346,17 +401,39 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          verify_venv="${RUNNER_TEMP}/loopx-pypi-${version}"
-          python -m venv "${verify_venv}"
+          verify_target="${RUNNER_TEMP}/loopx-pypi-target-${version}"
+          skills_dir="${RUNNER_TEMP}/loopx-pypi-skills-${version}"
           for attempt in {1..12}; do
-            if "${verify_venv}/bin/python" -m pip install \
+            if python -m pip install \
               --disable-pip-version-check \
               --index-url https://pypi.org/simple \
               --no-cache-dir \
               --no-deps \
+              --target "${verify_target}" \
               "loopx==${version}"; then
-              test "$("${verify_venv}/bin/loopx" --version)" = "loopx ${version}"
-              exit 0
+              if (
+                cd "${RUNNER_TEMP}"
+                test "$(PYTHONPATH="${verify_target}" python -m loopx.cli --version)" = \
+                  "loopx ${version}"
+                PYTHONPATH="${verify_target}" python -m loopx.cli --format json \
+                  workflow-skills --install --skills-dir "${skills_dir}" \
+                  --host-surface deepseek-harness-native \
+                  > "${RUNNER_TEMP}/loopx-pypi-workflow-skills.json"
+              ); then
+                python - "${RUNNER_TEMP}/loopx-pypi-workflow-skills.json" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert payload["ok"] is True, payload
+          assert payload["operation"] == "install", payload
+          assert payload["host_surface"] == "deepseek-harness-native", payload
+          assert payload["source"]["kind"] == "python_distribution", payload
+          assert payload["after"]["ready"] is True, payload
+          PY
+                exit 0
+              fi
             fi
             if [[ "${attempt}" -eq 12 ]]; then
               break

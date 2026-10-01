@@ -94,13 +94,19 @@ can discover user-installed skills:
   which drives the session over the OpenCode 2 HTTP API and owns the loop
   timers, so long runs survive TUI close. OpenCode 1 plugins do not run under
   OpenCode 2; see `loopx/opencode2_goal_mode/README.md`.
-- Pi: the self-contained goal extension under `.pi/extensions/loopx-goal.ts`
-  (with its loop core in `.pi/extensions/pi-goal-loop-runtime.mjs`) exposes
-  `/loopx` after restart and runs the quota-gated goal loop through
-  `loopx_goal_activate`. It is installed explicitly with
-  `loopx slash-commands --install --surface pi` (pass `--pi-project <path>`
-  to target another project from a different directory); private binding state
-  stays under each project's `.loopx/pi/` (already gitignored via `.loopx/`).
+- Pi: the self-contained goal extension exposes `/loopx` after `/reload` or a
+  restart and runs the quota-gated goal loop through `loopx_goal_activate`.
+  `loopx slash-commands --install --surface pi` installs it for the current
+  project; add `--pi-project <path>` for another project, or `--pi-scope user`
+  to install the discoverable `index.ts` and runtime under
+  `<agent-dir>/extensions/loopx/` for all projects. `<agent-dir>` defaults to
+  `~/.pi/agent` and follows `PI_CODING_AGENT_DIR`. Run
+  `loopx slash-commands --inspect --surface pi` to read both scopes, including
+  stale or partial installs and a warning when both scopes would load. To
+  remove one scope, use `--uninstall --surface pi` with that scope; reinstall
+  with `--install` to upgrade managed files. Only extension code is global:
+  private bindings remain under each project's `.loopx/pi/` (already
+  gitignored via `.loopx/`).
 
 The command family is the same across surfaces, even when the host-specific
 entry point is different:
@@ -380,6 +386,124 @@ The GitHub Pages archive installer remains available as a fallback. `loopx
 update` now projects the active installation owner: PyPI environments stay
 package-manager owned, archive snapshots stay LoopX owned, and live source
 checkouts stay Git owned.
+
+### Workflow Skill Versions And Pinned Hosts
+
+Each installed skill, including the generated `$loopx` entry, records its source
+LoopX version in `.loopx-skill-version.json`. The root
+`.loopx-skill-install.json` also records `loopx_version`. Inspect with the CLI
+that the host will actually run:
+
+```bash
+loopx workflow-skills --skills-dir ./host-skills --format json
+loopx workflow-skills --install --skills-dir ./host-skills
+```
+
+The inspect result's `before` object reports `loopx_version`,
+`expected_loopx_version`, and `loopx_version_matches`; install reports these
+under `after`. A mismatch or missing/invalid marker makes the readback not
+ready. Legacy `loopx_skill_install_readback_v0` manifests require a one-time
+reinstall using a CLI that includes this version-marker fix. Reinstalling with
+an unpatched pinned CLI still writes unversioned metadata; upgrade that runtime
+or backport the fix first. This readiness rule also applies to
+Ark Managed Agent doctor, Ark/DeepSeek filesystem onboarding, and isolated
+native profiles. An isolated profile compares against its own installed CLI,
+even when its supervisor uses another LoopX version.
+
+User-level skill directories can be shared across hosts. For a pinned host,
+run its pinned executable (for example `./loopx-sidecar`) for both commands
+and use a separate `--skills-dir` for each runtime version. Configure the host
+to load that directory and compare the readback before loading skills; older
+or third-party hosts do not gain this check automatically. Restart the host
+after installing or repairing skills so its session reloads them. To roll
+back, reinstall into that same directory using the previous pinned executable.
+These commands only manage skill files; they grant no repository, network,
+credential, or merge authority.
+
+### Host-Bundled / Frozen Workflow Skills
+
+PyInstaller hosts can bundle the existing skill data without Python distribution
+metadata at runtime. In a frozen process, LoopX reads
+`share/loopx/skills` under `sys._MEIPASS` first, then the same bundle's `skills`
+directory for compatibility with existing checkout-like bundles. The first
+complete skill set wins; files from different layouts are never combined.
+If the freezer does not expose `_MEIPASS`, the root beside the bundled `loopx`
+package is used. These are existing wheel and source layouts, not a new wheel
+format. If neither contains a complete skill set, discovery fails with rebuild
+instructions, without searching another checkout or Python installation.
+Regular checkout and pip discovery is unchanged.
+
+Build from an isolated environment containing the exact LoopX version shipped
+with the host. Include the **entire** `share/loopx/skills` tree from that wheel,
+including each skill's `SKILL.md`, `agents/`, `references/`, and `scripts/` files
+where present. The wheel's data-file list is authoritative; do not copy only
+`loopx-project` or a separately maintained prompt. `--collect-data loopx` alone
+does not include wheel data installed outside the Python package.
+
+For example, create `sidecar.py`:
+
+```python
+from loopx.entrypoint import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+After installing your pinned LoopX wheel and PyInstaller in the build environment,
+run this Python build script there:
+
+```python
+import subprocess
+import sys
+from loopx.workflow_skill_install import resolve_workflow_skill_source
+
+source = resolve_workflow_skill_source()
+if not source["available"]:
+    raise SystemExit(source["reason"])
+subprocess.run([
+    sys.executable, "-m", "PyInstaller", "--onefile",
+    "--name", "loopx-sidecar", "--collect-submodules", "loopx",
+    "--collect-data", "loopx",
+    "--add-data", f"{source['skills_root']}:share/loopx/skills",
+    "sidecar.py",
+], check=True)
+```
+
+Use `--onedir` in place of `--onefile` for a directory bundle. See
+[PyInstaller runtime paths and data placement](https://pyinstaller.org/en/stable/runtime-information.html).
+This recipe covers skill installation and static slash-command generation;
+hosts must separately package and validate dependencies and non-Python resources
+for other LoopX capabilities they enable. Build and test on each target OS.
+
+Validate against a disposable host directory (on Windows use
+`dist/loopx-sidecar.exe`):
+
+```bash
+dist/loopx-sidecar --format json workflow-skills --skills-dir ./test-host/skills
+dist/loopx-sidecar --format json workflow-skills --install --skills-dir ./test-host/skills
+dist/loopx-sidecar --format json workflow-skills --skills-dir ./test-host/skills
+dist/loopx-sidecar --format json slash-commands --install --surface codex --codex-home ./test-host
+```
+
+Expect `source.kind: frozen_bundle`, successful installation, then
+`install_required: false`. The managed readback records the frozen bundle's
+LoopX package version, so a newer sidecar reports the older installed skills as
+requiring refresh. Static slash commands are generated from bundled Python code
+and do not require the workflow-skill data tree. `--skills-dir` selects the
+installation destination, not a source override. Skill installation does not
+enable schedulers, launch goals, or grant the host additional authority.
+
+Rebuild with the new pinned wheel and reinstall skills when upgrading the host;
+restart the agent host to reload them. Keep the previous sidecar for rollback and
+reinstall its matching skills. To remove managed material from the test host:
+
+```bash
+dist/loopx-sidecar workflow-skills --uninstall --skills-dir ./test-host/skills
+dist/loopx-sidecar slash-commands --uninstall --surface codex --codex-home ./test-host
+```
+
+Workflow uninstall preserves locally modified skills. Review preserved files
+before deleting the disposable directory.
 
 ## Contributor Install
 
@@ -748,6 +872,7 @@ loopx operator-gate \
 
 loopx reward \
   --goal-id your-project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "validation improved and the route is worth extending"

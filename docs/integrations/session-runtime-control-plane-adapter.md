@@ -40,6 +40,37 @@ recovers after approval; it should not become the default end-user console.
 
 ## Core Principle
 
+### Managed Codex home ownership (implemented)
+
+The managed Chat adapter captures `LOOPX_CHAT_CODEX_HOME`, then `CODEX_HOME`,
+then the host's default Codex home at controller startup. It explicitly passes
+that home to each app-server process, including catalog-compatibility retries.
+New managed Codex sessions persist this binding in owner-local session state.
+Resume and submit reject a different home before starting an upstream process
+or modifying a turn. Legacy sessions acquire the binding only after successful
+upstream restoration; startup alone neither rebinds nor copies their history.
+
+The macOS LaunchAgent installer preserves an existing binding on upgrade,
+including older shell-export plists. Use `LOOPX_CHAT_CODEX_HOME` explicitly when
+installing a deliberately different host profile. A later ambient `CODEX_HOME`
+does not overwrite it. Restore the original home to recover a home-mismatch
+gate; changing this variable is not a session-migration command.
+
+Sharing a host home does not by itself prove a SQLite lock failure. A desktop
+launcher should separate ordinary open (read-only identity/configuration checks)
+from offline account switching, migration, or rollback (exclusive ownership).
+Do not make a normal open perform hidden migrations, kill managed workers, or
+move sessions into another home to pass an overly broad file-open check.
+Sharing a home also does not authorize two clients to run the same thread
+concurrently. Account changes still require quiescing all users of that home;
+this binding does not implement credential copying or account-refresh logic.
+
+Validation: `python -m pytest tests/test_chat_codex_home.py tests/test_chat_agent.py`
+and `python examples/macos-dashboard-launchagent-status-smoke.py`. The latter
+exercises the actual installer with fixture LaunchAgents, not real services.
+
+### Projection boundary
+
 The host session log is the raw fact source. LoopX run history is a
 compact control projection. A projection may reference host ids such as session,
 event, tool call, artifact, approval, or outcome ids, but it must not copy full
@@ -153,6 +184,36 @@ summaries, then returns:
   `monitor`;
 - `reconcile_rule`: the rule that host logs remain raw facts while LoopX stores
   only compact control projection.
+
+### Raw-Material Key Classification
+
+The builder never reads input values to decide whether they are raw material;
+it classifies input key names with a typed, word-level rule. Keys are split
+into words on `_`, `-`, and camelCase and matched as exact keys, whole words,
+or exact word sequences, never as substrings. Every key lands in one of three
+states:
+
+| State | Effect | Examples |
+| --- | --- | --- |
+| compact | allowed | keys the projection reads (`status`, `summary`, `next_action`), timestamps, pointer/count suffixes only when no raw evidence is present (`catalog_id`, `login_at`), explicit safe collisions (`trace_id`, `message_id`, `log_count`), usage metrics (`token_count`, `max_tokens`) |
+| raw material | `raw_material_detected`, `agent_can_continue=false`, category recorded in `raw_material_categories`; its value is never copied | `credential` (`api_key`, `access_token`, `password`, `secret_id`, `api_key_id`), `transcript` (`message`, `raw_transcript`, `messages`, `prompt`, `body`, `transcript_id`), `log` (`log_path`, `stack_trace`), `local_path` (`file_path`), `raw_output` (`stdout_tail`, `diff`, `raw_id`) |
+| unclassified | reported in `unclassified_key_names` (bounded), never blocks | `backlog`, `changelog`, `logical_clock` |
+
+The word `token` is a credential only in auth forms (`token`, `access_token`,
+`auth_token`, `api_token`, `bearer_token`, `refresh_token`, `id_token`); count
+forms such as `tokens_used` are compact, but a raw-material word or phrase in
+the same key takes precedence over both metric and pointer shortcuts
+(`tokens_password`, `raw_tokens`, `secret_id`, and `api_key_id` are raw).
+`trace_id` is an explicitly safe pointer; `trace`, `stack_trace`, and
+`trace_path` are logs. `log_count`, `prompt_tokens`, and `prompt_token_count`
+are explicitly safe aggregates and `conversation_id` is an explicitly safe
+pointer. Transcript evidence otherwise matches the exact key `message` and the
+whole words `messages`, `prompt`, `prompts`, and `conversation`: `prompt_id`,
+`prompt_text`, and `conversation_ref` stay raw, `message_count` and
+`message_ref` are compact pointers, and `message_text` is reported as
+unclassified rather than guessed either way. `log`
+matches only as a whole word, so `catalog_id`, `login_at`, and `changelog` are
+not flagged.
 
 Run:
 

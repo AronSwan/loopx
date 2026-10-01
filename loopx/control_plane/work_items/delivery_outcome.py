@@ -33,8 +33,6 @@ class DeliveryTurnKind(str, Enum):
 
 DELIVERY_OUTCOME_CHOICES = tuple(outcome.value for outcome in DeliveryOutcome)
 DELIVERY_TURN_KIND_CHOICES = tuple(kind.value for kind in DeliveryTurnKind)
-DELIVERY_OUTCOME_UNKNOWN = "unknown"
-DELIVERY_OUTCOME_NOT_CONFIGURED = "not_configured"
 
 MATERIAL_DELIVERY_OUTCOMES = frozenset(
     {
@@ -47,12 +45,6 @@ ACCOUNTABLE_DELIVERY_OUTCOMES = frozenset(
     {
         DeliveryOutcome.OUTCOME_PROGRESS,
         DeliveryOutcome.PRIMARY_GOAL_OUTCOME,
-    }
-)
-FOLLOWTHROUGH_REQUIRED_DELIVERY_OUTCOMES = frozenset(
-    {
-        DeliveryOutcome.SURFACE_ONLY,
-        DeliveryOutcome.OUTCOME_GAP,
     }
 )
 PROGRESS_DELIVERY_OUTCOMES = ACCOUNTABLE_DELIVERY_OUTCOMES
@@ -86,7 +78,8 @@ def qualifies_turn_scoped_blocker_settlement(
         work_item_id or replan_obligation_id
     )
     if (
-        observation.get("result_class") != ProgressResultClass.BLOCKED.value
+        normalized_work_item_id is None
+        or observation.get("result_class") != ProgressResultClass.BLOCKED.value
         or normalize_progress_identifier(observation.get("blocker_id")) is None
         or normalize_progress_identifier(observation.get("work_item_id"))
         != normalized_work_item_id
@@ -117,6 +110,104 @@ def qualifies_turn_scoped_settlement(
             replan_obligation_id=replan_obligation_id,
         )
     )
+
+
+TURN_SCOPED_SETTLEMENT_REQUIREMENT = (
+    "turn-scoped refresh-state requires a progress outcome or a typed blocked "
+    "outcome_gap settlement"
+)
+TURN_SCOPED_SETTLEMENT_GAP_FALLBACK = "the settlement names no typed outcome"
+
+
+def explain_turn_scoped_settlement_gap(
+    delivery_outcome: Any,
+    progress_observation: Mapping[str, Any] | None,
+    *,
+    work_item_id: str | None = None,
+    replan_obligation_id: str | None = None,
+) -> str | None:
+    """Name the missing typed input that keeps a Turn from settling.
+
+    Refusing a settlement without naming the absent argument leaves the writer to
+    guess, which is the failure mode this diagnosis removes. The caller keeps
+    refusing; this helper only reports which input is missing or wrong, and
+    returns ``None`` for a settlement that already qualifies.
+    """
+
+    if qualifies_turn_scoped_settlement(
+        delivery_outcome,
+        progress_observation,
+        work_item_id=work_item_id,
+        replan_obligation_id=replan_obligation_id,
+    ):
+        return None
+    normalized = normalize_delivery_outcome(delivery_outcome)
+    progress_choices = " or ".join(
+        item.value for item in sorted(ACCOUNTABLE_DELIVERY_OUTCOMES, key=lambda item: item.value)
+    )
+    if normalized is None:
+        return (
+            "--delivery-outcome is required: name "
+            f"{progress_choices}, or outcome_gap together with "
+            "--progress-result-class blocked"
+        )
+    if normalized not in ACCOUNTABLE_DELIVERY_OUTCOMES:
+        if normalized is not DeliveryOutcome.OUTCOME_GAP:
+            return (
+                f"--delivery-outcome {normalized.value} cannot settle a Turn: name "
+                f"{progress_choices}, or outcome_gap together with "
+                "--progress-result-class blocked"
+            )
+        observation = (
+            progress_observation if isinstance(progress_observation, Mapping) else None
+        )
+        if (
+            observation is None
+            or observation.get("schema_version") != PROGRESS_OBSERVATION_SCHEMA_VERSION
+        ):
+            return (
+                "--delivery-outcome outcome_gap also requires a typed blocked "
+                "observation: send --progress-result-class blocked with "
+                "--progress-blocker-id and --progress-evidence-id"
+            )
+        result_class = observation.get("result_class")
+        if result_class != ProgressResultClass.BLOCKED.value:
+            return (
+                "--delivery-outcome outcome_gap requires --progress-result-class "
+                f"blocked; result_class={result_class or 'missing'} cannot settle a Turn"
+            )
+        if normalize_progress_identifier(observation.get("blocker_id")) is None:
+            return (
+                "--delivery-outcome outcome_gap with a blocked observation also "
+                "requires a stable --progress-blocker-id"
+            )
+        evidence_ids = observation.get("evidence_ids")
+        if (
+            not isinstance(evidence_ids, list)
+            or not evidence_ids
+            or not all(
+                normalize_progress_identifier(evidence_id) is not None
+                for evidence_id in evidence_ids
+            )
+        ):
+            return (
+                "--delivery-outcome outcome_gap with a blocked observation also "
+                "requires --progress-evidence-id"
+            )
+        if bool(work_item_id) == bool(replan_obligation_id):
+            return (
+                "name exactly one settlement identity: --todo-id or "
+                "--replan-obligation-id"
+            )
+        expected_work_item = normalize_progress_identifier(
+            work_item_id or replan_obligation_id
+        )
+        if normalize_progress_identifier(observation.get("work_item_id")) != expected_work_item:
+            return (
+                "the blocked observation must carry the settlement work item; "
+                f"work_item_id={observation.get('work_item_id') or 'missing'}"
+            )
+    return TURN_SCOPED_SETTLEMENT_GAP_FALLBACK
 
 
 def normalize_delivery_outcome(value: Any) -> DeliveryOutcome | None:
@@ -160,57 +251,3 @@ def require_delivery_turn_kind(value: Any) -> DeliveryTurnKind:
     if kind is None:
         raise ValueError("delivery_turn_kind must be one of: " + ", ".join(DELIVERY_TURN_KIND_CHOICES))
     return kind
-
-
-def delivery_turn_kind_for_run(
-    run: dict[str, Any],
-    *,
-    delivery_outcome: Any = None,
-) -> str:
-    """Classify the latest turn without relying on free-form classification text alone."""
-
-    raw_explicit = str(run.get("delivery_turn_kind") or "").strip()
-    if raw_explicit:
-        explicit = normalize_delivery_turn_kind(raw_explicit)
-        return explicit.value if explicit else DeliveryTurnKind.UNKNOWN.value
-
-    outcome = normalize_delivery_outcome(
-        delivery_outcome if delivery_outcome is not None else run.get("delivery_outcome")
-    )
-    classification = str(run.get("classification") or "").strip().lower()
-    health_check = str(run.get("health_check") or "").strip().lower()
-    recommended_action = str(run.get("recommended_action") or "").strip().lower()
-    searchable = " ".join(part for part in (classification, health_check, recommended_action) if part)
-
-    if outcome == DeliveryOutcome.PRIMARY_GOAL_OUTCOME:
-        return DeliveryTurnKind.PRODUCT_PATH_EXECUTION.value
-
-    evidence_keys = (
-        "case_result",
-        "compact_evidence",
-    )
-    if outcome == DeliveryOutcome.OUTCOME_PROGRESS or any(run.get(key) for key in evidence_keys):
-        return DeliveryTurnKind.COMPACT_EVIDENCE.value
-
-    if any(hint in searchable for hint in ("blocker", "blocked", "cannot proceed", "can't proceed")):
-        return DeliveryTurnKind.BLOCKER_WRITEBACK.value
-
-    if outcome == DeliveryOutcome.SURFACE_ONLY or any(
-        hint in classification
-        for hint in (
-            "contract",
-            "prep",
-            "preparation",
-            "protocol",
-            "policy",
-            "surface",
-            "smoke",
-            "setup",
-        )
-    ):
-        return DeliveryTurnKind.CONTRACT_ONLY_PREPARATION.value
-
-    if outcome == DeliveryOutcome.OUTCOME_GAP:
-        return DeliveryTurnKind.OUTCOME_GAP.value
-
-    return DeliveryTurnKind.UNKNOWN.value

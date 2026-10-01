@@ -26,23 +26,29 @@ from .event_collector_runtime import (
     _profile_app_id,
     _sender_identity,
 )
-from .event_inbox import MESSAGE_ID_PATTERN, ROUTE_KEY_PATTERN
+from .event_inbox import (
+    MESSAGE_ID_PATTERN,
+    ROUTE_KEY_PATTERN,
+    load_lark_event_inbox_config,
+)
+from .goal_channel_contracts import LarkTopicEventDecisionReason
+from .goal_topic_routing import decide_lark_topic_route_event
 from .group_history import (
     _canonical_events,
     _page_digest,
     _provider_argv,
     _provider_failure,
     _provider_page,
-    _route_context,
     _verify_inbox_events,
 )
+from .group_history_cursor import group_history_source_fingerprint
 from .inbox_reactions import (
     ensure_lark_event_inbox_received_reaction,
     lark_inbox_pending_turn_start_read_message_ids,
     record_lark_inbox_turn_start_read,
 )
 from .private_json import write_private_json_atomic
-from .routed_inbox import ingest_routed_lark_event_inbox
+from .routed_inbox import ingest_routed_lark_event_inbox, lark_inbox_config_kind
 
 CURSOR_SCHEMA_VERSION = "lark_turn_start_sync_cursor_v0"
 DISPATCH_CURSOR_SCHEMA_VERSION = "lark_turn_start_dispatch_cursor_v0"
@@ -50,6 +56,12 @@ SYNC_SCHEMA_VERSION = "lark_turn_start_inbox_sync_v0"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 SOURCE_FINGERPRINT_PATTERN = re.compile(r"^sha256:([0-9a-f]{24})$")
 TURN_START_REACTION_ATTEMPT_LIMIT = 3
+DIRECT_INBOX_TURN_START_POLICY = {
+    "enabled": True,
+    "initial_lookback_seconds": 15 * 60,
+    "overlap_seconds": 5,
+    "page_size": 50,
+}
 
 
 @dataclass
@@ -93,6 +105,103 @@ def _dispatch_source_fingerprint(config: Mapping[str, Any]) -> str:
     )
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     return f"sha256:{digest}"
+
+
+def _turn_start_config(
+    *, project: str | Path, config_path: str | Path
+) -> dict[str, Any]:
+    """Normalize a collector or one-click direct Inbox into one sync topology."""
+
+    kind = lark_inbox_config_kind(project=project, config_path=config_path)
+    if kind == "collector":
+        collector_config: Mapping[str, Any] = load_lark_event_collector_config(
+            project=project,
+            config_path=config_path,
+        )
+        return dict(collector_config)
+
+    root = Path(project).expanduser().resolve()
+    path = Path(config_path).expanduser()
+    path = (path if path.is_absolute() else root / path).resolve()
+    inbox = load_lark_event_inbox_config(project=root, config_path=path)
+    if not inbox["enabled"]:
+        return {
+            "schema_version": "lark_turn_start_direct_inbox_v0",
+            "enabled": False,
+            "project": root,
+            "config_path": path,
+            "profile": "",
+            "turn_start_sync": {**DIRECT_INBOX_TURN_START_POLICY, "enabled": False},
+            "routes": [],
+        }
+    reply = inbox["reply"]
+    if reply["enabled"] is not True:
+        raise ValueError(
+            "enabled direct Lark turn-start sync requires an explicit reply profile"
+        )
+    topic_root_message_id = str(inbox.get("topic_root_message_id") or "")
+    if not MESSAGE_ID_PATTERN.fullmatch(topic_root_message_id):
+        raise ValueError(
+            "enabled direct Lark turn-start sync requires a Goal Topic root"
+        )
+    config_ref = path.relative_to(root).as_posix()
+    return {
+        "schema_version": "lark_turn_start_direct_inbox_v0",
+        "enabled": True,
+        "project": root,
+        "config_path": path,
+        "profile": str(reply["sender_profile"]),
+        "turn_start_sync": dict(DIRECT_INBOX_TURN_START_POLICY),
+        "routes": [
+            {
+                "route_key": "default",
+                "chat_id": str(reply["chat_id"]),
+                "topic_root_message_id": topic_root_message_id,
+                "event_inbox_config_ref": config_ref,
+                "inbox": inbox,
+            }
+        ],
+    }
+
+
+def _route_source_fingerprint(
+    *, config: Mapping[str, Any], route: Mapping[str, Any]
+) -> str:
+    project_root = Path(config["project"])
+    inbox_path_ref = Path(route["inbox"]["inbox_path"]).relative_to(
+        project_root
+    ).as_posix()
+    return group_history_source_fingerprint(
+        route_key=str(route["route_key"]),
+        profile=str(config["profile"]),
+        chat_id=str(route["chat_id"]),
+        event_inbox_config_ref=str(route["event_inbox_config_ref"]),
+        inbox_path_ref=inbox_path_ref,
+        capture_scope=str(route["inbox"]["capture_scope"]),
+        route_binding_ref=str(route.get("topic_root_message_id") or ""),
+    )
+
+
+def _events_for_route(
+    events: list[dict[str, Any]], *, route: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Apply the Inbox's structural addressing boundary before persistence."""
+
+    inbox = route["inbox"]
+    if inbox["capture_scope"] == "configured_chat_all":
+        return events
+    return [
+        event
+        for event in events
+        if decide_lark_topic_route_event(
+            event=event,
+            chat_id=str(route["chat_id"]),
+            topic_root_message_id=str(route.get("topic_root_message_id") or ""),
+            capture_scope=str(inbox["capture_scope"]),
+            identity=inbox["reply"],
+        )
+        is LarkTopicEventDecisionReason.MATCHED
+    ]
 
 
 def _dispatch_cursor_path(project: Path, *, source_fingerprint: str) -> Path:
@@ -355,9 +464,9 @@ def _read_provider_events(
 
 def _route_receipt(
     *,
-    project: str | Path,
-    config_path: str | Path,
-    route_key: str,
+    config: Mapping[str, Any],
+    route: Mapping[str, Any],
+    source_fingerprint: str,
     now: datetime,
     initial_lookback_seconds: int,
     overlap_seconds: int,
@@ -365,12 +474,10 @@ def _route_receipt(
     lark_cli_executable: str,
     runner: Runner,
     reaction_budget: _ReactionAttemptBudget,
+    historical_context_only: bool,
+    emit_received_reactions: bool,
 ) -> dict[str, Any]:
-    config, route, _, source_fingerprint = _route_context(
-        project=project,
-        config_path=config_path,
-        route_key=route_key,
-    )
+    route_key = str(route["route_key"])
     cursor_path = _cursor_path(
         Path(config["project"]),
         route_key=route_key,
@@ -421,6 +528,7 @@ def _route_receipt(
                 skipped_count,
                 self_message_skipped_count,
             ) = provider_page
+            events = _events_for_route(events, route=route)
             newly_missing = [
                 event
                 for event in events
@@ -431,7 +539,18 @@ def _route_receipt(
             ingest = ingest_routed_lark_event_inbox(
                 project=config["project"],
                 config_path=config["config_path"],
-                events=events,
+                events=[
+                    {
+                        **event,
+                        "route_key": route_key,
+                        **(
+                            {"historical_context_only": True}
+                            if historical_context_only
+                            else {}
+                        ),
+                    }
+                    for event in events
+                ],
                 execute=True,
             )
             try:
@@ -454,7 +573,7 @@ def _route_receipt(
                     )
                     for event in events
                 )
-                reaction_enabled = bool(
+                reaction_enabled = emit_received_reactions and bool(
                     route["inbox"]["reply"].get("received_reaction_emoji")
                 )
                 pending_reaction_message_ids = (
@@ -603,13 +722,13 @@ def _dispatch_failure(
 
 def _dispatch_route_receipts(
     *,
-    project: str | Path,
-    config_path: str | Path,
     config: Mapping[str, Any],
     policy: Mapping[str, Any],
     observed_at: datetime,
     lark_cli_executable: str,
     runner: Runner,
+    historical_context_only: bool,
+    emit_received_reactions: bool,
 ) -> list[dict[str, Any]]:
     source_fingerprint = _dispatch_source_fingerprint(config)
     cursor_path = _dispatch_cursor_path(
@@ -639,9 +758,12 @@ def _dispatch_route_receipts(
             )
             receipts = [
                 _route_receipt(
-                    project=project,
-                    config_path=config_path,
-                    route_key=str(route["route_key"]),
+                    config=config,
+                    route=route,
+                    source_fingerprint=_route_source_fingerprint(
+                        config=config,
+                        route=route,
+                    ),
                     now=observed_at,
                     initial_lookback_seconds=int(policy["initial_lookback_seconds"]),
                     overlap_seconds=int(policy["overlap_seconds"]),
@@ -649,6 +771,8 @@ def _dispatch_route_receipts(
                     lark_cli_executable=lark_cli_executable,
                     runner=runner,
                     reaction_budget=reaction_budget,
+                    historical_context_only=historical_context_only,
+                    emit_received_reactions=emit_received_reactions,
                 )
                 for route in routes
             ]
@@ -696,10 +820,12 @@ def sync_lark_turn_start_inbox(
     lark_cli_executable: str = "lark-cli",
     runner: Runner = subprocess.run,
     now: datetime | None = None,
+    historical_context_only: bool = False,
+    emit_received_reactions: bool = True,
 ) -> dict[str, Any]:
     """Sync one bounded page per configured route and return a content-free receipt."""
 
-    config = load_lark_event_collector_config(
+    config = _turn_start_config(
         project=project,
         config_path=config_path,
     )
@@ -721,13 +847,13 @@ def sync_lark_turn_start_inbox(
         }
     observed_at = (now or datetime.now(UTC)).astimezone(UTC)
     receipts = _dispatch_route_receipts(
-        project=project,
-        config_path=config_path,
         config=config,
         policy=policy,
         observed_at=observed_at,
         lark_cli_executable=lark_cli_executable,
         runner=runner,
+        historical_context_only=historical_context_only,
+        emit_received_reactions=emit_received_reactions,
     )
     failures = [receipt for receipt in receipts if receipt["ok"] is not True]
     # A realtime collector may have persisted a message before this hook sees

@@ -1,28 +1,22 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from typing import Any
 
 from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
 from .control_plane.todos.contract import normalize_required_write_scopes
+from .public_safe_text import (
+    PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
+    find_private_text_match,
+)
 
 
 CHECKPOINTED_BOUNDARY_AUTHORITY_SCHEMA_VERSION = "checkpointed_boundary_authority_v0"
 ACTIVE_BOUNDARY_AUTHORITY_STATUSES = {"active", "approved"}
 BOUNDARY_AUTHORITY_DECISIONS = {"approve", "reject", "defer"}
-PRIVATE_TEXT_PATTERNS = (
-    re.compile(r"/" + r"Users/"),
-    re.compile(r"/" + r"ext_data/"),
-    re.compile("la" + "rk" + "office", re.I),
-    re.compile("docs" + r"\." + "internal", re.I),
-    re.compile(r"\bt-20\d{12}-[a-z0-9]+\b"),
-    re.compile(r"\b" + "Bear" + r"er\b", re.I),
-    re.compile(r"\b" + "Author" + r"ization\b", re.I),
-    re.compile(r"\b" + "tok" + r"en\s*=", re.I),
-    re.compile(r"\b" + "pass" + r"word\b", re.I),
-    re.compile(r"\b" + "sec" + r"ret\b", re.I),
-)
+# Owned by loopx.public_safe_text so every real validator owner shares one
+# contract; re-exported here because callers already import this name.
+PRIVATE_TEXT_PATTERNS = SHARED_PRIVATE_TEXT_PATTERNS
 
 
 def _now() -> datetime:
@@ -30,11 +24,8 @@ def _now() -> datetime:
 
 
 def _validate_public_safe_text(label: str, value: str | None) -> None:
-    if not value:
-        return
-    for pattern in PRIVATE_TEXT_PATTERNS:
-        if pattern.search(value):
-            raise ValueError(f"{label} contains a private-looking value; keep raw evidence in private payloads")
+    if find_private_text_match(value) is not None:
+        raise ValueError(f"{label} contains a private-looking value; keep raw evidence in private payloads")
 
 
 def _clean_text(value: Any, *, limit: int = 180) -> str | None:

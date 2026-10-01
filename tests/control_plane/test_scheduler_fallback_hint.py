@@ -18,7 +18,15 @@ from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
-from loopx.upgrade import resolve_codex_app_automation_rrule
+from loopx.upgrade import (
+    load_codex_app_automation_manifest,
+    prompt_digest,
+    resolve_codex_app_automation_rrule,
+)
+from scripts.codex_app_apply_rrule import (
+    _read_automation_prompt,
+    _write_automation_toml,
+)
 
 GOAL_ID = "fallback-hint-goal"
 AGENT_ID = "codex-fixture"
@@ -159,7 +167,7 @@ def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
 def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
     payload = {
         "scheduler_hint": {
-            "codex_app": {
+            "app_automation": {
                 "fallback_hint": {
                     "cli_args": [
                         "loopx-apply-rrule",
@@ -182,7 +190,7 @@ def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
         registry_path=registry_path,
         runtime_root=tmp_path / "runtime",
     )
-    fallback = payload["scheduler_hint"]["codex_app"]["fallback_hint"]
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
     assert fallback["cli_args"][:3] == [
         "loopx-apply-rrule",
         "--registry",
@@ -198,7 +206,7 @@ def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
 def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None:
     payload = {
         "scheduler_hint": {
-            "codex_app": {
+            "app_automation": {
                 "ack_hint": {
                     "cli_args": [
                         "quota",
@@ -226,16 +234,16 @@ def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None
         turn_instance_id=turn_instance_id,
     )
 
-    codex_app = payload["scheduler_hint"]["codex_app"]
+    app_automation = payload["scheduler_hint"]["app_automation"]
     for hint_name in ("ack_hint", "failure_hint"):
-        hint = codex_app[hint_name]
+        hint = app_automation[hint_name]
         assert hint["cli_args"][-3:] == [
             "--turn-instance-id",
             turn_instance_id,
             "--execute",
         ]
         assert hint["route_binding"]["turn_instance_bound"] is True
-    assert codex_app["ack_hint"]["args"]["turn_instance_id"] == turn_instance_id
+    assert app_automation["ack_hint"]["args"]["turn_instance_id"] == turn_instance_id
 
 
 def test_heartbeat_scheduler_rules_name_the_fallback(tmp_path: Path) -> None:
@@ -283,3 +291,89 @@ def test_resolve_codex_app_automation_rrule_returns_automation_id(
     )
     assert result["available"] is True
     assert result["automation_id"] == "fixture"
+
+
+def test_codex_app_automation_writer_round_trips_multiline_prompt(
+    tmp_path: Path,
+) -> None:
+    prompt = (
+        "Advance `multiline-goal` from active state.\n\n"
+        "Keep C:\\Users\\alice and an embedded \"\"\" marker.\n"
+        "Preserve a line ending with a slash \\\n"
+        "Use `quota should-run --available-capability=network`.\n\n"
+        "Agent: `multiline-agent`\n"
+    )
+    automation_path = tmp_path / "automations" / "multiline" / "automation.toml"
+    _write_automation_toml(
+        automation_path,
+        automation_id="multiline",
+        name="Multiline heartbeat",
+        prompt=prompt,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+        thread_id="multiline-thread",
+    )
+    assert _read_automation_prompt(automation_path) == prompt
+
+    manifest = load_codex_app_automation_manifest(tmp_path)
+    assert manifest["available"] is True
+    assert len(manifest["entries"]) == 1
+    entry = manifest["entries"][0]
+    assert entry["goal_id"] == "multiline-goal"
+    assert entry["agent_id"] == "multiline-agent"
+    assert entry["target_thread_id"] == "multiline-thread"
+    assert entry["rrule"] == "FREQ=MINUTELY;INTERVAL=3"
+    assert entry["prompt_sha256"] == prompt_digest(prompt)
+    assert entry["char_count"] == len(prompt)
+    assert entry["line_count"] == len(prompt.splitlines())
+    assert entry["available_capabilities"] == ["network"]
+
+    resolved = resolve_codex_app_automation_rrule(
+        goal_id="multiline-goal",
+        agent_id="multiline-agent",
+        thread_id="multiline-thread",
+        root=tmp_path,
+    )
+    assert resolved == {
+        "available": True,
+        "rrule": "FREQ=MINUTELY;INTERVAL=3",
+        "automation_id": "multiline",
+        "source": "codex_app_automation_manifest",
+    }
+
+
+def test_codex_app_automation_manifest_reports_bounded_parse_errors(
+    tmp_path: Path,
+) -> None:
+    automations = tmp_path / "automations"
+    for index in range(21):
+        path = automations / f"invalid-toml-{index:02d}" / "automation.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            'kind = "heartbeat"\nprompt = "C:\\Users\\alice"\n',
+            encoding="utf-8",
+        )
+    invalid_utf8 = automations / "00-invalid-utf8" / "automation.toml"
+    invalid_utf8.parent.mkdir(parents=True, exist_ok=True)
+    invalid_utf8.write_bytes(b'kind = "heartbeat"\nprompt = "\xff"\n')
+
+    manifest = load_codex_app_automation_manifest(tmp_path)
+    assert manifest["available"] is True
+    assert manifest["entries"] == []
+    assert manifest["reason"] == "no readable LoopX heartbeat automations discovered"
+    assert manifest["parse_error_count"] == 22
+    assert len(manifest["parse_errors"]) == 20
+    assert manifest["parse_errors_complete"] is False
+    assert {error["reason"] for error in manifest["parse_errors"]} == {
+        "invalid_utf8",
+        "invalid_toml",
+    }
+
+    resolved = resolve_codex_app_automation_rrule(
+        goal_id="missing-goal",
+        root=tmp_path,
+    )
+    assert resolved["available"] is False
+    assert resolved["candidate_count"] == 0
+    assert resolved["manifest_parse_error_count"] == 22
+    assert len(resolved["manifest_parse_errors"]) == 20
+    assert resolved["manifest_parse_errors_complete"] is False

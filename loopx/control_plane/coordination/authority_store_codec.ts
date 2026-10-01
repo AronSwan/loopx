@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStoreCommit } from "./authority_store.ts";
 
@@ -9,14 +11,18 @@ export function isAuthorityJsonObject(value: unknown): value is JsonObject {
 }
 
 export function authorityUnicodeCompare(left: string, right: string): number {
-  const leftPoints = Array.from(left, (item) => item.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (item) => item.codePointAt(0) ?? 0);
-  const shared = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < shared; index += 1) {
-    const difference = leftPoints[index] - rightPoints[index];
-    if (difference !== 0) return difference;
+  // Walk code points without allocating two arrays for every sort comparison.
+  // JS's default sort compares UTF-16 units, which would change persisted
+  // revisions for supplementary characters relative to BMP characters.
+  let leftIndex = 0, rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftPoint = left.codePointAt(leftIndex)!;
+    const rightPoint = right.codePointAt(rightIndex)!;
+    if (leftPoint !== rightPoint) return leftPoint - rightPoint;
+    leftIndex += leftPoint > 0xffff ? 2 : 1;
+    rightIndex += rightPoint > 0xffff ? 2 : 1;
   }
-  return leftPoints.length - rightPoints.length;
+  return leftIndex < left.length ? 1 : rightIndex < right.length ? -1 : 0;
 }
 
 export function hasExactAuthorityKeys(
@@ -102,9 +108,13 @@ export function canonicalAuthorityBytes(value: unknown): Buffer {
   return Buffer.from(JSON.stringify(canonicalAuthorityJson(value)), "utf8");
 }
 
+export function canonicalAuthoritySha256(value: unknown): string {
+  return createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");
+}
+
 export function parseAuthorityCursor(value: string | null): bigint {
   if (value === null) return 0n;
-  if (!/^[1-9]\d*$/.test(value)) {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
     throw new AuthorityStoreProtocolError("provider cursor is invalid");
   }
   return BigInt(value);

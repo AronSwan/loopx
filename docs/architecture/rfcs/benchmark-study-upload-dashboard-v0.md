@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft integration proposal |
+| Status | Accepted |
+| Supersedes / closes | none |
 | Date | 2026-09-02 |
 | Authors | LoopX maintainers |
 | Scope | Provider-neutral benchmark study description, upload records, and read-only dashboard projections |
@@ -107,6 +108,13 @@ external write without a separately activated provider.
 The projection is not the analyst's raw evidence packet. It cannot contain raw
 task text, trajectory excerpts, hidden evaluator material, verifier tails, or
 host-local paths.
+
+An insight upload must attach to one already uploaded active exact-run board row.
+That row must be terminal with `insight.status=complete`, and its case, run, and
+outcome identities must match the projection. The board row remains the only arm,
+score, countability, integrity, and treatment-fidelity authority.
+This deliberately tightens the local simulation's prior permissive behavior:
+orphan, pre-terminal, and outcome-mismatched insight uploads are rejected.
 
 `benchmark_runtime_observation_v0` is reused unchanged for exact-job authority,
 runner liveness, terminal discovery, and runner-invalid classification.
@@ -222,7 +230,7 @@ The v0 direction is accepted when:
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 集成提案草案 |
+| 状态 | 已接受 |
 | 日期 | 2026-09-02 |
 | 作者 | LoopX 维护者 |
 | 范围 | Provider-neutral 的 benchmark study 描述、上传记录与只读看板投影 |
@@ -316,6 +324,13 @@ receipt，但不持有 provider 凭证，也不会在未单独激活 provider �
 
 该 projection 不是分析者的原始证据包，不得包含原始题目文本、轨迹片段、隐藏
 evaluator 材料、verifier 尾部输出或宿主机本地路径。
+
+insight 上传必须绑定到已上传且处于 active 状态的同一个 exact-run 实验板记录。
+该 run 必须已经终态，且 `insight.status=complete`；projection 的 case、run 和
+outcome 身份必须与其一致。arm、score、countability、integrity 与
+treatment-fidelity 的唯一权威仍是实验板记录。
+这是对本地模拟既有宽松行为的有意收紧：孤立、未终态或 outcome 不匹配的
+insight 上传会被拒绝。
 
 `benchmark_runtime_observation_v0` 原样复用于 exact-job authority、runner
 liveness、终态发现和 runner-invalid 分类。occupancy 与 provider-pressure 信号

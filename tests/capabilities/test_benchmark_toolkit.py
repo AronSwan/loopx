@@ -146,9 +146,21 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
         "matched_pair_count",
         "aggregate_primary_metric_by_arm",
         "binary_outcome_by_arm_when_available",
+        "feature_metric_by_arm_when_available",
+        "preservation_guardrail_by_arm_when_available",
         "improved_flat_regressed_pair_counts",
+        "baseline_effort_strata_when_available",
         "new_case_insights_and_next_probe",
     ]
+    effort_stratification = reporting["effort_stratification"]
+    assert effort_stratification["default_reference_arm"] == "baseline"
+    assert effort_stratification["default_reference_field"] == (
+        "effort.duration_ms"
+    )
+    assert effort_stratification["candidate_duration_affects_bucket"] is False
+    assert effort_stratification["interpretation"] == (
+        "descriptive_sensitivity_only"
+    )
     assert "Do not send a repetitive" in reporting["unchanged_policy"]
     active = analysis["active_progress_readback"]
     assert active["workspace_basis"] == [
@@ -209,6 +221,38 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
     assert "must not read hidden evaluator evidence" in active_monitor
     assert "send findings back" in active_monitor
     assert "only after" in analysis["role_boundary"]["post_run_analyst"]
+
+    observation = analysis["active_case_observation"]
+    assert observation["status"] == "provisional_only"
+    assert observation["artifact_template"] == {
+        "schema_version": "benchmark_case_observation_v0",
+        "case": {
+            "benchmark_id": "<public-id>",
+            "case_id": "<public-id>",
+            "arm": "<baseline-or-treatment>",
+        },
+        "run_status": "<planned-running-or-terminal>",
+        "runtime_outcome": "<ok-error-in_progress-or-unknown>",
+        "duration_ms": "<non-negative-integer-or-null>",
+        "evidence_refs": [
+            {
+                "kind": "<trace-log-artifact-report-or-other>",
+                "trace_id": "<opaque-id-or-null>",
+                "span_id": "<opaque-id-or-null>",
+                "env": "<environment-token-or-null>",
+                "artifact_ref": "<private-pointer-or-null>",
+            }
+        ],
+        "hypothesis": "<provisional-causal-explanation>",
+        "confidence": "<high-medium-or-low>",
+        "promotion_state": "pending_terminal_score_review",
+    }
+    assert "must not invent an official score" in observation["score_boundary"]
+    assert "write a separate benchmark_case_insight_v0" in observation[
+        "promotion_rule"
+    ]
+    assert "never trace IDs" in observation["privacy_boundary"]
+
     artifact = analysis["artifact_template"]
     assert artifact["schema_version"] == "benchmark_case_insight_v0"
     assert artifact["evidence_reviewed"] == [
@@ -218,6 +262,15 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
         "hidden_tests",
         "grader_or_verifier",
         "failure_and_score_details",
+    ]
+    assert artifact["evidence_refs"] == [
+        {
+            "kind": "<trace-log-artifact-report-or-other>",
+            "trace_id": "<opaque-id-or-null>",
+            "span_id": "<opaque-id-or-null>",
+            "env": "<environment-token-or-null>",
+            "artifact_ref": "<private-pointer-or-null>",
+        }
     ]
     assert set(artifact["insight"]) == {
         "approach_summary",
@@ -259,6 +312,20 @@ def test_catalog_exposes_four_arm_factorial_start_contract() -> None:
     assert any(
         "four-arm-contract" in command["command"] for command in capability["commands"]
     )
+
+
+def test_catalog_exposes_study_simulation_workflow() -> None:
+    capability = build_capability_detail_packet("benchmark-toolkit")["capability"]
+
+    commands = [item["command"] for item in capability["commands"]]
+    assert any("study-validate" in command for command in commands)
+    assert any("upload-envelope" in command for command in commands)
+    assert any("upload-local" in command for command in commands)
+    assert any("upload-readback" in command for command in commands)
+    assert any("study-dashboard" in command for command in commands)
+    workflow = capability["agent_usage"]["study_projection_workflow"]
+    assert workflow["sequence"][0] == "validate_provider_neutral_study_manifest"
+    assert "separately activated provider" in workflow["external_provider_boundary"]
 
 
 def _attestation() -> dict[str, object]:
@@ -573,6 +640,132 @@ def test_loopback_http_requires_explicit_network_scope() -> None:
     assert receipt["network_access"] == "denied"
     assert receipt["evidence_counts"]["loopback_network_request"] == 1
     assert "loopback_network_request" in receipt["blockers"]
+
+
+def test_patch_heredoc_url_is_not_classified_as_network_access() -> None:
+    command = """pier-env-exec --cwd /app --apply-patch <<'PATCH'
+*** Begin Patch
+*** Update File: docs/api.md
+@@
++curl http://localhost:9090/api/v1/status
+*** End Patch
+PATCH
+"""
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["loopback_network_request"] == 0
+    assert receipt["evidence_counts"]["external_network_request"] == 0
+
+
+def test_network_command_after_patch_heredoc_remains_visible() -> None:
+    command = """pier-env-exec --cwd /app --apply-patch <<'PATCH'
+*** Begin Patch
+*** Update File: docs/api.md
+@@
++curl http://localhost:9090/api/v1/status
+*** End Patch
+PATCH
+curl https://example.invalid/probe
+"""
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["loopback_network_request"] == 0
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+def test_shell_heredoc_network_command_remains_fail_closed() -> None:
+    command = """sh <<'SCRIPT'
+curl https://example.invalid/probe
+SCRIPT
+"""
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        """printf '%s\\n' --apply-patch && sh <<'SCRIPT'
+curl https://example.invalid/probe
+SCRIPT
+""",
+        """echo apply_patch && sh <<'SCRIPT'
+curl https://example.invalid/probe
+SCRIPT
+""",
+        """tool --apply-patch <<'PATCH'
+curl https://example.invalid/probe
+PATCH
+""",
+        """pier-env-exec --apply-patch <<'PATCH'; sh <<'SCRIPT'
+curl https://inside-patch.invalid/example
+PATCH
+curl https://example.invalid/probe
+SCRIPT
+""",
+    ],
+)
+def test_non_patch_heredoc_cannot_borrow_patch_marker(command: str) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+def test_patch_and_shell_heredocs_on_one_line_keep_only_shell_body() -> None:
+    command = """/opt/bin/apply_patch <<'PATCH' && sh <<'SCRIPT'
+*** Begin Patch
+*** Update File: docs/api.md
+@@
++curl https://inside-patch.invalid/example
+*** End Patch
+PATCH
+curl https://example.invalid/probe
+SCRIPT
+"""
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+def test_network_commands_around_patch_heredoc_remain_visible() -> None:
+    command = """curl https://before.invalid/probe
+'./apply_patch' <<'PATCH'
+*** Begin Patch
+*** Update File: docs/api.md
+@@
++curl https://inside-patch.invalid/example
+*** End Patch
+PATCH
+curl https://after.invalid/probe
+"""
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=command),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
 
 
 def test_loopback_scope_requires_external_network_denial_attestation() -> None:

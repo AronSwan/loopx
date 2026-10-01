@@ -4,11 +4,12 @@ import {
   requireNonEmptyString as requiredString,
   requireJsonObject as requiredObject,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 const SCHEMA_VERSION = "pending_capability_intent_projection_v0";
 const TOKEN_RE = /^[a-z][a-z0-9_.:-]{2,127}$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{2,255}$/;
-const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const DIGEST_RE = ENVELOPED_SHA256_PATTERN;
 const FIELDS = new Set([
   "schema_version",
   "capability_id",
@@ -54,7 +55,7 @@ export function projectPendingCapabilityIntent(value: unknown): JsonObject {
     requireBoolean(
       projection.external_delivery_authorized,
       "pending capability intent external_delivery_authorized",
-    ) !== false ||
+    ) !== true ||
     requireBoolean(
       projection.agent_read_required,
       "pending capability intent agent_read_required",
@@ -131,7 +132,7 @@ export function projectPendingCapabilityIntent(value: unknown): JsonObject {
     action_summary: actionSummary,
     command,
     generation_authorized: true,
-    external_delivery_authorized: false,
+    external_delivery_authorized: true,
     agent_read_required: true,
   };
 }

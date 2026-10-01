@@ -116,9 +116,12 @@ contract for local write affordances:
 }
 ```
 
-The dashboard frontstage ops route uses a TanStack Query-backed local status
-reader for `/frontstage?mode=ops&statusUrl=<relative-or-loopback>`. Showcase
-mode still ignores `statusUrl`; only explicit ops mode may fetch a status feed.
+The deprecated dashboard diagnostics route uses a TanStack Query-backed local
+status reader at
+`/deprecated/frontstage/ops?statusUrl=<relative-or-loopback>`. The old
+`/frontstage?mode=ops` form redirects to that namespace. Showcase mode still
+ignores `statusUrl`; only the explicit deprecated diagnostics route may fetch a
+status feed.
 The query layer validates `status_contract.schema_version` before trusting a
 loopback feed. If the feed is below the dashboard's expected schema version,
 the route shows stale-daemon repair copy using `status_contract.reload_hint`
@@ -325,6 +328,8 @@ goals must stay out of the eligible lane even when they have a high
     "current_registry_is_global": false,
     "global_goal_count": 4,
     "current_goal_count": 3,
+    "current_registry_excluded_goal_count": 1,
+    "current_registry_excluded_goal_ids": ["other-project-goal"],
     "source_registry_count": 2,
     "summary": {
       "high": 0,
@@ -881,23 +886,27 @@ Item fields:
   `post_handoff_latest_run` identifies that latest seen run by timestamp and
   classification, and `delivery_batch_scale` labels whether the observed
   delivery is test-only, single-surface, multi-surface, implementation-shaped,
-  or still unknown. Status prefers an explicit compact run field such as
-  `delivery_batch_scale=multi_surface` over classification-name inference, so
-  a verified browser-smoke-plus-docs artifact is not misclassified as
-  `test_only` merely because the classification contains `smoke`.
+  or still unknown. Delivery scale and outcome come only from explicit typed
+  fields. Classification names, health text, recommendations, and the mere
+  presence of evidence objects never establish delivery semantics.
+  `delivery_turn_kind` comes from an explicit kind, the explicit outcome, or
+  a scoped typed blocker observation accepted by the existing settlement
+  predicate. `outcome_gap` alone does not prove blocker writeback.
   `post_handoff_recent_runs` is a compact newest-first slice of recent
-  post-handoff work runs, and `post_handoff_small_scale_streak` counts the
-  leading `test_only` / `single_surface` / `unknown` scale streak so heartbeat
-  jobs and review packets can request a larger validated delivery batch only
-  after repeated small-scale follow-through. When
-  `project_asset.execution_profile.outcome_floor` declares outcome markers or
-  surface-only hints, compact runs may also include `delivery_outcome`
-  (`outcome_progress`, `surface_only`, or `outcome_gap`), and status also
-  honors an explicit refresh-state `delivery_outcome` before falling back to
-  marker/hint inference. `primary_goal_outcome` is accepted as a compatible
-  progress label for refresh-state records that want to mirror the default
-  execution profile wording. `post_handoff_outcome_gap_streak` counts
-  consecutive work runs that did not advance the declared outcome floor.
+  post-handoff work runs. `post_handoff_small_scale_streak` counts only leading
+  explicit `test_only` / `single_surface` scales; unknown breaks the streak.
+  Explicit `delivery_outcome` values are `outcome_progress`, `surface_only`,
+  `outcome_gap`, and `primary_goal_outcome`. Missing or invalid historical
+  semantics stay unknown. A missing outcome with no configured floor retains
+  the internal `not_configured` sentinel and is omitted from the compact run.
+  Legacy outcome-marker/hint lists retain floor-configuration compatibility,
+  but their words no longer classify runs. With that floor configured,
+  `post_handoff_outcome_gap_streak` counts only consecutive explicit
+  `surface_only` / `outcome_gap` outcomes; unknown breaks the streak.
+  Follow-through obligations require typed fields, never narrative inference.
+  New delivery claims use the existing writer enum fields; state-only refresh
+  without a delivery claim remains legal. This deliberately changes decisions
+  previously inferred from old untyped labels without rewriting run history.
   `quota_slot_spent` events do not count as post-handoff work.
 - `operator_question`: optional human-facing gate to show in the LoopX
   operator view. This is the canonical place for user/controller judgment.
@@ -1030,6 +1039,12 @@ Item fields:
   latter to be strictly greater. This lets agents see not-yet-unlocked
   successors without accidentally selecting them as current work or waking on
   an unchanged/replayed monitor result.
+  A `resume_at:<timezone-aware-rfc3339-timestamp>` condition carries
+  `scheduled_for`, `evaluated_at`, `clock_provider=runtime_clock`, a one-shot
+  material-change generation, and—once due—a stable `resume_receipt`. The
+  receipt remains identical across later reads and restarts. Presentation
+  clients may show its id for diagnosis, but must not treat it as execution
+  authority or maintain a separate local countdown state.
   Optional future fields such as `created_at`, lease TTLs, dependencies, or
   evidence links should extend this item shape rather than inventing another
   todo surface.
@@ -1396,6 +1411,13 @@ remain visible, while `interaction_contract.user_channel` becomes
 `action_required=false`, `notify=DONT_NOTIFY` until the bounded reminder window
 or a material gate/host change. Other blocker-push
 cases may still be de-duplicated when the same blocker was surfaced recently.
+
+The suppression decision also removes `actions` and `non_blocking` from the
+final user channel, so a remaining `user_action` cannot re-promote the same
+contract to `NOTIFY`. Provider sinks must deduplicate delivery by gate identity
+plus material state generation, with an additional reminder generation only
+for an explicitly due reminder window; presentation text is not delivery
+identity.
 Eligible monitor-only no-transition polls keep open user todos in
 `user_todo_summary`, but do not force repeated notification or set
 `requires_user_action=true`; they should surface as a quiet
@@ -1505,9 +1527,10 @@ carry any writeback review guidance. The trace is not an independent
 next-action authority and does not imply automatic active-state writeback.
 `execution_obligation`,
 `heartbeat_recommendation`, `work_lane_contract`,
-`external_evidence_observation`, `goal_boundary`, and
-`protocol_action_packet` remain compatibility and drill-down fields under that
-contract, not competing sources of truth.
+`external_evidence_observation`, and `goal_boundary` remain compatibility and
+drill-down fields under that contract, not competing sources of truth.
+`protocol_action_packet` belongs to the historical summary contract; the
+PR-05 migration below omits it from new outputs.
 The same payload includes `scheduler_hint.schema_version=scheduler_hint_v0`.
 This is the scheduling contract for host runtimes, not a delivery permission:
 Codex App can back off its automation cadence for long waits, while Codex CLI
@@ -1529,9 +1552,9 @@ available from `scheduler_hint.cold_path_detail` when callers request
 App/local cadence back to the current profile's initial interval before
 unchanged backoff resumes, and does not spend quota.
 Codex App heartbeats should use `automation_update` only when
-`codex_app.stateful_backoff.apply_needed=true` and
-`codex_app.recommended_rrule` is present. If that update succeeds, the agent
-must run `codex_app.ack_hint.cli_args`;
+`app_automation.stateful_backoff.apply_needed=true` and
+`app_automation.recommended_rrule` is present. If that update succeeds, the agent
+must run `app_automation.ack_hint.cli_args`;
 current payloads use `quota scheduler-ack-current` so LoopX re-reads the latest
 hint, then persists `reset_token`, `identity_signature`, `progression_index`,
 and `last_applied_rrule` under the runtime root. When the same identity repeats,
@@ -1539,7 +1562,7 @@ LoopX advances the progression after the applied interval has elapsed, until
 the max interval. An immediate post-ACK readback remains on the acknowledged
 RRULE so repeated reconciliation converges rather than oscillates. When the reset token
 changes, the next projected RRULE returns to
-`reset_policy.codex_app_initial_rrule`. If the current desired RRULE is already
+`reset_policy.app_automation_initial_rrule`. If the current desired RRULE is already
 applied, `recommended_rrule` is omitted and the host update should be skipped.
 When that matching readback still needs a reset-token/identity binding,
 `ack_needed=true`; run the bound ack directly. Otherwise no scheduler action
@@ -1571,23 +1594,25 @@ requires `execution_obligation.must_attempt_work=false` and no blocker-push
 notification such as `notify_user_on_open_todo=true`; when both are present,
 notify the user and do not spend. Verified `mapped_noop_if_unchanged` remains a
 quiet no-op case.
-The guard also emits `protocol_action_packet.schema_version =
-protocol_action_packet_v0`, a compact rule-only packet for executor and future
-LLM-router experiments. It distills the same quota guard into one primary actor,
-user/agent action requirement, quiet-noop allowance, execution lane, and a short
-`llm=no_api` marker inside a single `summary` string so the hot path stays
-within interface budget. The detailed spend policy remains in
-`heartbeat_recommendation.spend_policy`. This packet is not a new source of
-authority and does not authorize model/API use; it is the deterministic baseline
-that an optional Codex/LLM summarizer must beat on payload shrinkage and
-user/agent action clarity before direct LLM API wiring is added. When an open
-todo uses the common `[P*] short title: details` shape, the packet uses the
-short title as the action label so long progress notes do not re-enter the hot
-path.
-If open user todos coexist with executable agent work, the packet keeps the
-primary actor as `agent` but adds `user_action_pending=true` plus a compact
-`user_action` label. This preserves the owner-visible blocker without
-mislabeling that owner todo as `agent_action`.
+Historical guard outputs carried `protocol_action_packet_v0`, a deterministic
+summary of actor, action requirements, quiet-noop allowance, and lane with
+`llm=no_api`. It conveyed no independent execution or model/API authority.
+The [PR-05 migration](reference/protocols/protocol-action-packet-decision-v0.md)
+omits `protocol_action_packet` from all new quota/live/paused/recovery
+outputs, including full-decision cold reads. Current executors and status/display
+consumers should read the typed interaction, lane, and scheduler contracts above;
+packet absence must not imply permission to deliver, spend, or stay quiet.
+Historical packet, opaque-summary, residue, and signature readers remain;
+stored records are not rewritten. New source/envelope signature documents may
+omit the capsule's packet witness while preserving semantic fields: equal hashes
+with older packet-bearing outputs are not promised. The release boundary is the first official release containing #4794;
+published v1.1.0 artifacts remain unchanged. Valid v0 historical formats stay
+supported for the lifetime of the v0 reader contract, without a removal date
+introduced by this migration. The named bundled consumers and v1.1.0 rollback
+baseline are qualified; external clients requiring this optional packet must
+migrate or pin the previous release. See the migration contract for exact scope
+and rollback steps.
+
 When a registry-enabled goal has `control_plane.self_repair.enabled=true`,
 `quota should-run` may return `decision=self_repair`,
 `self_repair_allowed=true`, `stall_self_repair`, and an `effective_action` such
@@ -1637,11 +1662,14 @@ Review Packet source-of-truth rule:
   receives a small current instruction;
 - `loopx review-packet --goal-id <goal-id> --handoff-only` is the
   copy-minimal form for an already selected or approved target-agent relay: it
-  prints only the `project_agent_handoff` text in markdown output, while JSON
+  prints only agent context (or its complete shard set) in markdown output, while JSON
   output returns a minimized handoff payload instead of the full operator
   packet. To keep the hot path compact, handoff-only JSON does not expose a separate
   `handoff_followthrough_summary` prose field; that prose remains available in
-  the full Review Packet and embedded handoff text;
+  the full Review Packet and embedded handoff text. A fragmented handoff is the
+  one case where handoff-only output exceeds one shard: markdown prints every
+  shard with a relay header and JSON adds `project_agent_handoff_fragments` plus
+  `handoff_fragment_manifest`, without adding any other Review Packet content;
 - project-agent handoff commands redact local absolute registry/runtime paths
   before they enter `project_agent_command`, `project_agent_handoff`, or
   `handoff_text`;
@@ -1650,6 +1678,48 @@ Review Packet source-of-truth rule:
   block, and carry only the target goal guard, minimal-context rule, source
   label, optional compact post-handoff delivery scale, optional delivery
   contract, forwarding/execution boundary, command, and stop condition;
+- overflow preserves the **prepared handoff text**, after existing command-block
+  normalization and bounded status projection. This is not a promise to preserve
+  raw source documents or the original multiline command spelling. No sections
+  are deleted to fit the transport budget. Complete `project_agent_handoff` and
+  `handoff_text` fields always contain the entire prepared text, including on
+  overflow; consumers ignoring new keys still receive the complete instruction.
+  `handoff_interface_budget` and handoff-only size fields measure that complete
+  text and report `within_budget=false` when appropriate. The 16 line / 1800
+  character limit is a **per-shard** transport budget, not a total semantic cap;
+- on overflow, `project_agent_handoff_fragments` contains **all ordered shards**,
+  including index 0, with `handoff_fragment_manifest` describing the set and
+  original/per-shard sizes. Markdown renders that set once. On the in-budget
+  path no extra keys or envelopes are added, preserving existing output.
+  Each shard carries a `<!--loopx-handoff ... -->` envelope with content-derived
+  set id, sequence, payload checksum, previous-shard hash and full-content digest.
+  Fences are closed/reopened and long lines continued using reserved transport
+  markers. Reassembly restores prepared text byte-for-byte;
+- receivers use `loopx handoff restore --input handoff.json --format json` for
+  full or handoff-only producer JSON, or add `--input-format markdown` for raw
+  sharded Markdown (full packet or handoff-only). `--input -` reads stdin.
+  Unfragmented Markdown must be handoff-only; unfragmented full packets should
+  use JSON. JSON is recommended because Markdown renderers may strip comments.
+  A Markdown fragment title with a missing envelope, or an envelope moved off
+  the start of its line, fails restoration instead of becoming unverified plain
+  text. If a renderer removes both titles and envelopes, the remaining text
+  cannot be identified as fragmented; obtain the original JSON output.
+  Plain unframed text has no integrity proof. Reserved fragment titles,
+  envelopes, continuation and fence markers cannot be supplied as oversized
+  source content;
+- restoration strictly rejects missing, reordered, duplicate, mixed-set or
+  modified shards, malformed envelopes, inconsistent complete text fields and
+  mismatched manifests. Failures exit nonzero, expose an `error_code`, and return
+  no partial `handoff_text`. Collect all parts in order and retry with unchanged
+  producer output. There is no incremental/idempotent collector: repeated
+  generation is deterministic, but duplicate parts in one import are errors;
+- checksums prove content consistency, not sender authentication, request
+  identity, receiver acceptance or execution authority. Equal text from two
+  requests must not be business-deduplicated by set id. Restore never executes
+  content, changes Todo/claim/lease, starts a session or opens the registry.
+  Recheck current goal, scope and applicable gates after restoring; use existing
+  `handoff prepare/inspect/adopt` for ownership where applicable. This CLI path
+  does not qualify Lark delivery, cross-host recovery or arbitrary renderers;
 - `handoff_delivery_contract` is optional structured guidance derived from the
   current `handoff_readiness` plus `project_asset.execution_profile`, not a
   target-specific hack. When repeated small-scale follow-through reaches the
@@ -1763,6 +1833,23 @@ It mirrors the compact run index, but strips local artifact paths. UIs should
 show artifact availability with `json_exists` and `markdown_exists` instead of
 linking directly to local files.
 
+Artifact flags are fresh observations for every returned Run, not facts trusted
+from the persisted index. History collection first reads and deduplicates the
+complete index and computes quota and semantic history; only then does it check
+files for retained recent, latest-status, agent-lane and semantic-evidence rows.
+`--limit 0` does not discard old vision, owner correction or active blocked-retry
+evidence. Creating or deleting an artifact is visible on the next read even when
+the index bytes are unchanged. Full `load_index`/`load_index_snapshot` readers
+still observe every row by default. This is a caller filesystem optimization,
+independent of the Todo authority provider, not an index cache or a limit on
+decision history.
+
+文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
+完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
+的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
+文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
+File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
 run-index artifact paths are resolved against the project root that owns the
@@ -1812,6 +1899,7 @@ Goal shape:
     "blocked_action_scope": "gated_delivery",
     "safe_bypass_allowed": true
   },
+  "index_digest": "sha256:<exact-run-index-digest>",
   "index_exists": true,
   "raw_index_records": 2,
   "unique_runs": 2,
@@ -1845,6 +1933,11 @@ Goal shape:
   "latest_runs": []
 }
 ```
+
+`index_digest` is the SHA-256 digest of the exact run-index bytes observed by
+the status read. It is `null` when the index file does not exist. Quota spend
+previews carry this opaque value into the write-time compare-and-swap check, so
+consumers must not recompute it from the compact `latest_runs` projection.
 
 `authority_registry` on the goal comes from the registry and stays visible even
 when the latest run is an operator gate or reward overlay rather than a fresh
@@ -1980,9 +2073,9 @@ quiet skip.
 For `controller_readiness`, the status export keeps only controller-stage
 booleans, missing gate names, operator-facing review text, next handoff
 condition, and compact gate rows with `id`, `ok`, and `review`. For
-`human_reward`, the status export keeps only `recorded_at`, `decision`,
-`reward`, `reason_summary`, and `follow_up`. For `operator_gate`, the status
-export keeps only `recorded_at`, `gate`, `decision`, `operator_question`,
+`human_reward`, the status export keeps only `recorded_at`, `actor_kind`,
+`decision`, `reward`, `reason_summary`, and `follow_up`. For `operator_gate`,
+the status export keeps only `recorded_at`, `gate`, `decision`, `operator_question`,
 `reason_summary`, `follow_up`, and `agent_command`. Operator-gate runs may also
 include a compact `operator_gate_resume_contract` with
 `version=operator_gate_resume_contract_v0`, `gate_id`, `created_state_ref`,
@@ -2020,6 +2113,7 @@ Operators can append `human_reward` with the CLI:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending"
@@ -2035,6 +2129,7 @@ operating-rule correction, the overlay may also include a compact lesson:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision route_correction \
   --reward mixed \
   --reason-summary "run the driver repair before expanding cases" \
@@ -2085,6 +2180,7 @@ operator explicitly asks for it:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \
@@ -2167,6 +2263,19 @@ release artifact under the LoopX runtime root.
 non-blocking warning; operators should still run `loopx doctor` or the
 canary-promotion readiness smoke for exact local release evidence.
 
+## Projection Envelope
+
+`projection_envelope` (`loopx_projection_envelope_v0`) records when status read
+the registry, global registry, run indexes, goal state contract, and runtime
+projection routes, and whether the requested scope (`registry`, `goal`, or
+`activation.<state>`) is fully covered. Registry members count toward
+coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
+`goal_not_found` rather than as an empty but complete projection. A
+`--use-projection-cache` hit re-serves the stored envelope, keeping
+`observed_at` and restamping `served_at` and staleness. Field semantics and
+the consumer rule are in the
+[projection envelope contract](reference/contracts/projection-envelope-contract.md).
+
 ## Decision Freshness Summary
 
 `decision_freshness_summary` is an optional checkpointed-decision projection over
@@ -2236,11 +2345,27 @@ into `write_reserved_run_artifacts` and into the `refresh-state` run-write
 path. The first shipped measurement source is the Codex CLI session rollout:
 `loopx refresh-state --usage-codex-session <rollout.jsonl>` reads only the
 newest aggregate `token_count` totals, the model id, the session id, and event
-timestamps — never prompts, completions, or tool output. The session must be
-bound explicitly; there is no automatic session discovery, because guessing a
-concurrent session risks attributing one session's spend to another run. A
-host that measures usage itself can instead pass one finished per-run
+timestamps — never prompts, completions, or tool output. The model label is
+bound to the context observed before the selected token snapshot; a later
+context without new usage cannot relabel that snapshot. A snapshot without a
+preceding model context is rejected. This binding does not allocate cumulative
+session usage across models. The session must be bound explicitly; there is no
+automatic session discovery, because guessing a concurrent session risks
+attributing one session's spend to another run. A host that measures usage
+itself can instead pass one finished per-run
 measurement with `--usage-json`. Without either flag, usage stays unknown.
+
+The explicitly selected rollout is scanned as UTF-8 JSONL through its opening
+file size, one record at a time. This is a complete accounting scan of that
+extent, not a sampled prefix: later appended usage is observed on the next
+read. Transcript-buffer memory scales with the largest record rather than the
+whole file; the reader also retains aggregate metadata and any trailing model
+contexts needed for legacy binding reconciliation. The final incomplete JSON
+record or incomplete UTF-8 codepoint may be ignored while the writer appends.
+Interior corruption, other invalid UTF-8 and an early EOF before the captured
+extent fail closed. Unicode separators inside JSON strings are content, not
+JSONL record boundaries. No discovery, resume, session import or additional
+usage authority is introduced.
 
 Cumulative host snapshots are converted to non-negative deltas at that
 producer boundary, and the run index append is the single commit point: each
@@ -2255,8 +2380,25 @@ usage booking lock, so concurrent refreshes cannot fund two deltas from one
 stale basis. Replaying the same snapshot identity with an identical
 observation is an idempotent zero delta; the same identity carrying any
 different counter or binding label fails closed instead of silently zeroing
-real usage. A new session starts a fresh absolute observation rather than a
-bogus reset error. Missing optional measurements stay omitted (unknown)
+real usage. The Codex adapter has one bounded legacy-label exception: an
+unmarked same-snapshot baseline can be reconciled only when its old model is
+the final post-snapshot context observed by the first durable booking time.
+The rollout must provide ordered, timezone-aware timestamps, and every
+cumulative metric (including optional-field presence) must still match the
+strict collector. Missing or inconsistent evidence remains a conflict. A
+context appended after first booking cannot justify a historical correction.
+
+The correction appends a zero delta with the same snapshot ID and corrected
+model; it never rewrites old records or totals. New Codex bookings carry a
+`codex_usage_binding` record/index field with schema `codex_usage_binding_v1`,
+`source_snapshot_id`, and `model`; a correction also records `legacy_model`.
+Any existing binding metadata excludes that snapshot from this legacy path.
+Subsequent replays use the corrected baseline and ordinary strict validation.
+Old records contain no producer-version attestation: this exception proves
+consistency with the historical reader's source semantics, not which binary
+wrote the row, and is not a general model-conflict migration mechanism.
+
+A new session starts a fresh absolute observation rather than a bogus reset error. Missing optional measurements stay omitted (unknown)
 rather than zero-filled. Malformed, negative, non-finite (`NaN`/`Infinity`,
 rejected at the typed builder, at the strict-JSON `--usage-json` boundary,
 and again at durable serialization, which forbids non-standard JSON
@@ -2282,7 +2424,12 @@ The summary currently reports:
 - `runs_24h` / `runs_7d`: observed compact run records in the current status
   sample.
 - `quota_spend_slots_24h` / `quota_spend_slots_7d`: slots from
-  `quota_slot_spent` events in that sample.
+  `quota_slot_spent` events in that sample, using the same rule as the quota
+  spend ledger (`goal_quota_with_spend_ledger`): the event's `event_type`
+  decides, a spend is keyed by the run it was recorded against, and a void is
+  clamped against the spend it names. A spend whose `quota_event` cannot be
+  read contributes no slot, and a void that targets a spend outside the window
+  does not reduce that window.
 - `automation_run_count_24h` / `automation_run_count_7d`: quota spend events
   whose compact `quota_event.source` is `heartbeat`, `automation`, or `cron`.
   If the compact run index does not retain a source, `quota_slot_spent` is
@@ -2304,6 +2451,12 @@ The summary currently reports:
   measured.
 - `project_share_24h`: per-goal share of observed 24h runs, rounded to three
   decimals.
+
+The Personal Workspace preserves absent measurements through parsing and
+active/stopped Goal merging. Goal details show “Not measured” / “未采集” for
+an absent metric; an observed zero remains `0`, `$0.00`, or `0ms`. Token totals
+require both measured input and output counts. The compact Goal header shows
+only observed metrics, without inferring a cost from token counts.
 
 Because `status --limit` can bound the recent run sample, consumers should
 display `sample_run_count` and treat these values as operational signals for
