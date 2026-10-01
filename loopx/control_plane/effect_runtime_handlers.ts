@@ -10,6 +10,7 @@ import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
 import {planIssueFixMonitorReconciliation} from "./capabilities/issue_fix_monitor_reconciliation.ts";
+import {planPrReviewApprovalCloseout} from "./capabilities/pr_review_approval_closeout.ts";
 import {projectPeerOrchestration} from "./quota/peer_orchestration.ts";
 import {inspectTaskLease} from "./work_items/task_lease_inspection.ts";
 import {evaluateTodoPriority} from "./todos/priority.ts";
@@ -236,7 +237,7 @@ import { decideCollaborationLifecycle } from "./collaboration/goal_instance_life
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
 import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
-import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
+import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "./collaboration/semantic_request.ts";
 import {
   evaluateExternalEvidenceAdmission,
   planExternalEvidenceRequest,
@@ -639,6 +640,7 @@ export function createEffectRuntimeHandlers(
     ["scheduler.monitor_successor.plan", planMonitorSuccessor],
     ["scheduler.monitor_target.select", selectMonitorTodoRequest],
     ["capabilities.issue_fix.monitor_reconciliation.plan", planIssueFixMonitorReconciliation],
+    ["capabilities.pr_review.approval_closeout.plan", planPrReviewApprovalCloseout],
     ["coordination.local_authority_shadow.record", recordLocalAuthorityShadow],
     ["coordination.runtime_shadow.commit_entry", deliverShadowEntry],
     ["coordination.runtime_shadow.outbox_read", readLocalAuthorityShadow],
@@ -759,6 +761,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
     ],
+    ["collaboration.source_context.normalize", normalizeCollaborationSourceContext],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [

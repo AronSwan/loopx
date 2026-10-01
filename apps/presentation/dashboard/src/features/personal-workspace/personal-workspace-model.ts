@@ -296,6 +296,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   collaboration?: CollaborationReadback;

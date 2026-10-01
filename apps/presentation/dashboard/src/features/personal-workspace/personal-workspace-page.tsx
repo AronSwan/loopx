@@ -757,6 +757,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
 const acceptedImageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const maxImageAttachmentBytes = 5 * 1024 * 1024;
 const maxImageAttachmentCount = 4;
+const maxImageAttachmentTotalBytes = 12 * 1024 * 1024;
 
 function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
   return new Promise((resolve, reject) => {
@@ -1781,6 +1782,10 @@ export function PersonalWorkspacePage({
     }
     if (oversized) {
       setImageAttachmentError(t("composer.imageSizeError", { size: maxImageAttachmentBytes / 1024 / 1024 }));
+      return;
+    }
+    if ([...imageAttachments, ...selected].reduce((total, image) => total + image.size, 0) > maxImageAttachmentTotalBytes) {
+      setImageAttachmentError(t("composer.imageTotalSizeError", { size: maxImageAttachmentTotalBytes / 1024 / 1024 }));
       return;
     }
     try {
