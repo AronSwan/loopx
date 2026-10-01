@@ -22,6 +22,7 @@ import {resolveConversationTrigger} from "./collaboration/conversation_trigger.t
 import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
+import {projectConversationReplyContext} from "./collaboration/conversation_reply_context.ts";
 import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
 import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
@@ -233,6 +234,7 @@ import {
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
+import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -748,6 +750,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.goal_draft", (params) => ({draft: admitGoalDraft(params)})],
     ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
+    ["collaboration.conversation.reply_context", projectConversationReplyContext],
     ["chat.turn.accept", planChatTurnAcceptance],
     ["collaboration.delegation.observe", transitionDelegationObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
@@ -757,6 +760,7 @@ export function createEffectRuntimeHandlers(
       (params) => normalizeCollaborationRequest(params.request),
     ],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
+    ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [
       "collaboration.goal_instance.decide",
       (params) => decideCollaborationLifecycle(params),
