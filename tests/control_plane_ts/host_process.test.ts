@@ -49,10 +49,12 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
     t.after(() => rm(root, {recursive: true, force: true}));
     const marker = join(root, "counter");
     // Ignore TERM so the test proves escalation and does not merely observe a
-    // cooperative child. Its marker is the semantic oracle, not a PID lookup.
+    // cooperative child. Publish the marker atomically: a kill during a write
+    // must not look like a surviving child, but each completed tick stays visible.
     const child = `const fs=require('fs');let n=0;process.on('SIGTERM',()=>{});
-      fs.writeFileSync(${JSON.stringify(marker)},String(n));
-      setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(++n)),10)`;
+      const marker=${JSON.stringify(marker)}, staged=marker+'.next';
+      const publish=()=>{fs.writeFileSync(staged,String(n));fs.renameSync(staged,marker)};
+      publish();setInterval(()=>{n++;publish()},10)`;
     const script = `const{spawn}=require('child_process');const fs=require('fs');
       spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:${JSON.stringify(mode === "closed_pipes" ? "ignore" : "inherit")}});
       const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){
@@ -75,4 +77,40 @@ test("output consumer failure cancels execution rather than leaving an orphan", 
   const result = await runHostProcess(request(`setInterval(()=>process.stdout.write('tick\\n'),10)`),
     async () => { throw new Error("consumer left"); });
   assert.equal(result.outcome, "cancelled"); assert.equal(result.output_complete, false);
+});
+
+test("closed pipes do not turn asynchronous KILL delivery into completed cleanup", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-kill-fence-"));
+  const marker = join(root, "counter");
+  const descendant = `const fs=require('fs');process.on('SIGTERM',()=>{});let n=0;
+    const publish=()=>{fs.writeFileSync(${JSON.stringify(marker + ".next")},String(n++));
+      fs.renameSync(${JSON.stringify(marker + ".next")},${JSON.stringify(marker)})};
+    publish();setInterval(publish,10)`;
+  const leader = `const{spawn}=require('child_process');const fs=require('fs');
+    spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});
+    const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){
+      clearInterval(timer);process.stdout.write('ready');process.exit(0)}},5)`;
+  const kill = process.kill.bind(process);
+  let killDelivered = false;
+  let scheduled: Promise<void> | undefined;
+  t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+    if (pid < 0 && signal === "SIGKILL") {
+      // Model the kernel's asynchronous signal delivery deterministically.
+      // The old supervisor returns before this delivery and the marker changes.
+      scheduled ??= delay(100).then(() => {
+        try { kill(pid, "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+        killDelivered = true;
+      });
+      return true;
+    }
+    return kill(pid, signal);
+  });
+  t.after(async () => { await scheduled; await rm(root, {recursive: true, force: true}); });
+  const result = await runHostProcess(request(leader), async () => {});
+  assert.equal(result.outcome, "exited");
+  assert.equal(killDelivered, true, "returned before KILL had stopped the group");
+  const counter = await readFile(marker, "utf8");
+  await delay(100);
+  assert.equal(await readFile(marker, "utf8"), counter);
 });

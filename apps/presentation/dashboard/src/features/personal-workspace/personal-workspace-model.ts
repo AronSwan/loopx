@@ -4,7 +4,7 @@ import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
-import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
+import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
@@ -25,6 +25,12 @@ export type WorkspaceHomeLane =
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  cadence?: string | null;
+  nextDueAt?: string | null;
+  expiresAt?: string | null;
+  lastCheckedAt?: string | null;
+  targetKey?: string | null;
+  watchOnly?: boolean | null;
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
@@ -215,6 +221,8 @@ export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
 export type WorkspaceSchedule = {
   agentId?: string;
+  expiresAt?: string;
+  watchOnly?: boolean;
   executionHistory?: Array<{
     label: string;
     runId?: string;
@@ -286,6 +294,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   collaboration?: CollaborationReadback;
@@ -455,7 +464,8 @@ export type PersonalWorkspaceCallbacks = {
   /** Re-read the workspace projection after an applied action. `invalidateGoalIds`
    * names the Goals the action touched, so a peer's snapshot is not re-read for it. */
   onReconcileStatus?: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
-  onRefresh?: () => void | Promise<void>;
+  /** Full refresh by default; error recovery can explicitly read missing Goals only. */
+  onRefresh?: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;
@@ -468,17 +478,26 @@ export type PersonalWorkspaceCallbacks = {
     agentId: string,
     goalId: string | null,
     attachments?: WorkspaceImageAttachment[],
-  ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
+  ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
   onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+};
+
+// What one send hands back for review: at most one decision the owner reviews
+// now (it opens the drawer) plus candidate cards left in the conversation, such
+// as an Agent's Todo proposals. One answer may carry both.
+export type WorkspaceSendPreviews = {
+  candidates?: WorkspaceActionPreviewRequest[];
+  decision?: WorkspaceActionPreviewRequest;
 };
 
 export type WorkspaceActionPreviewRequest = {
