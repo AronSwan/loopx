@@ -56,6 +56,7 @@ cd ../sdk && uv build --wheel                # 版本已手工stamp为0.2.0rc2(�
 | package.json postinstall 置空 | 打包期 | 不进轮子 |
 | pnpm-workspace/.npmrc 镜像与放宽 | 打包期 | 不进轮子 |
 | build-exe-for-python-sdk.ts 两处 LOCAL BUILD PATCH | 构建期 | 不进轮子；**运行时代码 100% 官方源** |
+| 轮内 runtime.json 版本号 0.0.0-dev | 化妆性(官方原样) | 审计对账勿误判为篡改 |
 
 ### 3b. loopx-green 对官方 loopx/ 包的偏离（2026-10-01 瘦身后：3 文件 6 行）
 | 文件 | 偏离 | 回馈上游 | 回归官方条件 |
@@ -81,6 +82,15 @@ cd ../sdk && uv build --wheel                # 版本已手工stamp为0.2.0rc2(�
    `DEEPSEEK_BASE_URL=https://open.bigmodel.cn/api/anthropic`（不再是 coding/paas/v4）。
 2. **max_tokens 必须显式 ≤131072**（默认值超智谱上限报 400 "[1210]max_tokens参数非法"）。
 3. shell 工具已可用（0.1.5 的 `--profile is required` 已修）——第九场起可评估撤除工人 OPERATING.md 的 shell 告示。
+
+## 4b. 二轮审计补充语义（升级组二轮，2026-10-01）
+
+- SDK 默认 shutdown 超时 1 秒=每棒收尾硬杀运行时；适配器应显式传 10s（**排队待改，随 r9 后测试批**）
+- turn run-once 手工调用默认 115 秒请求预算——手工必显式传超时
+- SDK 轮路径曾指向 4GB 构建树（单点）——已修复为仓内 .local 双轮（uv sources）
+- DSH_HOME 全局 export=所有进程静默汇入同一 home（并发红线，见手册）
+- 流式首事件延迟=思考完成(实测~4.5秒)——任何看门狗判活阈值不得低于 5 秒
+- 401 三信封/工具id为 call_ 前缀/reasoning_content 迁移为 thinking 块——判据与解析器适配见 v2.2 编译席
 
 ## 5. 验证链（升级当日全绿）
 

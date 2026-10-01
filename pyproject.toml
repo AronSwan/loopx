@@ -176,5 +176,5 @@ files = [
 
 # 2026-10-01 受控升级: 本地自构建的harness 0.2.0rc2轮子(官方tag dsh-v0.2.0-rc.2构建链)
 [tool.uv.sources]
-deepseek-harness-sdk = { path = "../harness-020/python/sdk/dist/deepseek_harness_sdk-0.2.0rc2-py3-none-any.whl" }
+deepseek-harness-sdk = { path = ".local/deepseek_harness_sdk-0.2.0rc2-py3-none-any.whl" }  # 单点修复(升级组二轮#中): 不再依赖4GB构建树存活
 deepseek-harness-runtime-bin = { path = ".local/deepseek_harness_runtime_bin-0.2.0rc2-py3-none-win_amd64.whl" }
