@@ -554,7 +554,8 @@ class Delegations:
         })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
-              parent_request_id: str | None = None, *, conversation: dict | None = None) -> dict:
+              parent_request_id: str | None = None, *, conversation: dict | None = None,
+              confirmed_operation_id: str | None = None) -> dict:
         """Start or replay one bound operation.
 
         ``conversation`` is supplied only by the trusted Chat host, never by
@@ -576,6 +577,10 @@ class Delegations:
                                 binding["agent_id"], operation_id, brief, parent_request_id,
                                 caller_goal_ref=self._caller_goal_ref())
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
+            if confirmed_operation_id is not None:
+                # Internal callback adapter only: a canonical locator/CAS fence,
+                # not an executor identity or domain execution permission.
+                identity["confirmed_operation_id"] = require_operation_id(confirmed_operation_id)
             if exists:
                 if _read(path).get("identity") != identity:
                     raise ValueError("delegation operation identity conflict")
@@ -892,12 +897,18 @@ class Delegations:
                 ],
             }
             native_tools = ["--codex-mcp-server-json", json.dumps(mcp_server)]
+        continuation: list[str] = []
+        path = self.path(operation_id)
+        if path.is_file():
+            confirmed = _read(path)["identity"].get("confirmed_operation_id")
+            if confirmed is not None:
+                continuation = ["--codex-confirmed-operation-id", require_operation_id(confirmed)]
         return ["--execution-mode", "isolated-headless", "--project", binding["workspace"],
                      "--scan-root", binding["workspace"], "--no-global-sync",
                      "--timeout-seconds", str(binding["timeout_seconds"]),
                      "--validation-command-json", json.dumps(validator),
                      "--validation-failure-kind", "repair_required", *native_tools,
-                     *binding["host_args"]]
+                     *binding["host_args"], *continuation]
 
     def _record_turn_result(
         self, path: Path, row: dict, result: dict, *, publish: bool = True
