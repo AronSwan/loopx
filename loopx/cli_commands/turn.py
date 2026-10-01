@@ -173,6 +173,7 @@ def handle_turn_command(
             runtime_root=runtime_root,
             runtime_root_arg=runtime_root_arg,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
+            goal_ref=goal_ref,
         )
         operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
         scheduler_context = decision_owner.scheduler_execution_context
@@ -298,6 +299,12 @@ def handle_turn_command(
                 strict_goal_admission = goal_admission if goal_admission.enabled else None
                 if strict_goal_admission is not None:
                     strict_goal_admission.require_current()
+                resumed_goal_ref = payload.get("goal_ref")
+                goal_ref = (
+                    dict(resumed_goal_ref)
+                    if isinstance(resumed_goal_ref, Mapping)
+                    else None
+                )
             if payload.get("route", {}).get("kind") == "capability_action_required":
                 # The normal host transaction forbids Core mutations. A
                 # capability may prepare artifacts and require authored input;
@@ -423,6 +430,7 @@ def handle_turn_command(
                     registry_path=registry_path,
                     runtime_root_arg=runtime_root_arg,
                     event_kind=event_kind,
+                    goal_ref=goal_ref,
                     agent_id=settlement_identity.agent_id,
                     todo_id=settlement_identity.todo_id,
                     run_id=settlement_identity.turn_instance_id,
@@ -438,6 +446,7 @@ def handle_turn_command(
                         "agent_id",
                         "todo_id",
                         "run_id",
+                        *(("goal_ref",) if goal_ref is not None else ()),
                         *(("status",) if event_kind == "todo_complete" else ()),
                     ],
                 )
@@ -523,6 +532,7 @@ def handle_turn_command(
                     completion_turn_key=completion_turn_key,
                     dry_run=False,
                     sync_global=not bool(args.no_global_sync),
+                    goal_ref=goal_ref,
                 )
                 if refresh.get("ok") and (
                     refresh.get("appended")
@@ -704,6 +714,8 @@ def handle_turn_command(
                     ),
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                     effect_ref=effect_ref,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if spent.get("ok") and (
                     spent.get("appended")
@@ -717,6 +729,8 @@ def handle_turn_command(
                         todo_id=settlement_identity.todo_id,
                         turn_instance_id=settlement_identity.turn_instance_id,
                         replan_obligation_id=settlement_identity.replan_obligation_id,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
                     )
                     if readback is None:
                         raise RuntimeError(
@@ -811,6 +825,8 @@ def handle_turn_command(
                         todo_id=settlement_identity.todo_id,
                         turn_instance_id=settlement_identity.turn_instance_id,
                         replan_obligation_id=settlement_identity.replan_obligation_id,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
                     )
                     if readback is None:
                         raise RuntimeError(
@@ -855,6 +871,8 @@ def handle_turn_command(
                         todo_id=settlement_identity.todo_id,
                         turn_instance_id=settlement_identity.turn_instance_id,
                         replan_obligation_id=settlement_identity.replan_obligation_id,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
                     )
                     if readback is None:
                         raise RuntimeError(
@@ -903,6 +921,8 @@ def handle_turn_command(
                         todo_id=settlement_identity.todo_id,
                         turn_instance_id=settlement_identity.turn_instance_id,
                         replan_obligation_id=settlement_identity.replan_obligation_id,
+                        registry_path=registry_path,
+                        goal_ref=goal_ref,
                     )
                     if readback is None:
                         raise RuntimeError(
@@ -963,6 +983,7 @@ def handle_turn_command(
                     bounded_research_frontier_projector=(
                         project_live_explore_composition_frontier
                     ),
+                    goal_ref=goal_ref,
                 )
                 hint = (
                     latest.get("scheduler_hint")
@@ -1063,6 +1084,7 @@ def handle_turn_command(
                     settlement_identity,
                     semantic_replan_guard_scoped=replan_guard_scoped,
                     semantic_replan_obligation_id=replan_obligation_id,
+                    goal_ref=goal_ref,
                 )
 
             managed_cadence = managed_cadence_start(

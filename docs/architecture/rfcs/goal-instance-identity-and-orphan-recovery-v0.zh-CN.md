@@ -761,6 +761,30 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
   binary 或其他 M3 行已完成。`execution_authority: false` 和总 activation hold
   保持不变。
 
+### 2026-09-30：M3 quota settlement owner 候选
+
+- **基线：** `3ec049e13`。
+- **候选实现：** Source profile 的 quota spend、replay、receipt repair、void、
+  settlement readback 与 rolling-window accounting 均绑定调用方预先捕获的精确
+  GoalRef。Python 按顺序把 run-index 与 Goal lifecycle lock witness 交接给
+  TypeScript accounting owner。TypeScript 校验两个 witness，并复用
+  `decideFirstPartyHostRuntime(require_current)`。单阶段 accounting 会接管
+  witness 直至 artifact commit；多阶段 monitor accounting 只借用 witness，
+  由 Python 在 preflight、provider writeback 与 commit 的完整外层范围内持锁。
+- **证据：** TypeScript 与 Python 集成测试在 Goal A 捕获后发布同名 Goal B，
+  证明迟到的 A 不产生任何写入。测试还覆盖 B 独立 spend/void、跨实例 replay
+  和 prepared receipt repair 拒绝、精确 settlement readback，以及按实例隔离的
+  rolling-window accounting、alias/exact 混合 fallback 历史，以及在同一
+  admission 下的 exact auxiliary monitor preflight、异常、commit 与 replay。
+- **兼容性：** 非 source 的 spend、replay、void 与 readback 请求不携带 GoalRef
+  或 source admission；其持久化 record、receipt、响应 payload 和锁行为保持
+  legacy 形态。
+- **剩余 hold：** 本切片只资格化 `quota_settlement` inventory 行。Source
+  profile provider journey 仍受既有 activation gate 限制，native monitor
+  证据不表示该路径已启用。不支持及常驻
+  binary、downstream external-effect drain 和其他未资格化 M3 owner 继续受阻。
+  `execution_authority: false` 和总 activation hold 保持不变。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |
