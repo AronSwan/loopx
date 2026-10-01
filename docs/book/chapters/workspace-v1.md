@@ -2,7 +2,9 @@
 
 `v1.0.0` 是 **Personal Workspace milestone**：它把跨会话、跨 Agent 的长程工作收拢到一个可检查、可操作的本地 operator surface。本章说明这个操作面和控制面事实源的关系，以及为什么界面上的动作必须走受治理的路径。
 
-## 一个界面看起来正常的下午
+## 一个界面看起来正常的下午 {#pause-readback}
+
+以下是合成诊断情境，不是一次已核实的生产事故。
 
 ```text
 14:02  operator 打开 Workspace。Manager 总览显示 3 个 Goal，"执行中"车道有两张卡片。
@@ -11,13 +13,20 @@
 14:06  页面上 Goal 仍然显示为活跃。
 14:08  他刷新了一次。还是活跃。
 14:20  他去查 CLI：`loopx quota status` 说这个 Goal 已经在 paused。
-14:21  这时他才意识到：页面在 14:02 读到的是一份缓存投影，
-       而 14:05 的点击并没有真正 apply。
+14:21  他确认两个读回不一致，开始核对 Goal、来源、读取时间和那次操作的回执。
 ```
 
-这里没有崩溃，没有报错，甚至 HTTP 状态码都是成功的。问题在于**把界面当成了事实**：页面显示的是某一次读取的快照，点击成功只代表请求被接受，而"状态真的变了吗"需要另一次独立读回来回答。
+这些观察尚不能证明 14:05 的操作没有 apply，也不能仅凭 CLI 的 paused 证明那次点击成功。可能是操作已提交而投影滞后，也可能 paused 来自另一项控制状态。先确认比较的是同一对象和来源，再找对应 operation receipt。
 
-## 为什么"页面显示什么就是什么"不成立
+| 新取得的证据 | 可支持的结论 | 下一步 |
+| --- | --- | --- |
+| 原 stop 回执有效，当前 source 也已 stopped | 该操作已接受，旧 active 显示不再适用 | 修投影或读取路径，不重复 stop |
+| 原入口明确拒绝或确认未提交 | 那次请求没有完成目标变化 | 修该拒绝条件，按当前 owner 入口重新预览 |
+| 原结果无法读回或身份对不上 | 尚不能确认那次操作 | 保留原请求，恢复读回；不以反复点击猜结果 |
+
+操作回执解释历史因果，当前 source 解释现在的状态，页面显示解释某次投影。三者相关，但不能互相替代。现场取证见[附录](appendix-reference.md#diagnostic-routing)。
+
+## 为什么"页面显示什么就是什么"不成立 {#action-owners}
 
 Workspace 呈现和发起受治理的动作，但 Goal、Todo、Gate、事件、配置和回执仍然由控制面事实源拥有。这带来三个不可避免的后果：
 
@@ -29,7 +38,7 @@ Workspace 呈现和发起受治理的动作，但 Goal、Todo、Gate、事件、
 
 ## 先确认运行时，再看页面
 
-页面出现不等于控制面健康。启动后先做三项读回，把界面还原成控制面事实：
+页面出现不等于控制面健康。先核对版本和诊断，再启动或复用服务；`dashboard --no-open` 不是纯粹的状态查询：
 
 ```bash
 loopx --version
@@ -159,7 +168,7 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 **代价三：需要理解四层"已启用"的区别。** 把它们压成一个开关会误判能力可用性，而分清它们需要额外的心智负担。
 
-**边界一：Workspace 不拥有事实。** 界面损坏或缓存过期时，控制面仍在正常推进；恢复方法是重新读投影，而不是通过界面"修状态"。它也不构成 Stage 2C authority——shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定，不由某个操作面出现而成立。
+**边界一：Workspace 不拥有事实。** 界面损坏不能证明控制面仍健康，也不能证明它已经停止。先区分 source、runtime 与 projection；只有源状态和运行条件确认正常时，才把故障限定为显示恢复，而不是通过界面手改状态。它也不构成 Stage 2C authority——shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定，不由某个操作面出现而成立。
 
 **边界二：桌面更新的范围有限。** 更新只能来自固定官方 feed；macOS 使用 updater signature 与 ad-hoc code signing，不应描述为 notarized。回退安装也不承诺逆转未来不兼容的 Goal schema。
 
@@ -181,8 +190,8 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 1. **界面是投影，不是事实源。** 每次重要判断前重新读一次源。
 2. **HTTP 成功不证明写入完成。** 只有 receipt 与 readback 能证明。
-3. **点击不构成授权。** 合法性仍由 quota decision 与 Gate 判断。
-4. **四种"已启用"互相独立。** 把它们压成一个开关是误判的常见来源。
+3. **点击不构成授权。** Owner 操作由对应 Goal lifecycle 接受，Todo 由其生命周期校验，自动 Turn 由当前 quota contract 准入；页面不重新授予任何一种权限。
+4. **四种"已启用"需要分别证明。** 它们可以互为前提，但不能把一个开关的值当成所有条件均已满足。
 5. **消息到达不扩大权限。** Capture scope 与 ingress mode 都不授予新的写权限。
 
 这五条回答同一个问题：**当界面告诉你"一切正常"时，凭什么相信它？**

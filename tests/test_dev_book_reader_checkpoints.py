@@ -21,7 +21,12 @@ BOOK = REPO / "docs" / "book"
 PAGES = (BOOK / "chapters/12-control-plane-course.md",
          BOOK / "en/chapters/12-control-plane-course.md")
 CHECKPOINTS = ("state", "lease", "settlement", "monitor")
-TEACHING_PAGES = ("00-reading-guide.md", "05-connect-existing-project.md", "12-control-plane-course.md")
+TEACHING_PAGES = (
+    "00-reading-guide.md", "02b-long-horizon-requirements.md", "03-one-turn.md",
+    "04-runtime-boundaries.md", "04b-budget-and-admission.md", "05-connect-existing-project.md",
+    "work-graph-and-authority.md", "workspace-v1.md", "12-control-plane-course.md",
+    "appendix-reference.md",
+)
 JUDGMENT_PARTS = ("facts", "reason", "evidence", "next")
 
 
@@ -143,6 +148,31 @@ class ReaderCheckpointReferences(unittest.TestCase):
                         self.assertTrue(path.is_file(), str(path))
                         if fragment:
                             require_heading(path.read_text(encoding="utf-8"), fragment)
+
+
+    def test_bilingual_fixed_source_references_match(self) -> None:
+        # Matching references is a drift check, not proof of translation quality.
+        pattern = r"https://github\.com/[^/]+/loopx/blob/[0-9a-f]{40}/[^)\s]+"
+        for name in TEACHING_PAGES:
+            zh = (BOOK / "chapters" / name).read_text(encoding="utf-8")
+            en = (BOOK / "en/chapters" / name).read_text(encoding="utf-8")
+            with self.subTest(page=name):
+                self.assertEqual(set(re.findall(pattern, zh)), set(re.findall(pattern, en)))
+
+    def test_all_teaching_code_fences_close(self) -> None:
+        for locale in ("chapters", "en/chapters"):
+            for name in TEACHING_PAGES:
+                fence: str | None = None
+                for line in (BOOK / locale / name).read_text(encoding="utf-8").splitlines():
+                    match = re.match(r"^\s*(`{3,}|~{3,})", line)
+                    if match:
+                        marker = match.group(1)
+                        if fence is None:
+                            fence = marker
+                        elif marker[0] == fence[0] and len(marker) >= len(fence):
+                            fence = None
+                with self.subTest(locale=locale, page=name):
+                    self.assertIsNone(fence, "unclosed fenced example")
 
 
 class ReaderCheckpointGuardTests(unittest.TestCase):

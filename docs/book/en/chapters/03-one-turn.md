@@ -1,18 +1,19 @@
 # One governed turn
 
-This chapter answers one question: across a single round of agent work, what happens between "should this move at all" and "this counts as done" — and why the **ordering itself** is a safety boundary.
+A turn is not merely a model invocation. It turns current facts into bounded action, then presents the result to the owner that can validate and accept it. Start with normal work before distinguishing artifact acceptance, incomplete settlement, and continuation after discovering a dependency.
 
-## Follow the running task through a normal turn {#running-turn}
+## Follow one normal turn {#running-turn}
 
-In the [running task](00-reading-guide.md#running-example), A advances T1, B can independently handle T2, and G1 covers the unapproved T3. This table explains responsibility; not every Turn executes all these steps.
+In the [running example](00-reading-guide.md#running-example), A implements T1, B documents independent T2, M1 observes CI, G1 decides publication scope, and T3 delivers. These are teaching labels, not importable payloads.
 
-| Point | Current facts | Action | Result for the next executor |
+| Point | Current facts | Action and accepting owner | Result for the next turn |
 | --- | --- | --- | --- |
-| Select | T1 open; A meets current scope, capability, and workspace requirements | Read admission | Selected work and Turn identity |
-| Execute | Inputs and compatibility requirements are clear | Produce C1 and tests | Candidate artifacts, not whole-Goal success |
-| Validate | Validator examines C1 | Check text compatibility, JSON, and invalid inputs | Evidence bound to C1 |
-| Accept | Source and authority still satisfy commit requirements | Lifecycle writeback and required settlement | R1 and this Turn's result; later timeout does not erase a commit |
-| Continue | M1 has not completed CI observation; G1 is unapproved | Reread the frontier; independent T2 may advance | Explicit waiting and follow-up; do not publish T3 early |
+| Selection | T1 is open; A satisfies capability, authority and workspace conditions | Current admission selects work | Exact Todo and Turn identity, not arbitrary Goal-wide write permission |
+| Execution | Compatibility requirements and input revision are known | Host performs bounded work | C1 and candidate test results |
+| Validation | The validator still checks C1 | Check text compatibility, JSON and invalid inputs | Evidence bound to artifact and requirements |
+| Acceptance | Source and execution proof still permit commit | Todo/writeback owner accepts its transition | Actual readback of completion, progress or a blocker |
+| Settlement | This result requires accounting | Settlement owner completes internal accounting | Matching receipts or an outstanding action |
+| Continuation | CI and publication still have unmet conditions | Current frontier and scheduling path reassess | Independent work, explicit wait, recovery or justified stop |
 
 ```mermaid
 flowchart TD
@@ -21,33 +22,57 @@ flowchart TD
     H --> V["Validate C1 postconditions"]
     V --> W["Governed writeback / Turn settlement"]
     W --> P["Receipts and refreshed views"]
-    P --> N["Continue, wait, or recover"]
+    P --> N["Continue, wait or recover"]
     N --> F
 ```
 
-The diagram shows ordinary delivery responsibilities. Historical receipt recovery, quiet waits, and no-spend observations have distinct branches. Next consider committed writeback whose complete result never reached the caller.
+This is a responsibility chain, not a requirement that quiet waits, receipt recovery and normal delivery execute identical steps. Host execution, Todo completion, Turn settlement and Goal acceptance are different conclusions.
 
-## The process stops after writeback
+## From acceptance requirements to delivery evidence {#acceptance-evidence}
 
-Consider a teaching scenario: an Agent produces a compatibility fix, validation passes, and the result is written back. Quota settlement then times out and the process exits.
+“Tests passed” needs an object: which revision satisfies which requirement? When the artifact changes from C1 to C2, do not combine every green result into a revision-free pass.
 
-The CLI did not return success, yet code and some durable records already exist. Repeating the whole turn may duplicate effects; declaring completion may hide unfinished settlement.
+| Requirement being judged | Related work | Evidence supporting the local conclusion | What it does not establish |
+| --- | --- | --- | --- |
+| Default text output remains compatible | T1 | Compatibility checks on C2, including inputs and results | C2 has been published |
+| JSON satisfies the agreed fields | T1 and the relevant G1 decision | Current agreement and validation on C2 | Every future schema is approved |
+| Examples match behavior | T2 | Example checks and review against C2 | Combined changes need no integration validation |
+| Publication to the named target is allowed | G1 | An authorized decision covering object, scope and conditions | Publication has occurred |
+| Delivery reached its target or acceptor | T3 | Artifact revision, target readback, and receipt of delivery when the task requires it | A local file completes external delivery |
 
-The first question is: **which steps committed, which are confirmed absent, and which outcomes remain unknown?**
+This is a teaching reasoning table, not a new acceptance schema. Objective, acceptance, permissions and terminal conditions currently span project material, Vision, Todos and runtime constraints. Do not pretend that a unified writable Goal intent object already makes every judgment. See [state](state-substrate.md) and the [state-machine map](core-state-machines.md) for storage and revision bases.
 
-## Why recoverable commit boundaries matter
+Evidence becomes an accepted work fact through the relevant lifecycle entrypoint. Dependencies, unresolved decisions, successors and Goal acceptance still need checking. A task asking for a reviewable patch does not acquire a new production-deployment requirement; a task requiring delivery cannot stop at a local file. **Acceptance comes from the task and currently valid decisions, not a standard lowered by the executor to report completion.**
 
-Saving only a final success record is simple, but cannot explain partial execution. Recording each step helps, although interruption can still occur between an external effect and its local checkpoint.
+### Three kinds of supporting material
 
-LoopX records identity, phases, and receipts for a governed Turn and provides readback for unresolved operations. Recovery preserves completed work, resolves uncertainty, and then decides whether continuation is legal.
+| Material | What it can support | What it cannot replace |
+| --- | --- | --- |
+| Observation | What was read from a particular object at a particular time | Freshness checks and acceptance decisions |
+| Evidence | Materials supporting a conclusion | A record that a transition was accepted |
+| Receipt | Acceptance of a bound operation under its inputs and conditions | Current execution rights or an unchanging external world |
 
-When the evidence is insufficient, stopping safely is a valid recovery outcome.
+For example, a `git push` timeout is a call outcome. A remote-ref readback may establish that a commit is present, but not necessarily which invocation caused it, and it does not automatically create a LoopX delivery receipt. Resolve the original operation before its writeback; timeout is not proof of absence.
 
-## Scale one: the transaction inside one turn
+## Scale one: execute, validate and commit
 
-### Seven phases describe confirmed progress
+Normal delivery has five useful stages: `Decide → Act → Validate → Write back → Account`.
 
-The LoopX Turn transaction contract defines seven ordered phases:
+**Decide** reads the current `interaction_contract` and selected work. An old prompt, card or recommendation does not override current selection.
+
+**Act** produces a coherent segment with explicit inputs and boundaries. Bounded does not mean one line: an independently verifiable feature slice is more useful than fragments that cannot be accepted.
+
+**Validate** checks postconditions. Code needs behavioral validation, documentation needs command and explanation checks, external effects need appropriate readback, and blockers need inspectable missing conditions. An exit code matters only when the validator actually checked the intended postcondition.
+
+**Write back** asks the relevant owner to accept state and compact evidence references. If code or Todo declarations changed during validation, recheck applicability rather than applying an old success to new state. The Todo completion snapshot comparison under its mutation lock is one concrete boundary; see the [completion adapter](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/loopx/control_plane/todos/completion_transaction.py).
+
+**Account** follows the result's settlement contract. LoopX quota uses internal budget slots, not provider bills. Gate notification, dry runs, unchanged observations and repeated writeback must not masquerade as new delivery spend, although they can consume time, models and networks.
+
+Missing validation leaves artifact suitability unknown; missing writeback hides accepted results from successors; a stale projection can display old state; outstanding settlement calls for record recovery, not repeating the artifact. These are different owners, not problems a universal `refresh-state` can automatically repair.
+
+### What the seven phases constrain
+
+These are explicit opt-in integrations. LoopX Turn transactions use:
 
 ```text
 host_execute → typed_result → validation
@@ -55,235 +80,93 @@ host_execute → typed_result → validation
              → scheduler_apply → scheduler_ack
 ```
 
-A receipt's `completed_phases` must be a legal prefix of this sequence. This constrains **what may be claimed as complete**. It does not restrict crashes to phase boundaries or prove that an unrecorded effect never happened.
+`completed_phases` must satisfy the applicable legal-prefix contract. It constrains claimed progress, not the instants at which a process can exit; Host execution can contain multiple tool calls. TurnEnvelope is a bounded projection, and `turn plan` / `turn run-once` are explicit integration entrypoints. These facts do not put every Host tool invocation under the same journal.
 
-A provider may commit writeback before the process saves its checkpoint, leaving a `prepared` intent in the journal. Recovery reads back the same settlement identity and effect reference:
+For a prepared but unconfirmed settlement step, recovery reads the provider under the original effect identity:
 
-| Readback | Action | Remaining conditions |
+| Readback of the original operation | Recovery path | Boundary retained |
 | --- | --- | --- |
-| `committed`, with a valid receipt | Record the existing result and skip that effect | Identity, payload, and phase match |
-| `absent` | May execute the uncommitted step | Current recovery decision and authority allow it |
-| `unknown`, or unavailable readback | Stop this recovery path and retain uncertainty | Obtain valid readback or repair through the responsible owner |
+| `committed` with valid payload and identity | Reuse the result | Do not repeat a confirmed effect |
+| `absent` | Execute the outstanding step when recovery permission and current guards allow | Missing logs alone do not establish absence |
+| `unknown`, failed or conflicting readback | Remain at the owning recovery boundary | Do not bypass uncertainty with a new key |
 
-A legal prefix is only one recovery condition. The executor also checks journal identity, bindings, failure kind, and recovery permission. A saved Host result may allow continuation from validation.
+`HOST_FAILURE`, `WRITEBACK_FAILED` and `QUOTA_SPEND_FAILED` identify different failure locations, not unconditional retry permission. Continue with [historical recovery versus new execution](04-runtime-boundaries.md#recovery-or-new-execution).
 
-Failures that require another Host invocation also have explicit retry and budget constraints.
+### Why recover settlement after writeback exists? {#settlement-recovery}
 
-### Why quota accounting follows writeback
+`durable_writeback → quota_spend` relates accounting to validated durable results. A later spend timeout does not revoke accepted writeback or make cross-system work atomic.
 
-`durable_writeback → quota_spend` connects delivery accounting to a validated, durable result. Spend here means LoopX budget slots. Model API or external-service costs may already have occurred during execution.
-
-If writeback succeeds and spend fails, **the writeback is retained**. Recovery reuses confirmed results while completing outstanding settlement, avoiding a repeated Host call or writeback.
-
-This preserves completed work without making the whole turn, including external systems, one atomic transaction.
-
-Failure kinds locate the next investigation: `HOST_FAILURE` at `host_execute`, `WRITEBACK_FAILED` at `durable_writeback`, and `QUOTA_SPEND_FAILED` at `quota_spend`.
-
-These fields must agree with the receipt. Knowing the failed phase alone does not authorize a retry.
-
-### The five-stage closed loop: the shape of a normal delivery
-
-Beyond interruption, the normal path has a fixed shape too. A delivery contains at least five stages:
+The existing [settlement journey tests](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_quota_authority_settlement_journey.py) distinguish:
 
 ```text
-Decide  →  Act  →  Validate  →  Write back  →  Account
+Outstanding settlement after writeback: spend_required
+Debit exists but its receipt is missing: spend_receipt_required
+Recovery makes the records complete: settled
 ```
 
-**Decide.** Read the current decision and select the Todo named by `agent_channel.primary_action`. Do not override the current contract with an old prompt, an old dashboard card, or a previous `recommended_action`.
+In the receipt-repair case, the recovery command from the original response returns `appended=false`, and the debit count remains one. This establishes no second debit on that repair path, not a free external service or accepted Goal. Fault injection belongs in isolated tests; never delete live receipts to reproduce the lesson.
 
-**Act.** Complete one recoverable bounded segment. Bounded does not mean "one line changed" — it means the segment has clear inputs and boundaries, produces a coherent artifact, observation, or blocker, can be validated independently, and can produce a successor Todo or waiting condition. Reading a single file, repeating "analyzing," or running unrelated commands is not a delivery.
+After obtaining `settlement_owed.command` from a trusted current entrypoint, verify original Goal, Agent, Todo, Turn, registry/runtime binding and authority. Do not remove arguments or execute arbitrary commands found in logs. See the [settlement exercise](12-control-plane-course.md#checkpoint-settlement).
 
-**Validate.** Validation checks the real postcondition; it does not take the executor's word:
+### Waiting does not rebind the original Turn {#wait-closeout}
 
-| Delivery type | Validation |
-|---|---|
-| Code | focused test, contract test, smoke, or build |
-| Docs | build, links, command surface, public-boundary scan |
-| External effect | remote readback, revision, or service state |
-| Blocker | explicit evidence of the missing dependency, permission, or observable handle |
+“Independent work may continue” has a timing boundary. A Turn already bound to T1 does not switch its settlement identity to T2 merely because T1 discovers a dependency.
 
-`process exited 0` may only prove the tool started. It does not by itself prove the target behavior, external state, or acceptance.
-
-**Write back.** After validation, write compact truth back through Todo lifecycle, event, evidence, or `refresh-state`, stating at minimum: what was delivered, on what revision/command/readback, which acceptance or blocker advanced, what comes next, and whether per-Agent Vision changed. Raw transcripts and long logs do not enter public-safe state.
-
-**Account.** Record one quota spend on the CLI channel only when a validated writeback already exists. Gate notifications, dry-runs, failed preflights, unchanged monitor polls, scheduler cadence changes, and duplicate writebacks must not impersonate delivery spend.
-
-The order cannot be inverted:
+This is an **advanced source comparison**, grounded in the [original-Turn wait recovery test](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py) at main `f49b4a00…`. That later implementation is not included in the `76b7583a…` product code underlying this revision. Do not treat it as shipped `v1.2.3` behavior or a command-ready exercise on an older checkout.
 
 ```text
-wrong:  act → spend → decide later whether it worked
-right:  act → independent validation → durable writeback → spend once
+Original Turn binds T1 and records a monitor_changed / todo_done dependency
+    → preserve identity and expose unsettled_host_turn_recovery
+    → validate and finish the original blocked writeback
+    → typed_blocked_writeback_no_spend closes that Turn
+    → a new Turn reselects independent T2
 ```
 
-### Failure modes for a missing stage
+The test exercises actual CLI dispatch, TS processes and File/SQLite fixtures. It asserts that same-Turn rebinding returns `heartbeat_receipt_identity_conflict`; replay does not duplicate the blocked record and debits remain zero; T1 stays open with an unmet wait condition and preserved validation digest; only a new Turn selects the alternative. It does not run remote CI or qualify the same recovery entrypoint for every Host.
 
-The five stages form a dependency chain. Each missing stage produces a specific failure; the loop does not simply keep running:
+On an older release, preserve the original identity and inspect the recovery action actually offered locally. Do not paste new test fields or swap Todos to bypass a failure. [Observation policy](04b-budget-and-admission.md#wait-and-next-turn) explains why to wait; closeout and scheduling are not one rule.
 
-| Missing stage | Visible symptom | Consequence |
-|---|---|---|
-| Validation | artifact exists, no postcondition check | Unqualified delivery enters writeback; later decisions rest on wrong evidence |
-| Writeback | artifact produced, Todo still open | The next peer cannot see completion; duplicate work or a wrong frontier |
-| Refresh | Todo updated, status/vision still stale | Quota targets the wrong goal; monitors judge on expired conditions |
-| Spend | Delivery written back, no quota record | Quota accounting and delivery causality disagree |
+## Scale two: why was this turn admitted?
 
-**A missing validation is the most dangerous**, because it mistakes internal confidence for external fact. **A missing writeback is the most common**, because the agent skips the loop after "finishing the work" and keeps only a local artifact or chat message. **A missing refresh is the most subtle**: the surface state looks correct while quota and monitors were already reading stale values before the decision.
+### Decision pipeline: current facts to contract
 
-## Scale two: whether this turn should move at all
-
-Everything above concerns what happens *after* work has been chosen. In long-running systems the more common failure is moving **when nothing should have moved**: starting because "quota is left," skipping validation because "the user hasn't complained," ignoring a Gate because "the goal is still active."
-
-### Quota is a decision compiler
-
-"Quota remaining" suggests subtraction: charge once per run, stop at zero. But a legal round of work may need no spend at all (monitor poll, dry-run, preflight), and a spend does not mean effective delivery (an artifact with no validation). Reading quota as a balance check breaks in these scenes:
-
-- **While PR checks are pending:** you cannot call the model just because the goal is active. You must wait for the external result first.
-- **After repeated dry-run or preflight failures:** no spend occurred, but the system must not retry forever. Repeated failure calls for repair or replan.
-- **When a monitor is not due:** you must not poll early just because quota remains; that wastes external resources.
-
-The correct model compiles source facts into an interaction contract under stable precedence. It decides what a turn may do and how many spends it allows, and rules out reasoning like "the balance is above zero, so start."
-
-### The Decision pipeline: the order is itself the safety contract
-
-A decision requires several rules to compile one contract together in dependency order, across nine stages:
+A useful reading order for inputs is:
 
 ```text
 identity
   → authority and boundary
-  → scoped decision
-  → repair obligation
+  → scoped decision / repair obligation
   → capability and workspace eligibility
   → frontier and continuation
   → interaction contract
-  → scheduler
+  → scheduler hint
 ```
 
-1. **Identity:** resolve the exact Goal and registered Agent; fail closed when identity is unclear.
-2. **Goal boundary:** establish repository, write scope, authority source, spawn, and public/private boundary.
-3. **User Gate:** normalize blocking scope, decision scope, the concrete question, and the projection gap.
-4. **Outcome / repair obligation:** check consecutive surface-only progress and Vision or acceptance gaps to decide whether replan or self-repair is mandatory.
-5. **Capability:** filter candidates the current execution surface can actually perform.
-6. **Workspace:** check task repository, worktree, branch, and required write scope.
-7. **Frontier:** resolve priority, claim/lease, dependency, successor, monitor, and terminal closure.
-8. **Interaction contract:** compose the user, agent, and CLI channels.
-9. **Scheduler hint:** derive the next wake, backoff, and ACK from the now-settled lifecycle state.
+This is a teaching dependency map, not a new global first-match table. Actual precedence belongs to the current entrypoint and rule owner. Identity is an input, not a guess from a display name. Positive balance, an active Goal or another busy Agent does not authorize arbitrary delivery.
 
-**The order is itself the safety contract.** Choosing a Todo before checking the workspace lets the Host start writing before discovering the working directory is wrong. Treating an open user item as a global block starves safe work that does not depend on that decision.
+Unknown identity or source does not grant delivery eligibility; missing scope does not imply approval; unrelated Gates must not freeze independent work; applicable recovery duties must not be hidden by new delivery. When conditions coexist, read the resolved contract and named reason, then trace the owning rule. A Host must not reconstruct a decision from scattered counters.
 
-### The three channels can hold at once
+### Three channels are not three independent grants
 
-A turn carries three perspectives, and all three can hold at once:
+| Channel | Question |
+| --- | --- |
+| User | Which decision or notification needs a person, and for which scope? |
+| Agent | Must work be attempted, and which bounded action is allowed? |
+| CLI | Which controlled writeback, settlement or recovery actions are needed? |
 
-| Channel | What it answers |
-|---|---|
-| User | Must the user act now; notify or stay quiet; which action, lane, or whole Goal does the Gate block |
-| Agent | Must this Agent attempt work; is delivery allowed, is a quiet no-op allowed; what is the single primary action |
-| CLI | Which lifecycle command comes next; how to refresh/writeback after validation; when spend is allowed; why a Gate, wait, or no-change must not spend |
+While G1 awaits publication approval, the user channel can require action and the Agent channel can allow independent T2. A user having seen a reminder is not approval. Read modes such as `bounded_delivery`, `user_gate`, `scoped_user_gate_fallback`, `external_evidence_observation`, `monitor_quiet_skip`, `agent_scope_wait`, `autonomous_replan` and repair with their current payload, not as a timeless enum list.
 
-```text
-user channel:
-  action_required = true
-  action = approve homepage publication
-agent channel:
-  must_attempt = true
-  primary_action = run an independent link check
-CLI channel:
-  spend_after_validation = true
-```
+An owner stopping a Goal in the Workspace uses its lifecycle authority; automatic Turn quota is not a universal permission check on the owner. Pause also does not erase historical commits. Whether a recovery mutation is permitted remains the responsibility of that entrypoint. See combined cases in [Course Lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/).
 
-The user Gate stays visible, but it does not cover that independent link-check Todo. Collapsing this into "there is a user Todo, so the Agent stops" loses the scoped fallback; collapsing it into "the Agent can work, so no need to tell the user" is equally wrong.
+### Implementation language does not select the rule owner
 
-### Common interaction modes
+Migrated transactions have TypeScript owners; Python handles adapters or explicit external effects. Known slices include Turn settlement, Todo completion, Host Todo settlement, spend/void/monitor-poll commit, the full local task-lease lifecycle, Vision refresh and receipt-bound scheduler follow-up.
 
-The combination of the three channels compresses into a **testable mode**. An external developer should at least recognize these:
+`v0.5.4` still ships `turn plan` / `turn run-once`: this is historical migration context, not a replacement label for the current release or evidence that “Python has been removed.” The [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) explains transaction-payoff and ownership boundaries. Diagnose disagreement from the current contract and caller path, not from a blanket preference for one language.
 
-| Mode | Agent behavior | User behavior | Spend |
-|---|---|---|---|
-| `bounded_delivery` | Complete one bounded artifact, blocker, or state delta | Usually no interruption | Once, after validation + writeback |
-| `user_gate` | Do not run paths the Gate covers | Answer, reject, cancel, or redirect | No spend |
-| `scoped_user_gate_fallback` | Run only the selected fallback that does not depend on that Gate | Gate stays visible | Once, after fallback validation |
-| `external_evidence_observation` | Read a bounded handle or readback; invent no delivery | Provide a missing handle if needed | Only after a material transition |
-| `monitor_quiet_skip` | Stay quiet when not due or with no material change | No interruption | No spend |
-| `agent_scope_wait` | The current peer has no in-scope candidate; wait for reassignment | Usually no action | No spend |
-| `autonomous_replan` | Write a Todo, Vision, acceptance, or no-follow-up delta | Interrupt only for owner-held decisions | After an accountable delta |
-| `outcome_floor_recovery` | Restore only missing outcome evidence, or write a blocker | Depends on the blocker's owner | After recovery validation |
-| `blocked_health` / repair | Repair registry, projection, or boundary first | Intervene only when owner authority is needed | No spend without a valid delta |
+## Readback and the chapter's exit condition
 
-Specific modes shift as the protocol evolves. **What is worth keeping is the discrimination method**, not a memorized enumeration: who owns the next transition, what behavior is allowed, and what evidence permits writeback.
-
-### What observation, evidence, and receipts each prove
-
-The three carry different responsibilities within one turn, and conflating them produces accidents of the "I assumed someone validated it" kind:
-
-| Object | Proves | Does not prove |
-|---|---|---|
-| Observation | What was seen at some moment | That the conclusion was accepted, or is still fresh |
-| Evidence | Which materials support a judgment | That a state transition was actually written |
-| Receipt | That an action or transition was accepted under bound inputs and revision | That the outside world will stay that way |
-
-Taking a timed-out `git push`, the chain separates like this:
-
-```text
-tool invocation                → merely an attempt
-the result of git ls-remote    → a readback observation
-remote ref equals expected commit → can become evidence
-LoopX records the publish transition → that is the durable receipt
-```
-
-**A proposal is not an effect either.** A protocol declaring "recommends publishing" grants no credentials or permissions and does not prove the remote changed.
-
-### The other face of a missing stage: treating a local signal as global authority
-
-| Source fact | Decision meaning |
-|---|---|
-| Whether the Goal is registered and the Agent identified | Fail closed on unclear identity; consume no resources |
-| Whether a User Gate blocks the current scope | Blocked paths do not run; unblocked fallbacks run independently |
-| Whether the frontier has a claimable Todo | With no runnable candidate, enter monitor or agent-scope wait |
-| Whether consecutive deliveries lack outcome | After several surface-only rounds, require a real outcome or self-repair |
-| Whether external evidence is fresh | Expired evidence cannot enter the decision; refresh readback first |
-
-Forbidden shortcuts include skipping a Gate because the goal is active, skipping the workspace check because quota once existed, and skipping validation because the user has not complained. Each of these mistakes a local signal for global authority.
-
-See [Control-Plane Course lesson 6](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/) for the full decision table, the nine combined cases, and rule precedence, and [lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/) for the failure replay and repair path at each rung of the evidence ladder. This chapter teaches the discrimination method; it does not enumerate modes that will shift as the protocol evolves.
-
-### Who solely owns a rule
-
-The nine-stage order from scale two holds only on one further condition: **a rule can have exactly one owner.** If Python and TypeScript each implement "when is charging allowed," the two implementations will eventually diverge, and the divergence means the ordering contract quietly stops holding on one side.
-
-LoopX moves the canonical semantics of the complete transaction into TypeScript:
-
-```text
-Python CLI / Host adapter
-  → typed request
-  → managed TypeScript Effect runtime
-  → domain-owned decision or effect receipt
-  → Python compatibility projection / explicit external Provider
-```
-
-Published typed owners include **Turn settlement**, **Todo completion**, and **Host Todo settlement**, plus quota delivery routing, **spend/void/monitor-poll commit**, the **full local task-lease lifecycle**, **Vision refresh**, governed capability-lifecycle validation, and scheduler heartbeat/state with **receipt-bound scheduler follow-up**.
-
-Python still carries the current CLI transport, explicit external Provider/Host effects, legacy projection, and the Markdown/event writeback not yet migrated. The migration does not mean "**Python has been removed**" — but the same rule must never be reimplemented in a Python facade, because that creates a second source of truth and breaks exactly what this section protects. `v0.5.4` still ships a runnable `turn plan` / `turn run-once` path, and the migration effectively began from that release.
-
-The [TypeScript Control-Plane Migration RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/typescript-control-plane-migration-v0.md) on current `main` defines the remaining work as transaction-payoff: one migration should move a complete transaction and delete the Python semantic path it replaced. Adding only leaf handlers, DTOs, or bridge calls does not count as migration progress.
-
-When the two sides disagree, locate the current contract owner. TypeScript owns migrated Turn settlement, while Python still owns some Todo read rules.
-
-Language alone does not decide correctness; use the migration RFC delivery boundary and actual caller path.
-
-## Cost and boundary: what recovery requires
-
-**Recovery records must remain readable.** Journals, identity bindings, and provider receipts add storage, validation, and migration costs. Missing or corrupt records may block recovery; absence of evidence is not proof of nonexecution.
-
-**Unknown outcomes may require waiting.** Retaining completed work reduces duplicate execution but requires provider readback. An external API without queries or idempotency identifiers needs its own recovery strategy.
-
-**Phases constrain settlement.** `host_execute` may include multiple tool calls. Fixed settlement phases do not forbid editing a file and clearing a cache. Any added external effect still needs its own authority, idempotency, and readback boundary.
-
-TurnEnvelope is an explicitly enabled bounded projection. LoopX Turn has an experimental protocol and runnable `turn plan` / `turn run-once` paths for explicit opt-in integrations.
-
-These boundaries do not give every tool call in every Host the same recovery guarantees.
-
-## How to judge whether recovery can proceed
-
-Start from the original Turn identity. A CLI timeout does not justify creating a new task to repeat the work. For diagnosis, inspect its journal:
+For execution managed by the corresponding Turn journal:
 
 ```bash
 loopx turn inspect-journal \
@@ -291,37 +174,6 @@ loopx turn inspect-journal \
   --turn-key <turn-key> --format markdown
 ```
 
-Read `recorded_effects` and `recovery_decision`. `null` means unknown. Inspection neither performs recovery nor grants retry permission; follow the current executor decision and provider readback while preserving the original identity.
+Inspect original identity, `recorded_effects` and `recovery_decision`. Diagnosis does not execute recovery or grant retry permission. Missing records or `null` do not automatically prove absence. Other execution paths use their own receipts; do not invent a Turn key.
 
-| Claim | Evidence entry | Evidence boundary |
-| --- | --- | --- |
-| Completed phases must form a legal prefix | `turn_driver/transaction.py`, `test_effect_program_fault_replay_matrix.py` | Checks record shape; controlled receipts do not exhaust real crashes |
-| Unknown prepared effects cannot be blindly executed | `turn_driver/settlement.ts`, `tests/control_plane_ts/turn_settlement.test.ts` | Still depends on trustworthy provider readback |
-| Failed spend preserves writeback | Spend rejection and recovery cases in `tests/test_loopx_turn_executor.py` | Synthetic providers verify executor branches, not external billing |
-
-See the [LoopX Turn protocol](/loopx/docs/reference/protocols/loopx-turn-v0/) for complete fields and recovery conditions. This evidence supports guarantees within named boundaries, not exactly-once behavior for arbitrary external operations.
-
-## How a turn ends
-
-A turn can end in several ways, and all of them are legal:
-
-- validated delivery + writeback + spend;
-- concrete blocker + recovery condition;
-- user Gate notification;
-- bounded external observation;
-- quiet monitor or no-candidate wait;
-- replan or repair delta;
-- stop after a terminal audit.
-
-**Writing no code is not necessarily a failure** — a Gate, a wait, and a quiet no-op may be exactly what the protocol requires. Conversely, writing a lot of code does not make a turn effective if it bypassed the selected Todo, authority, workspace, or validation.
-
-## Boundaries to preserve in use
-
-1. Completed phases describe a legal prefix of confirmed results; unrecorded effects may still require readback.
-2. Retain valid receipts under the same settlement identity; a spend failure does not undo completed writeback.
-3. Resolve unknown results before proceeding; do not use a new identity to bypass the original Turn's recovery checks.
-4. User, agent, and CLI channels may all carry obligations; apply each within its scope.
-5. Cost optimizations must preserve admission precedence and authority checks at commit time.
-6. Account according to the current settlement contract; Gate notifications, dry-runs, and unchanged polls are not delivery spend.
-
-The next chapter follows these rules across multiple turns: when to retry, when to replan, and when a human must take over.
+You should now be able to identify the revision validated for T1, the owner that accepted each result, outstanding settlement, remaining M1/G1 responsibility, and why the next turn can do T2 but not publish T3. Continue to [recovery](04-runtime-boundaries.md) to connect one legal result to long-running progress.

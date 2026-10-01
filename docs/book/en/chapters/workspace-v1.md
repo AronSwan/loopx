@@ -2,7 +2,9 @@
 
 `v1.0.0` is the **Personal Workspace milestone**: it gathers long-running work spanning sessions and Agents into an inspectable, operable local operator surface. This chapter explains how that operator surface relates to the control-plane sources of truth, and why actions taken in the UI must follow a governed path.
 
-## An afternoon where the UI looked fine
+## An afternoon where the UI looked fine {#pause-readback}
+
+This is a synthetic diagnostic situation, not a verified production incident.
 
 ```text
 14:02  The operator opens the Workspace. The Manager overview shows three
@@ -12,13 +14,21 @@
 14:06  The page still shows the Goal as active.
 14:08  They refresh. Still active.
 14:20  They check the CLI: `loopx quota status` says this Goal is already paused.
-14:21  Only now do they realize the page read a cached projection at 14:02,
-       and the 14:05 click never actually applied.
+14:21  They identify disagreement and check the Goal, source, read times
+       and receipt for that particular operation.
 ```
 
-Nothing crashed, nothing errored, and the HTTP status code was a success. The failure is **treating the UI as fact**: what the page shows is a snapshot from one read, a successful click only means the request was accepted, and "did the state actually change" needs a separate, independent read to answer.
+These observations do not establish that the 14:05 action failed to apply, and CLI paused alone does not prove the click succeeded. A commit may have succeeded while projection lagged, or another control state may explain paused. Verify the same object and source, then locate the matching operation receipt.
 
-## Why "what the page shows is what is true" does not hold
+| Additional evidence | Supported conclusion | Next step |
+| --- | --- | --- |
+| Valid original stop receipt and current stopped source | The operation was accepted; old active display is no longer applicable | Repair projection or read routing, not repeat stop |
+| Original entrypoint explicitly rejected or confirmed non-commit | That request did not complete the intended change | Repair the refusal condition and preview through the current owner |
+| Original outcome unreadable or identity mismatched | That operation remains unconfirmed | Preserve the request and restore readback, not repeated clicks |
+
+An operation receipt explains historical causality; current source explains present state; the page reflects a particular projection. They relate but do not substitute for one another. Use the [appendix](appendix-reference.md#diagnostic-routing) for field evidence.
+
+## Why "what the page shows is what is true" does not hold {#action-owners}
 
 The Workspace presents and initiates governed actions, but Goal, Todo, Gate, events, configuration, and receipts remain owned by the control-plane sources of truth. Three consequences follow unavoidably:
 
@@ -30,7 +40,7 @@ The whole chapter compresses into one sentence: **the Workspace is where you obs
 
 ## Confirm the runtime before trusting the page
 
-A page appearing does not mean the control plane is healthy. After starting up, run three reads that reduce the UI back to control-plane facts:
+A page appearing does not mean the control plane is healthy. Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
 
 ```bash
 loopx --version
@@ -160,7 +170,7 @@ Continuous reporting is a separate authorization chain: a custom profile declare
 
 **Cost three: four kinds of "enabled" must be distinguished.** Collapsing them into one switch misjudges capability availability, and keeping them apart carries real mental overhead.
 
-**Boundary one: the Workspace does not own facts.** When the UI is broken or its cache is stale, the control plane keeps advancing normally; the recovery is to re-read the projection, not to "fix state" through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
+**Boundary one: the Workspace does not own facts.** A broken UI proves neither a healthy control plane nor stopped execution. Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
 
 **Boundary two: desktop updates are narrowly scoped.** Updates can only come from the fixed official feed; macOS uses updater signature and ad-hoc code signing and should not be described as notarized. Restoring a previous version also does not promise to reverse a future-incompatible Goal schema.
 
@@ -182,8 +192,8 @@ For one Workspace acceptance pass, confirm at least that:
 
 1. **The UI is a projection, not a source of truth.** Re-read the source before any consequential judgment.
 2. **HTTP success does not prove the write completed.** Only a receipt and readback do.
-3. **A click is not authorization.** Legality is still decided by the quota decision and Gates.
-4. **The four kinds of "enabled" are mutually independent.** Collapsing them into one switch is a common source of misjudgment.
+3. **A click is not authorization.** Goal lifecycle accepts owner operations, Todo lifecycle checks work transitions, and the current quota contract admits automated Turns. The page grants none of these permissions.
+4. **The four kinds of "enabled" need separate evidence.** They may be prerequisites for one another; one switch does not establish that every condition holds.
 5. **A message arriving does not widen permission.** Neither capture scope nor ingress mode grants new write authority.
 
 These five answer one question: **when the interface tells you everything is fine, what makes that believable?**

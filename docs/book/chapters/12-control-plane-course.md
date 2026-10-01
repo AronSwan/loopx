@@ -62,22 +62,7 @@ uv sync --extra test
 
 ### 先读取，再决定是否改变状态 {#read-before-change}
 
-以下是使用者的查阅入口，不是测试初始化脚本。先从已有配置确认精确 registry、runtime root、Goal 与 Todo；不要根据显示名称猜测，也不要使用练习里的 T1/M1 代号。设置好四个 shell 变量后再执行；缺少变量会直接停止：
-
-```bash
-: "${REGISTRY:?Set the existing registry path}"
-: "${RUNTIME:?Set the existing runtime root}"
-: "${GOAL:?Set the exact goal id}"
-: "${TODO:?Set the exact todo id}"
-loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
-  todo list --goal-id "$GOAL" --todo-id "$TODO"
-loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
-  task-lease inspect --goal-id "$GOAL" --todo-id "$TODO"
-```
-
-第一条读取该工作项，第二条查看 lease；它们不请求完成 Todo、获取 lease 或结算。读取仍可能启动 runtime，两次响应也不是一个原子快照。记录各自的 identity、来源、时间与可用的版本信息；字段缺失就记录缺失，不自行补成 approved、open 或 zero。
-
-不要把所有带“检查”含义的命令都当成无副作用读取。`quota should-run --codex-app` 的准入路径可能创建 heartbeat receipt；`refresh-state` 是受控写回；获取/续租、结算和 ACK 都不属于这两条查阅命令。下面的 pytest 会在隔离 fixture 中执行这些动作，不能当作生产诊断命令逐条照抄。
+日常诊断的完整命令与停止条件已集中到[附录：现场读取](appendix-reference.md#read-before-change)。本章保留练习，不再维护第二份操作 runbook。下面的 pytest 使用隔离 fixture，不能当作 live Goal 初始化或修复步骤。
 
 <!-- reader-checkpoint:state:start -->
 ### 检查一：哪个状态可以用于准入？ {#checkpoint-state}
@@ -218,17 +203,7 @@ uv run --extra test pytest -q \
 
 ## 用四项检查定位真实问题 {#diagnostic-routing}
 
-先找第一处无法回答的问题，处理它而不是重启整个流程。这是查阅顺序，不新增机器状态或自动恢复算法。
-
-| 症状 | 事实与规则入口 | 支持结论的最小证据 | 下一步的接受条件 |
-| --- | --- | --- | --- |
-| 页面与 Todo 不同 | [状态检查](#checkpoint-state) | 选定源与精确 Todo 的读回 | 恢复正确来源后重算，不以页面覆盖源 |
-| 过去成功、现在拒写 | [lease 检查](#checkpoint-lease) | 当前证明与历史 receipt 分开 | 合法新执行取得当前证明；已结束则停止 |
-| 写回存在、结算不完整 | [结算检查](#checkpoint-settlement) | 原身份的记录与待完成动作 | 结算读回完整且没有重复扣减 |
-| 请求超时、效果未知 | [未知结果](#unknown-outcome) | 原 operation 的 provider 读回 | 已确认结果后，才选择复用或继续 |
-| 一直等待或反复 replan | [Monitor 检查](#checkpoint-monitor) | 当前 lane、due、候选工作与 Host 状态 | 等待可解释，或返回当前合法工作 |
-
-发现 live 项目与这些结果不同时，不先删除 guard。核对版本、配置和输入；仍矛盾时保留最小反例，交给 owning boundary。公开 Issue/PR 只携带 public-safe 的 identity 引用、版本、错误码和必要证据，不上传 live registry、凭据、原始 transcript 或完整私有运行记录。
+真实项目的[症状分流](appendix-reference.md#diagnostic-routing)统一放在附录；操作读者不需要先运行源码测试。练习与正文的主要关系分别是[状态](state-substrate.md)、[权限](work-graph-and-authority.md#authority-layers)、[结算](03-one-turn.md#settlement-recovery)和[观察](04b-budget-and-admission.md#observation-owners)。
 
 ## 综合练习：一次交付为什么仍未获准？ {#integrated-judgment}
 
@@ -244,6 +219,12 @@ uv run --extra test pytest -q \
 [权限](work-graph-and-authority.md)、[恢复](04-runtime-boundaries.md)与 [Workspace](workspace-v1.md)分别拥有这些操作说明。Owner 决定不统一由自动 Turn 的 quota 授权；运行某个内部测试也不证明本次真实 CI 或批准已经发生。
 
 将任务换成“依据两份公开材料完成比较报告”，仍能使用同一判断：材料版本替代 commit，方法与引用检查支持结论，接受人与发布范围需要明确。材料更新后重新检查受影响的分析，不把全部旧讨论变成新证据；报告写完也不自动授权发布。这是概念迁移练习，不宣称另一条产品旅程已经验证。
+
+### 再加一个条件：原 Turn 尚未收口
+
+若 T1 还欠原身份的等待写回，“T2 独立”并不允许同一 Turn 改绑结算身份。先解释原 Turn 怎样收口，再解释新的准入怎样选择 T2。比较[等待时序](03-one-turn.md#wait-closeout)中的主线进阶测试；那项后续实现不在本分支的旧产品基线中，不计入上面的八个可用测试函数。
+
+再检查协作：A 和 B 各自通过验证，不足以验收组合结果；按[交接到集成](work-graph-and-authority.md#handoff-to-integration)指出采用版本、集成验证、发布决定与最终接受者。
 
 ## 何时算读懂、何时算需要修订 {#judgment-exit}
 

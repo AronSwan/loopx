@@ -1,217 +1,107 @@
 # 消耗的上限与外部观察
 
-本章回答一个问题：一个没人盯着也停不下来的系统，怎么让它**在没人看的时候既不空转、也不假装自己在工作**。这一章接在"要求四"后面：消耗必须有上限且可被外部观察。
+T1 完成后，M1 仍在等待 C1 的 CI，G1 仍在等待发布决定。预算还有余额，不代表应该反复调用模型；没有新消息，也不证明外部条件没有变化。本章把“是否行动”“何时再看”“谁去观察”与“何时改路”分开，再让它们共同支持一次可解释的等待。
 
-## 从一个坏的结局开始
+## 先区分五种责任 {#observation-owners}
 
-先看一个场景。它不需要任何一方出错，只要有两个 monitor 就够：
+| 问题 | 负责的事实或规则 | 不能替代的责任 |
+| --- | --- | --- |
+| 当前可以推进哪项工作？ | quota 与当前 interaction contract | 不授予额外外部权限 |
+| 在观察什么，最近看到了什么？ | Monitor 身份、目标与 observation metadata | 不凭空访问 CI 或创建运行进程 |
+| 什么时候再看？ | cadence、next due 与 scheduler/backoff | 不保证届时一定有可用 Host |
+| 谁真正执行观察或唤醒？ | 已接入且可用的 Host、运行器或事件通道 | 配置存在不证明运行健康 |
+| 现有等待或路线是否值得继续？ | frontier、Vision 与 replan policy | 不是简单缩短或拉长 cadence |
 
-```text
-10:00  Goal 上有两个外部条件待观察：PR #123 的 CI，与 PR #456 的 review。
-       M1 盯 #123（cadence 30m），M2 盯 #456（cadence 45m）。
-10:30  M1 到期。轮询结果与上次相同，它的 no-change streak 记为 1。
-10:45  M2 到期。轮询结果与上次相同，它的 streak 记为 1。
-11:00  M1 到期。streak 记为 2。
-11:15  M2 到期。streak 记为 2。
-...    两个 monitor 交替到期，各自的计数器都在缓慢上升，
-       但它们永远到不了 backoff 需要的阈值，因为每次醒来看到的都是"另一条 lane 刚跑过"。
-```
+实际资源成本还有自己的来源：供应商账单、工具使用和机器时间。LoopX 的内部 quota 结算不能代替这些数据。一次合法 no-spend 观察仍可能有真实成本。
 
-这个过程里没有任何一方在说谎。每次轮询都合法：monitor 确实到期了，外部条件确实没有变化，观察结果也确实被写了回去。
+## 一个错误计数策略会怎样误导判断
 
-问题在于**退让的判据被放在了错误的尺度上**。如果"是否退让"由全局的相邻 run 判断，那么 M1 的每一次 run 都在打断 M2 的无变化序列，M2 的每一次 run 也反过来打断 M1。两条 lane 互相给对方续命，系统看起来一直在工作，实际上在**热轮询**一个不变的世界。
+以下是**假设性的错误策略**，不是声称当前实现仍有此缺陷：把“最近连续没有变化”只记在一个全局目标上，每次换目标就清零。
 
-同一个根的另一种表现更安静：
+| 时间 | 到期工作 | 正确的工作项事实 | 假设的错误全局判断 |
+| --- | --- | --- | --- |
+| 10:30 | M1，cadence 30m | M1 第一次无变化 | 刚看到 M1 |
+| 10:45 | M2，cadence 45m | M2 第一次无变化 | 换成 M2，清掉前一目标计数 |
+| 11:00 | M1 | M1 第二次无变化 | 又换目标，重新计数 |
+| 11:30 | M1、M2 各自到期 | 分别更新自己的观察 | 结果取决于处理顺序，而非目标真正停滞多久 |
 
-```text
-22:00  最后一个 Agent Turn 结束。frontier 上剩一个外部条件，没有 monitor 订阅它。
-次日
-09:00  用户回来，发现什么都没发生。
-```
-
-**静默停滞**。没有机制在无人监督时推进工作，也没有机制在无人监督时宣布"我在等"。
-
-两个结局看起来相反，其实是同一个缺陷：系统没有一个**可被外部观察的消耗判据**。热轮询是因为退让没有被正确地计数，静默停滞是因为等待没有被登记成一条可唤醒的状态。
-
-## 为什么"设一个预算上限"不是解药
-
-直觉反应是给系统加一个额度：每轮扣一点，扣完就停。这个设计会同时错过两个方向。
-
-**它拦不住空转。** 热轮询的每一次轮询都是"合法"的轮次，额度会照常扣减，直到花完为止。上限只是让热轮询有一个终止时间，没有让它停止。更糟的是，真正需要响应外部变化的那一轮，可能正好排在额度耗尽之后。
-
-**它拦不住静默停滞。** 没有任何人观察的外部条件不会自己产生一个 run。额度充裕并不能让系统知道"该去看一眼 #456 的 review 了"。上限管的是花费，管不到观察。
-
-**它也对合法的无费轮次判断错误。** monitor poll、dry-run、preflight 都是合法工作，它们的成本不在配额里（协议上，monitor poll 是不计费结算）。一个按余额判断的系统会把"还有额度"读成"可以开跑"，而这一轮真正需要的可能是"继续等"。
-
-所以真正需要的是三个互相配合的机制，而不是一条孤立的上限：**准入**决定这一轮该不该动；**backoff** 决定连续无变化时如何退让；**monitor** 决定由谁来唤醒。
+错误不在阈值太高，而在于把不同目标的观察混成了一段历史。修正应保留每个 Monitor 自己的身份和计数，而不是不断降低阈值。相反，假如根本没有可用 Host 去执行 due observation，计数器再正确也只是一份静态记录：这是执行活性缺口，不是 no-change。
 
 ## 等 CI 时，观察频率怎样选择 {#running-wait}
 
-M1 观察 C1 的 CI，G1 等待维护者。它们可能同时未完成，但需要的下一步不同：M1 需要真实外部读回，G1 需要对应的决定。一个无限循环反复询问，无法替代这两个责任。
-
-| 方案 | 适合的情况 | 代价与边界 |
+| 方案 | 适合的条件 | 成本与限制 |
 | --- | --- | --- |
-| 人工回来查看 | 低频、短期、可容忍延迟 | 依赖人的注意力，需保留接手信息 |
-| 固定 cadence 观察 | 变化节奏可预计 | 等待较久时重复成本较高 |
-| 退避的 monitor + 可用事件唤醒 | 长时间无变化，或已有真实事件通道 | 退避增加发现延迟；没有事件通道就不能承诺即时响应 |
+| 人工回来查看 | 低频、短期、允许较长延迟 | 依赖人的注意力，要保留接手信息 |
+| 固定 cadence | 变化节奏可预计 | 长时间等待会产生重复观察 |
+| 有上限的退避 | 长时间无变化 | 减少重复读取，但增加发现变化的延迟 |
+| 真实事件通道加必要核验 | 已有可用通知和身份绑定 | 收到事件仍须核对目标、revision 和当前状态 |
 
-| M1 的观察 | 可保存的事实 | 下一步 |
+M1 与 G1 不要求同一种动作。CI 需要外部结果读回，发布决定需要有权决定的人；不能以一次 CI passed 替代批准，也不应把用户待决定当成所有独立工作的全局冻结。
+
+| M1 的实际观察 | 可保存的事实 | 合法后续 |
 | --- | --- | --- |
-| C1 的 CI pending，结果未变 | 本次真实观察及 no-change 信息 | 按 due/backoff 等待，不记 delivery spend |
-| C1 的 CI passed | 绑定 C1 的新 evidence / material change | 重读 T3 条件；G1 未批准时仍不发布 |
-| 代码已变为 C2 | C1 的观察只证明历史 C1 | 调整观察对象并获取 C2 的结果 |
+| C1 的 CI pending，结果未变 | 有来源与时间的无变化观察 | 更新观察状态，按当前策略等待 |
+| C1 的 CI passed | 绑定 C1 的新证据 | 重新检查 T3，包括 G1 |
+| 当前代码已是 C2 | 旧绿色结果只支持 C1 | 获取适用于 C2 的验证，不删除 C1 历史 |
+| 读取失败或无权访问 | 无法确认当前 CI | 报告读取缺口，不记成 unchanged 或 passed |
 
-Monitor 记录调用者已完成的观察；它本身不访问 CI。当前 source、观察对象和真实唤醒路径都要明确，才谈得上等待有依据。
+Monitor 保存调用者完成的观察。本身不访问 CI，`next_due_at` 也不创建一个执行进程。等待健康需要目标、观察规则和实际执行面同时存在。
 
-## 设计
+## 预算参与准入，但不独自授权
 
-### 准入：这一轮该不该动
+正常交付仍受预算限制：当前窗口 `spent_slots >= allowed_slots` 时会进入相应 throttling。余额不足不能通过换 Todo 或把交付叫作观察绕过；余额充足也不能绕过 Gate、当前身份、能力、工作区和依赖。
 
-第一个机制是准入。它在"决定做什么"之前先回答"现在允许做什么"，并且答案不能由执行者自己给出。
+读取最终 contract，至少区分“允许交付”“需要恢复或修复”“观察”“等待”与“要求决定”。身份不明时拒绝交付资格，不等于整个诊断过程不消耗任何资源。`quota should-run --codex-app` 的相关准入路径可能创建 heartbeat receipt，不应当作无副作用的循环查询。现场读取见[附录](appendix-reference.md#read-before-change)。
 
-Quota 的模型在[一轮受治理的工作](03-one-turn.md)中作为 decision compiler 介绍。预算余额仍是准入输入：当前窗口的 `spent_slots >= allowed_slots` 会使正常工作进入 `throttled`；有剩余额度也仍须通过 Gate、能力、工作区和 frontier 检查。
+内部记账回答已接受的工作如何归因；scheduler cadence change、Gate 通知、dry-run、未变化的 poll、重复写回不能冒充新的 delivery spend。不要用“无费轮次”描述 no-spend，否则会掩盖观察本身的资源成本。
 
-因此，余额回答“预算够不够”，完整准入回答“这个 Agent 现在可以做什么”。两者缺一不可。
+## 登记等待之后，谁可以继续？ {#wait-and-next-turn}
 
-被禁止的捷径有一致的形状：把局部信号当成全局授权。
+T1 发现真实依赖时，等待需要有具体对象，例如 `monitor_changed:<todo_id>` 或 `todo_done:<todo_id>`。保留验收器、原工作身份和依赖关系，不能通过把 Todo 草率标 done 消除当前阻塞。
 
-| Source fact | 准入含义 |
-|---|---|
-| Goal 是否注册、Agent 是否识别 | 身份不明时 fail closed，不消耗任何资源 |
-| User Gate 是否阻塞当前 scope | 被阻塞的路径不执行，未被阻塞的 fallback 独立运行 |
-| 外部依赖是否已经登记等待 | 有 typed 依赖时不重试，转入等待并保留独立 successor |
-| 本轮是否已有结算身份 | 一个 heartbeat Turn 只有一个 settlement Todo，不能被另一个 monitor 替换 |
-| 交付类型是否允许 spend | 无 validation 的 writeback、dry-run、未变化的 poll 都不产生 delivery spend |
+工作图中存在独立 T2，并不意味着已绑定 T1 的当前 Turn 可以直接改绑。应先完成原 Turn 按其合同要求的等待写回和收口，再由后续准入选择新工作。**Turn 收口、Todo 等待与下轮选择是三件事。**
 
-**该记账的必须记，不该记的不能记。** 合法交付按当前 settlement contract 记账；Gate notification、dry-run、失败 preflight、未变化的 monitor poll、scheduler cadence change 和重复 writeback 不冒充 delivery spend。
+[Turn 章的等待时序](03-one-turn.md#wait-closeout)用主线 `f49b4a00…` 的明确测试解释这条路径，并标注了它不属于旧发布版承诺。它验证不重复扣减、不强迫执行 Monitor poll、原 Todo 的等待和验证声明仍保留；不是一条适用于所有 Host 的全局调度顺序。
 
-总量上限与记账分类分别防止超额消耗和错误归因。这里的配额单位不是外部模型账单；一次 no-spend 观察仍可能消耗工具、网络或模型资源。
+## Cadence backoff 与路线重规划
 
-准入的另一个产品形态是等待被登记。一个已准入的 advancement Turn 发现真实依赖时，会登记 `monitor_changed:<todo_id>` 或 `todo_done:<todo_id>`，同时保留一个独立可运行的 successor。结算返回 `typed_blocked_writeback_no_spend`：有 validation 与 durable writeback 回执，不扣额、不计交付进展。旧 Turn 因此不会被卡住，独立工作照常可选。
+Backoff 问的是“相同条件下，多久以后再观察”。它从已仲裁的 decision 和运行 profile 派生调度建议，并按对应 scheduler state 的 identity / `reset_token` 保持或重置退避。具体间隔、上限与 unchanged limit 应读取当前 profile，而不是把一组示例数值当作所有 Host 的共同协议。
 
-```text
-loopx quota should-run --goal-id "$GOAL" --agent-id "$AGENT"   # 读本轮准入
-loopx task-lease inspect --goal-id "$GOAL" --todo-id "$MONITOR" # 读 monitor 的当前租约
-```
+如果没有事件通道，外部变化只能在下一次真实观察后被发现。reset 可以改变后续间隔，但不会追回已经等待的时间。Host apply 成功或已经匹配目标 cadence 后，才按绑定 ACK 路径确认；失败或超时要记录对应失败，不能伪造 ACK。详见[调度入口](appendix-reference.md#scheduler-entry)。
 
-### 退避：连续无变化时如何退让
+Replan 问的是“继续等待是否仍符合目标，是否有更好的下一步”。当前 Monitor 策略会结合当前 Agent 的可选 advancement、Monitor 类型和无变化历史判断，不能只看一个计数。
 
-第二个机制是 backoff，它回答"没人改变的时候，多久以后再问一次"。
+| 当前输入 | 受对应测试支持的判断 |
+| --- | --- |
+| 当前 Agent 没有可选 advancement，符合条件的普通 monitor-only lane 已达阈值 | 可能形成 `monitor_no_change_streak` replan obligation |
+| 当前 Agent 自己有可选 advancement | 相关测试中优先选择工作，不产生该 Monitor 派生的 obligation |
+| 只有 peer 有工作 | 不以 peer 的进展抹掉当前 Agent 的停滞 |
+| Monitor 明确为 `watch_only` | 相关测试中即使计数很大，也不因此触发这项 replan |
 
-Scheduler hint 把当前状态投影成一个 cadence，其中包含 unchanged-poll 的策略：一个 backoff multiplier（当前实现取 2）、每个执行面的 unchanged poll limit，以及一个 max interval。连续的无变化轮次会把间隔逐步拉长，直到触达上限为止。
+[策略测试](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_monitor_replan_agent_scope.py)中的阈值为 5。这是被测策略，不是所有等待必须改路的普遍定理。测试预置计数后检查 decision；它不证明真实交错 poll、并发计数写入或真实 Host 唤醒。更完整的预测练习见[Monitor 检查](12-control-plane-course.md#checkpoint-monitor)。
 
-Scheduler state 绑定 `reset_token` 与 `identity_signature`。重新读取到的身份或决策输入变化时，cadence 可以回到当前 profile 的初始值；连续 unchanged polls 则按相应策略退避。
+因此，replan 不是“更强的 backoff”。一次可以改变观察频率，另一次需要重新判断路线并形成当前协议认可的结果；仅写“重新想过了”不能替代所需的变化或明确终止依据。
 
-外部世界改变和系统观察到改变之间仍有延迟。如果没有单独的事件唤醒通道，变化要等下一次 due poll 才能被发现。因此退避降低重复观察成本，也可能增加响应时间；reset 不会追回已经等待的时间。
+## 怎样定义一项可解释的观察
 
-同一条退让逻辑还有一个强得多的版本，用于 monitor 长时间观察而无进展时。当一条 monitor-only lane 的连续无变化次数到达阈值，Goal frontier 不再安静等待，而是要求一次 autonomous replan：
+创建或修改 Monitor 前，确定稳定 target、可用观察句柄、cadence/next due、相关变化判据、观察边界和无变化的记录方式。
 
-```text
-kind: monitor_no_change_streak
-threshold: 5
-```
+当前 metadata 合同允许 `expires_at`、`resume_when` 或显式 `watch_only=true` 作为 boundedness 的选择。expiry 与 due 不是同一个字段：前者约束何时结束，后者安排下一次观察；没有 expiry 不能直接推导 Monitor 非法。
 
-阈值取 5 在源码里有明确理由：它被刻意放在 2 轮的 run-history stall 阈值之上，因为安静的 monitor 合法地需要等好几个 cadence 周期；用两次无变化就强制 replan，会给慢速外部源制造无谓的 churn。具体数值会随协议演进，但**"退让到什么程度就该改问法"需要一个数**这件事本身是稳定的。
+变化判断必须与任务有关。服务响应中的无关时间戳变化不一定意味着验收前提改变；相同文本也不一定是同一 revision。把验证对象和解释保留在证据中，不把每次取回的原始响应无限塞进热路径。
 
-### Monitor：由外部条件驱动唤醒
+[`monitor_metadata.ts`](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/loopx/control_plane/todos/monitor_metadata.ts)处理观察元数据和重放。领域观察由调用者提供，受控写入负责验证和记录；不同 Monitor 的计数不能因别的 lane 刚运行而互相覆盖。已有 canonical observation/successor 事务的原子边界见[状态机专题](core-state-machines.md)，不能把它扩展成“网络读取、结算和所有显示一起原子完成”。
 
-第三个机制是不再由 Agent 反复询问，而是把"等什么"登记成一个状态。
+## 故障时先定位缺哪一环
 
-当 frontier 只剩外部条件时，建立 `continuous_monitor`。一个 Monitor 至少需要六件东西：
+| 现象 | 先取证 | 后续与停止条件 |
+| --- | --- | --- |
+| 没有消息 | due、真实 Host 状态、最近成功观察 | 无 Host 就报告执行缺口，不宣称外部无变化 |
+| 持续重复观察 | 目标身份、fingerprint、各自计数与 cadence | 修负责该层的策略；不调低所有阈值碰运气 |
+| 已有新证据却没推进 | 证据 revision、当前 Gate、依赖和准入 | 条件不足继续等待；不要只改显示状态 |
+| 经常要求 replan | 当前 lane、可选工作、watch-only 与 ACK 结果 | 提交实际认可的 replan 结果；不伪造一次 ACK |
+| 观察已经提交但显示仍旧 | 原操作回执、当前源与投影 | 恢复投影，不再次提交相同业务变化 |
 
-- **stable target key**：被观察对象的稳定标识（一个 PR、一个 tag、一份 release），别在每轮轮询时重新推断；
-- **cadence 与 next due**：期望多久看一次，以及下次什么时候看；
-- **bounded observation handle**：可读回的观察句柄，让"看过了"有证据可查，不停留在自述；
-- **material-change 判据**：什么才算变化；
-- **观察边界**：当前合同要求 `expires_at`、`resume_when` 或显式 `watch_only=true` 至少一种；
-- **no-change accounting policy**：连续无变化怎么记账、记在哪。
+观察频率越高，读取成本通常越高；退避越长，发现延迟可能越大。等待策略的好坏应由任务对延迟、资源和人工介入的要求判断，不以轮次数或通知数量衡量。
 
-Cadence 决定下一次观察时间，expiry 决定到期终止，它们不是同一个条件。没有 expiry 的 monitor 仍可按 `resume_when` 或 `watch_only` 合法存在，并有自己的 next due。
-
-观察记录通过 `last_checked_at`、`result_hash`、`consecutive_no_change` 与 `material_change` 参与后续判断；具体 boundedness 与状态转移由 monitor metadata 合同校验。
-
-写入观察时，不变的那次和变了的那次走的是不同的路径。计数器只在无变化且 hash 未变时递增；material change 或 hash 变化把它归零：
-
-```typescript
-// loopx/control_plane/todos/monitor_metadata.ts
-const noChange = replay ? previousNoChange : material || (previousHash && previousHash !== resultHash)
-  ? 0 : previousNoChange + 1;
-```
-
-`material-change` 判据决定这条观察是否提供了新的相关证据。它可以参与后续工作判断，但不是全系统唯一的 successor 来源，也不会直接授予推进权限。
-
-### 多 Monitor、多 Agent 的 per-lane 计数
-
-回到开头的热轮询。修法在于**换计数的尺度**，调整阈值解决不了它。
-
-正确做法是每个 monitor todo 维护独立的 `consecutive_no_change` 计数器。M2 有 material change 时只重置 M2，M1 不受影响；回合顺序（A1、B1、A2、B2……）不会互相清零。
-
-这个 per-lane 设计同样适用于多 agent：每个 agent 的 monitor 是独立 lane，它们共享同一个 frontier 读模型，但 no-change 判断是 per-lane 的。共享读模型让全局视角一致，per-lane 计数让退让判据不被别的 lane 的活跃度污染——这两件事必须同时成立，只做前者就会退化成热轮询，只做后者则看不到全局。
-
-实际效果可以直接观察。下面这个 fixture 里四条 lane 交错存在：两条 streak 为 1、一条为 5（且属于当前 Agent）、一条为 5 但属于 peer Agent。结果是恰好那一条被触发：
-
-```text
-kind: monitor_no_change_streak
-todo_id: todo_unchanged_twice
-target_key: github-pr-456
-run_count: 5, threshold: 5, agent_id: <当前 Agent>
-```
-
-另外两条 streak 为 1 的 lane 安静待命，streak 为 5 的 peer lane 不进入当前 Agent 的 replan 义务。**计数是按 lane 的，唤醒也是按 lane 的。**
-
-### Scheduler hint 是"何时唤醒"
-
-最后一个区分，也是本章最容易混用的一个：**scheduler hint 与 execution permission 是两件事。**
-
-```text
-scheduler hint: when to wake
-interaction contract: what this turn may do
-```
-
-Scheduler hint 把当前状态投影成 Host cadence：现在运行、等待 fresh evidence、等待重分配，或者按 monitor cadence 唤醒。它回答的是时间问题。而"这一轮能不能写、能不能扣费"由 interaction contract 回答。
-
-因此有一条硬规则：**Host 即使在正确时间唤醒，也必须重新运行 current decision。** 旧的 scheduler proposal、旧的 `should_run`、旧的 selected Todo 都不能跨状态变化直接复用。否则 scheduler 就从"闹钟"变成了"授权"。
-
-同理，三个与唤醒相关的动作都不产生 delivery spend：cadence apply、failure writeback、以及 ACK。唤醒本身不构成一次交付。
-
-## 代价与边界
-
-**准入需要可用的事实。** 身份未解析、Gate scope 不明或 evidence 过期时，相关工作可能等待修复。这能避免猜测授权，也会增加一次工作的准备成本。
-
-**观察频率影响发现延迟。** 拉长 cadence 节省查询，但不能保证立刻看到变化。monitor 无变化的 replan 阈值与 poll 间隔是不同参数，需要分别按观察对象的时间尺度判断。
-
-**Material-change 判据需要领域知识。** 只比较选定字段可能漏掉未纳入指纹的变化；加入无关时间戳又可能把噪音当成进展。应选择与等待条件相关的事实，并给它们绑定来源和 freshness。
-
-**缺少可读回对象时，需要明确的接手者。** 可以记录需要人提供证据的 Gate 或 blocker，不能承诺自动观察一个没有查询入口的外部条件。
-
-配额使用量不等于完成工作量，`monitor_quiet_skip` 也不独自证明系统健康。判断等待是否合理，应检查目标、next due、expiry（如适用）、streak 和恢复 owner。
-
-调度选中一项工作并不自动授予执行租约或外部写权限。当前 interaction contract、lease 与相应操作的 authority 检查仍各自生效。
-
-## 具名失败：这些约束拦住了什么
-
-下面三个场景各有对应测试或协议锚点，可以直接运行或查阅。
-
-**按 lane 选择 replan。** `tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks` 预置多条 lane 的计数，验证满足阈值的当前 Agent lane 被选入 replan。它不执行逐次观察或 scheduler backoff；计数更新由 `monitor_metadata.ts` 及其测试验证，cadence 属于 scheduler。
-
-**辅助观察必须不计费，且不能替换结算身份。** 当 advancement 已绑定本 Turn 的 settlement Todo 时，新到期的 monitor 可以在同一 Turn 写入辅助观察，但它不能替换结算身份，也不能产生第二次扣费。重放必须幂等。对应测试：`tests/control_plane/test_monitor_observation_admission.py`，以及协议 `docs/reference/protocols/quota-monitor-observation-receipt-v0.md`（其中明确"回执证明历史结果，不授权新 mutation"）。
-
-**有真实依赖时不靠短定时器硬撑。** 一个已准入的 Turn 发现真实依赖时，应当登记 causal wait 并保留独立 successor，别用一个短 `resume_at` 反复重试。结算返回 `typed_blocked_writeback_no_spend`，不扣额、不计进展，Todo 保持开放且原验收器不变。对应协议：`docs/reference/protocols/quota-blocked-causal-closeout-v0.md`。
-
-## 不变式
-
-读懂这一章，你应该能自己检查下面六句话。
-
-**关于准入与退让：**
-
-1. **没有 delta 就不该 spend。** Gate notification、dry-run、未变化的 poll 都算不上交付。反过来，一次 spend 也不证明发生了有效交付。
-2. **退让按 lane 计数，不按全局计数。** 观察到"系统一直在忙但什么都没变"，先检查 no-change 是否被放到了全局尺度。
-3. **唤醒不授予权限。** 在正确时间被唤醒的 Host，仍须重新运行 current decision。
-
-**关于观察：**
-
-4. **等待需要可读的边界。** 检查 target、cadence/next due，以及 `expires_at`、`resume_when` 或 `watch_only` 中适用的约束；不能仅因没有 expiry 判成停滞。
-5. **material-change 判据决定谁在驱动后续工作。** 它是人为选择的，所以也是可以选错的。
-6. **没有可观察 handle 的外部条件用不上这套机制。** 这时系统的兜底是人，而人是有成本的。
-
-这六句回答的是同一个问题：**当没有人盯着、也没有任何变化发生的时候，这个系统凭什么说自己还在正常等待，还是已经空转或停摆？** 判断的依据不在它跑了多少轮，而在它能不能说出自己在等什么、等到什么时候、以及什么算等到了。
+本章的完成标准是：能说明在等什么、谁来观察、何时再看、哪一种变化会改变下一步，以及这份等待是否还有实际运行条件。需要操作时回到[Host 章节](06-codex-app.md)或[CLI 路径](07-codex-cli.md)，需要诊断时使用[附录](appendix-reference.md#diagnostic-routing)。

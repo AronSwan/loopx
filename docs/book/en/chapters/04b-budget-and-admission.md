@@ -1,221 +1,107 @@
-# The ceiling on consumption, and outside observation
+# Bounded spending and external observation
 
-This chapter answers one question: for a system nobody is watching and that never stops on its own, how do you keep it from **running hot when nobody looks, or quietly pretending it is working**. It follows directly from requirement four: consumption needs a ceiling, and it needs to be observable from outside.
+After T1 finishes, M1 may still await CI for C1 and G1 may still await a publication decision. Remaining budget does not justify repeatedly invoking a model; no message does not prove the external world is unchanged. Separate whether to act, when to look again, who observes, and when to reconsider the route.
 
-## Start from a bad ending
+## Separate five responsibilities {#observation-owners}
 
-Consider a scenario that requires no one to make a mistake — only two monitors:
-
-```text
-10:00  Two external conditions are pending on a Goal: CI on PR #123, review on PR #456.
-       M1 watches #123 (cadence 30m). M2 watches #456 (cadence 45m).
-10:30  M1 comes due. The poll matches the previous result, so its no-change streak is 1.
-10:45  M2 comes due. The poll matches the previous result, so its streak is 1.
-11:00  M1 comes due. Streak 2.
-11:15  M2 comes due. Streak 2.
-...    The two monitors alternate and each counter climbs slowly, but neither
-       ever reaches the threshold backoff needs: each wake-up sees the other lane just ran.
-```
-
-Nothing in that sequence lies. Every poll is legitimate: the monitor was genuinely due, the external condition genuinely had not changed, and the observation genuinely was written back.
-
-The problem is that **the retreat decision was measured at the wrong scale**. If "should we back off" is decided from adjacent runs globally, then every M1 run interrupts M2's unchanged sequence and every M2 run interrupts M1's. The two lanes keep each other alive. The system looks busy and is in fact **hot-polling a world that never changes**.
-
-The same root has a quieter expression:
-
-```text
-22:00  The last Agent turn ends. One external condition remains, unsubscribed.
-Next
-09:00  The user returns and finds that nothing happened.
-```
-
-**Silent stagnation.** No mechanism advances work while nobody supervises, and no mechanism declares "I am waiting" while nobody supervises.
-
-The two endings look opposite. They are one defect: the system has no **externally observable criterion for its own consumption**. Hot polling happens because retreat was counted at the wrong scale; silent stagnation happens because waiting was never registered as a state something can wake.
-
-## Why "set a budget ceiling" is not the cure
-
-The instinct is to give the system an allowance: charge a little per round, stop at zero. That design misses in both directions at once.
-
-**It does not stop spinning.** Every round of hot polling is a "legal" round, so the allowance drains on schedule until it is gone. The ceiling only gives hot polling an expiry time; it does not make it stop. Worse, the round that genuinely needed to react to an external change may land after the allowance ran out.
-
-**It does not stop silent stagnation.** An external condition nobody observes will never produce a run on its own. A generous allowance does not tell the system "go look at the review on #456." A ceiling governs spending, and it cannot reach observation.
-
-**It also misjudges legal no-cost rounds.** Monitor polls, dry-runs, and preflights are legal work whose cost does not sit in quota at all — a monitor poll settles without spending. A system reading a balance turns "allowance remains" into "start now," when the correct answer for this round may be "keep waiting."
-
-So what is needed is not a ceiling but three cooperating mechanisms: **admission** decides whether this round should move; **backoff** decides how to retreat under repeated no-change; and **monitors** decide what does the waking.
-
-## Choosing how often to observe CI {#running-wait}
-
-M1 observes C1's CI while G1 awaits a maintainer decision. Both may be incomplete but need different actions: external readback for M1, the scoped decision for G1. Repeated questioning cannot substitute for either responsibility.
-
-| Option | Useful when | Cost and boundary |
+| Question | Owning facts or rules | Responsibility it cannot replace |
 | --- | --- | --- |
-| A person returns to inspect | Low frequency, short duration, tolerable delay | Uses human attention and needs handoff information |
-| Fixed-cadence observation | Change rate is predictable | Repeated cost during long waits |
-| Backed-off monitor with available event wakes | Long no-change periods or a real event channel exists | Backoff delays discovery; without an event channel there is no immediate notification guarantee |
+| Which work may advance now? | Quota and the current interaction contract | No additional external permission |
+| What is being watched, and what was last observed? | Monitor identity, target and observation metadata | No automatic CI access or process creation |
+| When should another observation happen? | Cadence, next due and scheduler/backoff | No guarantee that a Host will be available then |
+| Who actually observes or wakes execution? | An integrated, usable Host, runner or event channel | Configuration is not proof of runtime health |
+| Is this wait or route still worthwhile? | Frontier, Vision and replan policy | Not merely increasing or decreasing cadence |
 
-| M1 observation | Fact to retain | Next action |
+Actual resource costs have their own sources: provider bills, tool usage and machine time. Internal quota settlement does not replace them. A legitimate no-spend observation can still cost resources.
+
+## How a faulty counting policy misleads decisions
+
+The following is a **hypothetical faulty policy**, not a claim that current implementation retains this defect: track consecutive unchanged observations in one global target slot, resetting whenever the target changes.
+
+| Time | Due work | Correct per-item fact | Hypothetical global interpretation |
+| --- | --- | --- | --- |
+| 10:30 | M1, cadence 30m | M1's first unchanged observation | Just saw M1 |
+| 10:45 | M2, cadence 45m | M2's first unchanged observation | Switch to M2 and clear the previous target count |
+| 11:00 | M1 | M1's second unchanged observation | Switch again and start counting again |
+| 11:30 | M1 and M2 are each due | Update each observation independently | Depends on processing order rather than actual stagnation |
+
+The problem is not a high threshold; it is conflating different targets. Preserve each Monitor's identity and count instead of repeatedly lowering the threshold. Conversely, without a usable Host executing due observations, correct counters remain static records: that is a liveness gap, not no-change evidence.
+
+## Choose an observation frequency while waiting for CI {#running-wait}
+
+| Option | Suitable conditions | Cost and limit |
 | --- | --- | --- |
-| C1 CI pending, unchanged | Actual observation and no-change information | Follow due/backoff; no delivery spend |
-| C1 CI passed | New evidence / material change bound to C1 | Recheck T3; do not publish while G1 is unapproved |
-| Code advanced to C2 | C1's observation proves only historical C1 | Update the observation target and read C2's result |
+| A person returns to inspect | Low frequency, short duration, tolerable delay | Depends on attention and preserved handoff context |
+| Fixed cadence | Predictable change rhythm | Repeated observations accumulate during long waits |
+| Capped backoff | Long unchanged periods | Reduces repeated reads but increases detection latency |
+| Real event channel with verification | Available notification path and identity binding | An event still needs target, revision and current-state checks |
 
-Monitors record observations their callers actually made; they do not query CI themselves. Establish current source, observation target, and the real wake path before relying on waiting behavior.
+M1 and G1 require different actions. CI needs external readback; publication needs an authorized decision. CI passed cannot substitute for approval, and a pending user decision must not automatically freeze independent work.
 
-## The design
+| Actual M1 observation | Retainable fact | Legal continuation |
+| --- | --- | --- |
+| CI for C1 remains pending | Source- and time-bound unchanged observation | Update observation state and wait under current policy |
+| CI for C1 passed | New evidence bound to C1 | Recheck T3, including G1 |
+| Current code is C2 | Old green evidence supports C1 only | Obtain applicable C2 validation without deleting C1 history |
+| Read failed or access is denied | Current CI remains unconfirmed | Report the read gap, not unchanged or passed |
 
-### Admission: whether this round should move
+A Monitor records an observation completed by its caller. It does not itself access CI, and `next_due_at` does not create an execution process. A healthy wait needs the target, observation rules and actual execution surface together.
 
-The first mechanism is admission. Before deciding what to do, it answers what is permitted now — and the answer cannot come from the executor itself.
+## Budget participates in admission, but is not authorization
 
-[One governed turn](03-one-turn.md) introduces quota as a decision compiler. Balance remains an input: `spent_slots >= allowed_slots` in the current window makes ordinary work `throttled`.
+Ordinary delivery remains budget-constrained: `spent_slots >= allowed_slots` in the current window triggers applicable throttling. Do not bypass exhaustion by switching Todos or renaming delivery as observation. Positive balance does not bypass Gates, identity, capability, workspace or dependencies.
 
-Available budget still requires Gate, capability, workspace, and frontier checks. Balance answers whether budget is available; full admission answers what this Agent may do now. Both matter.
+Read the resolved contract, distinguishing delivery, recovery/repair, observation, waiting and an outstanding decision. Unknown identity refuses delivery eligibility; it does not make diagnosis consume no resources. Relevant `quota should-run --codex-app` paths can create heartbeat receipts and must not be treated as side-effect-free polling. Use the [appendix](appendix-reference.md#read-before-change) for field reads.
 
-The forbidden shortcuts share one shape: mistaking a local signal for global authority.
+Internal accounting attributes accepted work. Scheduler cadence changes, Gate notifications, dry runs, unchanged polls and repeated writeback must not masquerade as new delivery spend. Calling them free turns would hide their actual resource costs.
 
-| Source fact | Admission meaning |
-|---|---|
-| Whether the Goal is registered and the Agent identified | Fail closed on unclear identity; consume no resources |
-| Whether a User Gate blocks the current scope | Blocked paths do not run; unblocked fallbacks run independently |
-| Whether an external dependency has been registered as a wait | With a typed dependency, do not retry — wait and keep an independent successor |
-| Whether this round already has a settlement identity | One heartbeat turn has exactly one settlement Todo; another monitor cannot replace it |
-| Whether the delivery type permits spend | A writeback with no validation, a dry-run, and an unchanged poll produce no delivery spend |
+## After registering a wait, who may continue? {#wait-and-next-turn}
 
-**Required accounting must happen; ineligible actions must not be charged as delivery.** Follow the current settlement contract for valid delivery.
+When T1 discovers a real dependency, record a specific target such as `monitor_changed:<todo_id>` or `todo_done:<todo_id>`. Preserve the validator, original work identity and dependency relation. Marking the Todo done is not a shortcut for clearing the blocker.
 
-Gate notifications, dry-runs, failed preflights, unchanged monitor polls, scheduler cadence changes, and duplicate writebacks do not count as delivery spend.
+Independent T2 in the work graph does not let a Turn already bound to T1 rebind itself. Complete the original Turn's required blocked writeback and closeout, then let later admission select new work. **Turn closeout, Todo waiting and next-turn selection are three different facts.**
 
-The quantity limit and accounting classification address different risks. Quota units are not an external model bill; a no-spend observation may still use tools, network resources, or a model.
+The [Turn chapter's wait sequence](03-one-turn.md#wait-closeout) explains this path with an explicit test from main `f49b4a00…`, labeled separately from older release promises. It checks no duplicate debit, no forced Monitor poll, and retained waiting/validation declarations. It is not a universal scheduling order for all Hosts.
 
-Another product shape of admission is that waiting gets registered. When an admitted advancement turn discovers a real dependency, it registers a `monitor_changed:<todo_id>` or `todo_done:<todo_id>` wait while keeping an independently runnable successor. Settlement returns `typed_blocked_writeback_no_spend`: validation and durable-writeback receipts, no debit and no delivery credit. The old turn is therefore not stuck, and independent work stays selectable.
+## Cadence backoff versus route replanning
 
-```text
-loopx quota should-run --goal-id "$GOAL" --agent-id "$AGENT"   # read this round's admission
-loopx task-lease inspect --goal-id "$GOAL" --todo-id "$MONITOR" # read the monitor's current lease
-```
+Backoff asks when to observe again under the same conditions. It derives a schedule from the resolved decision and runtime profile, preserving or resetting backoff with the applicable scheduler state's identity and `reset_token`. Read intervals, caps and unchanged limits from the current profile rather than treating sample numbers as a contract shared by every Host.
 
-### Backoff: how to retreat under repeated no-change
+Without an event channel, external change is detected only after the next actual observation. Reset can change a future interval, not recover elapsed time. Use the bound ACK only after Host apply succeeds or readback already matches the target cadence. Failure or timeout needs the corresponding failure record, not a fabricated ACK. See [scheduler entrypoints](appendix-reference.md#scheduler-entry).
 
-The second mechanism is backoff, which answers "given that nothing changed, how long until we ask again."
+Replan asks whether waiting still serves the objective and whether another next step is preferable. Current Monitor policy combines current-Agent advancement, Monitor type and unchanged history; a counter alone is insufficient.
 
-The scheduler hint projects the current state into a cadence, including the unchanged-poll policy: a backoff multiplier (2 in the current implementation), an unchanged-poll limit per execution surface, and a max interval. Consecutive unchanged rounds stretch the interval step by step until it hits the ceiling.
+| Current input | Judgment supported by the relevant tests |
+| --- | --- |
+| No selectable advancement for the current Agent; eligible ordinary monitor-only lane reaches threshold | May create `monitor_no_change_streak` replan obligation |
+| The current Agent has selectable advancement | Tested cases choose work without that Monitor-derived obligation |
+| Only a peer has advancement | Peer progress does not erase the current Agent's stagnation |
+| Monitor explicitly uses `watch_only` | Tested cases do not create this obligation even with a large count |
 
-Scheduler state is bound to `reset_token` and `identity_signature`. Changed identity or decision inputs, once read, can return cadence to the profile's initial value. Consecutive unchanged polls follow the backoff policy.
+The [policy tests](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_monitor_replan_agent_scope.py) use threshold 5. That is the tested policy, not a theorem that every wait must change course after five observations. They preset counters and evaluate decisions, not actual interleaved polling, concurrent counter writes or real Host waking. See the [Monitor exercise](12-control-plane-course.md#checkpoint-monitor).
 
-External change can precede its observation. Without a separate event-wake channel, it is detected at a later due poll. Backoff reduces repeated observation cost but may increase response latency; reset cannot recover the time already spent waiting.
+Replan is therefore not stronger backoff. One changes observation frequency; the other reassesses the route and needs an outcome accepted by its current contract. Saying “I reconsidered” does not replace the required change or supported terminal reasoning.
 
-The same retreat logic has a much stronger version for a monitor that observes without progress for a long time. Once a monitor-only lane's unchanged count reaches a threshold, the goal frontier stops waiting quietly and requires an autonomous replan:
+## Define an explainable observation
 
-```text
-kind: monitor_no_change_streak
-threshold: 5
-```
+Before creating or changing a Monitor, identify its stable target, available observation handle, cadence/next due, relevant-change criterion, observation boundary and no-change accounting.
 
-The threshold of 5 has an explicit rationale in source: it sits deliberately above the 2-turn run-history stall threshold, because a quiet monitor legitimately waits several cadence cycles, and forcing replan after two unchanged polls creates churn for slow external sources. The specific number will move as the protocol evolves, but the fact that **"retreat far enough and you must change the question" needs a number** is stable.
+The metadata contract permits `expires_at`, `resume_when` or explicit `watch_only=true` as boundedness alternatives. Expiry and due are different: one constrains termination, the other schedules another observation. Absence of expiry alone does not establish an invalid Monitor.
 
-### Monitors: waking on an external condition
+Change must matter to the task. An unrelated response timestamp need not change acceptance conditions; identical text need not denote the same revision. Keep the validated object and interpretation in evidence rather than accumulating every raw response in the hot path.
 
-The third mechanism stops the Agent from repeatedly asking, and registers what it is waiting for as a state.
+[`monitor_metadata.ts`](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/loopx/control_plane/todos/monitor_metadata.ts) handles observation metadata and replay. The caller supplies domain observations; controlled writeback validates and records them. Another lane running must not overwrite this Monitor's count. See the [state-machine topic](core-state-machines.md) for canonical observation/successor transaction boundaries; these do not make network reads, settlement and every display atomic together.
 
-When the frontier holds nothing but an external condition, create a `continuous_monitor`. A monitor needs at least six things:
+## Diagnose the missing relationship
 
-- a **stable target key**: a durable identifier for the observed object (a PR, a tag, a release), not a description re-inferred on every poll;
-- **cadence and next due**: how often to look, and when the next look is;
-- a **bounded observation handle**: a readable handle so "we looked" has evidence, not just a self-report;
-- a **material-change predicate**: what counts as a change;
-- an **observation boundary**: the current contract accepts `expires_at`, `resume_when`, or explicit `watch_only=true`;
-- a **no-change accounting policy**: how repeated no-change is recorded, and where.
+| Symptom | Evidence to collect first | Continuation and stopping condition |
+| --- | --- | --- |
+| No messages | Due state, actual Host state, last successful observation | Report an execution gap if no Host exists, not an unchanged external world |
+| Repeated observations | Target identity, fingerprint, individual counters and cadence | Repair the owning policy, not every threshold |
+| New evidence but no progress | Evidence revision, current Gates, dependencies and admission | Keep waiting if conditions are unmet; do not edit display state alone |
+| Repeated replan requests | Current lane, selectable work, watch-only and ACK outcomes | Submit an accepted replan result, not a fabricated ACK |
+| Observation committed but display stale | Original receipt, current source and projection | Restore projection, not repeat the business mutation |
 
-Cadence determines the next observation; expiry determines time-based termination. They are different conditions. A monitor without expiry can validly use `resume_when` or `watch_only` and still have a next due time.
+Higher frequency generally costs more reads; longer backoff can increase detection delay. Judge policy against the task's latency, resource and human-intervention needs, not counts of turns or notifications.
 
-`last_checked_at`, `result_hash`, `consecutive_no_change`, and `material_change` record observations for later decisions. The monitor metadata contract validates boundedness and state transitions.
-
-When an observation is written, the unchanged one and the changed one take different paths. The counter increments only on no-change with an unchanged hash; a material change or a changed hash zeroes it:
-
-```typescript
-// loopx/control_plane/todos/monitor_metadata.ts
-const noChange = replay ? previousNoChange : material || (previousHash && previousHash !== resultHash)
-  ? 0 : previousNoChange + 1;
-```
-
-The material-change predicate determines whether this observation carries new relevant evidence. It can inform follow-up work, but is neither the only source of successors nor an execution grant.
-
-### Per-lane counting across monitors and agents
-
-Back to the hot polling from the opening. The fix is not to tune the threshold, it is to **change the scale of the count**.
-
-The correct approach is to keep an independent `consecutive_no_change` counter per monitor Todo. When M2 has a material change, only M2 resets; M1 is unaffected. The turn order (A1, B1, A2, B2, …) does not clear either one.
-
-The same per-lane design applies across agents: each agent's monitor is its own lane, they share one frontier read model, but the no-change judgment is per-lane. The shared read model keeps the global view consistent; per-lane counting keeps the retreat criterion from being contaminated by another lane's activity. Both must hold at once — only the former degrades into hot polling, only the latter loses the global view.
-
-The result is directly observable. In the fixture below four lanes coexist: two with a streak of 1, one with a streak of 5 belonging to the current Agent, and one with a streak of 5 belonging to a peer Agent. Exactly one of them fires:
-
-```text
-kind: monitor_no_change_streak
-todo_id: todo_unchanged_twice
-target_key: github-pr-456
-run_count: 5, threshold: 5, agent_id: <current Agent>
-```
-
-The two lanes with a streak of 1 stay quiet, and the peer lane with a streak of 5 does not enter the current Agent's replan obligation. **Counting is per lane, and so is waking.**
-
-### The scheduler hint says when to wake
-
-The last distinction is the one this chapter is most likely to blur: **the scheduler hint and execution permission are two different things.**
-
-```text
-scheduler hint: when to wake
-interaction contract: what this turn may do
-```
-
-The scheduler hint projects the current state into a Host cadence: run now, wait for fresh evidence, wait for reassignment, or wake on the monitor cadence. It answers a question about time. Whether this round may write, and may charge, is answered by the interaction contract.
-
-Hence one hard rule: **a Host woken at exactly the right time must still re-run the current decision.** An old scheduler proposal, an old `should_run`, an old selected Todo must not be reused across a state change. Otherwise the scheduler turns from an alarm clock into an authorization.
-
-By the same logic, three wake-related actions produce no delivery spend: cadence apply, failure writeback, and ACK. Waking is not itself a delivery.
-
-## Cost and boundary
-
-**Admission needs usable facts.** Unresolved identity, unclear Gate scope, or stale evidence may hold related work for repair. This avoids guessed authority while adding preparation cost.
-
-**Observation frequency affects detection latency.** Longer cadence saves queries but cannot promise immediate discovery. A monitor's no-change replan threshold and polling interval are separate parameters, each tied to the observed process's time scale.
-
-**Material-change predicates need domain knowledge.** Comparing selected fields may miss facts omitted from a fingerprint; including irrelevant timestamps may treat noise as progress. Choose facts relevant to the wait and bind their source and freshness.
-
-**An unobservable condition needs an explicit handoff.** Record a Gate or blocker for the person who can supply evidence. Do not promise automatic observation of an external condition without a query path.
-
-Quota consumption is not completed workload, and `monitor_quiet_skip` alone does not establish health. Inspect the target, next due, expiry where applicable, streak, and recovery owner.
-
-Scheduler selection does not grant an execution lease or external write authority. The current interaction contract, lease, and operation-specific authority checks still apply.
-
-## Named failures: what these constraints stop
-
-Three scenarios below each have a corresponding test or protocol anchor you can run or read.
-
-**Select replan by lane.** `tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks` supplies prepopulated counters and checks which eligible lane of the current Agent is selected.
-
-It does not execute the opening observation timeline or scheduler backoff. Counter transitions belong to `monitor_metadata.ts` and its tests; cadence belongs to the scheduler.
-
-**Auxiliary observations must be no-spend, and must not replace the settlement identity.** When an advancement is already bound to this turn's settlement Todo, a newly due monitor may write an auxiliary observation in the same turn, but it cannot replace the settlement identity and cannot produce a second debit. Replay must be idempotent. Corresponding test: `tests/control_plane/test_monitor_observation_admission.py`, plus the protocol `docs/reference/protocols/quota-monitor-observation-receipt-v0.md`, which states plainly that a receipt proves a historical outcome and does not authorize a new mutation.
-
-**A real dependency is not propped up by a short timer.** An admitted turn that discovers a real dependency should register a causal wait and keep an independent successor, not retry on a short `resume_at`. Settlement returns `typed_blocked_writeback_no_spend`, with no debit and no delivery credit, while the Todo stays open with its original validator. Corresponding protocol: `docs/reference/protocols/quota-blocked-causal-closeout-v0.md`.
-
-## Invariants
-
-Six claims you can check yourself.
-
-**On admission and retreat:**
-
-1. **No delta means no spend.** A Gate notification, a dry-run, and an unchanged poll are not deliveries. The converse also holds: one spend does not prove an effective delivery happened.
-2. **Retreat is counted per lane, never globally.** If you observe a system that looks busy while nothing changes, check whether no-change was measured at the global scale.
-3. **Waking is not authorization.** A Host woken at the right time must still re-run the current decision.
-
-**On observation:**
-
-4. **Waiting needs a readable boundary.** Inspect the target, cadence/next due, and applicable `expires_at`, `resume_when`, or `watch_only` constraint. Missing expiry alone does not establish stagnation.
-5. **The material-change predicate decides who drives subsequent work.** It is a human choice, which means it can be chosen wrongly.
-6. **An external condition with no observable handle cannot use this machinery.** The fallback is then a person, and a person has a cost.
-
-These six answer one question: **when nobody is watching and nothing is changing, what lets this system say it is still waiting correctly rather than already spinning or stalled?** The evidence is not how many rounds it ran, but whether it can say what it is waiting for, until when, and what would count as having arrived.
+You should be able to name the wait target, observer, next observation, relevant change and remaining execution conditions. Continue with the [Host](06-codex-app.md) or [CLI](07-codex-cli.md) for operation, and the [appendix](appendix-reference.md#diagnostic-routing) for diagnosis.

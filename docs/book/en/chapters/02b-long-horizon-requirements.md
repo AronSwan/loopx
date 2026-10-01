@@ -1,89 +1,67 @@
 # The four demands of long-running work
 
-A fix may involve editing code, testing it, waiting for PR checks, responding to review, and handing it to another Agent. Each step may fit one session; the whole task crosses sessions, processes, and human decisions.
-
-This chapter uses that example to introduce four architectural questions. They form a reading framework for LoopX, not a claim that every LoopX path already provides the same guarantees. Other systems may choose different mechanisms.
+A repair can span code edits, tests, CI waiting, review, handoff and delivery. Each step may fit one session; the task crosses sessions, processes and decisions. This chapter supplies four reading questions, not a universal architecture or a claim that every LoopX path already provides the same guarantees.
 
 ## Four demands
 
-| Question | What must be retained or decided | LoopX's main approach |
+| Question | What must be retained or judged? | LoopX's main approach |
 | --- | --- | --- |
-| How does another session continue? | Objective, work items, evidence, and next action | Durable state and rebuildable projections |
-| How does interrupted work avoid repetition? | Committed, absent, and unknown effects | Turn identity, journals, receipts, and provider readback |
-| What if two executors arrive together? | Scope, write ownership, and current revision | Claims, leases, fences, and commit checks |
-| How does an unchanged situation cost less? | Budget, runnable work, wait target, and next observation | Quota admission, monitors, backoff, and external scheduling |
+| How does another session continue? | Objective, work, evidence and next entrypoint | Durable state and rebuildable projections |
+| How does interruption avoid blind repetition? | Committed, absent and unknown outcomes | Original identity, journals, receipts and provider readback |
+| How do executors collaborate? | Assignment, scope and current execution proof | Claims, leases, fences and commit checks |
+| How does no-change work consume less? | Budget, wait target, observations and actual execution conditions | Quota, Monitors, scheduler/backoff and Host |
 
-Together these mechanisms support continued progress, including legitimate waits and stops. Long-running work does not require an always-live process or a delivery on every wake.
+Long-running work needs neither an immortal process nor a delivery on every wake. Legitimate waiting and honest stopping also need representation.
 
-## Demand one: state must outlive the current context
+## Demand one: state outlives the current context
 
-The fix is submitted and the Agent changes session. The new session needs the exact PR, commit, passed checks, and outstanding decisions. A statement that the fix is done cannot reconstruct those relations.
+A recipient needs the exact PR, commit, validated behavior and outstanding decisions, not merely “I fixed it.” Chat may persist and explain history, but persistence alone supplies neither structure, freshness nor current permission.
 
-Chat history may persist and help explain the past. It may still lack structure, refer to stale inputs, or be compressed. Facts governing the next action need an addressable owner, revision, and read entrypoint.
+Consequential facts need an addressable source, applicable revision and read entrypoint. Maintaining records has a cost; the benefit is reassessing conditions after session change rather than filling gaps from memory. In the [state chapter](state-substrate.md), distinguish source from display under the selected mode.
 
-LoopX externalizes Goal, Todo, Gate, and receipt state, then projects it for people, Agents, and schedulers. Maintaining and reading records costs work, but lets another session reassess the conditions for action.
+## Demand two: retain known facts and uncertainty
 
-**Usage question:** can the next executor identify the objective, unfinished work, and recovery conditions from current sources? Information present only in a prompt cannot by itself prove durable writeback.
+An external operation can succeed while its local response is lost. A missing local record proves neither remote absence nor completion.
 
-## Demand two: retain both known facts and uncertainty after interruption
+Governed Turns represent confirmed progress through phases and receipts and read unresolved effects under original identity. Legal prefixes constrain records, not the crash window between external commit and checkpoint. The original owner resolves uncertainty; a new key must not bypass it. Only supported outcomes and current permission allow reuse or outstanding execution.
 
-Suppose a PR push succeeds, but the process exits before saving its local receipt. Missing local evidence cannot establish that nothing happened remotely. A blind retry may repeat an effect; skipping may leave settlement unfinished.
+Historical recovery and admission for a new execution answer different questions; see [recovery](04-runtime-boundaries.md#recovery-or-new-execution).
 
-A governed LoopX Turn uses phases, identity, and receipts for confirmed progress. Prepared effects also require provider readback. Confirmed commits are reused; confirmed absence may allow execution; unknown outcomes retain a block and recovery owner.
+## Demand three: distinguish assignment from permission to commit
 
-Legal phase prefixes constrain recorded progress. They do not eliminate the gap between an external effect and a local checkpoint. Continuation also depends on bound identity, authority, and external observability.
+Agents can handle different work or both believe the same item belongs to them. Claims express responsibility; applicable leases/fences constrain the current instance. Neither replaces Goal boundaries, Gate scope, capability or workspace conditions.
 
-**Usage question:** after a timeout, inspect the original Turn and recovery decision. Do not create a new identity simply to repeat work, or translate `unknown` into `false`.
+Default legacy, soft-claim and hard-lease paths have distinct enforcement boundaries. One mode does not establish universal exclusion, and multiple peers do not imply one executor for the entire Goal. Tie takeover and parallelism to a concrete writer and current inputs; see [authority layers](work-graph-and-authority.md#authority-layers).
 
-## Demand three: parallel work needs explicit write boundaries
+## Demand four: budget and observation constrain repetition
 
-Two Agents can fix different modules or contend for one Todo. After a restart, an old instance may still hold a stale decision. Work ownership and the legality of the current write therefore need separate answers.
+Budget bounds quantity, but balance alone cannot tell whether another turn is useful. CI waiting requires readback for the correct revision; approval waiting needs an authorized decision. A next-due time without a usable Host is only a recorded time.
 
-LoopX uses claims for ownership and leases, revisions, and fences to constrain applicable write paths. Checks belong at the relevant commit boundary; old display state or a takeover declaration cannot replace current authority.
+Monitors retain targets and observations; scheduler/backoff arranges timing; Hosts or integrated event channels execute. Backoff reduces repeated reads but can delay discovery. Replan reassesses a route rather than applying stronger backoff. Internal no-spend does not make models, tools or networks free; see [observation ownership](04b-budget-and-admission.md#observation-owners).
 
-These mechanisms have configuration and migration boundaries. Default legacy handoff differs from `hard_lease`, and legacy writers do not all enforce the same instance fence. Multiple peers also do not imply one executor for the entire Goal.
-
-**Usage question:** identify the current authority, handoff mode, and writer checks before relying on takeover safety. A design target does not qualify a path where enforcement is not enabled.
-
-## Demand four: budget and observation must bound unproductive repetition
-
-While PR checks are pending, repeatedly asking a model to look again may return the same answer. A budget bounds quantity but cannot alone decide whether another turn is useful. Available budget can still mean waiting.
-
-LoopX admission combines budget, Gates, frontier, capabilities, and workspace facts. Exhaustion restricts ordinary delivery. Monitors organize observations by cadence and material change; unchanged conditions can trigger backoff or replanning.
-
-A monitor may use governed polling. An additional event channel can wake work sooner; without one, backoff increases detection latency. That is a real tradeoff between observation cost and response time.
-
-Delivery quota is separate from actual token, network, and tool costs. A poll that consumes no delivery spend can still consume resources.
-
-**Usage question:** are the wait target, next observation, budget limit, and release condition visible? Can the current Host or scheduler actually trigger work while no person is watching?
-
-## How the four demands form one system
-
-Follow the opening repair task:
+## How the demands work together
 
 ```text
-Persist Goal / Todo / acceptance conditions
-  → select runnable work and check authority from current facts
-  → Host execution, validation, durable writeback, and settlement
-  → wait for PR checks; observe on cadence or an available event
-  → reread facts, identity, and recovery conditions after session change or handoff
+Identify objective and current work
+  → read sources and determine allowed action
+  → execute, validate and obtain owner acceptance
+  → complete outstanding settlement and arrange next action or wait
+  → observe changes and choose continuation, replanning or stopping
 ```
 
-This is a workflow illustration, not another state machine or mandatory API order. State enables handoff; authority constrains continuation; receipts help interpret effects; budget and observation govern the next attempt.
-
-No single mechanism guarantees that the objective succeeds.
+This is a teaching responsibility chain, not a new global API order. No mechanism guarantees success alone. Understand how mechanisms supply one another's evidence and which owner must handle each failure.
 
 ## Reading routes and evidence
 
-Read [durable state and projections](state-substrate.md), then [work graphs, authority, and peers](work-graph-and-authority.md) for facts and writers. [One governed turn](03-one-turn.md) connects them.
+**First reading:** enter [one complete turn](03-one-turn.md#running-turn), then return to [state](state-substrate.md) and [authority](work-graph-and-authority.md#design-choice) to understand its facts and writers. Continue with [recovery](04-runtime-boundaries.md) and [observation](04b-budget-and-admission.md). This matches the reading guide and requires no memorized state-machine enums.
 
-[Recovery and boundaries](04-runtime-boundaries.md) covers repeated turns; [budget, admission, and observation](04b-budget-and-admission.md) covers waiting and cost. Onboarding chapters apply these boundaries to a selected Host.
+**Alternative:** experienced control-plane readers can study state and authority before the Turn. The state-machine topic and appendix are references, not mandatory prerequisites to onboarding.
 
-| Boundary to inspect | Evidence entry | What it does not prove alone |
+| Boundary | Protocol entrypoint | What it does not establish alone |
 | --- | --- | --- |
-| Source versus projection | [Long-horizon state protocol](/loopx/docs/reference/protocols/long-horizon-agent-state-protocol-v0/) | Every reader is real-time |
-| Turn recovery | [LoopX Turn protocol](/loopx/docs/reference/protocols/loopx-turn-v0/) | Every external effect can be retried automatically |
-| Ownership and handoff | [Peer runtime protocol](/loopx/docs/reference/protocols/peer-agent-runtime-v1/) | Every mode enforces exclusive instances |
-| Budget and waking | [Quota contract](/loopx/docs/quota-allocation/) | A Host without event integration immediately detects external changes |
+| Sources and projections | [Long-horizon state](/loopx/docs/reference/protocols/long-horizon-agent-state-protocol-v0/) | Every reader is real-time |
+| Turn recovery | [LoopX Turn](/loopx/docs/reference/protocols/loopx-turn-v0/) | Every external effect can be retried automatically |
+| Assignment and takeover | [Peer runtime](/loopx/docs/reference/protocols/peer-agent-runtime-v1/) | Every mode has the same fence |
+| Budget and waiting | [Quota contract](/loopx/docs/quota-allocation/) | A Host without events detects changes immediately |
 
-Carry three questions into each chapter: where does this guarantee apply, which conditions does this environment satisfy, and who owns the next action after failure?
+Carry the guide's [four-question standard](00-reading-guide.md#judgment-standard): current facts, allow/refuse reasoning, supporting evidence and a legal next entrypoint. Retain unknowns instead of guessing to complete the story.

@@ -1,330 +1,134 @@
 # 工作图、权限与 Peer 协作
 
-一条 Todo 可以同时被多个 peer 看见。它的归属、当前写权限与执行实例需要分别核对，才能避免接管后的旧实例继续提交。本章说明工作图如何表达协作，以及 claim、lease 和 fence 在哪些边界上约束写入。
+A 可以实现 JSON，B 可以补文档，维护者仍未批准发布。这三件事可以同时成立。工作图的价值是把它们表达成有身份、有依赖和有接受条件的工作，而不是让“有人正在做”成为所有动作的许可。
 
-## 从一个坏的结局开始
+本章先分清工作归属、执行证明与决定范围，再走一次交接和集成。实际写入仍由当前 authority、handoff mode 与对应 writer 校验；本章不新增一个统一授权者。
 
-下面是缺少提交围栏时的教学反例，并非当前受保护路径的执行记录：
+## 从一项任务拆出可接受的工作 {#design-choice}
+
+沿用[贯穿任务](00-reading-guide.md#running-example)。T1 的结果是兼容实现；T2 的结果是与当前行为一致的文档；M1 是外部观察；G1 是明确的决定；T3 将已接受结果交付到目标位置。
+
+| 选择 | 能解决什么 | 留下的代价 |
+| --- | --- | --- |
+| 单个 Agent 持续执行 | 简化交接与冲突 | 仍需跨会话状态、验证和外部等待 |
+| 多个 peer 使用软 claim | 表达责任与可接手工作 | claim 本身不能排除失效或竞争实例 |
+| 对适用写入使用 lease 与围栏 | 让当前执行证明参与受控提交 | 要处理 TTL、版本变化、续租和恢复 |
+| 分离工作区并独立验收 | 减少直接编辑干扰 | 不能替代集成验证与合并权限 |
+
+拆分不以 Agent 数量为目标。若 B 必须等待 A 每次修改的结果，两者可能仍在同一关键路径；若它们可以独立产生可验证结果，才有并行价值。每项工作的输入、产物和后续接受条件应能单独说清楚。
+
+## 四个不能合并的判断 {#authority-layers}
+
+| 判断 | 依据 | 不充分的替代信号 |
+| --- | --- | --- |
+| 这项工作现在存在且可推进吗？ | 当前 Todo source、status、依赖和边界 | 旧列表仍显示 open |
+| 它归谁处理？ | claim、binding、exclusion 与 peer/lane 规则 | Agent 的自我介绍或进程名 |
+| 这个执行实例现在可以提交吗？ | 适用模式的 lease、当前 owner/key/version 与 writer fence | 原 acquire 曾成功 |
+| 这个具体动作被允许吗？ | Goal/repository 权限、Gate scope、能力和工作区要求 | 工具可调用、目录可写或 quota 有余额 |
+
+Agent identity 是工作 lane，不证明具体 Host，更不证明组织职级。`claimed_by` 表达归属而不是进程活性；lease 的有效性也不能证明模型判断正确。外部服务最终是否拒绝旧执行者，还取决于那个写入端实际执行的约束，不能从本地 lease 推导出全系统围栏。
+
+## Gate 覆盖动作，不靠数量冻结全局
+
+G1 限制 T3 的 publication scope。T2 如果确实独立且自己的条件满足，可以继续；G1 仍应在用户通道中可见。独立 fallback 不是绕过 Gate，而是根本没有执行被它覆盖的动作。
 
 ```text
-09:00  agent-a 选中 Todo T，acquire 到 lease，version=1，ttl=600s。
-09:00  agent-a 开始改代码，改到一半去跑一个长测试。
-09:10  agent-a 的 renew 失败：宿主进程被抢占，或者网络抖了一下。
-09:10  它没有重试成功，但进程还活着，手里的判断还是"我持有 T"。
-09:11  lease 过期。agent-b 看到 T 无人持有，acquire 成功，version=2。
-09:14  agent-b 改完，写回 version=2，验证通过，quota 记一次。
-09:20  agent-a 的长测试终于回来，它拿着 version=1 的判断写回。
-09:20  agent-a 的写回也成功了。
+G1: publication scope 尚未批准
+T3: requires G1 → 不执行发布
+T2: 不依赖 G1，其他条件满足 → 当前准入可选择文档工作
 ```
 
-09:14 和 09:20 两次写回都返回成功。后者覆盖前者，T 上现在只有 agent-a 的结果，agent-b 的工作从状态里消失。quota 却老老实实记了两次。
+scope 缺失或矛盾时不能猜成批准，也不能为了省事创造一个隐式 global Gate。由原 source/projection/decision owner 修复关系，或提出需要有权决定者回答的具体问题。`user_action` 提醒也不能替代 `user_gate` 的决定。
 
-这就是**丢失更新（lost update）**，也是**过期持有者（stale holder）**。它比"两个 agent 同时写坏了文件"更难发现：没有任何一方报错，状态自洽，账目自洽，只有一份真实完成的工作不见了。等到有人问"agent-b 那天做了什么"，读模型回答不了。
+用户操作有自己的生命周期权限；自动工作的准入有自己的 quota contract。Workspace 点按钮不产生权限，quota 也不是所有 owner 操作的通用批准器。具体操作见[Workspace](workspace-v1.md#action-owners)。
 
-## 为什么"claim 一下就该没人来抢"解决不了这个问题
+## Claim、lease 与当前执行证明
 
-直觉反应是：开工前 claim 这条 Todo，别人看到 claimed 就不碰了。
+当前 `handoff_mode` 决定适用约束：默认 `legacy` 保留软 claim / hard lease 的兼容路径，`soft_claim` 与 `hard_lease` 有自己的规则。部分 legacy terminal 路径可以出现 `terminal_fence_not_required`。因此，不能把一种模式上的回归测试推广为全部 writer 的强互斥证明。
 
-Claim 说的是"这个 peer 当前负责这项工作"，它帮 quota 和其他 Agent 避免重复领取。它**不证明持有者还活着**，也不证明持有者还在正确的 worktree 里。上面 09:10 的 agent-a 进程还活着、claim 还挂在自己名下，可它手里的判断已经过期十分钟了。
+对已经提升的 File/SQLite authority，精确读取应来自选定 provider；读取失败不退回旧 lease 文件。来源选择、registration 和当前 Todo 约束与 lease 共同参与判断。`task-lease inspect` 是一次观察，不是跨后续操作持有的锁。
 
-于是那个自然的补丁——"写回前先检查一下自己是不是还持有"——也救不了场。检查和写回是两次独立操作，中间隔着一次进程调度；如果检查通过之后、写入落盘之前 lease 被转移，你检查得再勤也只是把窗口收窄，没有关掉。
-
-真正的难点是：**一次写入要么由当前持有权威的执行实例发出，要么根本不该落盘**。判断不能发生在写入之前，只能发生在写入提交的那一瞬。这就要求 Todo 不只是彼此独立的条目，而是一张能表达"谁在推进我、我推进谁、谁取代了我"的图。
-
-## 为什么领取之后仍要在提交时检查 {#design-choice}
-
-T1 被 A 领取，并不意味着它以后任何时刻都能提交。B 可能在 A 停滞后依法接管，或任务的验收条件已经改变。需要分别保留协作归属和本次写入证明。
-
-| 做法 | 能解决的问题 | 剩余缺口 |
+| 生命周期动作 | 在适用合同中表达什么 | 调用者需要保留什么 |
 | --- | --- | --- |
-| 仅记录 claim | 同伴知道谁负责 | 不能独自证明旧实例仍可写 |
-| 执行前检查 lease / revision | 及早拒绝失效输入 | 检查之后到提交之前仍可能变化 |
-| 相应 writer 在提交边界检查 | 拒绝过期证明，保护当前 source | 冲突方需重读、重验证或交接 |
+| acquire | 为新的合法执行取得证明 | 工作与执行身份、当前条件和结果 |
+| renew | 延续当前执行的有效期 | 当前 owner/key/version；不能只用很早的版本 |
+| transfer | 把执行权交给满足条件的接收方 | 精确发送者证明、接收者与原请求意图 |
+| release | 合法退役当前证明 | 原 owner/key/version 与操作回执 |
 
-下面仅画启用了对应 lease/实例围栏的路径。`e1`、`e2` 是教学代号，不是完整请求；默认 legacy 模式并不在所有 writer 上强制同样的围栏。
+不要从这张表反推出通用参数。使用当前 `--help` 和实际 readback；尤其 renewal、transfer 与 release 对版本、epoch 和清理的规则不同。历史恢复与新申请的区别见[恢复章](04-runtime-boundaries.md#recovery-or-new-execution)。
+
+### 过期或被接管的执行者回来时怎么办？
+
+A 的旧操作可以有历史 receipt，但 B 已取得新的当前证明时，不能让 A 据此继续修改。先分开读取历史回执与当前 lease；需要恢复历史结果时走原操作，需要新工作时重新检查当前资格。
 
 ```mermaid
-sequenceDiagram
-    participant A as Agent A
-    participant S as 当前 authority
-    participant B as Agent B
-    A->>S: 获取 T1 执行证明 e1
-    Note over A: 执行中断或占用失效
-    B->>S: 按生命周期接管，得到 e2
-    A->>S: 用旧 e1 提交
-    S-->>A: 拒绝旧证明，保持当前状态
-    B->>S: 按当前 source 验证并提交
-    S-->>B: 接受并返回回执
+flowchart TD
+    S["读取当前 Todo / 模式 / lease"] --> K{"原操作结果是否已确认？"}
+    K -->|"未确认"| R["按原身份恢复读回"]
+    K -->|"已确认"| N{"是否开始新的执行？"}
+    R --> Q{"读回已确认？"}
+    Q -->|"否"| B["保留未知与恢复责任"]
+    Q -->|"是"| S
+    N -->|"否"| H["保留历史结果"]
+    N -->|"是"| A["核对当前归属、权限与工作区"]
+    A --> P["由适用 lifecycle 获取当前证明"]
+    P --> W["受控执行、验证、提交"]
 ```
 
-新回执证明 B 的这次提交；它不会替其他任务授予权限。历史 A 操作的回执恢复，也不能被误解为重新允许 A 产生新效果。
+同名 Agent、重新启动的终端和旧成功截图都不是绕过该过程的方法。`version_mismatch` 应触发当前状态核对；release 后的 `idempotency_key_reuse` 不通过修改历史 key 来“修复”。
 
-## Goal、Acceptance 与 per-Agent Vision
+## 从交接到集成：把一次协作走完 {#handoff-to-integration}
 
-Goal、Acceptance 与 per-Agent Vision 服务不同层次，同时在场时才拼出"该由谁推进"的完整依据：
+交接不只是发送一条消息。接收者需要知道接到哪个工作、接受哪份输入、尚欠哪些条件，并在自己的实际执行环境重新确认资格。
 
-| 对象 | 归属 | 回答的问题 |
+**第一步，A 返回具体产物。** T1 的回报引用 C1、验证声明和结果，以及尚未满足的 M1/G1。不能只写“JSON 已完成”。
+
+**第二步，B 确认采用哪份输入。** B 的文档基于 C1 的字段约定；若无法访问该产物，问题是交接输入缺失，而不是需要重新实现 T1。Handoff 使用 bounded refs 和合法读取入口，不把全部私有 transcript 复制到公开 packet。
+
+**第三步，当前归属合法转换。** Lease 转移与 Todo claim 是否同时改变，由所选命令合同决定。不要假设 lease-only transfer 自动改 claim，也不要在要求原子交接的路径上拆成两次手工写。接收方仍须满足 registration、binding、exclusion、scope 和 workspace 条件。对应操作说明以[canonical lease reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md)中的版本范围为准。
+
+**第四步，分别验证以后再验证组合。** T1 的代码检查和 T2 的示例检查只证明各自结果；集成者要检查两者在同一个候选版本上是否一致。两个分支都绿，不是组合提交也绿。
+
+**第五步，变化沿依赖传播。** A 将 C1 修正为 C2 时，B 检查字段或行为变化是否影响文档与验证。保留原历史，只更新受影响结论；已经基于 C1 完成的工作不是自动作废，也不是自动适用于 C2。
+
+**第六步，结果回到接受者。** 由 T3 对当前产物与决定再做判断。消息送达、接收者采用输入、工作被接受、发布被允许、外部交付发生，各有证据；不能用其中一项代替其余全部。
+
+这个六步过程是教学案例，不是在声明系统会自动完成所有跨 Host、跨设备或跨仓库编排。协作是否成功，必须检查用户所需的关系是否真正闭合。
+
+## 工作区隔离不等于集成正确 {#parallel-editing}
+
+传统保守做法对冲突写范围保持排他。读者还需要知道，新出现的协作编辑模式为什么可以允许某些“同路径编辑”，却仍不授予合并权。
+
+下面是**源码进阶对照**：主线 `f49b4a00…` 的[独立 worktree 编辑说明](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md)提供显式 `--write-worktree` 路径。它不是本次基于 `76b7583a…` 的产品代码新增功能，也不能倒推为发布版 `v1.2.3` 已支持。
+
+在该已提升 File/SQLite 路径上，经过校验的同机 sibling worktree 可以在指定条件下拥有重叠代码编辑范围，并返回 `integration_overlap_advisories`。仓库身份来自权威 Todo；Host/path 别名、同一 Todo、同一 worktree、未验证 workspace 或其他机器仍受相应排他规则约束。
+
+| 已取得的条件 | 可以说明什么 | 还不能说明什么 |
 | --- | --- | --- |
-| Goal | 项目 | 最终要达成什么结果 |
-| Acceptance | Goal 或明确的交付阶段 | 哪些可观察证据足以判断完成 |
-| Agent Vision | `agent_id` | 这个 peer 当前承担什么方向、scope、acceptance summary 与 replan trigger |
+| 工作区隔离已验证 | 编辑发生在被区分的 checkout | 可以修改共享运行数据或 Git 管理目录 |
+| lease admission 接受 | 当前协调模式允许这次执行 | 工具权限被扩大、跨 Goal 获得全局锁 |
+| 两份改动独立验证通过 | 各自产物满足已检查条件 | 组合后行为正确 |
+| 集成验证通过 | 当前组合满足相关检查 | 有合并、远端写入或发布权限 |
 
-Vision 超出泛化产品愿景，但本身属于 bounded 状态，而不是自由格式 scratchpad。[`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md) 将它定义为 bounded、per-Agent 的执行路由状态，可以包含 `role_scope`、`vision_summary`、`acceptance_summary`、`advancement_policy`、`replan_trigger_summary` 与最近一次 bounded patch。当一个 peer 产生 material progress 时，需要记录 Vision 是否 patched、unchanged with reason、retired 或 superseded；否则后续 quota 可能看到 `vision_checkpoint_missing`，要求先补齐 replan 证据，而不是静默继续。
+该模式是合作式代码编辑协调，不是 OS sandbox。旧 grant 不会因读取或续租自动升级为新模式；需要变更执行意图时，按当前生命周期退役并重新取得证明。安装 provider 或改变目录名不构成提升与授权。
 
-这能防止两种漂移：Todo 队列一直繁忙但没有推进 Goal acceptance；多个 peer 围绕同一 Goal 工作，却各自维护一套不可见的"我以为下一步是……"。
+## 依赖与后继怎样保持可追溯
 
-## 设计：工作图与它的五种关系
+`todo_done:<todo-id>`、`monitor_changed:<todo-id>`、`capacity_available:<capability>` 和 `pr_merged:<pr-id>` 表达不同恢复条件。条件满足产生下一步判断的依据，不必然自动改写旧 Todo status。
 
-Todo 是工作图的节点，也是最小可执行或等待单元。它可以承载 role 与 priority、`task_class` 与 `action_kind`、dependency / resume condition、required capability 与 write scope、claim / lease / continuation policy，以及 Gate、evidence、successor 和 supersession refs。它比完整项目计划小得多，也不该只是 prompt 里的一条提醒。
+跨仓库依赖需要正确 repository identity。`pr_merged:#123` 可以由 Todo 的 GitHub `task_repository` 解析仓库；显式 `pr_merged:owner/repo#123` 直接指定对象。两者都不能确定仓库时，不按相同编号猜测。
 
-节点之间的边表达"一个节点为什么影响另一个"，[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md) 允许的 `relation` 值里，起决定作用的是这几种：
+Successor 表达下一项有身份的工作；supersede 保留旧工作与替代关系（对应生命周期会把 predecessor 记为 done 并标记替代）；no-follow-up 说明为什么这一条路线不再需要后继，不能自动等同 Goal 全部验收。`independent_handoff` 与 `same_agent_non_delivery` 表达不同 continuation policy，按实际写回读取而不是从 prose 推断。
 
-```text
-blocks        A 未闭合前，B 无法成为合法候选
-validates     B 产出的证据，决定 A 是否真的完成
-repairs       A 失败后，B 负责诊断并恢复
-hands_off_to  A 结束后，B 接手，且保持 unclaimed 直到有人领取
-supersedes    B 取代 A，同时保留 lineage
-```
+## 用具名证据核对边界
 
-每条边都要写 `from_node_id`、`to_node_id`、`relation` 和一段 compact public-safe 的 `reason`。关键在于最后一句约束：**边不授予运行命令或改动状态的权限**。它能解释"谁在推进 T"，也能让 review 看清依赖，但不能替代后面几节讲的 claim、lease 与 fence。
-
-`repairs`、`audits` 与 `continues` 属于 lineage 关系而非 lifecycle 命令，它们从既有 run history、todo/gate metadata 与 compact blocker 或 validation writeback 推导出来；`repairs` 表示一个 repair/replan 节点打算恢复某条工作通道，`audits` 表示 compact run evidence 复核或限定某条通道。把这几种关系与"谁有权写"混为一谈，正是开头 09:20 那个 bug 的来源。
-
-这几种关系是本章其余部分的前提。没有它们，"谁在推进 T"只能从聊天记录里猜。
-
-### 五类常见工作
-
-| 类型 | 谁负责 | 典型语义 |
+| 要核对的结论 | 源码测试入口 | 不能扩大为 |
 | --- | --- | --- |
-| `advancement_task` | Agent | 当前可交付的实现、文档、分析或修复 |
-| `user_gate` | User/controller | 缺少决定时，相关 action 不可合法继续 |
-| `user_action` | User/controller | 需要用户处理，但不自动阻塞独立 Agent work |
-| `continuous_monitor` | Agent/Host | 按 cadence 观察外部条件，仅 material change 时推进 |
-| `blocker` | Agent/controller | 当前缺少可执行条件，需要明确恢复路径 |
+| 历史 acquire 与当前 proof 不同 | `tests/control_plane/test_canonical_lease_acquire.py` | 所有并发和 TTL 场景都已证明 |
+| 续租与转交的当前记录规则 | `test_canonical_lease_renew.py`、`test_canonical_lease_lifecycle.py` | 任意外部写入端都强制围栏 |
+| 旧 writer 不能绕过已生效来源 | `test_legacy_coordination_writer_fence.py` | 旧模式已被全局删除 |
+| runtime root override 不绕过来源围栏 | `test_split_root_todo_writeback_fence.py` | 改一个 CLI 参数就能获得新权限 |
 
-Todo text 可以供人阅读；机器路由不能只从自然语言猜任务类型。
+这些测试属于各自固定输入和 writer 的证据，不是运行中的 Goal 已经健康的证明。练习和断言解释见[lease 检查](12-control-plane-course.md#checkpoint-lease)；实际取证入口见[附录](appendix-reference.md#read-before-change)。
 
-### Frontier 是算出来的，不能只靠列出 open Todo
-
-**Frontier** 是当前满足全部前置条件的候选集合：
-
-```text
-open todos
-  -> dependency and resume
-  -> decision scope and authority
-  -> agent claim and lifecycle authority
-  -> host capability
-  -> workspace and write scope
-  -> freshness and evidence
-  -> current frontier
-```
-
-因此：open 不等于 runnable；priority 不等于绕过 Gate；claimed 不等于仍可执行；capability available 不等于获得 authority；Todo done 不等于 Goal complete。
-
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md) 可以把这些关系渲染成图，但图本身仍是 read-only projection。真正的状态变化继续通过 Todo、Gate、refresh 与 event protocols。
-
-## 谁有权写：claim、lease 与 lifecycle authority
-
-三个概念经常被错误合并，上面那条时间线正是合并它们的后果。
-
-### Claim：软性工作归属
-
-Claim 帮助避免重复领取，它只是协作信号。
-
-### Lease：一次执行的占用凭证
-
-Lease 用于需要 TTL、renew、transfer、version/CAS 或幂等 identity 的显式互斥场景。它适合高成本或有副作用的执行占用，但不自动替代 Todo lifecycle。一个实现可以有 claim 而没有 lease；可以有 lease 却因为 Gate 仍不能运行；可以在 lease 到期后重新分配；也可以在 handoff 时不传递旧 lease。
-
-### Lifecycle Authority：谁能改变状态
-
-Claim 回答谁计划执行；lifecycle authority 回答谁有权 complete、supersede、reassign 或执行特殊 override。显式委托某个 peer 完成一次 lifecycle mutation，不会把它升级为全局 leader。
-
-### Fence：写在提交那一刻才校验
-
-`task_lease_v0` 里真正拦住 09:20 那次写回的，是 acquire key 与返回 version 组成的 **execution-instance fence**。一份 lifecycle writer 不能只凭 `agent_id` 放行，因为多个宿主进程可能共用同一个注册 peer 身份。只要存在有效 lease，`todo complete` 与 `todo supersede` 就必须同时带上 idempotency key 和 expected version，并在 canonical writeback 全程持有 lease lock；缺失、过期或对不上的 fence 会被拒绝，而且是在创建 successor 之前就拒绝。
-
-Release 不删除记录，而是留下一条 inactive 的 terminal record。这样下一次 acquire 会推进 per-todo version 与 `lease_epoch`，而不会把 version 重新变成 1。下面这条测试把整个序列跑了一遍：
-
-```bash
-uv run --extra test pytest tests/control_plane/test_canonical_lease_acquire.py -q
-```
-
-它断言 acquire 后 `lease.version == lease.lease_epoch == 1`，用同一 `--idempotency-key` 重放会返回 `idempotent: true` 且 `acquired: false`，重放结果的 `lease` 与原 receipt 完全一致。release 之后再用同一个 key 去 acquire，会被拒成 `idempotency_key_reuse`；换一个 key 重新 acquire，version 变 3 而 `lease_epoch` 变 2。测试最后确认 lease 文件与 state 文件都不存在残留，即"放行"和"清理"是同一件事的两面。
-
-## 权限边界：谁被拒绝，依据是什么
-
-权限由几条正交的轴共同决定，而单一开关表达不了它。把任意两条合并，都会让"能不能动手"这个判断失去依据。
-
-| 边界 | 主要问题 | 不能证明 |
-| --- | --- | --- |
-| Decision scope | 是否获得这项动作需要的人类/控制器决定 | Host 是否能执行 |
-| Capability gate | 当前 Host/runtime 是否具备所需能力 | 是否获得用户授权 |
-| Workspace guard | 当前 Agent 是否位于正确 repository/worktree/write scope | 业务结果是否正确 |
-| Write fence | 这次写入是否来自当前持有权威的执行实例 | 业务结果是否正确 |
-
-Decision scope 来自 [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)，它要求 user/controller decision 说明 `kind`、`granularity`、`scope_key`，以及可选 expiry、decision id 与 reason。Agent Todo 可以声明 `required_decision_scopes`，只有 unresolved Gate 的 scope 覆盖当前 action 需求时，它才阻塞这项工作：
-
-```text
-Gate G1
-  decision_scope = public_claim:action:bilingual_homepage
-
-Todo A
-  required_decision_scopes = public_claim:action:bilingual_homepage
-
-Todo B
-  write internal link checker
-  required_decision_scopes = none
-```
-
-G1 阻塞 A，不阻塞 B。如果 projection 只有"等待用户确认"这句 prose，却没有 scope relation，正确动作是修复 projection 或询问具体决定，不能默认给 Agent authority，也不能默认冻结整个 Goal。`user_action` 更不能冒充 authority：用户看到了提醒，不等于批准了 production、publish 或 private read。
-
-Workspace guard 是另一条独立的拒绝依据。当 selected Todo 要写 repository state 时，执行者必须位于 origin 与 `task_repository` 匹配的 linked independent worktree；匹配 repository 只是必要条件，canonical checkout 仍可能被拒绝。`task_repository` 是不含凭据的 repository identity，它选择 workspace isolation 的目标仓库，**不授予写权限**，也不替代 claim、lease、Goal boundary 或 repository maintainer policy。
-
-### 拒绝要能说清理由
-
-边界之所以有用，一半在于它拒绝，一半在于它**说明为什么拒绝**。当 legacy coordination writer 被围栏挡住时，错误带着具体字段的 remediation，而非一句笼统的"写入失败"：
-
-```text
-legacy coordination writer is fenced; use the promoted canonical authority
-(file_v0) for goal goal-a; fence fence-a; the primary record was not changed
-```
-
-`tests/control_plane/test_legacy_coordination_writer_fence.py` 逐条钉住了这个形状：无围栏时保持默认行为且不启动 TypeScript；围栏存在时抛出的异常 `code == "legacy_coordination_writer_fenced"`，payload 里带 `reason_code`、`authority_mode`、`fence_id`，消息末尾固定是 `the primary record was not changed`。测试还断言同一句 remediation 在 Python 与 TypeScript 两侧渲染完全一致，并覆盖 `authority_mode` 缺失时的 `unknown_fail_closed` 行为。缺了 `fence_id` 这类字段不会退化成含糊文案，而是走 fail closed。
-
-## 多 peer 协作：ownership、evidence 与 review 责任的保持
-
-LoopX 的 live multi-agent 模型是 **equal peer**。Agent id 是工作身份，它证明不了 Host 表面，也证明不了组织层级；`codex-*` 命名不能单独证明任务运行在 Codex App 还是 CLI。这条边界决定了协作的默认形态：完成一项工作**不会**自动授予整个 Goal 的后续工作，默认 continuation 是 `independent_handoff`，即后续保持 unclaimed，任何合格 peer 都可接手，除非显式指派。
-
-Handoff 传递 bounded state references，而非 transcript 副本。一个 bounded handoff 至少应让接手者重建：Goal、Todo 与 stop condition；current revision/workspace；Gate、capability 与 authority boundary；evidence/material references 及 freshness；next action 与 validation；以及哪些内容被截断或留在 private store。
-
-### 接手者必须重新校验
-
-Handoff 不转移权限。旧 Agent 的 receipt 不会自动授予新 Agent source permission，旧 workspace observation 也不能证明当前环境未变化。接手者仍要重新运行 current guard。
-
-`tests/control_plane/test_canonical_lease_lifecycle.py` 把这条规则变成可执行的：测试故意在 legacy 路径下放一份与 provider 矛盾的 lease 文件（`version: 99`，owner 为 `stale-agent`），然后要求所有 `task-lease` 命令都只能读 provider。transfer 之后 `lease.owner` 变 `agent-b`，version 从 3 变 4，`lease_epoch` 从 7 变 8。此时如果 agent-a 拿着旧 proof 去 release，会被拒成 `version_mismatch`，而且 provider head 一字未变。测试结尾断言那份 legacy 文件字节未改动、state 文件始终不存在。
-
-### 同一份证据只该有一个来源
-
-多个 peer 并行时，最容易被悄悄破坏的是 evidence 的归属。每个实现 Todo 写回 exact revision、validation 和 completion evidence；下游按 dependency 与 fresh readback 进入 frontier，而非从"它们应该完成了"这句话推断 ready。
-
-跨仓库依赖也必须带 repository identity。`resume_when=pr_merged:#123` 只在 Todo 的 GitHub `task_repository` 与 merge event repository 匹配时成立；跨仓库应使用 `pr_merged:owner/repo#123`。缺少 repository identity 时，当前实现会 fail closed，而不会按相同 PR 编号猜测。
-
-### 哪些工作不适合多 peer
-
-| 工作类型 | 并行策略 |
-| --- | --- |
-| 研究、源码定位、triage、只读 review | 可以 fan-out；结果以 bounded evidence 回收 |
-| 不同 repository 的实现 | 每个 Todo 绑定自己的 `task_repository` 与 worktree |
-| 同一 repository、disjoint write scopes | 仅在 scope 可证明不重叠且验证可独立时并行 |
-| 同一文件或共享 schema/state machine | 默认串行，或先拆 owner/seam 后再并行 |
-| 外部 effect、merge、publish | 仍由 scoped Gate 和 repository policy 决定 |
-
-最后一行值得强调：当工作本身是强串行依赖的——每一步的输入是上一步的输出，或者多方共享同一个 state machine——lease 和 fence 只能保证"没有两次写入同时成功"，不能替你创造并行度。把这类工作拆给多个 peer，得到的是一串等待和一个更长的关键路径。Claim 是软 owner，并非锁；只有确切存在并发写冲突的 Host 才需要可选 `task_lease_v0`。
-
-### 等待之后如何恢复
-
-工作图不仅要表达"先做 A，再做 B"，还要表达等待结束后这件事怎么重新进入决策。Resume condition 是一条机器可读的条件：
-
-```text
-todo_done:<todo-id>
-pr_merged:<pr-id>
-capacity_available:<capability>
-monitor_changed:<monitor-todo-id>
-```
-
-条件满足不等于原 Todo 立刻可运行。旧任务可能已经 stale，需要 successor replan —— 这正是为什么 resume 必须写成结构化条件，而不是"等它好了再说"。
-
-当前 Todo 完成后，下一项工作的身份有四种合法表达：
-
-- **Successor**：明确下一项有身份的工作，让"下一步"进入 durable graph，而不是留在完成者的聊天里；
-- **Supersede**：方向改变时用新 Todo 取代旧 Todo，同时保留 lineage，不把已失效工作伪装成 done；
-- **No-follow-up**：确实不需要后继时，记录为什么 acceptance 已闭合或为什么后续不属于当前 Goal，结构化记录比"看起来做完了"更可审计；
-- **Continuation policy**：`same_agent_non_delivery` 让同一 peer 继续一项明确、非独立交付的后续，`independent_handoff` 让后续保持 unclaimed。
-
-### 一个跨仓库的目标
-
-同一 release 需要修改四个 repository 时，仍然只有一个 Goal：
-
-```text
-Goal: ship-cross-repo-release
-├── Todo A -> repo-a -> agent-a -> worktree-a
-├── Todo B -> repo-b -> agent-b -> worktree-b
-├── Todo C -> repo-c -> agent-c -> worktree-c
-└── Todo D -> integration verification -> waits for A/B/C evidence
-```
-
-A、B、C 可以并行，但 D 不能从自然语言"它们应该完成了"推断 ready。每个实现 Todo 写回 exact revision、validation 和 completion evidence；D 再按 dependency 与 fresh readback 进入 frontier。
-
-## 代价与边界：这套设计放弃了什么
-
-上面每条规则都换来一个性质，代价需要说清楚。
-
-**代价一：lease 需要续期，续期失败会中断工作。** 09:10 那次 renew 失败，本身就是设计在起作用：执行实例没能证明自己仍然持有权威，于是它的后续写入会被拒绝。对长任务而言，这意味着 TTL 必须按最坏情况设置。TTL 定得太短，一个正常的编译或长测试就会把持有者挤出；定得太长，一次崩溃留下的空窗会让别的 peer 干等。`test_canonical_lease_renew.py` 里 renew 一次只推进一次 version（1→2→3→4），`lease_epoch` 保持不变；这说明续期是"延长同一次执行"，重新 acquire 才是"换一次执行"。
-
-**代价二：写入可能被拒绝，调用方必须处理这个拒绝。** 围栏不是建议，它会让一次看起来正常的写回失败。调用方不能把 `version_mismatch` 当成瞬时错误去重试同一个 key——`test_canonical_lease_acquire.py` 断言同一 `--idempotency-key` 在 release 之后复用会被拒成 `idempotency_key_reuse`，Todo 已 done 时再 acquire 会被拒成 `todo_not_open`。正确的处理是重新读取当前 version、重新 acquire、重新验证，而不是憋着劲重放。
-
-**代价三：围栏规则会扩到写回路径的其他角落。** `tests/control_plane/test_split_root_todo_writeback_fence.py` 记录的就是这件事：当 `--runtime-root` 与 registry root 分离时，围栏必须落在**生效的那个 root** 上，并且在真正开始收集数据之前就拒绝。它断言被围栏的 writeback 让 state 字节不变，并把 `local_authority_todo_list_unavailable` 与 `legacy_fallback_used: false` 一起返回。这类错误会出现在 monitor poll、Turn repair 与 validated completion 等多条路径上。
-
-**边界一：claim 与 lease 都证明不了"持有者还活着"。** 它们说明的是写入是否有权落盘，而非持有者的进程是否健康、上下文是否还新鲜。一个持有有效 lease 的 agent 仍可能基于一小时前的判断在推进。
-
-**边界二：工作图是只读投影。** `task_graph_projection_v0` 渲染出的关系图不能用来改状态；能看到一条边不等于可以据此改动 Todo。
-
-**边界三：当前不承诺自动编排。** 产品不承诺"给一个 root 目录就自动并行四个 Goal"，也不承诺云端 coordinator 自动选择设备并 claim。bounded multi-agent orchestration 可以启用 child-agent planning，但 peer identity、claim、workspace guard、Gate 和 writeback 仍逐 Todo 生效；跨设备在线 authority 仍须单独满足服务与运行时资格，不能从本地协作推定已交付。
-
-当前 `handoff_mode` 决定归属规则：默认 `legacy` 保留 soft claim 与 hard lease 的兼容路径；`soft_claim` 和 `hard_lease` 各有专门约束。某些 legacy terminal 路径可返回 `terminal_fence_not_required`。
-
-因此，“防止过期实例提交”要落到具体 writer、mode 和 lease/fence 检查上。开启一种机制不代表所有写入口已被它覆盖。下面的测试分别验证命名边界，不能合并成全系统的独占保证。
-
-## 具名失败：这些约束拦住了什么
-
-抽象地谈"并发安全"没有说服力。下面四个场景各有对应测试，可以直接运行。
-
-**过期持有者写回被拒。** 这正是开头 09:20 的那一刻。`test_canonical_lease_lifecycle.py` 里 transfer 之后旧持有者用旧 version 去 release，得到 `version_mismatch`，并且断言 provider head 与 transfer 之后完全一致。丢失更新不再是"两份工作静默合并"，而是一次明确的拒绝。
-
-**围栏挡住旧写入者。** `test_legacy_coordination_writer_fence.py` 锁定 `legacy_coordination_writer_fenced`：写入被拦下，payload 里带着应该改走哪个 canonical authority 和哪个 `fence_id`，末句声明 primary record 未被修改。它还断言 `--runtime-root` 覆盖下的围栏能挡住 legacy writer，且被围栏时事务体根本不执行。
-
-**围栏必须落在生效的 root 上。** `test_split_root_todo_writeback_fence.py` 覆盖分离 root 的场景：registry source 被围栏时，即使通过 override 走同一份 source state，原围栏依然生效，state 字节不变；而未被围栏的 override 可以正常写出 receipt。缺了这条，围栏会变成可以绕开的摆设。
-
-**跨仓库 identity 无法解析时 fail closed。** `pr_merged:#123` 可以从 Todo 的 GitHub `task_repository` 解析仓库；显式 `owner/repo#123` 则直接绑定目标。两种来源都不可用时才拒绝，不能仅凭相同 PR 编号猜仓库。
-
-对应测试：`tests/control_plane/test_canonical_lease_acquire.py`、`tests/control_plane/test_canonical_lease_renew.py`、`tests/control_plane/test_canonical_lease_lifecycle.py`、`tests/control_plane/test_legacy_coordination_writer_fence.py`、`tests/control_plane/test_split_root_todo_writeback_fence.py`。这些断言本身就充当这套设计的可执行证据，而远不止是文档插图。
-
-## 协议阅读入口
-
-需要修改工作图或权限语义时，优先按问题读取协议：
-
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：依赖、Gate、validation、repair 与 handoff 的只读图；
-- [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)：Gate 覆盖关系与 fail-closed 行为；
-- [`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)：per-Agent Vision、checkpoint 与 replan；
-- [`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)：`write_intent`、revision conflict 与 lease conflict 的语义；
-- [Peer Agent Runtime v1](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)：equal peer、continuation 与 identity；
-- [Host Integration Surface](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)：claim、execution-instance fence、optional lease 与 Host 边界。
-
-如果改动涉及 equal peer、lifecycle authority、handoff、dependency 或 successor，继续阅读 [Control-Plane Course 第 5 讲](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/)。课程提供组合 case 与源码领读；本章保留外部贡献者需要的工作图和权限模型。
-
-## 当 Goal 结束：多查几步
-
-单条 Todo 离开 frontier 和整个 Goal 终止是两件事。Goal terminal closure 还要额外确认：
-
-- acceptance 是否满足；
-- 是否存在 unresolved Gate；
-- 是否有 due monitor、pending external effect 或 stale readback；
-- 是否有 successor、replan obligation 或 acceptance gap；
-- 是否有 retryable postcondition；
-- 是否明确记录 no-follow-up。
-
-这六项的共性在于：它们都可能被"Todo 都 done 了"这句话掩盖。
-
-## 不变式
-
-读完这一章，你应该能带走六句可以自己检查的话。
-
-1. **先确认当前写入是否受实例或 lease 围栏保护。** `hard_lease` 与默认 legacy 的要求不同；不能从一条 claim 推断所有 writer 都强制唯一实例。
-2. **写入的合法性在提交那一刻判定，不在准备阶段判定。** 拿旧 version 的写回必须被拒绝，而非先写后纠正。
-3. **重放安全不等于可以复用 key。** 同一个 `idempotency_key` 重放同一逻辑写入是幂等的；换了语义再复用同一个 key，会被拒成 `idempotency_key_reuse`。
-4. **续期失败是合法结局。** 持有者没能证明自己仍持有权威时中断工作，比让过期持有者写完更可接受；TTL 因此要按最坏任务时长设置。
-5. **handoff 传递引用，不传递权限。** 接手者必须重跑 current guard，旧 receipt 不授予新 Agent 任何 source permission。
-6. **离开 active frontier 只有三种合法方式。** completed with evidence、superseded with lineage、blocked/deferred with resume contract；"从列表里删掉"不构成生命周期。
-
-这六条回答的是同一个问题：**当同一个目标有多个 peer 同时在场、而没人能实时协调时，系统凭什么知道此刻该由谁写？** 本章给的是 LoopX 在工作图尺度上的答案。下一章把答案编译成一次受治理的 Turn：谁应行动、谁应等待、何时允许 writeback 与 spend。
+协作的最终标准是：接手者知道接受了什么，当前执行者具有什么资格，组合结果由谁验证，剩余决定由谁负责。范围、证明或输入不清楚时先补齐这一处关系，不重新分派全部任务碰碰运气。

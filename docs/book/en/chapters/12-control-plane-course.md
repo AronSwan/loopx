@@ -80,32 +80,9 @@ differences first. When tests move, follow the original invariant to the owner r
 output into the expected result. These tests do not qualify models, real Hosts, remote providers, or the
 whole product.
 
-### Read before deciding whether to change state {#read-before-change}
+### Read before deciding to change state {#read-before-change}
 
-These are operator reading entrypoints, not fixture initialization. Identify the exact existing registry,
-runtime root, Goal, and Todo from configuration, not display names or the exercise's T1/M1 labels. Set the
-four shell variables before running this block; missing variables stop it:
-
-```bash
-: "${REGISTRY:?Set the existing registry path}"
-: "${RUNTIME:?Set the existing runtime root}"
-: "${GOAL:?Set the exact goal id}"
-: "${TODO:?Set the exact todo id}"
-loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
-  todo list --goal-id "$GOAL" --todo-id "$TODO"
-loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
-  task-lease inspect --goal-id "$GOAL" --todo-id "$TODO"
-```
-
-One reads the work item; the other inspects its lease. Neither requests completion, acquisition, or
-settlement. Reads can still start a runtime, and the two responses are not an atomic snapshot. Record
-their respective identities, sources, times, and available versions. Record missing fields as missing,
-not as approved, open, or zero.
-
-Not every command that sounds like a check is a side-effect-free read. The admission path of
-`quota should-run --codex-app` can create a heartbeat receipt; `refresh-state` is governed writeback.
-Acquire/renew, settlement, and ACK are not either of the two reading commands above. The tests below
-exercise those operations in isolated fixtures, not as production diagnostic scripts to copy sequentially.
+The complete operating commands and stopping conditions live in the [appendix field reference](appendix-reference.md#read-before-change). This chapter keeps the exercises rather than a second operating runbook. The pytest commands use isolated fixtures, not live-Goal initialization or repair procedures.
 
 <!-- reader-checkpoint:state:start -->
 ### Check one: which state can admit work? {#checkpoint-state}
@@ -313,23 +290,9 @@ This is source-based explanation, not a claim that the four exercise groups cove
 Human handling also needs an explicit conclusion about the original effect. A person having looked at
 it does not replace readback or automatically grant publication authority.
 
-## Use the checks to locate a real problem {#diagnostic-routing}
+## Route real problems with the four checks {#diagnostic-routing}
 
-Find the first unanswered question and repair that gap rather than restarting everything. This is a
-reading route, not new machine state or an automatic recovery algorithm.
-
-| Symptom | Fact and rule entrypoint | Minimum supporting evidence | Condition for accepting the next step |
-| --- | --- | --- | --- |
-| A page and Todo disagree | [State check](#checkpoint-state) | Selected source and exact Todo readback | Recompute after source recovery; never overwrite source from a page |
-| Past success, current refused write | [Lease check](#checkpoint-lease) | Current proof separated from historical receipt | Legal new execution obtains current proof; ended work stops |
-| Writeback exists, settlement incomplete | [Settlement check](#checkpoint-settlement) | Original-identity records and outstanding action | Complete settlement readback without a second debit |
-| Request timed out, effect unknown | [Unknown outcome](#unknown-outcome) | Provider readback for the original operation | Confirm the effect before reusing or continuing |
-| Prolonged wait or repeated replan | [Monitor check](#checkpoint-monitor) | Current lane, due state, selectable work, Host status | Explainable waiting or a return to current legal work |
-
-When a live project differs, do not start by deleting guards. Check version, configuration, and inputs;
-retain a minimal counterexample for the owning boundary if the contradiction remains. Public issues/PRs
-carry only public-safe identity references, version, error code, and necessary evidence, not live registries,
-credentials, raw transcripts, or complete private run records.
+The appendix owns [symptom routing](appendix-reference.md#diagnostic-routing); operating readers need not run source tests first. The main explanations are [state](state-substrate.md), [authority](work-graph-and-authority.md#authority-layers), [settlement](03-one-turn.md#settlement-recovery) and [observation](04b-budget-and-admission.md#observation-owners).
 
 ## Integrated exercise: why is delivery still not authorized? {#integrated-judgment}
 
@@ -354,6 +317,12 @@ material versions replace commits, methods and citation checks support findings,
 publication scope remain explicit. Recheck affected analysis after a source update; do not turn all old
 discussion into new evidence. A finished report does not authorize publication. This is conceptual transfer,
 not qualification of another product journey.
+
+### Add one condition: the original Turn is not closed
+
+If T1 still owes blocked writeback under its original identity, independent T2 does not permit same-Turn rebinding. Explain original closeout before new admission selects T2. Compare the advanced main test in [wait sequencing](03-one-turn.md#wait-closeout). That later implementation is outside this branch's older product base and is not one of the eight available test functions above.
+
+Also check collaboration: A and B passing separate validation does not accept their combined result. Use [handoff through integration](work-graph-and-authority.md#handoff-to-integration) to name adopted revisions, integration validation, publication decisions and the final acceptor.
 
 ## When understanding is sufficient, and when the chapter needs repair {#judgment-exit}
 
