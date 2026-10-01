@@ -305,6 +305,19 @@ def main():
     print(f"语料 {len(corpus)} 篇,候选 {n_all} 条(强配对 {len(strong)}/弱配对 {len(weak)}/"
           f"无URL {n_all - len(strong) - len(weak)}),抽样 {len(picked)} 条", flush=True)
 
+    # 零覆盖告警(5-1-3,四次实证: r8门户页/r9法条号/r10条目号——配对率9.1%防线形同虚设)
+    if not picked:
+        coverage = 0 if n_all == 0 else (len(strong) + len(weak)) / n_all
+        print(f"\n{'!' * 3} 零覆盖告警: {n_all} 条候选全部无URL可配(覆盖率 0%)", flush=True)
+        print(f"   原因码: NO_URL_CANDIDATES——本课题引用形态非URL(条款号/内部编号/自产承诺)", flush=True)
+        print(f"   工具边界: 本工具只能核URL可配的主张;此课题类型不适用,非工具bug", flush=True)
+        print(f"   建议: 对此类课题改用条款号溯源(grep原文)或人工抽查", flush=True)
+        return  # 零覆盖不出报告——空报告比没有报告更误导
+    if n_all and (len(strong) + len(weak)) / n_all < 0.3:
+        cov = (len(strong) + len(weak)) / n_all
+        print(f"\n!! 低覆盖警告: 配对率 {cov:.1%}(候选{n_all}仅{len(strong)+len(weak)}可配)——"
+              f"本课题可能属非URL引用型,抽查信号密度极低", flush=True)
+
     rows, t0 = [], time.time()
     for no, (doc, i, ln, url) in enumerate(picked, 1):
         try:  # 行级隔离(门一#3): 一行异常不再作废整场,已花的fetch+API成本全保留
