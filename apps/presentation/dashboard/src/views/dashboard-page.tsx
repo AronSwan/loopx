@@ -1340,12 +1340,12 @@ function PersonalGoalHome({
     {
       agentId: "status-only",
       available: true,
-      capability: "不调用模型",
+      capability: t("header.statusOnlyDescription"),
       adapterKind: "status_projection",
       interrupt: false,
       label: t("header.statusOnlyAgent"),
       resume: true,
-      statusLabel: "只读",
+      statusLabel: t("common.readOnly"),
       streaming: false,
       toolCalls: false,
       trustScope: "read_only",
@@ -2215,7 +2215,7 @@ function PersonalGoalHome({
       const answerMessageId = appendManagerAssistantMessage(targetContextId, {
         agentLabel: usesStatusOnlyRoute ? t("header.statusOnlyAgent") : t("header.manager"),
         lines: answer.lines.slice(0, 3),
-        sourceLabel: usesStatusOnlyRoute ? "LoopX 状态投影 · 仅查状态" : "LoopX 状态投影",
+        sourceLabel: usesStatusOnlyRoute ? `${t("header.statusProjection")} · ${t("header.statusOnlyAgent")}` : t("header.statusProjection"),
         text: answer.text,
       });
       void recordProjectionExchange({
