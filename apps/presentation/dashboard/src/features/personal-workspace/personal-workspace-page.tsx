@@ -779,7 +779,7 @@ export function PersonalWorkspacePage({
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
-  initialManagerChatOpen = false,
+  selectedView: controlledView,
   managerChannelBinding,
   managerRuntime,
   model,
@@ -798,7 +798,7 @@ export function PersonalWorkspacePage({
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen?: boolean;
+  selectedView?: WorkspaceGoalTab;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -816,8 +816,13 @@ export function PersonalWorkspacePage({
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
-  const [selectedGoalTab, setSelectedGoalTab] = useState<WorkspaceGoalTab>("chat");
-  const [managerChatOpen, setManagerChatOpen] = useState(initialManagerChatOpen);
+  const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
+  const selectedGoalTab = controlledView ?? localView;
+  const managerChatOpen = selectedGoalTab === "chat";
+  function setSelectedGoalTab(view: WorkspaceGoalTab) {
+    setLocalView(view);
+    callbacks.onSelectView?.(view);
+  }
   const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
   const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
@@ -1555,8 +1560,8 @@ export function PersonalWorkspacePage({
   const drawerCallbacks: PersonalWorkspaceCallbacks = {
     ...callbacks,
     onOpenRunSession: async (run) => {
-      if (run.goalId !== selectedGoalId) selectGoal(run.goalId);
-      setSelectedGoalTab("chat");
+      if (run.goalId !== selectedGoalId) selectGoal(run.goalId, "chat");
+      else setSelectedGoalTab("chat");
       await callbacks.onOpenRunSession?.(run);
       setActiveSessionRun(run);
       setSelection(null);
@@ -1571,8 +1576,8 @@ export function PersonalWorkspacePage({
       setSelection(null);
     },
     onOpenOutput: (output) => {
-      if (output.goalId !== selectedGoalId) selectGoal(output.goalId);
-      setSelectedGoalTab("files");
+      if (output.goalId !== selectedGoalId) selectGoal(output.goalId, "files");
+      else setSelectedGoalTab("files");
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: applyProposal,
@@ -1651,16 +1656,15 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null) {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = goalId ? "tasks" : "overview") {
     setLocalGoalId(goalId);
-    setManagerChatOpen(false);
     setManagerConversationReceiptVisible(false);
     setGoalConversationReceiptVisible(false);
     setActiveSessionRun(null);
     setSelection(null);
-    setSelectedGoalTab("tasks");
+    setLocalView(view);
     setMobileSidebarOpen(false);
-    callbacks.onSelectGoal?.(goalId);
+    callbacks.onSelectGoal?.(goalId, view);
   }
 
   function selectAgent(agentId: string) {
@@ -1871,7 +1875,7 @@ export function PersonalWorkspacePage({
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
               setManagerConversationReceiptVisible(false);
-              setManagerChatOpen(true);
+              setSelectedGoalTab("chat");
             }}
             onSelectGoalTab={(tab) => {
               if (tab === "chat") openGoalConversation();
@@ -1879,7 +1883,7 @@ export function PersonalWorkspacePage({
             }}
             onSelectAgent={selectAgent}
             onReturnManagerHome={() => {
-              setManagerChatOpen(false);
+              setSelectedGoalTab("overview");
               setManagerConversationReceiptVisible(false);
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
@@ -1993,7 +1997,7 @@ export function PersonalWorkspacePage({
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                   ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId)
                   : undefined}
-                onOpenGoalEvidence={(goalId) => { selectGoal(goalId); openGoalConversation(); }} />
+                onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
           </div>
           <div className="personal-composer-wrap">
@@ -2025,7 +2029,7 @@ export function PersonalWorkspacePage({
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
                   setManagerConversationReceiptVisible(false);
-                  setManagerChatOpen(true);
+                  setSelectedGoalTab("chat");
                 }} />
             ) : null}
             {selectedGoal && selectedGoalTab !== "chat" && goalConversationReceiptVisible && goalMessages.length ? (
