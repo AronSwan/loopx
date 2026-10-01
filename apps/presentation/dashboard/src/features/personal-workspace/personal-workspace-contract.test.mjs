@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
+import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const answerText = source("./answer-text.ts");
@@ -217,6 +218,11 @@ for (const field of ["timezone", "nextRunAt", "previousRunAt", "notificationRule
   assert.match(model, new RegExp(`${field}\\??:`), `Schedule exposes ${field}`);
 }
 assert.match(drawer, /personal-execution-history/, "Schedule drawer renders execution history");
+assert.match(dashboard, /monitorTodoReadback\(todo\)/, "Status maps canonical monitor metadata into the shared Todo type");
+assert.match(page, /monitorScheduleReadback\(todo\)/, "Monitor schedules consume the shared readback, not Goal-level guesses");
+for (const field of ["next_due_at", "expires_at", "last_checked_at", "cadence", "watch_only"]) {
+  assert.match(status, new RegExp(`${field}:`), `Status explicitly types monitor field ${field}`);
+}
 assert.match(page, /const heartbeat = schedule\.scheduleKind === "heartbeat"/, "Schedule distinguishes heartbeat lifecycle type");
 assert.match(page, /actionKind: heartbeat \? "heartbeat\.bind" : "monitor\.update"/, "Schedule previews preserve heartbeat lifecycle type");
 

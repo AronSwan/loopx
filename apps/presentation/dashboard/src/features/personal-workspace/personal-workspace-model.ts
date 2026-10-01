@@ -25,6 +25,12 @@ export type WorkspaceHomeLane =
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  cadence?: string | null;
+  nextDueAt?: string | null;
+  expiresAt?: string | null;
+  lastCheckedAt?: string | null;
+  targetKey?: string | null;
+  watchOnly?: boolean | null;
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
@@ -215,6 +221,8 @@ export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
 export type WorkspaceSchedule = {
   agentId?: string;
+  expiresAt?: string;
+  watchOnly?: boolean;
   executionHistory?: Array<{
     label: string;
     runId?: string;
