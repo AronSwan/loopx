@@ -949,13 +949,37 @@ def live_pipeline_processes():
         return None
 
 
+def _pipeline_lock(root):
+    """一场一管的锁文件版(r10三连假阳性教训: 进程扫描在Windows分不清自己的祖先链——
+    uv包装python/bash包装器都命中过滤条件)。锁=PID+时间戳;启动时查活,死锁清后放行。"""
+    lk = root / ".pipeline-lock"
+    if lk.exists():
+        try:
+            info = json.loads(lk.read_text(encoding="utf-8"))
+            old_pid = info.get("pid")
+            # PID还在且确是python跑research_run2 → 活锁,拦
+            if old_pid:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(0x1000, False, old_pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    return lk, old_pid  # 活锁
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+        lk.unlink(missing_ok=True)  # 死锁/损坏锁: 清后放行
+    lk.write_text(json.dumps({"pid": os.getpid(), "ts": time.strftime("%Y-%m-%d %H:%M:%S")}),
+                  encoding="utf-8")
+    return None, None
+
+
 def auto(root):
-    # 并发防撞闸(r9事故机械牙): 已有编队管线在跑→拒绝启动,提示一场一管。
-    # 探针失败也拒绝(fail-closed)——宁可误拦一次,不再并发互杀一场。
-    live = live_pipeline_processes()
-    if live is not None:
-        raise SystemExit(f"已有编队管线在运行(pid={sorted(live)[:3]}): 一场一管——"
-                         "先收上一场(或确认其已死并清理),再启动新场")
+    # 并发防撞闸v2(r9事故机械牙; r10三连假阳性后从进程扫描改为锁文件——
+    # 进程扫描在Windows分不清自己的祖先链,锁文件只在跨管线时才互斥)
+    lock_path, live_pid = _pipeline_lock(root)
+    if live_pid is not None:
+        raise SystemExit(f"已有编队管线在运行(pid={live_pid}, 锁={lock_path}): "
+                         "一场一管——先收上一场;若确认已死,删 {lock_path} 后重试")
     # 端点快查(丙席#14+端点打架加固): 端点必须与所装SDK版本配对——
     # 错配组合(0.2.0+旧端点)此处在发射前拦住,不烧到第一个模型调用才发现404
     from importlib.metadata import version as _pkg_version
