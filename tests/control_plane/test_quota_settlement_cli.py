@@ -649,6 +649,20 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     # The isolated home also proves telemetry never reads the operator's sessions.
     from loopx import usage_ping
     import time
+
+    def await_cycle(*, finished: bool) -> dict[str, Any]:
+        # This observes an asynchronous local result, not an HTTP deadline.
+        # Process startup and competing tests must not become an 8s product rule.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if cycles_path.exists():
+                cycles = json.loads(cycles_path.read_text())["cycles"]
+                if cycles and ("end" in cycles[0] if finished else "start" in cycles[0]):
+                    assert len(cycles) == 1
+                    return cycles[0]
+            time.sleep(0.03)
+        raise AssertionError(f"public quota/spend CLI did not observe cycle finished={finished}")
+
     home = tmp_path / "isolated-home"
     machine = home / ".codex" / "loopx"
     machine.mkdir(parents=True)
@@ -695,10 +709,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
 
     # Preview/failed spend before validated delivery must not finish measurement.
     cycles_path = Path(str(usage_path) + ".cycles")
-    deadline = time.monotonic() + 8
-    while not cycles_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.03)
-    assert "start" in json.loads(cycles_path.read_text())["cycles"][0]
+    await_cycle(finished=False)
     for execute in (False, True):
         _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                  "--slots", "1", "--source", "heartbeat", *binding,
@@ -756,18 +767,9 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     assert spend["delivery_workspace_validated"] is True
     assert spend["delivery_workspace"]["workspace_identity"] == f"loopx:{GOAL_ID}"
     assert _spend_run_count(runtime) == 1
-    cycles_path = Path(str(usage_path) + ".cycles")
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        if cycles_path.exists():
-            cycles = json.loads(cycles_path.read_text())["cycles"]
-            if cycles and cycles[0].get("end"):
-                break
-        time.sleep(0.03)
-    else:
-        raise AssertionError("public quota/spend CLI did not complete a telemetry cycle")
-    assert len(cycles) == 1 and cycles[0]["exact"] is True
-    assert cycles[0]["start"] < cycles[0]["end"]
+    cycle = await_cycle(finished=True)
+    assert cycle["exact"] is True
+    assert cycle["start"] < cycle["end"]
     before_replay = cycles_path.read_bytes()
     replay_rc, replay = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                                  "--slots", "1", "--source", "heartbeat", *binding,
@@ -2220,6 +2222,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
+    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -2363,9 +2366,12 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert _spend_run_count(runtime) == 1
 
-    settled_ack_hint = settled_replay["scheduler_hint"]["codex_app"]["ack_hint"]
-    assert settled_ack_hint["args"]["turn_instance_id"] == TURN_ID
-    assert settled_ack_hint["cli_args"][-3:] == [
+    # A historical settlement receipt cannot issue a new scheduler operation.
+    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
+    for surface in ("app_automation", "codex_app"):
+        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
         TURN_ID,
         "--execute",
@@ -2373,7 +2379,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
-        *settled_ack_hint["cli_args"],
+        *original_ack_hint["cli_args"],
     )
     # The intervening fresh_guard superseded this Turn for host writeback,
     # even though its original delivery settlement still replays correctly.
@@ -5545,7 +5551,7 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert _classification_count(runtime, "replan_noop") == 0
 
 
-def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_explicit_conflict(
+def test_runtime_capability_reentry_replays_bound_receipt_after_rejected_rebind(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -5604,7 +5610,10 @@ def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_exp
     assert conflict_rc == 1, conflict
     assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     assert "explicitly requested Todo" in conflict["reason"]
-    assert conflict["heartbeat_receipt"]["status"] == "write_failed"
+    assert conflict["heartbeat_receipt"]["status"] == "replayed"
+    assert conflict["heartbeat_receipt"]["event_id"] == first["heartbeat_receipt"]["event_id"]
+    assert conflict["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert conflict["effective_action"] == "quota_skip"
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
 
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
+from ..todos.contract import TODO_ID_PATTERN
 
 if TYPE_CHECKING:
     from .goal_instance_scope import CollaborationGoalScope
@@ -113,6 +114,18 @@ def normalize_request(value: Any) -> dict | None:
         return dict(
             effect_runtime_result("collaboration.request.normalize", {"request": value})
         )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def normalize_source_context(value: str) -> str:
+    """The shared typed owner qualifies source text before persistence."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return str(effect_runtime_result(
+            "collaboration.source_context.normalize", {"source_message": value},
+        )["source_message"])
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc
 
@@ -454,7 +467,7 @@ def _receipt(root, lane, row):
             raise ValueError("invalid read receipt")
         if lane == "links":
             for key, pattern in [
-                ("todo_ids", re.compile(r"todo_[a-f0-9]{12}")),
+                ("todo_ids", TODO_ID_PATTERN),
                 ("evidence_ids", ENVELOPED_SHA256_PATTERN),
             ]:
                 refs = value.get(key)
