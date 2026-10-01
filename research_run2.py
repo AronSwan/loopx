@@ -857,7 +857,9 @@ def gate(root, include_final=True):
     for a, b in (("reviewer-1", "reviewer-2"), ("reviewer-2", "reviewer-1")):
         leaked = list((root / "agents" / a / "inputs").glob(f"review-{b[-1]}.md"))
         chk(f"盲评隔离({a}不见{b})", not leaked)
-    # 7-1-2终稿一致性(三轮): 结构级+方向自洽+修复环可达
+    # 7-1-2终稿一致性: 结构级(引用+处理)——方向自洽检查已降级为信号不拦截
+    # (升级组严评1/5: 正则在真实文档上主语错配+否定盲区+简化例全过真枪全错;
+    #  语义级方向检查归评审B任务书指令承担,门禁只做结构级覆盖)
     if include_final:
         fp = root / "agents/finalizer/outputs/final-plan.md"
         if fp.exists():
@@ -870,11 +872,6 @@ def gate(root, include_final=True):
                 "终稿须引用review-1和review-2(或评审A/B)——finalizer不可无视评审" if not refs_both else "")
             chk("final-plan.md 含评审处理", has_handling,
                 "终稿须含评审处理说明(采纳/驳回逐条)" if not has_handling else "")
-            # 方向自洽级(审计九轮补洞): 同一转换动作在文档内不允许绑两个矛盾目标
-            # r9病句实例: '挂件转自动→切a式'与'挂件→切生成版'矛盾——机械可判
-            dir_conflicts = _direction_conflicts(ft)
-            chk("final-plan.md 方向自洽", not dir_conflicts,
-                f"同一动作绑定了矛盾方向: {dir_conflicts}" if dir_conflicts else "")
     led = attempts_ledger(root, plan["N"])
     first = sorted(p for p, a in led.items() if a == 1)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
