@@ -547,3 +547,11 @@ def test_verdict_diagnose_covers_position_and_borrow_branches():
     body = long_doc + "\n结论:有条件通过(等同修改后采纳)\n"
     d_borrow = r2.verdict_diagnose(body)
     assert "借词" in d_borrow, d_borrow
+
+
+# ==== 端点打架事故加固(2026-10-01审计三章): 守卫按SDK版本认端点 ====
+def test_expected_endpoint_pairs_by_sdk_version():
+    assert r2.expected_endpoint("0.2.0rc2") == "https://open.bigmodel.cn/api/anthropic"
+    assert r2.expected_endpoint("0.1.5rc1") == "https://open.bigmodel.cn/api/coding/paas/v4"
+    # 0.2.0+旧端点组合必须被拦(此前守卫双放行=放行一场必死的404发射)
+    assert r2.expected_endpoint("0.2.0rc2") != "https://open.bigmodel.cn/api/coding/paas/v4"

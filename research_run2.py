@@ -874,15 +874,28 @@ def gate_with_repair(root, include_final, max_rounds=2):
     return False
 
 
+def expected_endpoint(sdk_version: str) -> str:
+    """端点与SDK版本的强配对(端点打架事故: 模板export旧端点+守卫只认旧端点,
+    0.2.0运行时会在首个模型调用404——守卫必须按版本认端点,不放行必死的组合)。
+    0.2.x走Anthropic Messages(api/anthropic); 0.1.5x走OpenAI兼容(coding/paas/v4)。"""
+    if sdk_version.startswith("0.2"):
+        return "https://open.bigmodel.cn/api/anthropic"
+    return "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
 def auto(root):
-    # 端点快查(丙席#14): 端点只在launch脚本export,错走标准端点要烧完一场才报
-    # 1113"假余额不足"——发射前拦住,代价为零
+    # 端点快查(丙席#14+端点打架加固): 端点必须与所装SDK版本配对——
+    # 错配组合(0.2.0+旧端点)此处在发射前拦住,不烧到第一个模型调用才发现404
+    from importlib.metadata import version as _pkg_version
+    try:
+        sdk_ver = _pkg_version("deepseek-harness-sdk")
+    except Exception:
+        sdk_ver = "未知"
+    want = expected_endpoint(sdk_ver) if sdk_ver != "未知" else None
     base = os.environ.get("DEEPSEEK_BASE_URL", "")
-    if base and not (base.rstrip("/").endswith("/api/coding/paas/v4")
-                     or base.rstrip("/").endswith("/api/anthropic")):
-        raise SystemExit(f"DEEPSEEK_BASE_URL={base} 不是智谱有效端点"
-                         "(harness 0.1.5走coding/paas/v4,0.2.0走api/anthropic;"
-                         "错端点报1113假余额不足或404)")
+    if want and base and base.rstrip("/") != want:
+        raise SystemExit(f"DEEPSEEK_BASE_URL={base} 与SDK {sdk_ver} 不配对"
+                         f"(该版本要求 {want});检查launch模板端点行")
     timing = {}
     t_all = time.time()
 
