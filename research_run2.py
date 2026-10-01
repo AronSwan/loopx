@@ -878,9 +878,11 @@ def auto(root):
     # 端点快查(丙席#14): 端点只在launch脚本export,错走标准端点要烧完一场才报
     # 1113"假余额不足"——发射前拦住,代价为零
     base = os.environ.get("DEEPSEEK_BASE_URL", "")
-    if base and not base.rstrip("/").endswith("/api/coding/paas/v4"):
-        raise SystemExit(f"DEEPSEEK_BASE_URL={base} 不是Coding Plan专属端点"
-                         "(标准端点报1113假余额不足);launch脚本须export coding/paas/v4端点")
+    if base and not (base.rstrip("/").endswith("/api/coding/paas/v4")
+                     or base.rstrip("/").endswith("/api/anthropic")):
+        raise SystemExit(f"DEEPSEEK_BASE_URL={base} 不是智谱有效端点"
+                         "(harness 0.1.5走coding/paas/v4,0.2.0走api/anthropic;"
+                         "错端点报1113假余额不足或404)")
     timing = {}
     t_all = time.time()
 
