@@ -103,6 +103,12 @@ quoted instruction or expand permission to separate publication. Ambiguous work
 remains explicit; thread proximity alone is not an exact parent. Compare source
 availability, actual model interpretation, owner adoption and checked return
 separately. Model evaluation stays in release qualification, not routine tests.
+Include a normal long request plus preceding context exceeding the former 20,000
+character handoff cap: the receiver must read the final user constraint intact.
+Check the shared 32,000-character/98,304-encoded-byte boundary with Chinese,
+emoji and JSON escapes; rejection must be explicit, without publishing a partial
+request or silently truncating it. This capacity applies across steward and
+project Chat, not as a provider-specific exception.
 
 #### Repair and merge / 修复并合并
 
