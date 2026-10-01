@@ -119,7 +119,8 @@ assert.match(styles, /\.personal-proposal-row\[data-action-kind="operation\.exec
 assert.match(drawer, /selection\.item\.actionKind !== "operation\.execute"/, "Dashboard hides generic local controls for authenticated group operations");
 assert.match(dashboard, /response\.protected_action/, "Agent semantic protected intent is projected only after the Chat response");
 assert.match(dashboard, /normalizedMessage\.includes\(normalizedTarget\)/, "A model-invented protected target cannot reach typed preview");
-assert.match(page, /if \(semanticPreview\) await createPreview\(semanticPreview\)/, "Semantic intent still enters the typed preview boundary");
+assert.match(page, /if \(previews\?\.decision\) await createPreview\(previews\.decision\)/, "Semantic intent still enters the typed preview boundary");
+assert.match(page, /previews\.candidates\.map\(\(request\) => createPreview\(request, \{ select: false \}\)\)/, "Agent candidate proposals enter the same typed preview boundary without taking the drawer");
 for (const legacyClassifier of ["hasHeartbeatIntent", "hasMonitorIntent", "hasTodoCreationIntent", "isExecutionIntent"]) {
   assert.doesNotMatch(page, new RegExp(`function ${legacyClassifier}`), `${legacyClassifier} no longer bypasses the Router contract`);
 }

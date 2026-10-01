@@ -52,8 +52,9 @@ import { larkCliMissingScenario } from "./personal-workspace-browser/lark-cli-mi
 import { executionServiceOfflineScenario } from "./personal-workspace-browser/execution-service-offline.mjs";
 
 import { conversationStartupScenario } from "./personal-workspace-browser/conversation-startup.mjs";
+import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo-proposal.mjs";
 
-const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
+const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
 scenarioCatalog.push(confirmedOperationsScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario

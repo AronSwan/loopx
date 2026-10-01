@@ -762,6 +762,7 @@ export function PersonalWorkspacePage({
   managerRuntime,
   model,
   readOnly = false,
+  typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
@@ -782,6 +783,9 @@ export function PersonalWorkspacePage({
   model: WorkspaceModel;
   ownerLabel?: string;
   readOnly?: boolean;
+  // Bumped when typed previews were stored outside this page, so the page
+  // re-reads the store instead of waiting for the next mount.
+  typedActionsRevision?: number;
   selectedAgentId?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
@@ -826,6 +830,9 @@ export function PersonalWorkspacePage({
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
+  // Cards this page created from the Manager channel. A card created from a
+  // Goal conversation stays in that Goal's timeline and never joins Manager Chat.
+  const [managerSessionProposalIds, setManagerSessionProposalIds] = useState<string[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
@@ -1059,9 +1066,9 @@ export function PersonalWorkspacePage({
   const quickPromptBlocked = steering || sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
-      || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
+      || (item.kind === "proposal" && (managerSessionProposalIds.includes(item.proposal.previewId)
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
-    [items, sessionProposalIds, managerChannelProposalIds],
+    [items, managerSessionProposalIds, managerChannelProposalIds],
   );
   const conversationOpen = selectedGoal ? selectedGoalTab === "chat" : managerChatOpen;
   const conversationMessages = selectedGoal ? goalMessages : managerMessages;
@@ -1186,12 +1193,22 @@ export function PersonalWorkspacePage({
         // The workspace remains usable when the optional local proposal store is unavailable.
       });
     return () => { cancelled = true; };
-  }, [readOnly, selectedGoalId, t]);
+  }, [readOnly, selectedGoalId, t, typedActionsRevision]);
+
+  function rememberSessionProposal(previewId: string, channelGoalId: string | null) {
+    setSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    if (channelGoalId === null) {
+      setManagerSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    }
+  }
 
   async function createPreview(
     request: WorkspaceActionPreviewRequest,
     options: { select?: boolean } = {},
   ) {
+    // The card belongs to the conversation on screen when the request started
+    // (this render's selectedGoalId), even if its answer lands after the owner
+    // moved elsewhere.
     if (readOnly) throw new Error(t("source.readOnlyWriteError"));
     let local: WorkspaceActionPreview;
     try {
@@ -1229,7 +1246,7 @@ export function PersonalWorkspacePage({
         workspaceCandidates,
       };
     }
-    setSessionProposalIds((current) => current.includes(local.previewId) ? current : [...current, local.previewId]);
+    rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
     if (options.select !== false) setSelection({ item: local, kind: "proposal" });
     return local;
@@ -1561,7 +1578,9 @@ export function PersonalWorkspacePage({
     },
     onTransitionProposal: async (proposal, transition) => {
       const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition), t);
-      setSessionProposalIds((current) => current.includes(transitioned.previewId) ? current : [...current, transitioned.previewId]);
+      const managerOwned = managerSessionProposalIds.includes(proposal.previewId)
+        || managerChannelProposalIds.includes(proposal.previewId);
+      rememberSessionProposal(transitioned.previewId, managerOwned ? null : proposal.goalId ?? selectedGoalId);
       setProposals((current) => {
         const next = { ...current };
         if (transition === "regenerate") delete next[proposal.previewId];
@@ -1700,8 +1719,13 @@ export function PersonalWorkspacePage({
     try {
       if (!selectedGoalId) setManagerConversationReceiptVisible(true);
       else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
-      const semanticPreview = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
-      if (semanticPreview) await createPreview(semanticPreview);
+      const previews = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
+      if (previews?.candidates?.length) {
+        const drafted = await Promise.allSettled(previews.candidates.map((request) => createPreview(request, { select: false })));
+        if (drafted.some((result) => result.status === "rejected")) setActionFeedback(t("feedback.proposalDraftFailed"));
+      }
+      // The decision is created last so it keeps the drawer selection.
+      if (previews?.decision) await createPreview(previews.decision);
     } catch (error) {
       if (!messageOverride) {
         setComposer(message);
