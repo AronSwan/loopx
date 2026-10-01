@@ -161,6 +161,36 @@ test("network failure is lossy and no-retry; no exception text enters local stat
   assert.equal((await observe(path, ctx, generation, row, async () => { throw new Error("SECRET:/private/path"); })).sent, false);
   await observe(path, ctx, generation, row, noPost);
   assert.ok(!(await readFile(path, "utf8")).includes("SECRET"));
+  assert.deepEqual((await inspect(path, ctx)).delivery_history.map(row => row.status), ["unavailable", "unavailable"]);
+});
+
+test("local delivery history is bounded, content-free and cleared by disable", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const generation = (await state()).generation;
+  for (let i = 0; i < 24; i++) {
+    await observe(path, { ...ctx, now: new Date(ctx.now!.getTime() + i * 15 * 60000) }, generation, row, async () => 400);
+  }
+  const status = await inspect(path, ctx);
+  assert.equal(status.delivery_history.length, 20);
+  assert.equal(status.identity_scope, "persistent_machine_state_directory_not_person_or_session");
+  for (const entry of status.delivery_history) {
+    assert.deepEqual(Object.keys(entry).sort(), ["channel", "day", "rows", "status"]);
+    assert.equal(entry.status, "rejected");
+  }
+  await configure(path, ctx, "disable");
+  assert.deepEqual((await inspect(path, ctx)).delivery_history, []);
+});
+
+test("scope disclosure upgrades preserve installation ID; only explicit disable resets it", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const original = await state();
+  await writeFile(path, JSON.stringify({ ...original, notice: { ...original.notice, version: 3 } }));
+  const pending = await inspect(path, ctx);
+  assert.equal(pending.sending, false);
+  assert.equal(pending.automatic_notice_required, true);
+  await configure(path, ctx, "acknowledge", pending.notice);
+  assert.equal((await state()).install_id, original.install_id);
+  assert.notEqual((await state()).generation, original.generation);
 });
 
 test("malformed state fails closed; disable is the explicit repair", async t => {
@@ -201,14 +231,32 @@ test("startup heartbeat does not invent a successful command result", async t =>
   assert.equal((await inspect(path, ctx)).aggregate_preview, null);
 });
 
-test("a real unresponsive collector times out without retaining error details", async t => {
+test("a real unresponsive collector aborts both requests without retaining error details", { timeout: 30_000 }, async t => {
   const server = createServer(() => {});
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const { path, state } = await fixture(t); const ctx = context();
   ctx.env.LOOPX_USAGE_PING_ENDPOINT = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/ping`;
-  await configure(path, ctx, "enable"); const started = performance.now();
+  await configure(path, ctx, "enable");
+  // Inspect the network deadline itself, not filesystem/CPU scheduling time.
+  // Keep real fetch and real timeout signals so missing cancellation still fails.
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const signals: AbortSignal[] = [];
+  const deadlines: number[] = [];
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    deadlines.push(milliseconds);
+    const signal = timeout(milliseconds);
+    signals.push(signal);
+    return signal;
+  });
   assert.equal((await observe(path, ctx, (await state()).generation, row)).sent, false);
-  assert.ok(performance.now() - started < 4500);
-  assert.equal((await state()).last_sent_day, undefined);
+  assert.deepEqual(deadlines, [3000, 3000]);
+  assert.ok(signals.every(signal => signal.aborted && signal.reason.name === "TimeoutError"));
+  const saved = await state();
+  assert.doesNotMatch(JSON.stringify(saved), /TimeoutError|aborted due to timeout/);
+  assert.equal(saved.last_sent_day, undefined);
+  assert.deepEqual(saved.deliveries, [
+    { day: "2026-09-26", channel: "heartbeat", rows: 1, status: "unavailable" },
+    { day: "2026-09-26", channel: "cli", rows: 1, status: "unavailable" },
+  ]);
 });

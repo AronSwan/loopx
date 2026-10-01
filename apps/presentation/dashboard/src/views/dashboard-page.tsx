@@ -3,7 +3,7 @@ import { conversationReturnSessions, reconcileConversationHistory, reconcileConv
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
-import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
+import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
 import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -56,6 +56,7 @@ import {
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
   chatSessionQueuesFollowUps,
+  chatSessionSupportsSteering,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -100,6 +101,7 @@ import {
   type WorkspaceAgentOption,
   type WorkspaceAttention,
   type WorkspaceGoal,
+  type WorkspaceGoalTab,
   type WorkspaceGoalUsage,
   type WorkspaceHomeLane,
   type WorkspaceImageAttachment,
@@ -1044,7 +1046,7 @@ function buildPersonalHomeModel(
     return (personalTodosForQueueItem(item, "user")?.items ?? [])
       .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => ({
         projectedDone: todo.done,
-        details: attentionDetails(todo),
+        details: attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id),
         actionKind: todo.action_kind ?? null,
         blocking,
         goalId: item.goal_id,
@@ -1244,7 +1246,8 @@ function buildPersonalHomeModel(
 }
 function PersonalGoalHome({
   goalArchiveLoadState,
-  initialManagerChatOpen,
+  selectedView,
+  onSelectView,
   isLoading,
   onGoalActivationStateChange,
   onGoalDeleted,
@@ -1261,11 +1264,12 @@ function PersonalGoalHome({
   toggleTheme,
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen: boolean;
+  selectedView?: WorkspaceGoalTab;
+  onSelectView: (view: WorkspaceGoalTab) => void;
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
@@ -1410,6 +1414,7 @@ function PersonalGoalHome({
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
   // from the Session owner each time this page binds a Session.
   const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [steeringSessionIds, setSteeringSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   // Bumped when the service reports a running Turn this page did not know
   // about, so the Turn recovery effect re-reads the Session and adopts it.
@@ -1559,6 +1564,14 @@ function PersonalGoalHome({
 
   function recordSessionAdmission(session: ChatSessionSummary) {
     const queues = chatSessionQueuesFollowUps(session);
+    const supportsSteering = chatSessionSupportsSteering(session);
+    setSteeringSessionIds((current) => {
+      if (current.has(session.session_id) === supportsSteering) return current;
+      const next = new Set(current);
+      if (supportsSteering) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
     setFollowUpQueueSessionIds((current) => {
       if (current.has(session.session_id) === queues) return current;
       const next = new Set(current);
@@ -2609,18 +2622,8 @@ function PersonalGoalHome({
     setAgentMenuOpen(false);
   }
 
-  function openManagerChat() {
-    onSelectGoal("");
-    setMobilePanel("chat");
-  }
-
-  function openGoalList() {
-    onSelectGoal("");
-    setMobilePanel("goals");
-  }
-
   function openGoalChat(goalId: string) {
-    onSelectGoal(goalId);
+    onSelectGoal(goalId, "chat");
     setMobilePanel("chat");
   }
 
@@ -2939,10 +2942,16 @@ function PersonalGoalHome({
           },
           onSteerConversationTurn: async (targetContextId, turnId, message, ingressId) => {
             const binding = runtimeBindings[targetContextId];
-            if (!binding?.sessionId || binding.turnId !== turnId || activeTurnIds.current.get(targetContextId) !== turnId) {
-              throw new Error("本轮已结束或已被新的回合取代，追加指令未发送，草稿已保留。");
+            if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
+            // The service owns exact-turn admission and durable retry. A delivered
+            // ingress may be read back after completion; never retarget it locally.
+            const receipt = await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            if (receipt.created === false) {
+              // A replay reads an existing delivery; its message belongs to the
+              // stored transcript, not a second optimistic user bubble.
+              if (targetContextId === contextId) await conversationHistory.refresh();
+              return;
             }
-            await steerChatTurn(binding.sessionId, turnId, message, ingressId);
             const id = managerMessageId.current++;
             setMessagesByContext(current => {
               const messages = current[targetContextId] ?? [];
@@ -2950,7 +2959,6 @@ function PersonalGoalHome({
               return { ...current, [targetContextId]: [...messages, { id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId, lines: [], role: "user", text: message }] };
             });
           },
-          onOpenGoal: openGoalChat,
           onOpenRunSession: async (run) => {
             if (!run.sessionId) return;
             const sessionId = run.sessionId;
@@ -2959,7 +2967,6 @@ function PersonalGoalHome({
               ...current,
               [sessionId]: snapshot,
             }));
-            openGoalChat(run.goalId);
             setMessagesByContext((current) => ({
               ...current,
               [run.goalId]: snapshot.messages.map((message) => ({
@@ -2983,7 +2990,6 @@ function PersonalGoalHome({
               turnId: snapshot.session.active_turn_id ?? undefined,
             });
           },
-          onOpenOutput: (output) => openGoalChat(output.goalId),
           ...(goalSubagentConfigurationEnabled ? {
           onPreviewGoalSubagentConfiguration: async (request) => {
             const preview = await previewGoalSubagentConfiguration(request);
@@ -3069,18 +3075,20 @@ function PersonalGoalHome({
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
-          onSelectGoal: (goalId) => goalId ? openGoalChat(goalId) : openManagerChat(),
+          onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
+          onSelectView,
           onSendMessage: async (message, agentId, goalId, attachments) => sendManagerQuestion(message, { agentId, goalId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
         }}
         goalArchiveLoadState={goalArchiveLoadState}
-        initialManagerChatOpen={initialManagerChatOpen}
+        selectedView={selectedView}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
         conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
+        conversationSupportsSteering={steeringSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
         readOnly={readOnly}
@@ -3286,12 +3294,16 @@ export function DashboardPage() {
     setPayload(nextPayload);
     setSource(nextSource);
     setStatusUrl(url);
-    await navigate({
-      search: (current) => ({
-        ...current,
-        statusUrl: url,
-      }),
-    });
+    // Loading the current source on reload must not add a duplicate history
+    // entry: Back should return to the user's previous workspace view.
+    if (search.statusUrl !== url) {
+      await navigate({
+        search: (current) => ({
+          ...current,
+          statusUrl: url,
+        }),
+      });
+    }
     if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return false;
     statusRequestFenceRef.current.requestedUrl = null;
     setRequestedStatusUrl(null);
@@ -3532,11 +3544,12 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
     void navigate({
       search: (current) => ({
         ...current,
         goalId,
+        view: view === "chat" ? "conversation" : view,
       }),
     });
   }
@@ -3557,7 +3570,10 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
-      initialManagerChatOpen={search.view === "conversation" && !search.goalId}
+      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
+      onSelectView={(view) => {
+        void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });
+      }}
       isLoading={isLoading}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
