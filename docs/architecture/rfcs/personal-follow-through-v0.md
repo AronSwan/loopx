@@ -92,8 +92,22 @@ Provider id is `loopx-lark`, a bundled optional extension. No new built-in
 capability or installable connector is needed. Interpretation is an Agent task;
 provider-neutral validation and mutation mapping belong in the existing typed
 work-item boundary. Lark authentication, ids and history remain in its provider.
-Python may adapt transport; it must not duplicate the TypeScript decision owner.
-Only add a helper when the first real consumer needs it.
+Implementation language is TypeScript, compiled to JavaScript and executed on
+Node.js. This includes the Lark provider adapter, event normalization, semantic
+proposal validation, canonical-operation integration, report composition and
+recovery. Desktop UI uses TypeScript/TSX. Tests use the existing JS/TS tooling.
+Do not add Python modules, Python subprocess bridges or a second Python decision
+owner for this workflow. JavaScript is limited to existing tooling conventions.
+
+Python source links in section 4 describe the audited baseline, not the target
+implementation. Reuse established typed owners and supported APIs. If a required
+operation is available only through Python, migrate the smallest cohesive owner
+and its active consumers to TypeScript with characterization, real-path parity
+and rollback evidence before claiming that slice complete. Do not route around
+canonical authority with direct state writes. M1 must identify and resolve these
+dependencies; the final workflow must run without a Python process. Unrelated
+repository-wide migration remains out of scope. Only add a helper when its first
+real consumer needs it.
 
 ### Proposal and task mapping
 
@@ -203,6 +217,7 @@ an owner-only path if restoration requires migration.
 | Recover effects | Crash before/after apply and ACK, response loss, replay, concurrent edit | No duplicate mutation, lost pending item or cursor skip | Isolated runtime fault injection |
 | Preserve boundaries | Revoked grant, another owner, injected source instruction, disabled feature | No unauthorized read/write or off-state side effect | Every changed shared surface |
 | Complete desktop journey | Released package, real authorized Lark source and real executor | Connect, capture, review, prepare, correct, reopen, inspect same returned artifact, disconnect | Browser fixtures alone cannot pass |
+| JS/TS-only execution | Run the packaged workflow with Python unavailable, covering capture, mutation, preparation and return | No Python process or bridge dependency; canonical state parity holds | Whole selected workflow, not only unit tests |
 | Honest operation | Sleep/network outage, expired credential, exhausted budget | Visible stale/blocked state, bounded recovery, no false always-on claim | Local-host profile only |
 
 For model qualification, use a frozen synthetic or consented corpus of at least
