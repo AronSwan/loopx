@@ -222,6 +222,29 @@ def url_set(txt):
             for u in URL_ASCII.findall(txt)}
 
 
+# 终稿方向自洽(审计九轮: r9§4.8弹孔的机械堵法)
+_DIRECTION_PAT = re.compile(
+    r"(挂件|WhatsApp|邮件|widget|表单|email|chat)"
+    r"[^\n]{0,60}?(?:转|切|switch|→)[^\n]{0,20}?"
+    r"(a式|b式|生成版|辅助版|「生成」|「辅助」|AI生成|AI辅助)", re.I)
+
+
+def _direction_conflicts(txt):
+    """同一主语的同一转换方向,文档内不允许绑定矛盾的目标话术.
+    r9实例: '挂件转自动发送→切a式'与'挂件→切生成版'——机械可判."""
+    from collections import defaultdict
+    by_subject = defaultdict(set)
+    for m in _DIRECTION_PAT.finditer(txt):
+        subject = m.group(1).lower()
+        target = m.group(2)
+        if any(w in target for w in ("a式", "辅助", "「辅助」", "AI辅助")):
+            by_subject[subject].add("A档(人审)")
+        elif any(w in target for w in ("b式", "生成", "「生成」", "AI生成")):
+            by_subject[subject].add("B档(自动)")
+    conflicts = {s: t for s, t in by_subject.items() if len(t) > 1}
+    return "; ".join(f"{s}→{sorted(t)}" for s, t in conflicts.items())
+
+
 def homog_report(root, n):
     """调研员来源集两两Jaccard,降序。只度量不拦截——官方监管页被多调研员同引是
     正常现象,真质量权威是评审+穷举门禁;这里给的是架构师须知的偏见放大风险信号。"""
@@ -239,6 +262,7 @@ def homog_report(root, n):
             pairs.append({"pair": [ka, kb], "jaccard": j, "shared": len(sa & sb)})
     pairs.sort(key=lambda x: (-x["jaccard"], x["pair"]))
     return pairs
+
 
 
 def attempts_ledger(root, n):
@@ -787,19 +811,24 @@ def gate(root, include_final=True):
     for a, b in (("reviewer-1", "reviewer-2"), ("reviewer-2", "reviewer-1")):
         leaked = list((root / "agents" / a / "inputs").glob(f"review-{b[-1]}.md"))
         chk(f"盲评隔离({a}不见{b})", not leaked)
-    # 7-1-2终稿↔评审一致性(结构性最小版): 终稿须引用两轮评审并含处理说明
-    # (语义级方向反转是评审B的DIRECTION CONSISTENCY检查的职责,门禁只做结构性覆盖)
+    # 7-1-2终稿一致性(三轮): 结构级+方向自洽+修复环可达
     if include_final:
         fp = root / "agents/finalizer/outputs/final-plan.md"
         if fp.exists():
             ft = fp.read_text(encoding="utf-8", errors="replace")
+            # 结构级: 引用双评审+含处理
             refs_both = (("review-1" in ft or "评审A" in ft or "评审-1" in ft) and
                          ("review-2" in ft or "评审B" in ft or "评审-2" in ft))
             has_handling = any(w in ft for w in ("采纳", "驳回", "处理说明", "incorporat", "reject"))
-            chk("终稿引用双评审", refs_both,
+            chk("final-plan.md 引用双评审", refs_both,
                 "终稿须引用review-1和review-2(或评审A/B)——finalizer不可无视评审" if not refs_both else "")
-            chk("终稿含评审处理", has_handling,
+            chk("final-plan.md 含评审处理", has_handling,
                 "终稿须含评审处理说明(采纳/驳回逐条)" if not has_handling else "")
+            # 方向自洽级(审计九轮补洞): 同一转换动作在文档内不允许绑两个矛盾目标
+            # r9病句实例: '挂件转自动→切a式'与'挂件→切生成版'矛盾——机械可判
+            dir_conflicts = _direction_conflicts(ft)
+            chk("final-plan.md 方向自洽", not dir_conflicts,
+                f"同一动作绑定了矛盾方向: {dir_conflicts}" if dir_conflicts else "")
     led = attempts_ledger(root, plan["N"])
     first = sorted(p for p, a in led.items() if a == 1)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
@@ -883,6 +912,9 @@ def ensure_phase(root, phase, subtopics=None, max_tries=3):
 def _failing_phases(report):
     """门禁失败项 → 负责phase(按检查名里的工件名反查)。结构性失败(盲评隔离等)无负责phase→[]。"""
     name_to_phase = {ref.split("/")[-1]: ph for ph, (_, ref) in ARTIFACT.items()}
+    # 7-1-2三项终稿检查名须映射到finalizer(审计九轮: 此前不走修复环=直接死刑)
+    for suffix in ("引用双评审", "含评审处理", "方向自洽"):
+        name_to_phase[f"final-plan.md {suffix}"] = "finalizer"
     for k in range(1, MAXN + 1):
         name_to_phase[f"research-{k}"] = f"researcher-{k}"
     out = []

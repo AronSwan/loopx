@@ -601,4 +601,4 @@ def test_final_plan_must_reference_both_reviews(tmp_path):
     ok2 = r2.gate(root, include_final=True)
     rep2 = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
     failed = [c["check"] for c in rep2["checks"] if not c["pass"]]
-    assert not ok2 and "终稿引用双评审" in failed
+    assert not ok2 and "final-plan.md 引用双评审" in failed
