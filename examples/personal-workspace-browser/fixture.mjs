@@ -1713,7 +1713,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
   });
-  await page.route("**/api/actions?**", async (route) => {
+  await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
