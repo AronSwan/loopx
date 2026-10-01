@@ -222,19 +222,29 @@ def url_set(txt):
             for u in URL_ASCII.findall(txt)}
 
 
-# 终稿方向自洽(审计九轮: r9§4.8弹孔的机械堵法)
+# 终稿方向自洽(审计九轮: r9§4.8弹孔的机械堵法; 乙席实证后三轮加固)
+# 窗口禁跨句([^\n。；;]): 乙席10b实测60字窗口跨句号吞并下一句目标
 _DIRECTION_PAT = re.compile(
     r"(挂件|WhatsApp|邮件|widget|表单|email|chat)"
-    r"[^\n]{0,60}?(?:转|切|switch|→)[^\n]{0,20}?"
+    r"[^\n。；;]{0,60}?(?:转|切|switch|→)[^\n。；;]{0,20}?"
     r"(a式|b式|生成版|辅助版|「生成」|「辅助」|AI生成|AI辅助)", re.I)
+# 乙席7b假阳性: 终稿引用评审被驳回建议时,被驳回的方向词会误判为冲突
+# → 命中前20字含驳回类词则跳过该命中(驳回的引用不是指令)
+_REJECTED_CONTEXT = re.compile(r"驳回|不采纳|已否|拒绝|维持原|已废弃")
 
 
 def _direction_conflicts(txt):
     """同一主语的同一转换方向,文档内不允许绑定矛盾的目标话术.
-    r9实例: '挂件转自动发送→切a式'与'挂件→切生成版'——机械可判."""
+    r9实例: '挂件转自动发送→切a式'与'挂件→切生成版'——机械可判.
+    边界(乙席实测): 封闭主语/目标表,窗口内不跨句,驳回引用不算指令;
+    盲区=列表外主语与近义目标逃逸(漏报方向,偏松不偏严,作兜底可用)."""
     from collections import defaultdict
     by_subject = defaultdict(set)
     for m in _DIRECTION_PAT.finditer(txt):
+        # 乙席7b: 回看匹配起点前20字,含驳回类词=引用被驳回的建议,跳过
+        prefix = txt[max(0, m.start() - 20):m.start()]
+        if _REJECTED_CONTEXT.search(prefix):
+            continue
         subject = m.group(1).lower()
         target = m.group(2)
         if any(w in target for w in ("a式", "辅助", "「辅助」", "AI辅助")):
