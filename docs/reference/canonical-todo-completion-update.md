@@ -220,6 +220,14 @@ its explicit gate contract. Cancelling a reminder is not cancelling an order,
 withdrawing an external message or authorizing a trade; expiry is not detected
 or acted on automatically by this change.
 
+Compatibility tightening: canonical `todo complete` previously accepted a
+`user_gate` without `--decision-outcome` and closed it without a decision.
+It now rejects that input before any state or dependent effect, matching the
+existing legacy explicit-completion contract. Callers must supply
+`approve|reject|cancel`. The separate `todo update --status done` closure remains
+valid and grants no decision authority; required scopes and blocked dependents
+are preserved. Historical successful receipts remain replayable as recorded.
+
 The delivered cancellation entry point is CLI/managed CLI. Existing Chat
 completion continues through the shared terminal owner, and frontend/Lark
 consumers read the canonical completed status; no new cancellation button,
@@ -239,6 +247,12 @@ are replayed as recorded, not reinterpreted as a new cancellation.
 任务，不消解要求或写入决策范围结果。不带决定的普通完成保留既有受保护恢复行为；
 用户 gate 的批准、拒绝和取消仍遵循原契约。取消提醒不等于撤单、撤回外部消息或
 交易授权，本改动也不自动检测到期。
+
+兼容收紧：此前 canonical `todo complete` 接受未带 `--decision-outcome` 的
+`user_gate` 并只关闭事项；现在在任何状态或下游写入前拒绝，与旧路径的显式完成
+契约对齐。调用方须明确传入 `approve|reject|cancel`。独立的
+`todo update --status done` 仍可记录关闭，但不产生决定或批准，保留关联任务的
+阻塞和范围要求。历史成功回执仍按原记录重放。
 
 本交付的取消入口是 CLI/managed CLI；既有 Chat 完成入口复用同一终结权威，前端和
 Lark 读取 canonical 完成状态，但不新增取消按钮、配置或独立聊天权威。直接前端/

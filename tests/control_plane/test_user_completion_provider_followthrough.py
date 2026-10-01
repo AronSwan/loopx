@@ -113,3 +113,44 @@ def test_public_action_closure_and_cli_cancel(tmp_path: Path, monkeypatch, provi
     assert replay.returncode == 0, replay.stdout + replay.stderr
     assert rows == {row["todo_id"]: row for row in list_goal_todos(
         registry_path=registry, goal_id=GOAL_ID)["todos"]}
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_public_gate_requires_decision_but_update_closure_grants_none(
+    tmp_path: Path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    repo, state, registry = _write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["common_runtime_root"] = str(tmp_path / "runtime")
+    registry.write_text(json.dumps(config))
+    target, gate = _add_target_and_gate(
+        registry, required_scopes=[PUBLISH_SCOPE], target_status="blocked",
+    )
+    if provider != "legacy":
+        config["goals"][0]["coordination"]["handoff_mode"] = "hard_lease"
+        registry.write_text(json.dumps(config))
+        rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, handoff_mode="hard_lease", todos=rows,
+        )
+        initialize_canonical_authority(tmp_path / "runtime", GOAL_ID, projection,
+                                       state_path=state, provider=provider)
+    before = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    cli = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry), "todo"]
+    identity = ["--goal-id", GOAL_ID, "--todo-id", gate["todo_id"], "--agent-id", AGENT_ID]
+    missing = subprocess.run([*cli, "complete", *identity, "--role", "user"],
+                             capture_output=True, text=True, timeout=45, cwd=repo)
+    assert missing.returncode != 0, missing.stdout
+    assert "user_gate completion requires decision_outcome" in json.loads(missing.stdout)["error"]
+    assert "handler failed unexpectedly" not in missing.stdout
+    assert list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"] == before
+    # Update-done records closure, not a decision; it must not approve the target.
+    closed = subprocess.run([*cli, "update", *identity, "--status", "done", "--no-follow-up",
+                             "--note", "Record closure without a decision"],
+                            capture_output=True, text=True, timeout=45, cwd=repo)
+    assert closed.returncode == 0, closed.stdout + closed.stderr
+    after = {row["todo_id"]: row for row in list_goal_todos(
+        registry_path=registry, goal_id=GOAL_ID)["todos"]}
+    assert after[gate["todo_id"]]["status"] == "done"
+    assert after[target["todo_id"]] == next(row for row in before if row["todo_id"] == target["todo_id"])
