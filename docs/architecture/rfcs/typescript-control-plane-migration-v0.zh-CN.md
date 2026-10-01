@@ -1535,3 +1535,7 @@ TS 摘要批次；Python 保留旧格式解码、公开字段筛选及渲染。�
 2026-09-24: [带租约接力与剩余本地默认交付包](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.zh-CN.md).
 
 事件重放与剩余切换清单见 [2026-09-25](ledger/shared-goal-authority-state-provider-v0/2026-09-25-event-replay.zh-CN.md).
+
+### settlement 定位的 Turn journal 回读
+
+原生查询统一拥有恢复定位和 completion capability 证据，并共享写入／回读的状态阶段约束。兼容变更、实测代价、验证范围与 facade 退出条件见 [2026-10-02 检查点](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.zh-CN.md)。

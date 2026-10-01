@@ -98,6 +98,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "./turn_driver/turn_journal_query.ts";
 import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
@@ -463,6 +464,8 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
+    ["turn_journal.find_settlement", findTurnJournalBySettlement],
+    ["turn_journal.observed_capabilities", readTurnJournalCapabilities],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
