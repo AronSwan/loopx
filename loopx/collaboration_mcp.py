@@ -1346,7 +1346,8 @@ class Delegations:
                      *binding["host_args"]]
 
     def _record_turn_result(
-        self, path: Path, row: dict, result: dict, *, publish: bool = True
+        self, path: Path, row: dict, result: dict, *, publish: bool = True,
+        already_locked: bool = False,
     ) -> None:
         turn_key = result.get("resume_turn_key")
         if turn_key:
@@ -1366,7 +1367,9 @@ class Delegations:
             )
         }
         if publish:
-            self._observe(path, row, "turn_returned")
+            self._observe(path, row, "turn_returned", already_locked=already_locked)
+        elif already_locked:
+            self._fenced_write_locked(path, row)
         else:
             self._fenced_write(path, row)
 
@@ -1601,9 +1604,9 @@ class Delegations:
             # an otherwise clean Git worktree fail canonical validation.
             self._clear_delegation_bootstrap(row, binding)
         try:
-            todo_completed_for_settlement = False
             result = row["turn_result"]
-            if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
+            needs_settlement = result.get("status") != "committed" or result.get("result_kind") != "validated_progress"
+            if needs_settlement:
                 journal = self._validated_turn_journal(row, binding)
                 if journal is None:
                     row["error"] = str(
@@ -1613,57 +1616,50 @@ class Delegations:
                     )[:180]
                     self._observe(path, row, "rejected")
                     return
-                if not self._receiver_adopted(row, binding):
-                    row["error"] = "delegation receiver did not adopt the request"
-                    self._observe(path, row, "rejected")
-                    return
-                self._bound(row, require_active=True)
-                delegation_results.require_dependencies(
-                    self, binding, delegation_results.operation_brief(self, row)
-                )
-                if not isinstance(row.get("task_lease"), dict):
-                    self._acquire_delegation_lease(path, row, binding)
-                self._raise_if_stop_requested(path)
-                self._complete_delegated_todo(row, binding)
-                todo_completed_for_settlement = True
-                self._raise_if_stop_requested(path)
-                result = self._cli(
-                    binding,
-                    "turn",
-                    "run-once",
-                    *common,
-                    "--resume-turn-key",
-                    row["turn_key"],
-                    *execution,
-                    "--execute",
-                    timeout=binding["timeout_seconds"] + 60,
-                    host_record=self._host_process_record(path),
-                )
-                self._record_turn_result(path, row, result, publish=False)
-            if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
-                raise ValueError(
-                    str(
-                        result.get("error")
-                        or result.get("reason")
-                        or "validated delegation settlement remains incomplete"
-                    )
-                )
             if not self._receiver_adopted(row, binding):
                 row["error"] = "delegation receiver did not adopt the request"
                 self._observe(path, row, "rejected")
                 return
             self._bound(row, require_active=True)  # revocation or rebinding while the model ran
             delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
+            if needs_settlement and not isinstance(row.get("task_lease"), dict):
+                self._acquire_delegation_lease(path, row, binding)
             # Both effects commit inside the dispatch lock that a stop also
             # takes, so the two sides linearize: either a stop is written first
             # and neither effect runs, or both effects commit first and the stop
             # that follows reports a record that already reached its terminal
             # observation. Committing them outside the lock let a stop settle
-            # for a member whose Todo and reply had already landed.
+            # for a member whose Todo and reply had already landed. Recovery of
+            # a validated journal uses this same completion entry, retaining the
+            # fence through settlement, result publication and acceptance.
             with exclusive_file_lock(self._dispatch_lock(path)):
                 self._raise_if_stop_requested(path)
-                if not todo_completed_for_settlement:
-                    self._complete_delegated_todo(row, binding)
+                self._complete_delegated_todo(row, binding)
+                if needs_settlement:
+                    result = self._cli(
+                        binding,
+                        "turn",
+                        "run-once",
+                        *common,
+                        "--resume-turn-key",
+                        row["turn_key"],
+                        *execution,
+                        "--execute",
+                        timeout=binding["timeout_seconds"] + 60,
+                        host_record=self._host_process_record(path),
+                    )
+                    self._record_turn_result(path, row, result, publish=False, already_locked=True)
+                    if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
+                        raise ValueError(str(result.get("error") or result.get("reason")
+                                             or "validated delegation settlement remains incomplete"))
+                    if not self._receiver_adopted(row, binding):
+                        row["error"] = "delegation receiver did not adopt the request"
+                        self._observe(path, row, "rejected", already_locked=True)
+                        return
+                    self._bound(row, require_active=True)
+                    delegation_results.require_dependencies(
+                        self, binding, delegation_results.operation_brief(self, row)
+                    )
                 row["artifacts"] = self._accepted(binding)
                 if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
                     return_result(

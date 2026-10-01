@@ -259,6 +259,10 @@ member's Todo stays open, so the coordinator decides what happens next. The
 member's Todo completion and reply publication commit under the same lock a
 stop takes, so a stop written first means neither effect lands, and a stop
 written after both leaves their acceptance intact.
+Recovery of an already validated Turn uses the same fenced completion entry:
+it retains the lock through the original Turn's settlement and result publication,
+without rerunning the Host. A competing stop waits for that acceptance or wins
+before completion starts; a lock-acquisition timeout requires retrying `stop`.
 
 中文：`stop --execute` 结束一个成员的有界工作，并返回一份只陈述已证明事实的
 回执。停止请求写在执行记录旁边的 `<operation>.stop.json`，从不写进记录本身，
@@ -283,6 +287,9 @@ operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会�
 成员的 Todo 仍然打开，由协调者决定下一步。成员的 Todo 完成与回执发布在 stop
 所取的同一把锁下提交，因此先写入停止则两个效果都不会落地，后写入停止则其验收结果
 保持不变。
+恢复已通过验证的 Turn 也使用同一个带锁的完成入口，直到原 Turn 结算与结果发布
+结束才释放锁，不会重新运行 Host。并发 stop 等待该验收结果，或在完成开始前先取得
+停止边界；获取锁超时则需要重试 `stop`。
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead
