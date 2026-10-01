@@ -19,6 +19,14 @@
 | 能力 | 暂缓理由 | 触发条件 |
 |---|---|---|
 | subagent/fork（工人自开子代理） | N 路并行已在控制器层；工人再开=token 翻倍+同质化风险 | 出现"单课题内部要多路深挖"真需求 |
+
+## 2b. 官方全家桶部署（2026-10-01 "用足底座"批）
+
+| 组件 | 状态 | 证据 |
+|---|---|---|
+| 官方 CLI `@deepseek-ai/dsh@0.2.0-rc.2` | ✅ 全局安装可用 | `dsh --version` = 0.2.0-rc.2 |
+| **官方实验 agent-team 三件套**（agent-team/tool/ui） | ✅ **web profile 内置且激活**（捆绑依赖,配置树在册）——官方自己的团队层,零第三方依赖 | dump-config 三条目 |
+| 第三方 dsh-agent-teams 0.1.22（NanmiCoder） | ✅ 包已装入 web profile（node_modules+package.json）；**激活未完成**——plugin manager 内部 pnpm 调用自败（手动 pnpm 同命令成功），cordis.patch.yml 注册待补 | 备用：人在环/可视化交互场景首选官方三件套,第三方做对照 |
 | jobs 后台任务 | 一次性回合制工人用不上 | 工人出现长任务要并行推进的场景 |
 | read_image 视觉 | 信息源以文字页为主 | 出现图像为主的信息源（截图/扫描件） |
 | skill 技能市场 | 生态刚起，无对口技能 | 出现对口技能（如引用格式检查器） |
