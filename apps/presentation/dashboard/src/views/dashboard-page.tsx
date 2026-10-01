@@ -1377,7 +1377,7 @@ function PersonalGoalHome({
       capability: "不调用模型",
       adapterKind: "status_projection",
       interrupt: false,
-      label: "仅查状态",
+      label: t("header.statusOnlyAgent"),
       resume: true,
       statusLabel: "只读",
       streaming: false,
@@ -2171,7 +2171,7 @@ function PersonalGoalHome({
       const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
       const answerMessageId = appendManagerAssistantMessage(targetContextId, {
-        agentLabel: usesStatusOnlyRoute ? "仅查状态" : "LoopX 管家",
+        agentLabel: usesStatusOnlyRoute ? t("header.statusOnlyAgent") : t("header.manager"),
         lines: answer.lines.slice(0, 3),
         sourceLabel: usesStatusOnlyRoute ? "LoopX 状态投影 · 仅查状态" : "LoopX 状态投影",
         text: answer.text,

@@ -67,6 +67,9 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
     await installApi(page);
     await page.goto(url, { waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor();
+    assert.match(await page.getByRole("region", { name: "Control plane source" }).innerText(), /This machine/);
+    const englishText = await page.locator("body").innerText();
+    for (const chinese of ["本机", "仅查状态"]) assert.ok(!englishText.includes(chinese), `English Workspace shows ${chinese}`);
     await page.screenshot({ path: resolve(outputDir, "locale-default-english.png") });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator(".personal-channel-scroll").evaluate((element) => { element.scrollTop = 0; });
@@ -86,6 +89,7 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor();
     assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    assert.match(await page.getByRole("region", { name: "控制面来源" }).innerText(), /本机/);
     await page.screenshot({ path: resolve(outputDir, "locale-saved-chinese.png") });
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("button", { name: /语言/ }).click();
