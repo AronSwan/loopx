@@ -35,6 +35,7 @@ on:
       - "examples/frontstage-stargazer-fetch-smoke.py"
       - "examples/dev-book-publication-smoke.py"
       - "packages/loopx-text-stats/**"
+      - "tests/test_dev_book_reader_checkpoints.py"
       - "examples/dev-book-welcome-wagon-smoke.py"
       - "examples/goal-channel-frontstage-fixture.py"
       - "examples/showcase-catalog-smoke.py"
@@ -75,6 +76,7 @@ on:
       - "examples/frontstage-stargazer-fetch-smoke.py"
       - "examples/dev-book-publication-smoke.py"
       - "packages/loopx-text-stats/**"
+      - "tests/test_dev_book_reader_checkpoints.py"
       - "examples/dev-book-welcome-wagon-smoke.py"
       - "examples/goal-channel-frontstage-fixture.py"
       - "examples/showcase-catalog-smoke.py"
@@ -163,6 +165,9 @@ jobs:
 
       - name: Validate Developer Book companion provider
         run: python3 -m unittest discover -s packages/loopx-text-stats/tests -v
+
+      - name: Validate Developer Book reader checkpoints
+        run: python3 -m unittest discover -s tests -p test_dev_book_reader_checkpoints.py -v
 
       - name: Validate bilingual Blog catalog
         run: node examples/blog-bilingual-index-smoke.mjs
