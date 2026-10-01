@@ -168,6 +168,10 @@ test("the narrower tier still rejects every value and assignment shape", () => {
     `${bearer} ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH)}`,
     `${bearer} ${"a".repeat(OPAQUE_VALUE_MIN_LENGTH + 24)}`,
     `${password}=hunter2`,
+    `{"${password}": 1}`,
+    `{"${secret}": "a"}`,
+    `{'${password}': 'a'}`,
+    `{"${secret}": }`,
     `${password} is hunter2`,
     `${password} set to hunter2`,
     `${password} is "a"`,
@@ -186,6 +190,7 @@ test("the narrower tier still rejects every value and assignment shape", () => {
   const accepted = [
     `the ${bearer} token expired`,
     `the ${password} is stored in the vault`,
+    `the "${password}" field stays unset`,
     `read the ${secret} from the environment`,
     `${bearer} authentication is required here`,
     `the ${password} is configured per environment`,

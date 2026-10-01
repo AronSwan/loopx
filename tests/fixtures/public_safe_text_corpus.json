@@ -4,7 +4,7 @@
   "sample_encoding": "Each sample is a template. Substitute every {NAME} placeholder with the joined parts of tokens[NAME], and {NAME_LOWER} with the lowercased join. Samples are assembled at test time so this fixture carries no literal credential-looking string.",
   "bucket_semantics": "public_safe is accepted by every owner and by the publication policy. private_looking is rejected by every owner and by the publication policy. internal_state_prose is the two-tier set from Refs #5136 direction 2: the four owners validate LoopX's own state and accept it, while the stricter publication policy (ALL_CATEGORIES / find_private_text_match) still rejects it.",
   "contract_signals": {
-    "assignment_punctuation": "A credential label followed by ':' or '=' carries whatever follows it. No value shape and no length applies, because the label already asserts an assignment.",
+    "assignment_punctuation": "A credential label followed by ':' or '=' carries whatever follows it, including when the label is a quoted object key. No value shape and no length applies, because the label already asserts an assignment.",
     "shaped_value_token": "A connector (whitespace, comma, semicolon, dash, or a copula such as 'is' or 'set to') followed by a token that contains a digit or one of the base64-only characters + / =.",
     "quoted_value": "The same connector followed by a quoted run. Quoting is its own signal, so a letter-only passphrase written as a quoted value is still a value.",
     "opaque_value_run": "The same connector followed by an unbroken letter-only run of OPAQUE_VALUE_MIN_LENGTH (16) characters or longer.",
@@ -161,6 +161,28 @@
       "shape": "assignment_punctuation"
     },
     {
+      "id": "quoted_password_key_single_digit_value",
+      "template": "{\"{PASSWORD_LOWER}\": {ONE_DIGIT}}",
+      "shape": "assignment_punctuation",
+      "note": "A quoted credential key still states an assignment; the short value does not create a length exemption."
+    },
+    {
+      "id": "quoted_secret_key_single_letter_string",
+      "template": "{\"{SECRET_LOWER}\": \"{ONE_LETTER}\"}",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "single_quoted_password_key_short_value",
+      "template": "{'{PASSWORD_LOWER}': '{ONE_LETTER}'}",
+      "shape": "assignment_punctuation"
+    },
+    {
+      "id": "quoted_secret_key_empty_assignment",
+      "template": "{\"{SECRET_LOWER}\": }",
+      "shape": "assignment_punctuation",
+      "note": "The assignment signal belongs to the labeled operator, so even an empty right-hand side remains a rejected credential assignment."
+    },
+    {
       "id": "bare_basic_credential_value",
       "template": "{BASIC} QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
       "shape": "unlabeled_secret_shape",
@@ -298,6 +320,12 @@
     }
   ],
   "internal_state_prose": [
+    {
+      "id": "quoted_password_word_in_prose",
+      "template": "the \"{PASSWORD_LOWER}\" field stays unset",
+      "shape": "credential_word_only",
+      "note": "Quoting a credential word does not make it a key unless an assignment operator follows."
+    },
     {
       "id": "bearer_word_in_prose",
       "template": "the {BEARER} token expired",

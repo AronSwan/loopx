@@ -73,7 +73,8 @@ ALL_CATEGORIES: frozenset[str] = frozenset(
 # is a shape fact about the text next to the label, which is what lets the two
 # directions be decided by different rules instead of by one length:
 #
-#   assignment_punctuation -- ``label:`` or ``label=`` carries whatever follows;
+#   assignment_punctuation -- ``label:`` or ``label=`` carries whatever follows,
+#                             including when the label is a quoted object key;
 #                             the label already asserts an assignment, so no
 #                             value floor applies (``LABELED_CREDENTIAL_...``).
 #   shaped_value_token -- a connector (whitespace, comma, semicolon, dash) or a
@@ -166,15 +167,15 @@ _BASIC_CREDENTIAL_VALUE = re.compile(
     r"[A-Za-z0-9+/=]{16,}",
 )
 
-# An assignment form of the four words: either separator, any value. It carries
-# no value-length floor on purpose, because naming a credential label next to an
-# operator already states an assignment. For the password and secret words this
-# arm is no tightening -- the old word-only rule rejected every mention of them,
-# assignments included -- while the colon spellings of token and bearer are the
-# two forms it did not know. Direction 2 asks that an assignment never depend on
-# a length accident.
+# An assignment form of the four words: an optional closing quote around the key,
+# either separator, and any value. It carries no value-length floor on purpose,
+# because naming a credential label next to an operator already states an
+# assignment. For the password and secret words this arm is no tightening -- the
+# old word-only rule rejected every mention of them, assignments included -- while
+# the colon spellings of token and bearer are the two forms it did not know.
+# Direction 2 asks that an assignment never depend on a length accident.
 LABELED_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
-    r"\b(?:" + "Bear" + r"er|tok" + r"en|pass" + r"word|sec" + r"ret)\s*[:=]",
+    r"\b(?:" + "Bear" + r"er|tok" + r"en|pass" + r"word|sec" + r"ret)[\"']?\s*[:=]",
     re.I,
 )
 

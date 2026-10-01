@@ -371,6 +371,7 @@ def test_both_tiers_differ_from_the_old_rule_only_where_this_change_says() -> No
         if was_rejected and internal is None:
             newly_released.append(sample_id)
     assert newly_released == [
+        "quoted_password_word_in_prose",
         "bearer_word_in_prose",
         "password_word_in_prose",
         "secret_word_in_prose",
@@ -510,6 +511,26 @@ def test_contract_biconditional_over_the_whole_form_class() -> None:
     assert values and prose
 
 
+def test_quoted_key_assignment_matrix_keeps_values_in_the_internal_tier() -> None:
+    # A closing object-key quote is part of the label spelling, not a boundary
+    # that may hide the assignment operator. Exercise every label, quote style,
+    # assignment spacing and value class independently of the implementation
+    # regex; every combination carries an assignment, including the empty value.
+    assignment_separators = (":", ": ", "=", " =", "\t=")
+    checked = 0
+    for label in _LABELS:
+        for quote in ('"', "'"):
+            for separator in assignment_separators:
+                for value, _value_kind in _VALUES:
+                    text = f"{{{quote}{label}{quote}{separator}{value}}}"
+                    assert _internal_rejects(text), text
+                    checked += 1
+            # Without an assignment operator, quoting the field name remains
+            # ordinary prose in the internal tier.
+            assert not _internal_rejects(f"the {quote}{label}{quote} field stays unset")
+    assert checked == len(_LABELS) * 2 * len(assignment_separators) * len(_VALUES)
+
+
 def test_documented_residual_is_a_short_letter_run_behind_a_prose_connector() -> None:
     # The one class the contract cannot recognize: a letter-only run below the
     # ceiling, beside the label, with no quotes and no assignment punctuation.
@@ -555,6 +576,8 @@ def test_each_contract_signal_is_wired_to_its_own_arm() -> None:
     # the corpus and the form matrix, not here.
     bearer = "Bear" + "er"
     assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(f"{bearer}:")
+    assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(f'"{bearer}":')
+    assert LABELED_CREDENTIAL_ASSIGNMENT_PATTERN.search(f"'{bearer}' =")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} abc123")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} is abc123")
     assert CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN.search(f"{bearer} set to abc123")

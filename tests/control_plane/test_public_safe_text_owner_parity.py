@@ -190,6 +190,10 @@ def test_corpus_covers_the_reviewed_credential_shapes() -> None:
         "dash_secret_opaque_value",
         "quoted_password_passphrase",
         "quoted_password_single_letter_value",
+        "quoted_password_key_single_digit_value",
+        "quoted_secret_key_single_letter_string",
+        "single_quoted_password_key_short_value",
+        "quoted_secret_key_empty_assignment",
         "bearer_opaque_letter_run_at_ceiling",
         "bearer_assignment_colon_bare_word",
         "password_assignment_short_value",
@@ -198,6 +202,7 @@ def test_corpus_covers_the_reviewed_credential_shapes() -> None:
     } <= private_ids
     prose_ids = set(_ids(INTERNAL_STATE_PROSE_SAMPLES))
     assert {
+        "quoted_password_word_in_prose",
         "bearer_word_in_prose",
         "bearer_before_long_ordinary_word",
         "password_copula_ordinary_word",

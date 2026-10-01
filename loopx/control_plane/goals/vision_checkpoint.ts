@@ -116,7 +116,8 @@ const GOAL_VISION_STATE_ALIASES: Readonly<Record<string, string>> = {
 // one. The value and assignment arms below are what keep a real credential out.
 // The credential-value contract, mirrored from loopx/public_safe_text.py: four
 // independent signals, of which this file owns the two connector arms. A label
-// plus `:` or `=` carries whatever follows (LABELED_CREDENTIAL_ASSIGNMENT below);
+// plus `:` or `=` carries whatever follows, including when the label is a quoted
+// object key (LABELED_CREDENTIAL_ASSIGNMENT below);
 // a label reached through a comma, dash, whitespace or copula carries a value only
 // when the next token looks assembled -- it holds a digit or a base64-only
 // character, or it is a quoted run, or it is an unbroken letter run at or above
@@ -134,7 +135,7 @@ export const CONNECTED_CREDENTIAL_VALUE_SHAPE =
   /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
 export const QUOTED_CREDENTIAL_VALUE_SHAPE =
   /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]+["']/i;
-const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)\s*[:=]/i;
+const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s*[:=]/i;
 // Ported from the Python owner's two in-policy shape detectors, so one corpus
 // yields one verdict in both runtimes (Refs #5136, direction 4). The third
 // Python detector -- a raw remote location -- is deliberately not ported: it is

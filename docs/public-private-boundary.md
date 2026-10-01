@@ -139,13 +139,14 @@ destination needs:
 
 The value arms stay in every policy, so the narrower tier releases prose only. A
 label carries a value when one of four independent signals is present: an
-assignment operator (`:` or `=`), which carries whatever follows with no length
-condition; a connector (whitespace, comma, semicolon, dash, or a copula such as
-"is" or "set to") followed by a token containing a digit or one of `+ / =`; the
-same connector followed by a quoted run; or the same connector followed by an
-unbroken letter-only run of `OPAQUE_VALUE_MIN_LENGTH` (16) characters or more. A
-raw credential token with no label at all -- a GitHub token, a private key block
--- is rejected by both tiers too, which the word-only rule never caught.
+assignment operator (`:` or `=`), including after a quoted object key, which
+carries whatever follows with no length condition; a connector (whitespace,
+comma, semicolon, dash, or a copula such as "is" or "set to") followed by a token
+containing a digit or one of `+ / =`; the same connector followed by a quoted
+run; or the same connector followed by an unbroken letter-only run of
+`OPAQUE_VALUE_MIN_LENGTH` (16) characters or more. A raw credential token with no
+label at all -- a GitHub token, a private key block -- is rejected by both tiers
+too, which the word-only rule never caught.
 
 No signal reads the length of a word to decide whether a credential *word* is
 present, so a scheme name beside an ordinary English word stays prose while the
