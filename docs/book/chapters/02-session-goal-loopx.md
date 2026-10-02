@@ -96,10 +96,12 @@ LoopX 同时处理 Goal、Agent 和 Host，但三者回答的是不同问题：
 
 1. 多个已注册 Goal 同时存在时，先返回只读 `goal_selection_gate`，再以精确 `--goal-id` 重跑；
 2. 不根据相似的 objective、聊天摘要或目录名猜测 Goal；
-3. 新的 argument-bearing `start-goal --guided` 未指定 `--agent-id` 时，即使只有一个已注册 Agent，
-   也默认进入 fresh identity registration；
-4. 只有用户明确要求接管某个已有 Agent，才以该精确 `agent_id` 继续；
-5. Agent 名称或前缀不证明 Host，实际运行面要由 host/runtime metadata 说明。
+3. `--agent-id` 与 `--new-peer` 都未给出时，若当前 host thread 没有已存绑定，`start-goal` 返回
+   `thread_binding_selection_required`（`select_agent_identity`）：默认动作是选择已有 lane，不会
+   自动注册新身份；
+4. 只有显式 `--new-peer` 才默认注册 fresh identity；
+5. 只有用户明确要求接管某个已有 Agent，才以该精确 `agent_id` 继续；
+6. Agent 名称或前缀不证明 Host，实际运行面要由 host/runtime metadata 说明。
 
 这样，"继续同一个项目"与"冒充上一个执行者"不会被压成同一操作。
 

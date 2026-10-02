@@ -56,8 +56,11 @@ Agent Turn    no delivery
 validate -> writeback -> optional spend
 ```
 
-The right branch is a legal outcome, and it is the common one. Landing there often usually means the cadence
-should slow down, not that you need more wakes.
+The right branch is a legal outcome, and it is the common one. It means no work was due for **this** turn; it
+does not mean the Goal frontier is closed. A settled turn's replay returns `should_run=false` while preserving
+the current cadence and deferring evaluation to a fresh Turn identity. Landing there often is therefore not
+evidence that the cadence should slow down; that decision belongs to the owner, and only once the frontier is
+genuinely waiting.
 
 ## Open the correct project root
 
@@ -254,8 +257,10 @@ notification.
 1. **A heartbeat firing is not work happening.** Judge reality by writeback and spend, not by trigger count.
 2. **Every wake passes through `quota should-run`.** Without that Gate, the automation becomes a bypass
    around the decision.
-3. **`should_run=false` is a legal outcome.** Frequency means the cadence should slow, not that it should be
-   pushed harder.
+3. **`should_run=false` is a legal outcome that closes this turn only.** A settled replay preserves the
+   current schedule and re-evaluates under a fresh Turn identity, so neither the count of `false` results nor
+   this turn's receipt is grounds to slow the cadence. Slowing happens through the four steps below, once the
+   owner reads the frontier as genuinely waiting.
 4. **A cadence change needs all four steps**: proposal, host apply, host readback, ACK.
 5. **A local ACK ledger does not prove Host state.** Only a Host readback that matches the target closes the
    loop; a mismatch is repaired as `drift_detected`.

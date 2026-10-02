@@ -104,10 +104,12 @@ Goal-start contract keeps those choices explicit:
 1. if several registered Goals exist, return a read-only `goal_selection_gate` and rerun with one exact
    `--goal-id`;
 2. do not infer a Goal from similar objective text, a chat summary, or a directory name;
-3. a new argument-bearing `start-goal --guided` without `--agent-id` enters fresh identity registration,
-   even when zero or one Agent is already registered;
-4. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
-5. an Agent name or prefix does not prove the Host surface; runtime metadata does.
+3. with neither `--agent-id` nor `--new-peer` given, a host thread that has no stored binding returns
+   `thread_binding_selection_required` (`select_agent_identity`): the default is to select an existing lane,
+   not to register a new identity;
+4. fresh identity registration is the default only when `--new-peer` is explicit;
+5. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
+6. an Agent name or prefix does not prove the Host surface; runtime metadata does.
 
 This lets a session continue the same project without silently impersonating the previous executor.
 

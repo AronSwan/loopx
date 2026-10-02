@@ -50,8 +50,10 @@ Agent Turn    no delivery
 validate -> writeback -> optional spend
 ```
 
-右分支是合法结局，而且是经常发生的那一种。频繁走到右分支通常意味着 cadence 需要放慢，而不是
-需要更多唤醒。
+右分支是合法结局，而且是经常发生的那一种。它只说明**这一次**没有该做的工作，不等于 Goal
+frontier 已经收尾：已结算 Turn 的回放会返回 `should_run=false`，同时保留当前 cadence，等新的
+Turn identity 再评估。所以频繁走到右分支并不说明 cadence 该放慢；只有 owner 判定确属等待，才
+按下面的四步调整。
 
 ## 从正确的项目根目录开始
 
@@ -232,7 +234,9 @@ loopx start-goal --guided --project . \
 
 1. **heartbeat 触发不等于工作发生。** 判断真实性看 writeback 与 spend，不看触发次数。
 2. **每次唤醒都过一次 `quota should-run`。** 没有这层 Gate，automation 就变成绕过决策的旁路。
-3. **`should_run=false` 是合法结果。** 频繁出现说明 cadence 该放慢，而不是该加力。
+3. **`should_run=false` 是合法结果，但它只关闭这一个 Turn。** 已结算回放保留当前 cadence，用新的
+Turn identity 重新评估；`false` 的次数或本 Turn 的 receipt 都不能当作放慢 cadence 的依据。需要
+放慢时，由 owner 判定确属等待后走第 4 条的四步。
 4. **cadence 变化的四步缺一不可**：proposal、host apply、host readback、ACK。
 5. **本地 ACK ledger 不证明 Host 状态。** 只有 Host readback 与目标一致才闭合，不一致时按
    `drift_detected` 修复。

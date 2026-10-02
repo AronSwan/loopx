@@ -247,6 +247,7 @@ uv run --extra test pytest -q \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_current_agent_advancement_still_preempts_monitor_streak_replan \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_watch_only_monitor_streak_does_not_create_replan_obligation
+  tests/control_plane/test_settled_replay_construction.py::test_settled_replay_preserves_schedule_without_new_host_effects
 ```
 
 [These tests](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py)
@@ -254,6 +255,13 @@ assert an obligation only for the eligible current-Agent lane, `run` without tha
 current advancement exists, and no such trigger for watch-only even at 50. They preset counters and
 evaluate policy rather than performing interleaved remote polling. They do not prove concurrent counter
 writes, real waking, or backoff timing.
+
+A direct counterexample sits alongside them: **a settled turn's replay**. With an open advancement
+successor still present it returns `should_run=false`, while `scheduler_hint.action` is
+`preserve_current_schedule`, `next_trigger` is `fresh_turn_identity`, the host action is `none`, and no ACK
+is required. Neither the count of `false` results nor this turn's receipt therefore implies the cadence
+should slow; slowing waits until the owner reads the frontier as genuinely waiting, and then follows the
+four steps in point 4.
 
 #### Next entrypoint and stopping condition {#monitor-next}
 

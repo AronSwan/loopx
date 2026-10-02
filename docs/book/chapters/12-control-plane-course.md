@@ -175,9 +175,15 @@ uv run --extra test pytest -q \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_current_agent_advancement_still_preempts_monitor_streak_replan \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_watch_only_monitor_streak_does_not_create_replan_obligation
+  tests/control_plane/test_settled_replay_construction.py::test_settled_replay_preserves_schedule_without_new_host_effects
 ```
 
 [原测试](https://github.com/loopx-project/loopx/blob/67930ab6af78491f10ca3de4ff74ef7a39954a51/tests/control_plane/test_monitor_replan_agent_scope.py)分别断言：只有符合条件的当前 Agent lane 产生 `monitor_no_change_streak`；有当前 advancement 时为 `run` 且没有该 obligation；watch-only 即使 streak 为 50 也不因此触发。它们预置计数器后执行决策，没有交错发送远端 poll，不证明计数写入并发、真实唤醒或 backoff 时间。
+
+这里同时给出一个直接反例：**已结算 Turn 的回放**。该测试在仍有 open advancement successor 时返回
+`should_run=false`，但 `scheduler_hint.action` 是 `preserve_current_schedule`、`next_trigger` 是 `fresh_turn_identity`，host action 为 `none` 且不需要 ACK。所以 `false` 的
+出现次数或本 Turn 的 receipt 都不能推出"该放慢 cadence"；放慢要等 owner 判定 frontier 确属等待，
+再走第 4 条的四步。
 
 #### 下一步入口与停止条件 {#monitor-next}
 
