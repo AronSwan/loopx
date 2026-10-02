@@ -1384,10 +1384,9 @@ def auto(root):
     timing = {}
     t_all = time.time()
 
-    # 锁定协议§5场内写锁(兑付K3写锁侧——窗口开启锚: 若根内已有锁锚则沿用
-    # 复跑不重置;否则首场写。锁hash=locking-protocol.md的commit锚,推送后生效)
+    # 锁定协议§5场内写锁(兑付K3写锁侧)+锚工件(合规组G1③: pushed自报布尔、
+    # push事件时间无一处落盘——锁锚须有机器绑定的第三方锚工件,否则君子协定)
     if _load_lock(root) is None:
-        _proto_lock = (root / "docs" / "locking-protocol.md")
         _lh = ""
         try:
             _lh = subprocess.run(
@@ -1398,6 +1397,24 @@ def auto(root):
             pass
         if _lh:
             _write_lock(root, _lh, pushed=bool(os.environ.get("RESEARCH_LOCK_PUSHED")))
+
+    # controller-start快照(合规组G3缺口: §4底座崩溃排除须'场start记录控制器
+    # git HEAD+dirty快照'——原全仓零实现。发射起点落盘,崩溃排除援引的法定证据)
+    try:
+        _snap = {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "controller_head": subprocess.run(
+                ["git", "-C", str(HERE), "rev-parse", "HEAD"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=10).stdout.strip(),
+            "controller_dirty": subprocess.run(
+                ["git", "-C", str(HERE), "status", "--porcelain"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=10).stdout.strip(),
+        }
+        write(root / "controller-start.snapshot.json", _snap)
+    except (OSError, subprocess.SubprocessError):
+        pass  # 快照失败不阻断发射(留证尽力而为)
 
     def stamp(stage):
         timing[stage] = round(time.time() - t_all, 1)
