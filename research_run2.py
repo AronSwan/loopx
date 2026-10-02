@@ -1036,6 +1036,16 @@ def ensure_phase(root, phase, subtopics=None, max_tries=3):
         # (充分用底座先进功能: should-run含配额/协调/目标状态,比自制探针更聪明)
         _env_wait = min(300, 30 * (2 ** (t - 1)))  # 30s→60s→120s,封顶300s
         _go, _why = _should_run(root, actor)
+        # 锁定协议§4: 探针/should-run结果落盘(乙席S5①: 网络事故排除须机器可判留证)
+        try:
+            pl = root / "probe-log.jsonl"
+            with pl.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                     "phase": phase, "should_run": bool(_go),
+                                     "why": _why[:80], "api_ok": _api_reachable()},
+                                    ensure_ascii=False) + "\n")
+        except OSError:
+            pass  # probe-log写不进不阻断重试决策(留证尽力而为)
         if _go:
             time.sleep(min(10, _env_wait // 6))  # 环境正常→短暂等待(模型方差)
         else:
