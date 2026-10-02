@@ -29,14 +29,6 @@ approval outstanding.
 | Environment ready | The current entrypoint and required dependencies passed their corresponding checks | The right project Goal is selected and a Host is running continuously |
 | Connection accepted | Goal, Agent, project boundary, and next entrypoint are explicit; writes have been read back | T1 is implemented, CI passed, and publication is authorized |
 | A piece of work delivered | Current artifacts and validation are reviewable, with complete lifecycle records | Every Todo, approval, and the entire Goal are complete |
-- `loopx doctor` reports a usable installation;
-- `.loopx/registry.json` exists in the project;
-- `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exists;
-- `loopx status` can show the active state and the current frontier; a first connection creates no
-  onboarding Todo, so the Agent writes the first delivery Todo after you confirm it;
-- `.loopx/` and `.loopx/goals/` do not enter Git;
-- reconnecting reuses the exact existing `goal_id` instead of overwriting the Goal;
-- a new executor receives a fresh `agent_id` unless the user explicitly authorizes a takeover.
 
 The chapter therefore does not join every command into one script to paste blindly. Separate reads,
 previews, and execution, continuing when the preceding step provides enough basis. When a command refuses,
@@ -44,8 +36,7 @@ identify the condition it protects rather than bypassing the check to make the t
 
 ## 1. Prepare the project and protect existing state {#prepare-project}
 
-Start at the root of the Git project you intend to manage, not the LoopX source repository. Read:
-Open your Agent development tool from the repository root. Adapt the goal and Host in this prompt, then
+Start at the root of the Git project you intend to manage, not the LoopX source repository. Open your Agent development tool from the repository root. Adapt the goal and Host in this prompt, then
 send it as one onboarding contract:
 
 ```text
@@ -140,16 +131,10 @@ If you find multiple Goals, an active lease, an unfinished mutation, or a worksp
 diagnosis and choices only. Do not write state, commit, or push.
 ```
 
-## 2. Install and inspect LoopX
+### Read the repository first
 
-Prerequisites:
-
-- Python 3.11 or later;
-- Node.js 22.22.3 or later for the LoopX-managed TypeScript Effect runtime;
-- a macOS or Linux shell, or Windows PowerShell 7;
-- an existing Git project.
-
-Install the PyPI release and its LoopX workflow skills:
+Whether you act yourself or delegate to an Agent, inspect the repository read-only from its root before
+writing any LoopX state:
 
 ```bash
 git rev-parse --show-toplevel
@@ -300,14 +285,17 @@ and an explicit `--new-peer` request. Do not treat an existing lane as a new ses
 When a new executor is needed, use the supported registration entrypoint:
 
 ```bash
-loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id>
-loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --execute
+loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --require-new
+loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --require-new --execute
 ```
 
-Preview first and execute within existing authorization. Inspect the actual registration result and
-source/global-visibility readback. A repeated operation reporting no new change is not a failure merely
-because `changed=false`; conversely, `ok` does not replace identity verification. Taking over an existing
-identity is an explicit choice and remains subject to current lease, workspace, and lifecycle constraints.
+Preview first and execute within existing authorization. `--require-new` makes an already registered id
+return a collision instead of an idempotent success; the guided packet's fresh-registration command carries
+the same flag. Continue to Todo writeback or activation with the new id only when the execute result reports
+`ok`, `changed`, and `written` as true, `global_sync.ok` as true, and `registration_readback.verified` as true.
+`changed=false` or a collision means the id already exists: choose another fresh id rather than treating it
+as a successful registration. Taking over an existing identity is an explicit choice and remains subject to
+current lease, workspace, and lifecycle constraints.
 
 ### Selecting a Host does not grant capabilities
 

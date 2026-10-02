@@ -146,7 +146,8 @@ A writeback may mark the vision unchanged only when all of the following hold:
 
 - a comparable baseline exists (the vision written in the previous round);
 - this round's delivery did not genuinely change any vision premise;
-- the writeback explicitly references the baseline revision and the "unchanged" reason.
+- the writeback gives the "unchanged" reason with `--vision-unchanged-reason`; LoopX binds the existing
+  vision as the baseline automatically, so no separate revision is passed.
 
 If the baseline is missing but the agent still claims unchanged, quota will produce a
 `vision_checkpoint_missing` gap. This is not a punishment, but a guard against the agent accumulating

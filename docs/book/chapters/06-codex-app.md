@@ -52,8 +52,8 @@ validate -> writeback -> optional spend
 
 右分支是合法结局，而且是经常发生的那一种。它只说明**这一次**没有该做的工作，不等于 Goal
 frontier 已经收尾：已结算 Turn 的回放会返回 `should_run=false`，同时保留当前 cadence，等新的
-Turn identity 再评估。所以频繁走到右分支并不说明 cadence 该放慢；只有 owner 判定确属等待，才
-按下面的四步调整。
+Turn identity 再评估。所以频繁走到右分支并不说明 cadence 该放慢；只有当前 `scheduler_hint`
+提出调整（`apply_needed=true`）时，才按下面的四步执行。
 
 ## 从正确的项目根目录开始
 
@@ -91,7 +91,7 @@ Codex 当前通过 command-facade skill 暴露 LoopX；不要假设用户自定�
 8. 运行 agent-scoped `quota should-run`；
 9. 只在 contract 允许时交付一个有界 segment。
 
-第 7 步和第 8 步的顺序容易搞反。先激活 heartbeat 意味着你在 Todo 成型之前就开始被定时唤醒，每次
+第 5 步和第 7 步的顺序容易搞反。先激活 heartbeat 意味着你在 Todo 成型之前就开始被定时唤醒，每次
 唤醒都会拿到一个还没有 frontier 的 Goal。先写 Todo 再激活，第一轮唤醒就有确定的候选。
 
 你不需要手工执行所有内部命令，但应该能从 Agent 报告中看到这些状态转换。得到一段自然语言计划，
@@ -165,7 +165,9 @@ cadence 变化本身不记 delivery spend，所以这条链路失败不会污染
 
 **代价一：唤醒是定时开销，不随工作量变化。** 每 20 分钟醒一次，意味着一周 504 次唤醒，其中大部分
 会走到 `wait` 分支。每次都要创建 session、读状态、编译 decision。这个成本与"这一周实际推进了几个
-步骤"无关，任务变慢它也不会变小。所以 cadence 需要主动收敛，默认值不该被长期沿用。
+步骤"无关，任务变慢它也不会变小。所以 cadence 需要收敛，但收敛由 LoopX 的 `scheduler_hint` 与
+stateful backoff 提出，再经四步落到 Host；不要因为 `wait` 次数多就手工改 RRULE，手工改动会在
+readback 中表现为 `drift_detected`。
 
 **代价二：收敛链条长。** 从 proposal 到最终 ACK 有四步，任何一步缺失都会在账面上看起来像是完成了。
 这是一条需要 readback 才能闭合的链路，不像本地写一个变量那样即时。
@@ -227,8 +229,9 @@ loopx start-goal --guided --project . \
 ### Goal 被 Gate 阻塞
 
 确认 Gate scope。只阻塞一个 Todo 的决定不应冻结其他 safe frontier。若 Gate 过宽，先修复项目状态，
-不要在 prompt 中要求 Agent 忽略它。Gate 长期未处理时，notice cooldown 会限制重复提醒，避免把一个
-等待变成高频通知。
+不要在 prompt 中要求 Agent 忽略它。Gate 长期未处理时，`human_gate` cadence 会退避，并只提示一次具体
+Gate 而不重复同样的安静轮询；若 Host cadence 更新失败而留下更密的轮询，notice cooldown 还会限制重复
+提醒，避免把一个等待变成高频通知。
 
 ## 不变式
 
@@ -236,7 +239,7 @@ loopx start-goal --guided --project . \
 2. **每次唤醒都过一次 `quota should-run`。** 没有这层 Gate，automation 就变成绕过决策的旁路。
 3. **`should_run=false` 是合法结果，但它只关闭这一个 Turn。** 已结算回放保留当前 cadence，用新的
 Turn identity 重新评估；`false` 的次数或本 Turn 的 receipt 都不能当作放慢 cadence 的依据。需要
-放慢时，由 owner 判定确属等待后走第 4 条的四步。
+放慢时，由当前 `scheduler_hint` 提出（`apply_needed=true`），再走第 4 条的四步。
 4. **cadence 变化的四步缺一不可**：proposal、host apply、host readback、ACK。
 5. **本地 ACK ledger 不证明 Host 状态。** 只有 Host readback 与目标一致才闭合，不一致时按
    `drift_detected` 修复。

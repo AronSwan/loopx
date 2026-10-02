@@ -96,21 +96,25 @@ loopx quota should-run \
 
 The Host runtime should identify `codex_cli`, with scheduling owned by the Goal or agent loop rather than a
 Codex App heartbeat. That distinction decides who is responsible for waking the work. If the packet reports
-missing scheduler context, fix the runtime profile instead of ignoring the warning: without scheduler
-context the system neither wakes itself nor tells you that it will not.
+missing scheduler context, fix the runtime profile instead of ignoring the warning. When scheduler context
+is missing or contradictory, `scheduler_hint` returns `repair_scheduler_execution_context` and sets unchanged
+polling to `stop_until_context_repaired`: until the runtime profile is repaired it proposes no cadence and
+schedules no next wake for you.
 
 ## Preserve identity and Todo ownership
 
 An argument-bearing guided start does not default to a fresh Agent identity when the Goal has registered
-Agents (even a single one); it returns an identity gate that requires selecting one lane. Fresh registration
-is the default only for a Goal with no registered lanes or an explicit `--new-peer`. Reuse an existing id
-only when the user explicitly requests takeover of that peer. After selection, the visible Goal, quota,
-refresh, and writeback paths should preserve the same explicit `--agent-id`. A missing or mismatched identity
-must fail closed rather than fall back to "the only Agent."
+Agents (even a single one). If the current host thread is unbound, it returns an identity gate that requires
+selecting one lane; if the thread is already bound to a lane, it keeps that binding. Fresh registration is
+the default only for a Goal with no registered lanes or an explicit `--new-peer`. Reuse an existing id only
+when the user explicitly requests takeover of that peer.
 
-That fail-closed rule guards one specific mistake: when a Goal holds only one identity, "just use it" looks
-harmless, but if that identity belongs to another Host or another lane, the work's ownership was silently
-rewritten.
+After selection, pass the same explicit `--agent-id` to the visible Goal, quota, refresh, and writeback
+paths. Do not rely on a fallback: host-loop activation without task text auto-selects the only registered
+lane (`single_registered_agent_selected`). "Just use it" looks harmless, but if that identity belongs to
+another Host or another lane, the work's ownership was silently rewritten. With an explicit id, an
+unregistered id is rejected, and a registered id that differs from the thread binding is treated as a
+deliberate override, so pass one only when you mean to switch lanes.
 
 Agent identity labels the LoopX lane. It does not prove that the work runs in Codex CLI. Use
 `host_surface`, runtime profile, or run metadata to identify the Host.
@@ -179,8 +183,8 @@ Inspect the old instance, claims, leases, scheduler ownership, and current write
    packet, not from the prompt.
 4. **The visible Goal and the selected Todo are separate things.** The Goal can continue; that does not make
    this Todo the right one.
-5. **Identity is always explicit.** A missing or mismatched identity fails closed rather than falling back to
-   "the only Agent."
+5. **Pass identity explicitly.** A sole registered lane can be auto-selected; an explicit `--agent-id` gets
+   an unregistered identity rejected and makes a lane switch a visible choice.
 6. **Coexisting Hosts need explicit work ownership.** Check claims, leases, and fences in the current mode; shared Goal reads do not authorize concurrent writes to the same work.
 
 ## After project onboarding

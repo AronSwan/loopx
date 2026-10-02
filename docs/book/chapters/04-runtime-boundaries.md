@@ -146,7 +146,8 @@ Goal 被 owner 停止、quota 暂停或 Host 退出，不能反证目标已完�
 
 - 存在可比较的 baseline（上一轮已写入的 vision）；
 - 本轮 delivery 确实没有改变任何 vision 前提；
-- 写回时明确引用 baseline revision 和“不变”理由。
+- 写回时用 `--vision-unchanged-reason` 给出“不变”理由；LoopX 会自动把已有 vision 绑定为 baseline，
+  不需要另外传入 revision。
 
 如果 baseline 缺失但 agent 仍声称 unchanged，quota 会产生 `vision_checkpoint_missing` gap。这不是
 为了惩罚，而是为了防止 agent 在 never-checked 状态上积累错误假设。完整失败回放见

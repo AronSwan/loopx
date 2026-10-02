@@ -93,19 +93,22 @@ loopx quota should-run \
 
 你应该看到 Host runtime 指向 `codex_cli`，scheduler owner 属于 Goal/agent loop，而不是 Codex App
 heartbeat。这个区别决定了"该唤醒时谁负责唤醒"：如果 packet 报告 scheduler context 缺失，先修复
-runtime profile，不要忽略 warning。缺少 scheduler context 时，系统既不会自己醒来，也不会告诉你它
-不会醒来。
+runtime profile，不要忽略 warning。scheduler context 缺失或矛盾时，`scheduler_hint` 返回
+`repair_scheduler_execution_context`，并把 unchanged poll 设为 `stop_until_context_repaired`：在修复
+runtime profile 之前，它不会提出新的 cadence，也不会替你安排下一次唤醒。
 
 ## 保持身份与 Todo 归属
 
 新的 argument-bearing guided start 在 Goal 已有已注册身份（哪怕只有一个）时不会默认注册 fresh
-Agent，而是返回 identity gate 要求选择其中一个 lane；只有 Goal 没有任何已注册 lane 或显式
-`--new-peer` 时才默认 fresh。已有 id 只在用户明确要求 takeover 那个 peer 时复用。完成选择后，
-visible Goal、quota、refresh 与 writeback 都应显式保留同一个 `--agent-id`；缺失或不匹配时应
-fail closed，而不是回退到"唯一身份"。
+Agent：当前 host thread 尚未绑定时，它返回 identity gate 要求选择其中一个 lane；thread 已绑定某个
+lane 时，沿用该绑定。只有 Goal 没有任何已注册 lane 或显式 `--new-peer` 时才默认 fresh。已有 id
+只在用户明确要求 takeover 那个 peer 时复用。
 
-这条 fail closed 规则防的是一个很具体的错误：Goal 里只有一个身份时，"用它就行"看起来无害，但如果
-那个身份属于另一个 Host 或另一个 lane，工作归属就被静默改写了。
+完成选择后，visible Goal、quota、refresh 与 writeback 都应显式传入同一个 `--agent-id`。不要依赖
+回退：不带任务文本的 host-loop activation 在 Goal 只有一个已注册 lane 时会自动选中它
+（`single_registered_agent_selected`）。"用它就行"看起来无害，但如果那个身份属于另一个 Host 或另一个
+lane，工作归属就被静默改写了。显式传入后，未注册的 id 会被拒绝；与 thread 绑定不同的已注册 id
+会被当作明确的覆盖选择，所以只在确实要换 lane 时这样做。
 
 Agent identity 表达 LoopX 工作 lane，不证明具体 Host。判断工作是否真的在 Codex CLI 运行，要看
 `host_surface`、runtime profile 或对应 run metadata。
@@ -170,7 +173,7 @@ Host 的 Goal resume 表面恢复，而不是反复重发完整任务。反复�
 2. **setup Turn 只建立连接。** 连接和交付混在一轮里，后续每一步都建立在一个未审的计划上。
 3. **`/goal` body 保持稳定。** 动态 Todo、Gate 和能力来自当次 decision packet，不来自 prompt。
 4. **visible Goal 与 selected Todo 是两件事。** Goal 能继续，不代表这个 Todo 就该做。
-5. **identity 一律显式。** 缺失或不匹配时 fail closed，不回退到"唯一身份"。
+5. **identity 一律显式传入。** 唯一已注册 lane 可能被自动选中；显式 `--agent-id` 让未注册的身份被拒绝，也让换 lane 成为看得见的选择。
 6. **两个 Host 并存需要明确执行归属。** 复核当前 mode 下的 claim、lease 与围栏，不能凭同一 Goal 可读就并发写同一项工作。
 
 ## 完成项目接入之后

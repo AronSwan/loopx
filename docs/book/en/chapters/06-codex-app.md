@@ -59,8 +59,8 @@ validate -> writeback -> optional spend
 The right branch is a legal outcome, and it is the common one. It means no work was due for **this** turn; it
 does not mean the Goal frontier is closed. A settled turn's replay returns `should_run=false` while preserving
 the current cadence and deferring evaluation to a fresh Turn identity. Landing there often is therefore not
-evidence that the cadence should slow down; that decision belongs to the owner, and only once the frontier is
-genuinely waiting.
+evidence that the cadence should slow down. Apply the four steps below only when the current `scheduler_hint`
+proposes a change (`apply_needed=true`).
 
 ## Open the correct project root
 
@@ -101,7 +101,7 @@ For a concrete task, the normal sequence is:
 8. run agent-scoped `quota should-run`;
 9. deliver one bounded segment only when the contract permits it.
 
-Steps 7 and 8 are easy to reverse. Activating the heartbeat first means you start being woken on a timer
+Steps 5 and 7 are easy to reverse. Activating the heartbeat first means you start being woken on a timer
 before the Todos exist, and each wake receives a Goal with no frontier yet. Write the Todos first and the
 very first wake already has a defined candidate.
 
@@ -182,8 +182,9 @@ corrupt the quota ledger — but it leaves the system waking on the wrong rhythm
 **Cost one: waking is a fixed overhead that does not track the workload.** Every 20 minutes means 504 wakes
 a week, most of which take the `wait` branch. Each one creates a session, reads state, and compiles a
 decision. That cost is unrelated to how many steps the week actually advanced, and it does not shrink when
-the task slows down. Cadence therefore needs active convergence; the default value should not be left in
-place indefinitely.
+the task slows down. Cadence therefore needs to converge, but LoopX's `scheduler_hint` and stateful backoff
+propose that convergence and the four steps carry it to the Host. Do not hand-edit the RRULE because many
+wakes take `wait`; a manual change shows up in readback as `drift_detected`.
 
 **Cost two: the convergence chain is long.** Four steps separate proposal from final ACK, and on the books
 a missing step looks the same as a completed one. This is a chain that only closes with readback, not
@@ -249,8 +250,9 @@ ACK from the current hint.
 
 Inspect the Gate scope. A decision that blocks one Todo must not freeze safe work on other lanes. For an
 overbroad Gate, repair the project state instead of prompting the Agent to ignore it. While a Gate stays
-unhandled, the notice cooldown bounds repeat reminders so that a wait does not become a high-frequency
-notification.
+unhandled, the `human_gate` cadence backs off and surfaces the concrete Gate once instead of repeating the
+same quiet poll; if a failed Host cadence update leaves a tighter poll, the notice cooldown also bounds
+repeat reminders so that a wait does not become a high-frequency notification.
 
 ## Invariants
 
@@ -259,8 +261,8 @@ notification.
    around the decision.
 3. **`should_run=false` is a legal outcome that closes this turn only.** A settled replay preserves the
    current schedule and re-evaluates under a fresh Turn identity, so neither the count of `false` results nor
-   this turn's receipt is grounds to slow the cadence. Slowing happens through the four steps below, once the
-   owner reads the frontier as genuinely waiting.
+   this turn's receipt is grounds to slow the cadence. Slowing happens when the current `scheduler_hint`
+   proposes it (`apply_needed=true`), through the four steps below.
 4. **A cadence change needs all four steps**: proposal, host apply, host readback, ACK.
 5. **A local ACK ledger does not prove Host state.** Only a Host readback that matches the target closes the
    loop; a mismatch is repaired as `drift_detected`.

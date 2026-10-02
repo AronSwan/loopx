@@ -25,22 +25,13 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 | 环境就绪 | 当前入口及所需依赖通过了对应检查 | 项目已经选对 Goal，Host 已经持续运行 |
 | 接入可验收 | Goal、Agent、项目边界与下一入口明确，写入结果已读回 | T1 已实现，CI 已通过，发布已获准 |
 | 一项工作交付 | 当前产物和对应验证可复核，生命周期记录完整 | 所有 Todo、所有审批和整个 Goal 均已完成 |
-- `loopx doctor` 报告安装可用；
-- 项目存在 `.loopx/registry.json`；
-- 项目存在 `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`；
-- `loopx status` 能显示 active state 和当前 frontier；首连不会生成 onboarding todo，
-  第一个交付 todo 由 Agent 与你确认后写入；
-- `.loopx/` 与 `.loopx/goals/` 不会进入 Git；
-- 再次连接会按精确 `goal_id` 复用已有 Goal，而不是覆盖目标；
-- 新接入的执行者使用 fresh `agent_id`，除非用户明确授权 takeover。
 
 因此，本章不是把所有命令连成一段可以盲目粘贴的脚本。读取、预览和执行分段进行，
 每次只在前一步给出足够依据后继续。出现拒绝时先理解所保护的条件，不为让教程跑通而绕过检查。
 
 ## 一、准备：确认项目，保护已有状态 {#prepare-project}
 
-从你准备管理的 Git 项目根目录开始，不是从 LoopX 的源码目录开始。先读取：
-在目标仓库根目录打开你正在使用的 Agent 开发工具，把下面提示词中的目标和 Host 改成自己的
+从你准备管理的 Git 项目根目录开始，不是从 LoopX 的源码目录开始。在目标仓库根目录打开你正在使用的 Agent 开发工具，把下面提示词中的目标和 Host 改成自己的
 情况后直接发送：
 
 ```text
@@ -128,16 +119,9 @@ next_action: <one concrete next step>
 不要写状态。不要提交或推送。
 ```
 
-## 2. 安装并检查 LoopX
+### 先读取仓库现状
 
-要求：
-
-- Python 3.11 或更高版本；
-- Node.js 22.22.3 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
-- macOS/Linux shell，或 Windows PowerShell 7；
-- 一个已有 Git 项目。
-
-安装 PyPI release 及其 LoopX workflow skills：
+无论自己操作还是交给 Agent，写入任何 LoopX 状态之前，先在项目根目录只读检查仓库：
 
 ```bash
 git rev-parse --show-toplevel
@@ -279,13 +263,15 @@ loopx start-goal --guided --project . \
 需要新增执行者，可以使用当前支持的注册入口：
 
 ```bash
-loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id>
-loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --execute
+loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --require-new
+loopx register-agent --goal-id <selected-goal-id> --agent-id <new-public-safe-agent-id> --require-new --execute
 ```
 
-先预览，再在已有授权内执行。核对实际注册结果、源与全局可见性的读回；
-重复操作返回未发生新变化，不应只凭 `changed=false` 判定失败，也不应凭 `ok` 省略身份核对。
-接管已有身份必须是明确选择，并继续满足当前 lease、workspace 和 lifecycle 约束。
+先预览，再在已有授权内执行。`--require-new` 让已注册的 id 返回冲突，而不是幂等成功；guided
+packet 生成的 fresh 注册命令也带这个参数。只有 execute 结果的 `ok`、`changed` 与 `written` 均为
+true，`global_sync.ok` 为 true，且 `registration_readback.verified` 为 true 时，才用这个新 id
+继续 Todo writeback 或激活。`changed=false` 或冲突说明该 id 已存在：换一个 fresh id，不要把它当成
+注册成功。接管已有身份必须是明确选择，并继续满足当前 lease、workspace 和 lifecycle 约束。
 
 ### Host 选择不是能力授予
 
