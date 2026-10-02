@@ -1039,7 +1039,7 @@ def test_inject_budget_cjk_weighting(tmp_path, monkeypatch):
     (ref / "ctx.md").write_text("汉字" * 500, encoding="utf-8")  # 1000纯CJK字符
     r2.stage_route(root, "architect")
     b = json.loads((root / "agents/architect/inject-budget.json").read_text(encoding="utf-8"))
-    assert b["est_basis"].startswith("CJK≈1.5")
+    assert "CJK" in b["est_basis"] and "1.5" in b["est_basis"]  # 口径写明(甲席后est_basis文案更新)
     assert b["reference_chars"] >= 1000
     # est_tokens必须明显高于"全部按÷4"(证明CJK加权生效而非摆设)
     assert b["est_tokens"] > b["total_inject_chars"] / 4 * 1.2
@@ -1054,7 +1054,46 @@ def test_inject_budget_est_tokens_arithmetic(tmp_path, monkeypatch):
     root = make_root(tmp_path, n=2)
     r2.stage_route(root, "finalizer")
     b = json.loads((root / "agents/finalizer/inject-budget.json").read_text(encoding="utf-8"))
-    for k in ("task_chars", "operating_chars", "inputs_bytes",
+    for k in ("task_chars", "operating_chars", "inputs_chars",
               "requirements_chars", "reference_chars", "total_inject_chars", "est_tokens"):
         assert isinstance(b[k], int) and b[k] >= 0, k
     assert 0 < b["est_tokens"] <= b["total_inject_chars"]
+
+
+def test_inject_budget_survives_non_utf8_feedback(tmp_path, monkeypatch):
+    """杀甲席C3变异: repair-feedback.md为非UTF-8(如pwsh UTF-16LE)——会计不得炸,
+    '不阻断发射'不是空头支票(原except OSError吞不掉UnicodeDecodeError)。"""
+    from loopx.control_plane.collaboration import peers as _peers
+    monkeypatch.setattr(_peers, "request", lambda *a, **k: None)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []} if "list" in a else {})
+    root = make_root(tmp_path, n=2)
+    fbp = root / "agents/architect/outputs/repair-feedback.md"
+    fbp.write_bytes("反馈".encode("utf-16-le"))  # pwsh默认UTF-16LE非UTF-8
+    import os, time
+    art = root / "agents/architect/outputs/architecture.md"
+    os.utime(art, (time.time() - 100, time.time() - 100))  # 工件旧于反馈→attached
+    r2.stage_route(root, "architect")  # 必须不抛UnicodeDecodeError
+    assert (root / "agents/architect/inject-budget.json").exists()
+
+
+def test_inject_budget_fields_reconcile_with_disk(tmp_path, monkeypatch):
+    """杀甲席C4变异(零护甲): 各字段与盘真值逐项对账——task/operating/inputs/
+    reference的chars必须==实际文件字符数(原5变异全存活=无任何字段钉死)。"""
+    from loopx.control_plane.collaboration import peers as _peers
+    monkeypatch.setattr(_peers, "request", lambda *a, **k: None)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []} if "list" in a else {})
+    root = make_root(tmp_path, n=2)
+    ref = root / "project" / "reference"
+    ref.mkdir(parents=True)
+    (ref / "ctx.md").write_text("背景" * 50, encoding="utf-8")
+    r2.stage_route(root, "architect")
+    ws = root / "agents/architect"
+    b = json.loads((ws / "inject-budget.json").read_text(encoding="utf-8"))
+    assert b["task_chars"] == len((ws / "tasks/architect.md").read_text(encoding="utf-8"))
+    assert b["operating_chars"] == len((ws / "OPERATING.md").read_text(encoding="utf-8"))
+    assert b["reference_chars"] == len((ref / "ctx.md").read_text(encoding="utf-8"))
+    # total=各分项字符和(统一字符单位,甲席C2: 不再混字节)
+    expect = (b["task_chars"] + b["operating_chars"] + b["inputs_chars"]
+              + b["requirements_chars"] + b["reference_chars"]
+              + b["repair_feedback_chars"])
+    assert b["total_inject_chars"] == expect
