@@ -348,10 +348,12 @@ generic runner 要求 manifest 和 runtime 的权限都为空。发消息、写�
 | managed entrypoint | `loopx extension run` |
 
 覆盖这条决策的可执行证据是 `examples/capability-extension-placement-doc-smoke.py`、
-`examples/capability-extension-registry-smoke.py` 与
+`tests/capabilities/test_capability_extension_registry.py` 与
 `tests/capabilities/test_capability_extension_registry.py::test_duplicate_capability_fails_closed`：
 第一项核对放置文档与目录归属；第二项核对内置 catalog 的来源，以及 extension 声明的 Capability 以
 `declared=true, installed=false` 组合进 registry；第三项核对一个 id 被声明两次时 registry fail closed。
+（`examples/capability-extension-registry-smoke.py` 当前在本机 main 上因内置 capability 清单写死而过期，
+不要把它当成可依赖的证据入口。）
 
 如果你要设计的不只是 standalone package，而是 Explore、Domain State、Capability Pack、
 multi-agent preset、Provider 或 presentation 的组合，继续阅读

@@ -355,11 +355,13 @@ Abstraction follows the change reason, not the file count.
 | managed entrypoint | `loopx extension run` |
 
 The executable evidence for this decision is `examples/capability-extension-placement-doc-smoke.py`,
-`examples/capability-extension-registry-smoke.py`, and
+`tests/capabilities/test_capability_extension_registry.py`, and
 `tests/capabilities/test_capability_extension_registry.py::test_duplicate_capability_fails_closed`. The
 first checks the placement document against directory ownership. The second checks built-in catalog
 origin and that an extension-declared Capability composes into the registry as `declared=true,
-installed=false`. The third checks that the registry fails closed when one id is declared twice.
+installed=false`. The third checks that the registry fails closed when one id is declared twice. (The
+`examples/capability-extension-registry-smoke.py` script is currently stale on main — its hardcoded
+built-in capability list no longer matches — so do not cite it as a working evidence entrypoint.)
 
 If you are designing more than a standalone package — such as Explore, Domain State, a Capability Pack,
 multi-agent preset, Provider, or presentation composition — continue to

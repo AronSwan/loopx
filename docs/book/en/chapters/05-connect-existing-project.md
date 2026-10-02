@@ -30,6 +30,13 @@ approval outstanding.
 | Connection accepted | Goal, Agent, project boundary, and next entrypoint are explicit; writes have been read back | T1 is implemented, CI passed, and publication is authorized |
 | A piece of work delivered | Current artifacts and validation are reviewable, with complete lifecycle records | Every Todo, approval, and the entire Goal are complete |
 
+**The "connection accepted" row must be observable as these facts**: the environment is ready
+(`loopx doctor` reports a usable installation; `.loopx/registry.json` and
+`.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exist); `loopx status` shows the active state and current
+frontier; reconnecting reuses the exact existing `goal_id` instead of overwriting it; a new executor gets
+a fresh `agent_id` unless the user explicitly authorizes a takeover; and `.loopx/` and `.loopx/goals/` do
+not enter Git. This local state is control-plane state, not project source.
+
 The chapter therefore does not join every command into one script to paste blindly. Separate reads,
 previews, and execution, continuing when the preceding step provides enough basis. When a command refuses,
 identify the condition it protects rather than bypassing the check to make the tutorial work.

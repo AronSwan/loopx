@@ -26,6 +26,12 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 | 接入可验收 | Goal、Agent、项目边界与下一入口明确，写入结果已读回 | T1 已实现，CI 已通过，发布已获准 |
 | 一项工作交付 | 当前产物和对应验证可复核，生命周期记录完整 | 所有 Todo、所有审批和整个 Goal 均已完成 |
 
+**"接入可验收"这一行要能观察到这些事实**：环境就绪（`loopx doctor` 报告可用，项目存在
+`.loopx/registry.json` 与 `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`）；`loopx status` 能显示
+active state 与当前 frontier；再次连接按精确 `goal_id` 复用已有 Goal 而不是覆盖；新接入的执行者使用
+fresh `agent_id`，除非用户明确授权 takeover；`.loopx/` 与 `.loopx/goals/` 不进入 Git。这些本地状态
+是控制面状态，不是项目源码。
+
 因此，本章不是把所有命令连成一段可以盲目粘贴的脚本。读取、预览和执行分段进行，
 每次只在前一步给出足够依据后继续。出现拒绝时先理解所保护的条件，不为让教程跑通而绕过检查。
 
