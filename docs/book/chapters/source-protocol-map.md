@@ -115,8 +115,10 @@ Why the nearest existing owner is or is not sufficient:
 
 主要入口：
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)：
-  append-only event、replay、idempotency 与 privacy partition；
+- `event_sourced_state_contract_v0`：已退役（历史设计）。当前 Todo 状态以选定的 File/SQLite
+  authority 为准，见[状态底座](state-substrate.md)与
+  [Shared Goal authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)；
+  run history 与 rollout events 仍有各自的记录职责；
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
   从 active-state workbench 生成 typed、read-only projection；
 - [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
@@ -126,7 +128,6 @@ Why the nearest existing owner is or is not sufficient:
 
 适合从这组协议开始的任务包括：
 
-- status 与 event 显示不一致；
 - active-state parser 丢失字段；
 - task graph 缺少 lineage 或 truncation diagnostics；
 - lifecycle writer 在 retry 后重复产生效果；

@@ -26,8 +26,10 @@ LoopX 不靠一个巨型状态机推进 Goal。它把持久工作、单轮决策
 周二 09:10  新实例接管。它读到 active 的 Goal、完整的 Todo 图、已 ACK 的调度记录。
 周二 09:10  所有字段都合法。Todo status 在四个持久 status 之内；Vision checkpoint
             格式正确；scheduler 的 last_checked_at 是最新的。
-周二 09:10  但它无法判断一件事：Goal 的 acceptance 在周一 17:30 已被改过，
-            而当前 Vision checkpoint 没有记录自己基于哪一版 acceptance。
+周二 09:10  但它无法判断一件事：Goal 的 acceptance 在周一 17:30 已被改过。
+            File/SQLite authority 路径上，checkpoint 的 read context 会覆盖 Goal 与
+            acceptance 基线的 digest，改过之后会判 stale 并要求重读；而在 acceptance
+            不由该路径携带的模式下，没有任何 owner 把 checkpoint 绑定到 acceptance 版本。
 周三 10:00  没有人能说清重规划是否已经完成。
 周三 10:00  控制面继续按旧路线推进。没有一条规则说这不允许。
 ```

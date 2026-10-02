@@ -406,7 +406,7 @@ invariant、画完协议链，通常要几个小时。换到的东西是：这�
 输入，那 PR 必须包含 projection，即使报 bug 的人只提到了 policy。范围由 invariant 决定，不由
 报错位置决定。
 
-**代价三：precedence 必须显式。** 一个 predicate 写起来短，但它在九阶段 decision pipeline
+**代价三：precedence 必须显式。** 一个 predicate 写起来短，但它在 ordered decision pipeline
 里的位置必须被写明，包括它与更高优先级规则的关系。少写一个位置，就少一条可审查的边界。
 
 **代价四：这一章的方法不能替你判断 scope 有多大。** 它给的是顺序和证据要求，无关工作量估算。

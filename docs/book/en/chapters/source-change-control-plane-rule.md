@@ -420,7 +420,7 @@ merely consumed bad input faithfully, the PR has to include projection, even tho
 mentioned only policy. The invariant decides scope, not the location of the error message.
 
 **Cost three: precedence must be explicit.** A predicate is short to write, but its position in the
-nine-stage decision pipeline has to be stated, including its relation to higher-priority rules. Omit one
+ordered decision pipeline has to be stated, including its relation to higher-priority rules. Omit one
 position and you omit one reviewable boundary.
 
 **Cost four: this chapter does not size the work for you.** It gives an order and an evidence

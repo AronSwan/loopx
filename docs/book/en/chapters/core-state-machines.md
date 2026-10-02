@@ -32,8 +32,11 @@ Tue 09:10  A new instance takes over. It reads an active Goal, a complete Todo g
            an ACKed scheduling record.
 Tue 09:10  Every field is legal. Todo status is one of the four durable statuses; the Vision
            checkpoint is well-formed; last_checked_at is current.
-Tue 09:10  It cannot determine one thing: the Goal acceptance changed at Mon 17:30, and the
-           current Vision checkpoint does not record which acceptance revision it used.
+Tue 09:10  It cannot determine one thing: the Goal acceptance changed at Mon 17:30. On the
+           File/SQLite authority path the checkpoint's read context covers the digest of the
+           Goal and acceptance basis, so a later change reads as stale and forces a reread;
+           in a mode that does not carry acceptance, no owner binds the checkpoint to an
+           acceptance revision.
 Wed 10:00  Nobody can say whether the replan is complete.
 Wed 10:00  The control plane keeps advancing the old route. No rule forbids it.
 ```

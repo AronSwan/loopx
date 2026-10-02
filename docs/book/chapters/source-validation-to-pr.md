@@ -279,16 +279,20 @@ review。测试结束后停止临时数据库。
 
 ## 选择本地验证命令
 
-LoopX 官方贡献基线包括：
+LoopX 官方贡献基线（见[测试与质量指南](/loopx/docs/development/testing-and-quality/)）从
+`uv sync --extra test` 开始，并在 checkout 内用所选解释器运行：
 
 ```bash
-python -m pip install -e ".[test]"
-python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
-python -m mypy
-python examples/control_plane/cli-output-budget-regression-smoke.py
-python -m pytest -q
+uv sync --extra test
+uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
+uv run --extra test python -m mypy
+uv run --extra test python examples/control_plane/cli-output-budget-regression-smoke.py
+uv run --extra test python -m pytest -q
 git diff --check
 ```
+
+若已有一个把当前 checkout 安装进去的显式环境，也可以在该环境里直接运行同样这组 `python -m ...`
+命令；裸 `python` 可能指向另一个安装版本，先确认 `sys.executable` 与 `loopx --version`。
 
 但开发阶段应从最聚焦的命令开始：
 
@@ -339,7 +343,7 @@ loopx check --scan-path <changed-doc-or-directory>
 
 ## 默认行为变化必须披露
 
-这是上表中唯一没有命令可跑的一行，也是 review 最容易漏掉的一类。
+默认行为披露在下面的验证结果表里没有对应的命令可跑，也是 review 最容易漏掉的一类。
 
 如果一个规则的默认行为发生了变化，下面三件事必须同时发生：
 
@@ -347,9 +351,9 @@ loopx check --scan-path <changed-doc-or-directory>
 2. 更新 docs 与 release note，写明变化前后的行为；
 3. 在 PR 描述里点名受影响的 lane。
 
-漏掉第 1 条的症状最隐蔽：测试仍然是红的会被人发现，而**名字在说谎的测试永远是绿的**。上面
-那个 `rejects-unclaimed-...` 就是这样：断言已经跟着实现改了，名字和 release note 还停在旧契约
-上，于是仓库里同时存在两句关于同一行为的真话，其中一句是过期的。
+漏掉第 1 条的症状最隐蔽：测试仍然是红的会被人发现，而**名字在说谎的测试永远是绿的**。断言
+已经跟着实现改了，名字和 release note 却还停在旧契约上，于是仓库里同时存在两句关于同一行为的
+真话，其中一句是过期的。
 
 披露还有一层要求容易和它混在一起：**"指导"与机器强制义务必须分开写。** 一个 `must_attempt_work`
 这类字段是机器会拒绝的状态，而一句"建议先检查"没有这种效力。把后者写成前者会让人以为系统会拦，把前者

@@ -119,8 +119,9 @@ This family answers:
 
 Start with:
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
-  for append-only events, replay, idempotency, and privacy partitioning;
+- `event_sourced_state_contract_v0` is retired (historical design). Current Todo state follows the
+  selected File/SQLite authority — see [the state substrate](state-substrate.md); run history and rollout
+  events keep their own record responsibilities;
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read-only projection over the active-state workbench;
 - [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
@@ -130,7 +131,6 @@ Start with:
 
 Typical jobs:
 
-- status and the event ledger disagree;
 - the active-state parser drops a field;
 - the task graph loses lineage or truncation diagnostics;
 - retry duplicates a lifecycle effect;
