@@ -1142,7 +1142,6 @@ export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
   const label = DELEGATION_STATE_LABELS[delegationState(row)];
   return zh ? label.zh : label.en;
 }
-}
 export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
   return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "operations", limit: 10, ...(cursor ? {cursor} : {})}),
