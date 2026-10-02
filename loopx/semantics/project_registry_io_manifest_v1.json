@@ -1959,7 +1959,7 @@
     },
     {
       "site": "loopx/paths.py::<module>.configured_runtime_route::codec_read:load_registry#1",
-      "line": 262,
+      "line": 267,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
