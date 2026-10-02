@@ -829,6 +829,57 @@ def read_plan(root):
     return plan
 
 
+def _load_lock(root):
+    """读根内锁定锚(lock.json,v1.1§5场内写锁兑付K3): {hash, at, pushed};无→None。"""
+    p = root / "lock.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if d.get("hash") and d.get("at") else None
+    except Exception:
+        return None
+
+
+def _journal_min_acquired(root):
+    """最早journal时间(排序核验兑付K4): 真锚=turns/*.lock.holder的UTC微秒
+    acquired_at(底座file_lock.py:199写,瞬态但现行);fallback=journal文件mtime。
+    committed件的writeback.generated_at是本地时区秒(乙席K4: 格式不符+failed件
+    无时间戳),只作次次选。返回ISO字符串或None(无journal)。"""
+    best = None
+    tdir = (root / "runtime" / "goals")
+    if not tdir.exists():
+        return None
+    for hold in tdir.glob("*/turns/*.lock.holder"):
+        try:
+            d = json.loads(hold.read_text(encoding="utf-8"))
+            t = d.get("acquired_at")
+            if t and (best is None or t < best):
+                best = t
+        except Exception:
+            continue
+    if best:
+        return best
+    # fallback: 最早journal文件mtime(holder瞬态已覆写时)
+    try:
+        ts = [f.stat().st_mtime for f in tdir.glob("*/turns/*.json")]
+        if ts:
+            return datetime.fromtimestamp(min(ts), tz=timezone.utc).isoformat(timespec="seconds")
+    except OSError:
+        pass
+    return None
+
+
+def _journal_order_ok(root, lock):
+    """排序核验: 最早journal时间必须晚于锁时间(乙席K4)。无锁/无journal=不判。"""
+    if not lock:
+        return None
+    earliest = _journal_min_acquired(root)
+    if not earliest:
+        return None
+    return earliest > lock["at"]
+
+
 def _artifact_digests(root):
     """全工件内容指纹(gate-report digests与修复回执共用)。键统一POSIX分隔——
     Windows下str(relative_to)出反斜杠,跨快照比对会因键风不一致全miss。
@@ -925,6 +976,7 @@ def gate(root, include_final=True):
     first = sorted(p for p, a in led.items() if a == 1)
     live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
     lo, hi = _wilson(len(first), len(live))
+    _lock = _load_lock(root)  # v1.1§5场内写锁(兑付K3)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
               "attempts": led, "first_pass": first,
@@ -933,6 +985,11 @@ def gate(root, include_final=True):
               "journal_unreadable": (jr or {}).get("_unreadable", 0),  # 甲席H1②: journal存在但不可读≠无journal
               "passk_wilson95": {"k": len(first), "n": len(live), "lo": lo, "hi": hi},
               "digests": _artifact_digests(root)}
+    if _lock:  # 锁锚+排序核验在场即落(乙席K4: acquired_at引用底座lock.holder真锚)
+        report["lock_hash"] = _lock["hash"]
+        report["lock_at"] = _lock["at"]
+        report["journal_order_ok"] = _journal_order_ok(root, _lock)
+        report["journal_earliest"] = _journal_min_acquired(root)
     write(root / "gate-report.json", report)
     print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒 "
           f"[Wilson95: {lo:.2f}-{hi:.2f}]"
@@ -1042,7 +1099,8 @@ def ensure_phase(root, phase, subtopics=None, max_tries=3):
             with pl.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                      "phase": phase, "should_run": bool(_go),
-                                     "why": _why[:80], "api_ok": _api_reachable()},
+                                     "why": _why[:80], "api_ok": _api_reachable(),
+                                     "exclusion_referee": "controller"},  # §4裁判署名(兑付S5③)
                                     ensure_ascii=False) + "\n")
         except OSError:
             pass  # probe-log写不进不阻断重试决策(留证尽力而为)
