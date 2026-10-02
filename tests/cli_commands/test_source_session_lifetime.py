@@ -31,12 +31,16 @@ from loopx.control_plane.turn_driver.journal_store import (
 )
 
 
-def _registration_arguments(registry_path: Path, knowledge_root: Path) -> list[str]:
+def _registration_arguments(
+    registry_path: Path, knowledge_root: Path, *, runtime_root: Path | str | None = None,
+) -> list[str]:
     return [
         "--format",
         "json",
         "--registry",
         str(registry_path),
+        "--runtime-root",
+        str(runtime_root if runtime_root is not None else knowledge_root / ".runtime"),
         "project",
         "register",
         "--goal-instance-profile",
@@ -329,8 +333,7 @@ def test_registration_publishes_fresh_v2_without_global_sync(
         encoding="utf-8",
     )
     global_before = global_registry.read_bytes()
-    arguments = _registration_arguments(registry_path, knowledge_root)
-    arguments[4:4] = ["--runtime-root", str(runtime_root)]
+    arguments = _registration_arguments(registry_path, knowledge_root, runtime_root=runtime_root)
 
     assert main(arguments) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -389,8 +392,7 @@ def test_registration_persists_an_absolute_runtime_root(
     monkeypatch.chdir(tmp_path)
     knowledge_root = tmp_path / "atlas"
     registry_path = knowledge_root / ".loopx" / "registry.json"
-    arguments = _registration_arguments(registry_path, knowledge_root)
-    arguments[4:4] = ["--runtime-root", "runtime"]
+    arguments = _registration_arguments(registry_path, knowledge_root, runtime_root="runtime")
 
     assert main(arguments) == 0
     capsys.readouterr()
