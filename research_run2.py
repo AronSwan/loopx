@@ -893,6 +893,19 @@ def _artifact_ok(root, phase):
         return False
 
 
+
+def _api_reachable(timeout=8):
+    """API健康探针(r13事故: 网络掉线10分钟,6次重试全灭=没有环境感知)."""
+    base = os.environ.get("DEEPSEEK_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+    try:
+        req = urllib.request.Request(base, method="HEAD",
+                                    headers={"User-Agent": "health-probe"})
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def ensure_phase(root, phase, subtopics=None, max_tries=3):
     """幂等+修复重试: 工件已过验直接跳过; 否则同根重试(新instance id),带修复反馈。"""
     if _artifact_ok(root, phase):
@@ -931,6 +944,14 @@ def ensure_phase(root, phase, subtopics=None, max_tries=3):
             # 工件优先: turn结算可能挂,但交付物已过验证器——门禁才是权威,不重跑模型
             print(f">>> {phase} 工件已过验(turn结算异常,采信工件)", flush=True)
             return {"status": "committed", "artifact_first": True}
+        # r13网络掉线事故系统性修法: 环境故障≠模型错误——重试间隔指数退避+API健康检查
+        # (3次紧连重试在10分钟掉线窗口内全灭=必然;环境恢复前重试=烧token无产出)
+        _env_wait = min(300, 30 * (2 ** (t - 1)))  # 30s→60s→120s,封顶300s
+        if _api_reachable():
+            time.sleep(min(10, _env_wait // 6))  # API正常→短暂等待(模型方差场景)
+        else:
+            print(f">>> {phase} API不可达,等{_env_wait}s后重试(环境退避,r13事故修法)", flush=True)
+            time.sleep(_env_wait)
         print(f">>> {phase} 第{t}次未过({last[:100]}), 重试", flush=True)
     raise SystemExit(f"{phase} {max_tries}次未过: {last}")
 
