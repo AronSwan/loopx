@@ -1200,16 +1200,138 @@ class Delegations:
         lease = row.get("task_lease")
         if not isinstance(lease, dict) or lease.get("required") is not True:
             return {"required": False, "released": None}
+        return self._release_owned_task_lease(
+            lease, binding,
+            idempotency_key=str(lease["idempotency_key"]),
+            expected_version=lease.get("version"),
+        )
+
+    def _release_owned_task_lease(
+        self, lease: dict, binding: dict, *, idempotency_key: str, expected_version: object,
+    ) -> dict:
+        """Release one lease this operation is proven to hold, by its own identity."""
+
         try:
             result = release_task_lease(
                 runtime_root=self.root, goal_id=self.goal_id, todo_id=binding["todo_id"],
-                owner=binding["agent_id"], idempotency_key=str(lease["idempotency_key"]),
-                expected_version=lease.get("version"), registry_path=self.registry,
+                owner=binding["agent_id"], idempotency_key=idempotency_key,
+                expected_version=expected_version, registry_path=self.registry,
             )
         except (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError) as exc:
             return {"required": True, "released": False, "error": str(exc)[:180]}
         return {"required": True, "released": result.get("released") is True,
                 "missing": result.get("missing") is True}
+
+    def _acquired_lease_identity(self, row: dict) -> str:
+        """The lease key this operation acquires with, rebuilt from its own identity.
+
+        `_acquire_delegation_lease` passes `_turn_instance_id(row)`, which is
+        either the recorded `turn_instance_id` or a value derived from the
+        operation's request id. Both survive in the operation record, so a later
+        process can name the lease it holds without the in-memory row that
+        acquired it.
+        """
+
+        return self._turn_instance_id(row)
+
+    def _settle_lease_obligation(
+        self, path: Path, row: dict, binding: dict, stop: dict,
+    ) -> tuple[dict, bool | None]:
+        """Try the required release once and record what it proved.
+
+        Returns the row a caller should keep reading from and the
+        `lease_released` fact, or `None` when the operation owed no required
+        lease at all — `None` keeps the typed planner's `undefined` meaning
+        instead of claiming a release that was never owed.
+        """
+
+        owed = row.get("task_lease")
+        if not (isinstance(owed, dict) and owed.get("required") is True):
+            owed = self._canonical_lease_obligation(row, binding)
+            if owed is not None and owed.get("discovered") is True:
+                # Persist the reconciled identity beside the stopped record: a
+                # later reader names the same lease instead of re-deriving it,
+                # and the obligation is no longer only a projection.
+                recorded = _read(path)
+                if not isinstance(recorded.get("task_lease"), dict):
+                    recorded["task_lease"] = {key: value for key, value in owed.items()
+                                              if key != "discovered"}
+                    _write(path, recorded)
+                row = recorded
+        if owed is None:
+            return row, None
+        if owed.get("released") is False and not owed.get("idempotency_key"):
+            # Reconciliation could not name the lease at all. That is an
+            # unproven obligation, never a release: keep the stop open and let
+            # the next read try to read the authority again.
+            if owed is not stop.get("lease"):
+                stop["lease"] = owed
+                _write(self._stop_path(path), stop)
+            return row, False
+        recorded = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
+        released = recorded if recorded.get("released") is True else None
+        if released is None:
+            released = self._release_owned_task_lease(
+                owed, binding, idempotency_key=str(owed["idempotency_key"]),
+                expected_version=owed.get("version"),
+            )
+        if released is not stop.get("lease"):
+            stop["lease"] = released
+            _write(self._stop_path(path), stop)
+        return row, released.get("released") is True
+
+    def _canonical_lease_obligation(self, row: dict, binding: dict) -> dict | None:
+        """Reconcile a required lease the operation record never annotated.
+
+        A native claim commits before `_acquire_delegation_lease` saves the
+        record, so process loss in that window leaves a real active lease the
+        record cannot prove. A missing annotation is an absent fact, not proof
+        that nothing is owed. Ask the canonical authority whether this
+        operation's own lease key still holds an active lease, with the exact
+        owner and execution key it acquired under. Anything less — another
+        owner, another key, another epoch, or an inspection that cannot be
+        answered — is not this operation's obligation to release, and never a
+        settlement. In legacy handoff modes there is no hard lease to owe.
+        """
+
+        try:
+            if not local_authority_is_promoted(runtime_root=self.root, goal_id=self.goal_id):
+                return None
+            handoff_mode = show_goal_handoff_mode(
+                registry_path=self.registry, runtime_root_arg=str(self.root), goal_id=self.goal_id,
+            )["handoff_mode"]
+        except (OSError, RuntimeError, ValueError) as exc:
+            return {"required": True, "released": False,
+                    "error": ("lease obligation unreadable: " + str(exc))[:180]}
+        if handoff_mode != "hard_lease":
+            return None
+        lease_key = self._acquired_lease_identity(row)
+        try:
+            from .control_plane.work_items.task_lease import inspect_task_lease
+
+            inspection = inspect_task_lease(
+                registry_path=self.registry, runtime_root=self.root,
+                goal_id=self.goal_id, todo_id=binding["todo_id"],
+            )
+        except (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError) as exc:
+            return {"required": True, "released": False,
+                    "error": ("lease obligation unreadable: " + str(exc))[:180]}
+        if inspection.get("ok") is not True or inspection.get("active") is not True:
+            return None
+        held = inspection.get("lease")
+        if (not isinstance(held, dict)
+                or held.get("owner") != binding["agent_id"]
+                or held.get("idempotency_key") != lease_key
+                or held.get("status") != "active"):
+            # Another execution's lease on the same Todo is not this stop's to release.
+            return None
+        version = held.get("version")
+        return {
+            "required": True, "handoff_mode": "hard_lease",
+            "idempotency_key": lease_key,
+            "version": version if isinstance(version, int) and not isinstance(version, bool) else None,
+            "discovered": True,
+        }
 
     def _settle_stop(self, path: Path) -> dict:
         with exclusive_file_lock(self._dispatch_lock(path)):
@@ -1241,20 +1363,15 @@ class Delegations:
             # settles a stop whose member still holds an active hard lease, with
             # resume already refused and the Todo blocked until the TTL.
             #
-            # The canonical `row.task_lease.required` is the source of truth, so
-            # the obligation survives the crash. A release is retried here, under
-            # the same lock that guards the record: every later read is another
-            # attempt rather than one failure becoming permanent.
-            owed = isinstance(row.get("task_lease"), dict) and row["task_lease"].get("required") is True
-            lease = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
-            if owed and lease.get("released") is not True:
-                retried = self._release_delegation_lease(row, binding)
-                if retried != lease:
-                    stop["lease"] = retried
-                    _write(self._stop_path(path), stop)
-                lease = retried
-            if owed:
-                facts["lease_released"] = lease.get("released") is True
+            # The record is checked first, then reconciled against the canonical
+            # authority: a native claim commits before the record that annotates
+            # it is saved, so the operation can hold a real lease it never wrote
+            # down. A release is retried here, under the same lock that guards the
+            # record: every later read is another attempt rather than one failure
+            # becoming permanent.
+            row, lease_released = self._settle_lease_obligation(path, row, binding, stop)
+            if lease_released is not None:
+                facts["lease_released"] = lease_released
             decision = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
                 "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
@@ -1295,22 +1412,44 @@ class Delegations:
             # re-reads the current state and the observation remains readable.
             return None
 
-    def _cli(self, binding: dict, *args: str, timeout: int = 60, host_record: Path | None = None) -> dict:
+    def _cli(self, binding: dict, *args: str, timeout: int = 60,
+             delegated_lease: dict | None = None,
+             host_record: Path | None = None) -> dict:
+        arguments = [
+            "--registry", str(self.registry),
+            "--runtime-root", str(self.root), "--format", "json", *args,
+        ]
         environment = _pinned_release_environment()
         environment.pop(HOST_PROCESS_RECORD_ENV, None)
         if host_record is not None:
             # The Turn's Host transport names the process group its supervisor owns.
             environment[HOST_PROCESS_RECORD_ENV] = str(host_record)
-        completed = subprocess.run([*_python_module_command("loopx.cli"),
-            "--registry", str(self.registry),
-            "--runtime-root", str(self.root), "--format", "json", *args,
-        ], cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout, env=environment)
+        if delegated_lease is None:
+            completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
+                cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
+                timeout=timeout, env=environment)
+            stdout, returncode = completed.stdout, completed.returncode
+        else:
+            from .control_plane.turn_driver.host_process_transport import run_host_process
+
+            chunks = []
+            try:
+                observation = run_host_process(
+                    [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"), *arguments],
+                    project=Path(binding["workspace"]), input_text="", timeout_seconds=timeout,
+                    environment=environment, delegated_lease=delegated_lease,
+                    on_stdout=chunks.append,
+                )
+            except RuntimeError as exc:
+                raise ValueError("delegation managed CLI supervision unavailable; reconcile the original Turn") from exc
+            if observation["outcome"] != "exited" or not observation["output_complete"]:
+                raise ValueError(f"delegation lease supervision stopped ({observation['outcome']}); reconcile the original Turn")
+            stdout, returncode = "".join(chunks), observation["returncode"]
         try:
-            value = json.loads(completed.stdout)
+            value = json.loads(stdout)
         except ValueError as exc:
             raise ValueError("delegation CLI returned no structured result") from exc
-        if completed.returncode and "turn" not in args:
+        if returncode and "turn" not in args:
             raise ValueError(
                 str(
                     value.get("error")
@@ -1557,6 +1696,8 @@ class Delegations:
             runtime_root=self.root,
             goal_id=self.goal_id,
         ):
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation canonical authority disappeared; reconcile the original execution")
             row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
             self._fenced_write(path, row)
             return row["task_lease"]
@@ -1566,6 +1707,8 @@ class Delegations:
             goal_id=self.goal_id,
         )["handoff_mode"]
         if handoff_mode != "hard_lease":
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation authority mode changed; reconcile the original execution")
             row["task_lease"] = {
                 "required": False,
                 "handoff_mode": handoff_mode,
@@ -1573,23 +1716,8 @@ class Delegations:
             self._fenced_write(path, row)
             return row["task_lease"]
         lease_key = self._turn_instance_id(row)
-        result = self._cli(
-            binding,
-            "todo",
-            "claim",
-            "--goal-id",
-            self.goal_id,
-            "--todo-id",
-            binding["todo_id"],
-            "--claimed-by",
-            binding["agent_id"],
-            "--agent-id",
-            binding["agent_id"],
-            "--claim-operation-id",
-            "delegation-claim-" + row["identity"]["request_id"][:32],
-            "--task-lease-idempotency-key",
-            lease_key,
-        )
+        claim = self._delegation_claim_arguments(row, binding)
+        result = self._cli(binding, *claim)
         lease = result.get("lease")
         if (
             result.get("ok") is not True
@@ -1609,11 +1737,44 @@ class Delegations:
         row["task_lease"] = {
             "required": True,
             "handoff_mode": "hard_lease",
-            "idempotency_key": lease_key,
-            "version": lease["version"],
+            "lease": lease,
         }
         self._fenced_write(path, row)
         return row["task_lease"]
+
+    def _delegation_claim_arguments(self, row: dict, binding: dict) -> list[str]:
+        return [
+            "todo",
+            "claim",
+            "--goal-id",
+            self.goal_id,
+            "--todo-id",
+            binding["todo_id"],
+            "--claimed-by",
+            binding["agent_id"],
+            "--agent-id",
+            binding["agent_id"],
+            "--claim-operation-id",
+            "delegation-claim-" + row["identity"]["request_id"][:32],
+            "--task-lease-idempotency-key",
+            self._turn_instance_id(row),
+        ]
+
+    def _delegated_lease_context(self, row: dict, binding: dict) -> dict | None:
+        """Private commands carry the original claim intent, never a model grant."""
+        lease = row.get("task_lease", {})
+        if lease.get("required") is not True:
+            return None
+        prefix = [*_python_module_command("loopx.cli"), "--registry", str(self.registry),
+                  "--runtime-root", str(self.root), "--format", "json"]
+        selected = ["--goal-id", self.goal_id, "--todo-id", binding["todo_id"]]
+        return {
+            "lease": lease["lease"],
+            "ttl_seconds": lease["lease"].get("acquire_ttl_seconds"),
+            "renew_argv": [*prefix, "task-lease", "renew", *selected, "--owner", binding["agent_id"],
+                           "--idempotency-key", lease["lease"]["idempotency_key"]],
+            "read_argv": [*prefix, *self._delegation_claim_arguments(row, binding)],
+        }
 
     def _complete_delegated_todo(self, row: dict, binding: dict) -> None:
         lease = row.get("task_lease")
@@ -1636,11 +1797,26 @@ class Delegations:
             "Bounded delegated work; requester owns synthesis.",
         ]
         if lease.get("required") is True:
+            # Atomic claim replay verifies current eligibility and the original
+            # key/epoch; it cannot reacquire an expired execution. Renewal has
+            # changed its version, so the historical acquisition is not CAS.
+            if "completion_lease_version" not in row:
+                proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
+                current = proof.get("lease", {})
+                if (proof.get("ok") is not True or current.get("owner") != binding["agent_id"]
+                        or current.get("idempotency_key") != lease["lease"]["idempotency_key"]
+                        or current.get("lease_epoch") != lease["lease"].get("lease_epoch")):
+                    raise ValueError("delegation current execution proof lost before completion")
+                # Persist the exact terminal intent before crossing the effect
+                # boundary. A lost completion reply must replay its receipt,
+                # even after that legitimate completion released the lease.
+                row["completion_lease_version"] = current["version"]
+                _write(self.path(row["identity"]["operation_id"]), row)
             arguments += [
                 "--task-lease-idempotency-key",
-                str(lease["idempotency_key"]),
+                str(lease["lease"]["idempotency_key"]),
                 "--task-lease-expected-version",
-                str(lease["version"]),
+                str(row["completion_lease_version"]),
             ]
         # A bounded member task returns to its requester; it is not terminal
         # Goal intent. Ordinary completion may precede its original Turn's
@@ -1666,6 +1842,10 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
+            if row.get("task_lease", {}).get("required") is True and "lease" not in row["task_lease"]:
+                # Upgrade a still-current operation record by replaying its
+                # original claim, not by inventing a replacement execution.
+                self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 self._raise_if_stop_requested(path)
                 turn_key = self._matching_turn_key(row, binding)
@@ -1681,6 +1861,7 @@ class Delegations:
                 )
                 result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
                                    "--execute", timeout=binding["timeout_seconds"] + 60,
+                                   delegated_lease=self._delegated_lease_context(row, binding),
                                    host_record=self._host_process_record(path))
                 self._record_turn_result(path, row, result)
         finally:

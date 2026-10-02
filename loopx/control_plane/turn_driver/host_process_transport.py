@@ -144,6 +144,8 @@ def run_host_process(
     drain_timeout_seconds: float = 2,
     on_stdout: Callable[[str], None] | None = None,
     on_stderr: Callable[[str], None] | None = None,
+    delegated_lease: dict[str, Any] | None = None,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Keep the control pipe open until exit; EOF cancels the owned process group.
 
@@ -161,6 +163,8 @@ def run_host_process(
         "drain_timeout_ms": drain_timeout_seconds * 1000,
         "stdout_limit_bytes": stdout_limit_bytes,
     }
+    if delegated_lease is not None:
+        request["delegated_lease"] = delegated_lease
     bridge = Path(__file__).with_name("host_process_bridge.ts")
     environment = os.environ.copy()
     record_value = environment.pop(HOST_PROCESS_RECORD_ENV, "")
@@ -224,7 +228,10 @@ def run_host_process(
             # before it has had a chance to terminate its owned Host group.
             proc.stdin.close()
             try:
-                proc.wait(timeout=5)
+                # The leased CLI gets six seconds to acknowledge nested Host
+                # cleanup. Keep this control transport alive through its forced
+                # group kill as well, including callback failure / Ctrl-C.
+                proc.wait(timeout=8 if delegated_lease is not None else 5)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()

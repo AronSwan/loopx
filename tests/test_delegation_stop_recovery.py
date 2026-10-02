@@ -1,6 +1,8 @@
 """Stop ordering against native completion of a validated, unsettled Turn."""
 
+import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from threading import Event, get_ident
@@ -11,7 +13,7 @@ from test_local_delegation import brief, demo, service as service
 from loopx import collaboration_mcp as delegation
 from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.collaboration.peers import returns
-from loopx.file_lock import exclusive_file_lock
+from loopx.file_lock import exclusive_file_lock, lock_holder_host_label
 
 
 def recoverable_boundary(service, monkeypatch):
@@ -127,3 +129,149 @@ def test_recovered_completion_wins_over_a_concurrent_stop(service, monkeypatch):
     assert len(returns(runner.root, runner.goal_id, "lead")["items"]) == 1
     assert not runner._stop_path(runner.path("analysis-recovery")).exists()
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
+
+
+def canonical_lease_at_the_native_edge(service, monkeypatch, operation_id, *,
+                                        owner="analyst", key_suffix="", version=4, active=True):
+    """Build the acquisition-before-annotation window at the native lease edge.
+
+    `_acquire_delegation_lease` claims natively and only then saves the record
+    that annotates the lease. A stop that wins in between, followed by process
+    loss after the durable ACK, leaves an active canonical lease the operation
+    record never names. This reconstructs exactly that disk state and hands the
+    new service instance a native boundary that really holds the lease, so the
+    Python reconciliation runs for real instead of being stubbed out.
+    """
+    from loopx.control_plane.collaboration.inbox import _write as write_inbox
+    from loopx.control_plane.work_items import task_lease as lease_module
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", operation_id, brief())
+    path = runner.path(operation_id)
+    row = _read(path)
+    assert "task_lease" not in row
+    request_id = row["identity"]["request_id"]
+    lease_key = str(row.get("turn_instance_id") or "delegation-" + request_id[:32])
+    stopped = {**row, "status": "stopped"}
+    runner._fenced_write(path, stopped)
+    write_inbox(runner._stop_path(path), {
+        **runner._new_stop_record(stopped, requested_by=runner.agent_id, worker=None),
+        "phase": "acknowledged",
+        # The ACK was durable and the process was lost before any release result.
+        "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
+                "source": "requester", "observed_status": "stopped", "turn_key": None},
+    })
+    monkeypatch.setattr(delegation, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(delegation, "show_goal_handoff_mode",
+                        lambda **kwargs: {"handoff_mode": "hard_lease"})
+    monkeypatch.setattr(lease_module, "inspect_task_lease", lambda **kwargs: {
+        "ok": True, "action": "inspect", "active": active, "legacy_fallback_used": False,
+        "lease": {"owner": owner, "idempotency_key": lease_key + key_suffix,
+                  "status": "active", "version": version},
+    })
+    fresh = delegation.Delegations(runner.root, runner.registry, runner.goal_id,
+                                   runner.agent_id, runner.config)
+    recovered = _read(path)
+    assert recovered["status"] == "stopped"
+    assert not isinstance(recovered.get("task_lease"), dict), recovered.get("task_lease")
+    return root, fresh, lease_key
+
+
+def test_a_lease_the_record_never_annotated_still_blocks_settlement(service, monkeypatch):
+    """An unproven release of a live lease is not a settlement.
+
+    The member really holds the hard lease its own key acquired under, and the
+    release surface is unavailable. `settled` would tell the owner the member is
+    stopped while the Todo stays locked to the lease TTL, with resume already
+    refused. The receipt must stay open instead.
+    """
+    root, runner, lease_key = canonical_lease_at_the_native_edge(
+        service, monkeypatch, "analysis-lease-window")
+
+    def unavailable(**kwargs):
+        raise RuntimeError("authority unavailable")
+
+    monkeypatch.setattr(delegation, "release_task_lease", unavailable)
+    receipt = runner.stop("analysis-lease-window", execute=True)
+    assert receipt["phase"] == "acknowledged", receipt
+    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
+    assert receipt["stop"]["lease"]["released"] is not True
+    with pytest.raises(ValueError, match="start a new operation id"):
+        runner.resume("analysis-lease-window")
+
+
+def test_a_recovered_lease_obligation_settles_only_after_its_exact_release(service, monkeypatch):
+    """The unannotated obligation is released by its own identity, then settles.
+
+    Discovery is not a substitute for the release: the receipt reports released
+    only once the exact owner and execution key this operation acquired under
+    were released through the existing authority path.
+    """
+    root, runner, lease_key = canonical_lease_at_the_native_edge(
+        service, monkeypatch, "analysis-lease-recover")
+    releases = []
+    monkeypatch.setattr(delegation, "release_task_lease",
+                        lambda **kwargs: releases.append(kwargs) or {"released": True})
+
+    receipt = runner.stop("analysis-lease-recover", execute=True)
+    assert receipt["phase"] == "settled", receipt
+    assert receipt["stop"]["lease"]["released"] is True
+    assert receipt["stop"]["settled"]["lease_released"] is True
+    assert releases == [{"runtime_root": runner.root, "goal_id": runner.goal_id,
+                         "todo_id": "todo_analyst-initial", "owner": "analyst",
+                         "idempotency_key": lease_key,
+                         "expected_version": 4, "registry_path": runner.registry}]
+    # The recovered identity is persisted, so a later read names the same lease.
+    recovered = _read(runner.path("analysis-lease-recover"))
+    assert recovered["task_lease"]["idempotency_key"] == lease_key
+    assert runner.stop("analysis-lease-recover", execute=True) == receipt
+    assert len(releases) == 1
+
+
+def test_a_foreign_lease_generation_is_not_this_stops_obligation(service, monkeypatch):
+    """A lease under another execution key is never released by this stop.
+
+    A recreated operation on the same Todo acquires a new execution key, and an
+    earlier generation still holding the old one is not this operation's to
+    retire. Releasing it would end work this stop never owned; leaving it is a
+    release this receipt never owed.
+    """
+    root, runner, lease_key = canonical_lease_at_the_native_edge(
+        service, monkeypatch, "analysis-lease-foreign", key_suffix="-older")
+    releases = []
+    monkeypatch.setattr(delegation, "release_task_lease",
+                        lambda **kwargs: releases.append(kwargs) or {"released": True})
+
+    receipt = runner.stop("analysis-lease-foreign", execute=True)
+    assert releases == [], "a foreign lease generation was released"
+    assert receipt["phase"] == "settled", receipt
+    assert "lease_released" not in receipt["stop"]["settled"]
+
+
+def test_an_unreadable_lease_obligation_keeps_the_stop_open(service, monkeypatch):
+    """A failure to even read the obligation is not a release.
+
+    Reconciliation can fail before it names any lease. Reporting that as a
+    settled stop would trade a wrong terminal receipt for a crash, so the stop
+    stays open and the next read retries the authority instead.
+    """
+    from loopx.control_plane.work_items import task_lease as lease_module
+
+    root, runner, lease_key = canonical_lease_at_the_native_edge(
+        service, monkeypatch, "analysis-lease-unreadable")
+
+    def unreadable(**kwargs):
+        raise RuntimeError("native authority store unavailable")
+
+    monkeypatch.setattr(lease_module, "inspect_task_lease", unreadable)
+    releases = []
+    monkeypatch.setattr(delegation, "release_task_lease",
+                        lambda **kwargs: releases.append(kwargs) or {"released": True})
+
+    receipt = runner.stop("analysis-lease-unreadable", execute=True)
+    assert receipt["phase"] == "acknowledged", receipt
+    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
+    assert releases == [], "an unnamed obligation must not be released"
+    # The reason survives on the receipt instead of becoming a crash.
+    assert "unreadable" in receipt["stop"]["lease"]["error"]
