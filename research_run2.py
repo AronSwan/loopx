@@ -254,14 +254,13 @@ def homog_report(root, n):
 
 
 def _journal_attempts(root):
-    """turn journal权威读取(managed_step.py:14: Turn journal是attempt唯一权威;
-    SAVI席洞察5: home-*目录计数是被重跑残留污染的粗化观测)。
+    """turn journal权威读取(managed_step.py:14; SAVI席洞察5)。
     runtime/goals/*/turns/*.json → {agent_id: {attempts/committed/failed}};
-    receipt.lineage.agent_id是turn→棒映射; 无turns目录→None(调用方回退home计数)。
-    解析异常(损坏JSON/缺lineage)计数落_unreadable——journal存在但不可读与
-    不存在journal是两回事(甲席H1②: 静默降级=证据根失明)。
-    r13实测: reviewer-1×4(failed3+committed1)与home计数吻合;researcher-1的
-    artifact_first案例(结算failed但工件采信)被journal如实记状态——两源分叉点。"""
+    receipt.lineage.agent_id是turn→棒映射。
+    **全坏≠无journal**(甲席J4③): 无任何可读agent时返回 {"_unreadable": N}
+    哨兵(计数带出),调用方据此判'journal存在但全坏'回退home且不标turn_journal
+    源;无turns目录/目录空→None(真无journal,也回退home)。解析异常计数落
+    _unreadable——journal存在但不可读与不存在journal是两回事(H1②)。"""
     out = {"_unreadable": 0}
     for tdir in (root / "runtime" / "goals").glob("*/turns"):
         for f in tdir.glob("*.json"):
@@ -278,9 +277,15 @@ def _journal_attempts(root):
             e = out.setdefault(aid, {"attempts": 0, "committed": 0, "failed": 0})
             e["attempts"] += 1
             e["committed" if d.get("status") == "committed" else "failed"] += 1
-    if not (set(out) - {"_unreadable"}):
-        return None
+    agents = set(out) - {"_unreadable"}
+    if not agents:
+        return {"_unreadable": out["_unreadable"]} if out["_unreadable"] else None
     return out
+
+
+def _journal_readable_agents(jr):
+    """jr中的可读agent集合(哨兵/None安全)。"""
+    return set((jr or {})) - {"_unreadable"}
 
 
 def _wilson(k, n, z=1.96):
@@ -313,8 +318,10 @@ def attempts_ledger(root, n):
         names = {p.name for p in root.glob(f"home-{ph}*")}
         exact = {x for x in names if x == f"home-{ph}" or re.fullmatch(rf"home-{ph}-r\d+", x)}
         homes[ph] = len(exact)
-    if jr is None:
-        return homes, None, {}
+    if jr is None or not _journal_readable_agents(jr):
+        # 真无journal 或 全坏(哨兵): 都回退home——但全坏时哨兵计数必须带出
+        # (甲席J4③: 否则'全坏'与'无journal老根'不可区分=最高信号场景失明)
+        return homes, jr, {}
     ledger = {ph: jr.get(ph, {}).get("attempts", 0) for ph in phases}
     drift = {ph: (ledger[ph], homes[ph]) for ph in phases if ledger[ph] != homes[ph]}
     if drift:
@@ -980,7 +987,8 @@ def gate(root, include_final=True):
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
               "attempts": led, "first_pass": first,
-              "attempts_source": "turn_journal" if jr else "home_dirs",
+              "attempts_source": ("turn_journal" if (jr and _journal_readable_agents(jr))
+                                  else "home_dirs"),
               "attempts_drift": drift,  # 甲席自由发现: 分叉信号只print=不可持久审计→落盘
               "journal_unreadable": (jr or {}).get("_unreadable", 0),  # 甲席H1②: journal存在但不可读≠无journal
               "passk_wilson95": {"k": len(first), "n": len(live), "lo": lo, "hi": hi},

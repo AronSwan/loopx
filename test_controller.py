@@ -134,7 +134,7 @@ def test_attempts_ledger_journal_status_truth(tmp_path):
 
 def test_journal_unreadable_counted_not_silent(tmp_path):
     """甲席H1②: journal存在但不可读(损坏/缺lineage)≠无journal——计数落
-    _unreadable,全坏时才整根降级home。"""
+    _unreadable;全坏时哨兵带出计数(甲席J4③: None曾把计数吞掉=最高信号失明)。"""
     root = tmp_path
     td = root / "runtime" / "goals" / "adaptive-research" / "turns"
     td.mkdir(parents=True)
@@ -142,11 +142,48 @@ def test_journal_unreadable_counted_not_silent(tmp_path):
     _mk_journal(root, "planner", "committed", "a" * 64)
     jr = r2._journal_attempts(root)
     assert jr["_unreadable"] == 1 and jr["planner"]["attempts"] == 1
+    # 全坏: 哨兵带出计数(J4③——jr is None会吞掉_unreadable=2)
     root2 = tmp_path / "all_bad"
     td2 = root2 / "runtime" / "goals" / "adaptive-research" / "turns"
     td2.mkdir(parents=True)
     (td2 / (("f" * 64) + ".json")).write_text("{NOT VALID", encoding="utf-8")
-    assert r2._journal_attempts(root2) is None  # 全坏→降级home
+    (td2 / (("e" * 64) + ".json")).write_text("{ALSO BAD", encoding="utf-8")
+    jr2 = r2._journal_attempts(root2)
+    assert jr2 == {"_unreadable": 2}  # 哨兵,非None(计数不丢)
+    (root2 / "home-planner").mkdir()
+    led, jr3, drift = r2.attempts_ledger(root2, 1)
+    assert led["planner"] == 1  # 全坏→回退home
+    assert jr3["_unreadable"] == 2  # 哨兵计数随三元组带出
+
+
+def test_gate_all_bad_journal_reports_unreadable_and_home_source(tmp_path, monkeypatch):
+    """杀甲席M4b: 全坏journal的根跑gate()——journal_unreadable=真值(非0),
+    且attempts_source=home_dirs(全坏不标turn_journal)。"""
+    root = make_root(tmp_path)
+    td = root / "runtime" / "goals" / "adaptive-research" / "turns"
+    td.mkdir(parents=True)
+    (td / (("f" * 64) + ".json")).write_text("{NOT VALID", encoding="utf-8")
+    (td / (("e" * 64) + ".json")).write_text("{ALSO BAD", encoding="utf-8")
+    assert r2.gate(root, include_final=True) is True
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep["journal_unreadable"] == 2  # 哨兵计数落盘(杀M4b恒0变异)
+    assert rep["attempts_source"] == "home_dirs"  # 全坏不标journal源
+
+
+def test_gate_drift_tuple_direction_pinned(tmp_path):
+    """杀甲席M3b: attempts_drift的(journal,home)方向钉死——journal=0/home=2
+    必须落(0,2)不是(2,0)(方向交换变异此前70测全绿存活=零护甲)。"""
+    root = make_root(tmp_path)
+    _mk_journal(root, "planner", "committed", "a" * 64)  # planner journal=1
+    (root / "home-planner").mkdir()
+    (root / "home-planner-r1").mkdir()  # planner home=2 → drift (1,2)
+    (root / "home-reviewer-1").mkdir()
+    (root / "home-reviewer-1-r1").mkdir()  # reviewer-1 journal=0, home=2 → (0,2)
+    assert r2.gate(root, include_final=True) is True
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    drift = rep["attempts_drift"]
+    assert drift["reviewer-1"] == [0, 2]  # (journal=0, home=2)方向钉死(杀M3b交换)
+    assert drift["planner"] == [1, 2]
 
 
 def test_attempts_ledger_falls_back_to_homes(tmp_path):
