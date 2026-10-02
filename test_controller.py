@@ -1097,3 +1097,56 @@ def test_inject_budget_fields_reconcile_with_disk(tmp_path, monkeypatch):
               + b["requirements_chars"] + b["reference_chars"]
               + b["repair_feedback_chars"])
     assert b["total_inject_chars"] == expect
+
+
+# ==== 终审法庭门五TOP1: urllib伪证发生器根修(5543f91bb落地首日缺import) ====
+def test_api_probe_returns_true_on_reachable():
+    """终审裁定: 对本地http server断言api_ok=true——证伪'每行必假'已死
+    (原NameError被except吞成恒False,probe-log的api_ok系统性说反话)。"""
+    import http.server, threading, socket
+
+    class _HeadOK(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):  # 探针发HEAD,基类501——补HEAD实现
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):  # 静音测试日志
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _HeadOK)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkey_url = f"http://127.0.0.1:{port}"
+        old = None
+        import os as _os
+        old = _os.environ.get("DEEPSEEK_BASE_URL")
+        _os.environ["DEEPSEEK_BASE_URL"] = monkey_url
+        try:
+            assert r2._api_reachable(timeout=3) is True  # 名存实亡时代恒False,现在必须真True
+        finally:
+            if old is None:
+                _os.environ.pop("DEEPSEEK_BASE_URL", None)
+            else:
+                _os.environ["DEEPSEEK_BASE_URL"] = old
+    finally:
+        srv.shutdown()
+
+
+def test_api_probe_returns_false_on_refused():
+    """拒绝连接的端口必须返回False(探针双极性——只测True是半根修)。"""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()  # 端口已释放,连接必拒
+    import os as _os
+    old = _os.environ.get("DEEPSEEK_BASE_URL")
+    _os.environ["DEEPSEEK_BASE_URL"] = f"http://127.0.0.1:{port}"
+    try:
+        assert r2._api_reachable(timeout=3) is False
+    finally:
+        if old is None:
+            _os.environ.pop("DEEPSEEK_BASE_URL", None)
+        else:
+            _os.environ["DEEPSEEK_BASE_URL"] = old

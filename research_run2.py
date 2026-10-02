@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1389,6 +1390,11 @@ def _pipeline_lock(root):
 
 
 def auto(root):
+    # 终审G3④: 已结算场禁重开(fail-closed)——settled.json在场即拒,新场须新根新锚
+    _settled = root / "settled.json"
+    if _settled.exists():
+        raise SystemExit(f"该场已结算({json.loads(_settled.read_text(encoding='utf-8')).get('note', '')})"
+                         f")——证据封存禁重开;确认性新场须新运行根(见settled.json)")
     # 并发防撞闸v2(r9事故机械牙; r10三连假阳性后从进程扫描改为锁文件——
     # 进程扫描在Windows分不清自己的祖先链,锁文件只在跨管线时才互斥)
     lock_path, live_pid = _pipeline_lock(root)
@@ -1618,7 +1624,29 @@ def main():
     elif args.cmd == "auto":
         if not os.environ.get("DEEPSEEK_API_KEY"):
             raise SystemExit("auto 需要 DEEPSEEK_API_KEY(或GLM key映射)")
-        auto(root)
+        # crash-settle钩子(终审G3④: '3小时暴尸'的操作性根治——auto全线裸抛,
+        # 死场无人落收场;现catch-all落settled.json死场标记,分类留裁判)
+        try:
+            auto(root)
+        except SystemExit as exc:
+            _crash = {"status": "crashed", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                      "exit": str(exc)[:200], "classification": "pending-referee"}
+            try:
+                if not (root / "settled.json").exists():
+                    write(root / "settled.json", _crash)
+            except OSError:
+                pass
+            raise
+        except Exception as exc:
+            _crash = {"status": "crashed", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                      "exit": f"{type(exc).__name__}: {str(exc)[:200]}",
+                      "classification": "pending-referee"}
+            try:
+                if not (root / "settled.json").exists():
+                    write(root / "settled.json", _crash)
+            except OSError:
+                pass
+            raise
 
 
 if __name__ == "__main__":
