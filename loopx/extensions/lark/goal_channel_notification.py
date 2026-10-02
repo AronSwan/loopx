@@ -117,7 +117,11 @@ def _goal_notification_row(
     receipts = receipts if isinstance(receipts, Mapping) else {}
     row["receipt_count"] = len(receipts)
     resolved_binding = binding
-    if binding.get("target_ref"):
+    has_blocked_receipts = any(
+        isinstance(receipt, Mapping) and receipt.get("kind") == "blocked_notice"
+        for receipt in receipts.values()
+    )
+    if binding.get("target_ref") and has_blocked_receipts:
         target = None
         try:
             if runtime_root is not None:
