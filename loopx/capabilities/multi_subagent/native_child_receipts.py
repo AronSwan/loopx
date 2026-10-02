@@ -1,10 +1,4 @@
-"""Turn-bound reports of host-native child-tool decisions.
-
-The native tool belongs to the host. LoopX can durably reconcile the
-coordinator's typed report of its result, but cannot attest that a host call
-occurred unless the host itself supplies an integration. This distinction is
-part of the projection, not an implicit promise of configured capacity.
-"""
+"""Turn-bound native child decisions, with explicit report/host provenance."""
 
 from __future__ import annotations
 
@@ -119,13 +113,17 @@ def native_child_activity(
     attempted = sum(row.get("operation") in {"spawn", "followup"} for row in ordered)
     rejected = sum(row.get("outcome") == "capacity_rejected" for row in ordered)
     host_failed = sum(row.get("outcome") == "host_failed" for row in ordered)
+    sources = {row.get("observation_source") for row in ordered}
+    observation = ("unknown" if not sources else "host_observed"
+                   if sources == {"host_observed"} else "mixed"
+                   if "host_observed" in sources else "coordinator_reported")
     return {
         "schema_version": NATIVE_SUBAGENT_ACTIVITY_SCHEMA_VERSION,
         "goal_id": goal_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id,
         "entrypoint_scope": "host_native_child_tools",
-        "observation": "coordinator_reported" if ordered else "unknown",
-        "host_attested": False,
+        "observation": observation,
+        "host_attested": observation == "host_observed",
         "configured_limit_kind": "upper_bound",
         "configured_limit": configured_limit,
         "observed_capacity": "capacity_rejection_reported" if rejected else
@@ -284,6 +282,7 @@ def _record_native_child(
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
+    _host_observed: bool = False,
 ) -> dict[str, Any]:
     """Preview or append a typed report; never launch a child or spend quota."""
     goal_id = _id(goal_id, field="goal_id")
@@ -296,6 +295,10 @@ def _record_native_child(
         stage=stage, operation=operation, outcome=outcome, entrypoint_id=entrypoint_id,
         reason_code=reason_code, evidence_ref=evidence_ref, validation_ref=validation_ref,
     )
+    if _host_observed:
+        if stage == "review" or operation == "skip":
+            raise ValueError("host observation cannot attest a parent review or skip")
+        fields["observation_source"] = "host_observed"
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
     prior = _events_for_turn(
@@ -342,7 +345,9 @@ def _record_native_child(
         if stage == "decision":
             if admission["report_permission"] != "new_operation":
                 raise ValueError("native child decision requires an open, work-admitted Turn guard")
-            if fields["operation"] in {"spawn", "followup"} and any(
+            # Host observations record calls that already happened, including
+            # violations; recording one cannot authorize another host call.
+            if not _host_observed and fields["operation"] in {"spawn", "followup"} and any(
                 _details(item).get("outcome") in {"capacity_rejected", "host_failed"}
                 for item in decisions.values()
             ):

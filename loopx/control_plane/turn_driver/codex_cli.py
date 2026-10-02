@@ -15,7 +15,8 @@ from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
-from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
+from .codex_native_child import native_child_observer
+from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES, selected_turn_todo
 from .codex_sessions import (
     CODEX_CLI_SESSION_SCHEMA_VERSION as CODEX_CLI_SESSION_SCHEMA_VERSION,
     _discard_codex_cli_session,
@@ -721,6 +722,8 @@ def run_codex_cli_host(
         else:
             goal_admission.accept_result(commit)
 
+    child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage)
+
     with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
@@ -757,6 +760,16 @@ def run_codex_cli_host(
                 candidate = codex_cli_event_session_id(event)
                 if candidate and candidate not in observed_session:
                     observed_session.append(candidate)
+                item = event.get("item")
+                if (child_observer is not None and observed_session
+                        and event.get("type") == "item.completed" and isinstance(item, Mapping)):
+                    def record_child() -> None:
+                        child_observer.observe(item, session_id=observed_session[0])
+
+                    if goal_admission is None:
+                        record_child()
+                    else:
+                        goal_admission.accept_result(record_child)
                 structured, diagnostic = _event_failure_categories(event)
                 if structured:
                     structured_failure_categories.add(structured)

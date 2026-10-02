@@ -161,6 +161,10 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(reward_memory_recall, Mapping):
         request["reward_memory_recall"] = dict(reward_memory_recall)
     request.update(subagent.subagent_host_request_projection(plan))
+    from .codex_native_child import configured_native_child_limit
+
+    if configured_native_child_limit(request) is not None:
+        request["turn_instance_id"] = transaction.get("turn_instance_id") or turn_key
     return request
 
 
