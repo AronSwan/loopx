@@ -62,8 +62,8 @@ cd ../sdk && uv build --wheel                # 版本已手工stamp为0.2.0rc2(�
 | 文件 | 偏离 | 回馈上游 | 回归官方条件 |
 |---|---|---|---|
 | loopx/file_lock.py | holder 侧车去 .json 后缀（1 行） | 协议文档已加 LOCAL DEVIATION 注记; 关联 issue #5397 | 上游修 #5397 后改回（改名 vs 扫描器跳过，以上游裁决为准） |
-| collaboration/inbox.py | 非 sha256 条目显式 continue（4 行） | 同 #5397（扫描器跳过规则） | 同上 |
-| collaboration/peers.py | returns() glob 过滤 .lock（1 行） | 同 #5397 | 同上 |
+| ~~collaboration/inbox.py~~ | ~~非 sha256 条目显式 continue（4 行）~~ **已回归官方（2026-10-01,edce5aab2——上游 #5397 修复落地,42e843ac）** | — | — |
+| ~~collaboration/peers.py~~ | ~~returns() glob 过滤 .lock（1 行）~~ **已回归官方（同上）** | — | — |
 
 **已瘦身两笔（2026-10-01"33行必要性"核查，官方对照后删/重分类）**：
 - ~~collaboration_mcp.py file_sha256 工具（27 行）~~ **已删**——官方 0.2.0 的 24 个原生工具无 hash 类，但 shell 已修复：

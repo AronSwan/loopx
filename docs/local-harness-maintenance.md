@@ -4,7 +4,9 @@
 
 ## 分支定位
 
-- `local-harness`: 本地编队资产+框架补丁,**永不 push 到 origin**(公开仓库)。
+- `local-harness`: 本地编队资产+框架补丁。**2026-10-03 起推送至 fork `AronSwan/loopx`**
+  （非官方仓——锚工件 lock-anchor.json 第三方时间锚用；对官方仓 loopx-project/loopx 只读 upstream,
+  不开 PR、不打扰维护者）。
 - `main`: 只做上游快进拉取,不做任何本地提交。
 - `freeze-p3`: 代码冻结点 tag(P5 盲测/P6 实验的基线)。
 
@@ -44,5 +46,5 @@ demo.py 与 collaboration_mcp.py 为冷文件(0次)。
 
 一坑一提交(`fix/test/feat/docs(scope): 坑N或一句话`);提交前
 `pytest test_controller.py -q` 必须绿;含密钥文件(r?-launch.sh/secrets.env/*.log/
-uv.lock)已被 `.git/info/exclude` 拦截——该拦截是**本机配置**,换机需重配
-(见 `.git/info/exclude` 内容),这也是"永不 push"的第二重理由。
+uv.lock)已被受控 `.gitignore` 拦截(2026-10-03 起,原仅 `.git/info/exclude` 本机配置——
+换机即裸奔,已补进受控文件)。

@@ -176,5 +176,7 @@ files = [
 
 # 2026-10-01 受控升级: 本地自构建的harness 0.2.0rc2轮子(官方tag dsh-v0.2.0-rc.2构建链)
 [tool.uv.sources]
+# 克隆方须知: 这两个 .local 轮子被 .gitignore 排除、克隆后不存在——uv sync 会失败。
+# 要么按 docs/harness-upgrade-020.md §2 自建轮子,要么删除本节回 PyPI 0.1.5rc1。
 deepseek-harness-sdk = { path = ".local/deepseek_harness_sdk-0.2.0rc2-py3-none-any.whl" }  # 单点修复(升级组二轮#中): 不再依赖4GB构建树存活
 deepseek-harness-runtime-bin = { path = ".local/deepseek_harness_runtime_bin-0.2.0rc2-py3-none-win_amd64.whl" }

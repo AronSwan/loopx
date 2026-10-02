@@ -1,3 +1,5 @@
+> **⚠️ Branch notice — `local-harness`: this is a contributor's local research/harness working branch (user-side, NOT an official loopx-project branch). Not reviewed by maintainers, not proposed for merge. All performance data herein is exploratory, not confirmatory.**
+
 <div align="center">
 
 <h1 align="center">LoopX</h1>

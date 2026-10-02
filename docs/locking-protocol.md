@@ -56,6 +56,12 @@
 - **锁锚工件（lock-anchor.json，人工落盘）**：推送远端时创建，含 {protocol_hash（协议文件
   锚 commit）, pushed_sha（推送的分支 HEAD）, push_event_at（GitHub push 事件时间=第三方锚）}。
   **它才是锁**，不是任何本地时间戳。
+- **锚效力的诚实边界（乙席强调，推送前必写）**：
+  锚防的是——协议事后编辑 + 本地时间篡改。
+  锚防不了——有写权限者（=我们）force-push 改史 + "先跑完再登记"（锚钉"协议文本在 T 时刻
+  的内容"，不钉"实验发生在 T 之后"）。
+  **锁的证明力 = 第三方事件日志（GitHub Events API 90 天内 / GH Archive 永久）的独立可
+  复查性，非工件自身**——工件是自转录文本，证明力全在审计者独立复查。
 - **锚校验（fail-closed）**：`auto()` 写 lock.json 前，校验 lock-anchor.json 的 protocol_hash
   是 `origin/local-harness` 的祖先（`git merge-base --is-ancestor`）——漂移（协议推送后又
   本地改）则拒绝开窗，不静默锚到未推送 commit。

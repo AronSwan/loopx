@@ -46,3 +46,9 @@ logs/
 /loopx/web/.chat-build-*/
 
 uv.lock
+
+# User-side research branch hygiene (local-harness): secrets and run data never leave the machine
+/secrets.env
+/r?-launch.sh
+/r??-launch.sh
+/.local/
