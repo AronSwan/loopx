@@ -76,9 +76,9 @@ change_quality（oracle 发现 + scope 指纹 + receipt stale 语义）/ 评审�
 
 | 项 | 内容 | 依据 |
 |---|---|---|
-| 1 | pass^k 台账迁读 turn journal（先对齐自有语义再动） | C-1，managed_step.py:14 |
-| 2 | 盲评隔离：评估是否借官方结构性隔离（串行两轮）简化并行盲评设计 | B，collaboration-delivery README |
-| 3 | 底座 typed verdict 契约是否引入评审任务书（与现行文本裁决并行评估） | B，review_contract.py:323 |
+| 1 | pass^k 台账迁读 turn journal（先对齐自有语义再动）——SAVI 席升格为一切统计纪律的前提 | C-1，managed_step.py:14 |
+| 2 | ~~盲评隔离评估~~ **已销案**（Cordis 席）：官方 worktree 隔离同为后续项，机械隔离检查与官方 writeScopes 同为 completion-time audit 立场且更强；串行 vs 并行取舍在盲评去偏，不在隔离强度 | Cordis 席，dsh-agent-teams quality-gates §2.2 |
+| 3 | 底座 typed verdict 契约是否引入评审任务书（与现行文本裁决并行评估）；附带 Cordis 席两明文（run interval 定义/门禁 owns-decision 标注） | B，review_contract.py:323 |
 
 ---
 *甲席：逐文件深查（27 机制族清单）；乙席：逐项对照（40 函数四分类）。分歧已合议：退避/幂等跳过属编排级正当关注，不算重复；pass^k 台账经实锤降级为重复项。*
