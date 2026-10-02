@@ -328,6 +328,7 @@ def test_hard_leased_cli_pins_the_release_and_the_record_through_the_transport(t
 
     def transport(*args, **kwargs):
         handed.update(kwargs)
+        handed["argv"] = args[0]
         kwargs["on_stdout"]("{}")
         return {"outcome": "exited", "output_complete": True, "returncode": 0}
 
@@ -337,4 +338,6 @@ def test_hard_leased_cli_pins_the_release_and_the_record_through_the_transport(t
                 host_record=record, delegated_lease={"lease": {}, "ttl_seconds": None,
                                                      "renew_argv": [], "read_argv": []})
     assert handed["environment"]["PYTHONPATH"].split(os.pathsep)[0] == str(delegation_module._release_root())
-    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record)
+    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record.with_suffix(".cli.host.json"))
+    index = handed["argv"].index("--host-process-record")
+    assert handed["argv"][index + 1] == str(record)
