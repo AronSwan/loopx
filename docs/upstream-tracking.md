@@ -72,7 +72,7 @@
 | 观察项 | 来源 | 状态 |
 |---|---|---|
 | 底座 API 三契约（append_message/drain/latest_session) | #5462 | 已报，待上游响应 |
-| 底座 benchmark RFC 补 BB-EDGE 统计纪律（epoch reset+α 花费） | 延伸读 SAVI 应用席 | 候选——上游 RFC(long-horizon-harness）先开门才递 |
+| 底座 benchmark RFC 补 BB-EDGE 统计纪律（**原理可移植：α 花费序列+estimand 变更纪律；机制不同构：epoch reset 是 benchmark 版本更新机制，底座升级=被测系统变更走 C.2 语义——门二 M3/复核席 R4① 证伪回写，原'epoch reset'标签作废**） | 延伸读 SAVI 应用席→复核席证伪→门二回写 | 候选——上游 RFC 先开门才递 |
 | Cordis vs AOS 设计立场文 | 延伸读 Cordis 同源席 | 候选——须落到上游可用形态（issue/RFC 评论）才算，先落自家 docs |
 
 ## 四、底座演化巡读记录（周频）
