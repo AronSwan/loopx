@@ -369,7 +369,10 @@ with contextlib.redirect_stdout(output):
     code = main(["--format", "markdown", "doctor", "--format", "json",
                  "--deep", "--installation-only"])
 assert code == {0 if healthy else 1}
-assert observed == [{{"deep": True, "agent_type": None, "installation_only": True}}]
+assert len(observed) == 1
+assert {{key: observed[0][key] for key in ("deep", "agent_type", "installation_only", "runtime_root_override")}} == {{
+    "deep": True, "agent_type": None, "installation_only": True, "runtime_root_override": None,
+}}
 assert json.loads(output.getvalue()) == {{"ok": {healthy!r}, "scope": "installation_only"}}
 """
     completed = run_isolated_script(script)
