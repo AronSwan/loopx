@@ -49,11 +49,18 @@ def checkpoint_sections(markdown: str) -> dict[str, str]:
 def pytest_nodes(section: str) -> tuple[str, ...]:
     nodes: list[str] = []
     for block in re.findall(r"(?ms)^```bash\n(.*?)^```[ \t]*$", section):
-        argv = shlex.split(block.replace("\\\n", " "), comments=True)
-        if "pytest" not in argv:
-            continue
-        nodes.extend(arg for arg in argv[argv.index("pytest") + 1:]
-                     if arg.startswith("tests/"))
+        # Split where the shell does, so a selector after a missing `\` is not
+        # credited to the pytest command before it.
+        for line in block.replace("\\\n", " ").splitlines():
+            argv = shlex.split(line, comments=True)
+            if not argv:
+                continue
+            if "pytest" not in argv:
+                if argv[0].startswith("tests/"):
+                    raise ValueError(f"selector is not a pytest argument: {argv[0]}")
+                continue
+            nodes.extend(arg for arg in argv[argv.index("pytest") + 1:]
+                         if arg.startswith("tests/"))
     if not nodes:
         raise ValueError("checkpoint has no pytest test selectors")
     return tuple(nodes)
@@ -202,6 +209,13 @@ class ReaderCheckpointGuardTests(unittest.TestCase):
                      .replace("checkpoint:temporary:", "checkpoint:lease:"))
         with self.assertRaisesRegex(ValueError, "out of order"):
             checkpoint_sections(malformed)
+
+    def test_selector_after_missing_continuation_is_rejected(self) -> None:
+        block = ("```bash\nuv run --extra test pytest -q \\\n"
+                 "  tests/test_example.py::test_first\n"
+                 "  tests/test_example.py::test_second\n```\n")
+        with self.assertRaisesRegex(ValueError, "not a pytest argument"):
+            pytest_nodes(block)
 
     def test_no_test_command_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "no pytest"):

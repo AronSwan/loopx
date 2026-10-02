@@ -246,7 +246,7 @@ Host or authorize mutation or delivery debit.
 uv run --extra test pytest -q \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_interleaved_monitors_keep_independent_no_change_streaks \
   tests/control_plane/test_monitor_replan_agent_scope.py::test_current_agent_advancement_still_preempts_monitor_streak_replan \
-  tests/control_plane/test_monitor_replan_agent_scope.py::test_watch_only_monitor_streak_does_not_create_replan_obligation
+  tests/control_plane/test_monitor_replan_agent_scope.py::test_watch_only_monitor_streak_does_not_create_replan_obligation \
   tests/control_plane/test_settled_replay_construction.py::test_settled_replay_preserves_schedule_without_new_host_effects
 ```
 
