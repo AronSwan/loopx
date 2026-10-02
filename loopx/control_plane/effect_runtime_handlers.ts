@@ -3,6 +3,7 @@ import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgen
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
+import {projectTodoContextPage} from "./todos/context_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
 import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
@@ -31,7 +32,7 @@ import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
 import {inspectLocalGoalAcceptance, commitLocalGoalAcceptance,
   commitLocalGoalAcceptanceVerification} from "./goals/acceptance_authority.ts";
 import {planLegacyHandoffMode} from "./coordination/handoff_mode_legacy_plan.ts";
-import {setLocalHandoffMode} from "./coordination/handoff_mode_runtime.ts";
+import {setLocalHandoffMode, migrateLocalHandoffMode} from "./coordination/handoff_mode_runtime.ts";
 import {projectOwnershipObservation} from "./coordination/ownership_observation.ts";
 import {observeLocalCoordinationOwnership} from "./coordination/local_authority_runtime.ts";
 import {evaluateTaskLeaseOwnerEligibility} from "./work_items/task_lease_eligibility.ts";
@@ -238,6 +239,7 @@ import {
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady } from "./collaboration/result_publication.ts";
 import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
 import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "./collaboration/semantic_request.ts";
@@ -543,6 +545,7 @@ export function createEffectRuntimeHandlers(
       reconcileRetainedActionSelection,
     ],
     ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
+    ["todo.context.page", projectTodoContextPage],
     ["work_item.task_graph.topology", projectTaskGraphTopology],
     ["work_item.task_graph.goal_topology", projectGoalTaskGraphTopology],
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
@@ -616,6 +619,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.monitor_poll", pollLocalCoordinationMonitor],
     ["coordination.handoff_mode.legacy_plan", planLegacyHandoffMode],
     ["coordination.local_authority.handoff_mode_set", setLocalHandoffMode],
+    ["coordination.local_authority.handoff_mode_migrate", migrateLocalHandoffMode],
     ["coordination.local_authority.todo_terminal", terminalLifecycleLocalCoordinationTodo],
     ["coordination.local_authority.todo_archive", archiveLocalCoordinationTodos],
     ["coordination.local_authority.todo_archive_ack", acknowledgeLocalCoordinationTodoArchive],
@@ -774,6 +778,8 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.source_context.normalize", normalizeCollaborationSourceContext],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
+    ["collaboration.result.plan_publication", planCollaborationResult],
+    ["collaboration.result.delivery_ready", collaborationResultDeliveryReady],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [
       "collaboration.goal_instance.decide",

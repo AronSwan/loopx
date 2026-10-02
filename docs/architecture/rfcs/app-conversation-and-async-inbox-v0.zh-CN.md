@@ -71,6 +71,15 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 这是待交付的 App 展示改进，不代表已安装回读或完整 GQ10 排序能力。
 跨项目选择、最多两项建议与真实的范围内采用，仍归既有 P1 注意力工作。
 
+共用的对话证据投影应把已声明的恢复条件、后继关系与决定范围保留为结构化事实。
+概览正文有界，并用 `content_truncated` 标明节选；既有管家/Goal 上下文工具通过
+精确的 `view=todos`、`goal_id`、`todo_id` 读取恢复许可范围内的全文。
+CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-id TODO`，
+仍保留外部受众边界。条件或已完成的引用对象都不授予执行权限，也不证明恢复就绪。
+大目录复用已有的本机私有快照传输，对话行容量不变。真实 File/SQLite 回读、来源缺失、
+撤权、超大记录及执行器工具桥接验证这个证据切片；它们不证明模型排序、打包 App 采用，
+也不代表完整 GQ09/GQ10 已走通，这些结果仍须在 release 评测中验证。
+
 ### 等待也是对话的一部分
 
 管家、Goal 对话和总览里的紧凑回执共用一个 TypeScript 活动组件。
@@ -229,6 +238,12 @@ Provider 认证、签名、外部事件解码、寻址、chat membership、rate 
 通用 pending 选择、稳定请求身份、replay/disposition 与恢复规则不能依赖 `oc_`/`om_` id 或 bot reaction。
 Notification/attention、Todo/lease、model admission 和 artifact acceptance 保留现有 owners。
 Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。Inbox 不授权启动另一个 automation。
+
+已返回阻塞或可审阅草稿，不能阻止后续完成结果回到同一对话。保留首条不可变结论，
+通过共享 TS 发布 owner 追加有明确身份的结果更新。同一更新重试保留结果身份，冲突替换拒绝。
+Chat/Lark 发送须等待前一结果核验送达；Peer 消费只确认已读的那条结果。
+在打包对话中验证重启、重复重试、前次发送不确定及精确 Goal 实例隔离。
+这是 R3/T1–T2 的结果连续性，不新增工作请求、权限、任务完成声明或管家专用队列。
 
 已提交委派的恢复复用现有 typed collaboration lifecycle。原请求 Turn 失败、超时或
 被打断，不会取消已经进入接收方 Inbox 的工作。该 Turn 结束后，即使调用方没能保存

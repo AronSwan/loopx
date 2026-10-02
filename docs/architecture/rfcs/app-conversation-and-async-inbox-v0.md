@@ -108,6 +108,19 @@ This is a proposed App presentation improvement, not installed readback or
 full GQ10 prioritization. Cross-project selection, at most two recommended
 priorities and actual scoped adoption remain in the existing P1 attention work.
 
+The shared conversation evidence lens must preserve declared resume conditions,
+successor relationships and decision scopes as structured facts. Overview text
+is bounded and carries `content_truncated`; an exact `view=todos`, `goal_id`,
+`todo_id` read recovers permitted text through the existing manager/Goal context
+tool. CLI/SSH export uses `goal-portfolio --manager-view todos --goal-id GOAL
+--todo-id TODO` and retains its external audience boundary. Neither a condition
+nor a completed referent grants execution or proves readiness. Large local
+catalogs use the existing private snapshot transport; conversation row limits
+remain unchanged. Real File/SQLite readback, source loss, revocation, oversized
+rows and the executor tool bridge qualify this evidence slice. They do not
+qualify model prioritization, packaged App adoption or the complete GQ09/GQ10
+journey; release evaluation must still prove those outcomes.
+
 ### Waiting is part of the conversation
 
 One shared TypeScript activity surface serves manager and Goal conversations,
@@ -341,6 +354,16 @@ not depend on `oc_`/`om_` identifiers or a bot reaction. Notification/attention,
 Todo/lease, model admission and artifact acceptance keep their existing owners.
 Dispatch events wake the existing driver within admission; polling repairs gaps.
 An inbox is not permission to start another automation.
+
+Returning a blocker or reviewable draft must not prevent later completion from
+reaching the same conversation. Preserve the initial immutable conclusion and
+append explicitly identified result updates through the shared TS publication
+owner. Retries retain one result identity; conflicting replacements fail closed.
+Chat/Lark sends wait for the preceding result's verified delivery, and peer
+consumption acknowledges only the result that was read. Qualify restart,
+duplicate retry, uncertain prior delivery and exact Goal-instance isolation in
+the packaged conversation. This is result continuity within R3/T1–T2, not a new
+work request, permission grant, task-completion claim or separate manager queue.
 
 The return-verification slice uses the existing TS classification owner for
 both adapter results and typed resolution failures. Exception text is diagnostic,
