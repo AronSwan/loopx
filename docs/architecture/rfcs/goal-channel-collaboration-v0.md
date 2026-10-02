@@ -312,14 +312,25 @@ loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices -
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
 ```
 
-A material refresh sends a notice only through the authorized Lark sink. The
-blocker identity and revision deduplicate unchanged messages; a resolved blocker
-that becomes blocked again gets a new delivery. The binding records pending,
-sent-but-unverified, verified, resolved, and superseded receipts. A provider
-failure or missing sink leaves the notice pending and does not stop safe fallback
-work. `status.json` exposes only public-safe counts and the two opt-ins; the
-private message identity stays in the binding. Chat replies do not approve or
-resolve a Todo; canonical Todo state must record recovery.
+A material refresh sends only through the authorized Lark sink. Deduplication
+binds blocker identity, revision, destination chat, and delivery generation.
+An explicitly observed open Todo retires the old blocker as resumed; terminal
+or superseding canonical facts retire it separately. Missing or paginated rows
+never prove recovery. Repeated recovery works even within one timestamp.
+
+Each refresh attempts at most eight pending effects, prioritizing unattempted
+notices before retries. Verified receipts do not consume that budget; the full
+frontier and deferred pending receipts remain available for later refreshes.
+A batch with pending work is not reported as fully verified. Switching channels
+requires independent send/readback for the new destination and retains the old
+history. Public status counts refer to the current target and exclude retired
+receipts from active delivery totals.
+
+The private binding records pending, sent-but-unverified, delivered, resumed,
+resolved, and superseded receipts. Provider failure or a missing sink leaves
+notices pending without stopping safe fallback. `status.json` exposes only
+public-safe counts and the two opt-ins. Chat replies do not approve or recover
+Todos; recovery remains a canonical Todo fact.
 
 The opt-in is stored only in the project-local private Goal Channel binding.
 It does not grant repository or LoopX transition authority. Chat replies can
