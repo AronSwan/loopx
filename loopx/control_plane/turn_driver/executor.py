@@ -801,6 +801,11 @@ def _host_result_stage(
     if "typed_result" not in completed_phases:
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
+        from .codex_native_child import configured_native_child_limit
+        if configured_native_child_limit(request) is not None:
+            # Reuse the journal's durable attempt identity; replay never creates
+            # another identity, and a real host retry always advances it.
+            request = {**request, "host_attempt": journal["host_attempt_count"]}
         # The attempt is durable now, so a later restart must not resume this
         # reservation. Confirmation failure stops before the host starts.
         if confirm_start is not None:

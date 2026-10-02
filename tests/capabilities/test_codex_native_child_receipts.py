@@ -29,7 +29,7 @@ def _observe(root, items, session_id="parent-1"):
         lineage={"goal_id": GOAL, "agent_id": AGENT},
         turn_instance_id=TURN, configured_limit=3)
     for item in items:
-        observer.observe(item, session_id=session_id)
+        observer.observe(item, session_id=session_id, invocation_id="host-turn-1")
 
 
 def test_host_spawn_result_parent_review_and_restart(tmp_path: Path):
@@ -118,6 +118,7 @@ def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path:
     _admit(tmp_path)
     request = _request()
     request["turn_instance_id"] = TURN
+    request["host_attempt"] = 1
     request["turn_envelope"].update(goal_id=GOAL, agent_id=AGENT, agent_context={
         "contributions": [{"capability_id": "multi_subagent", "facts": {"max_children": 3}}]})
     request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_native_1"
@@ -137,3 +138,105 @@ def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path:
     assert activity["host_attested"] is True
     assert activity["launched_count"] == 1
     assert activity["operations"][0]["result"] == "completed"
+
+
+def _real_cli_calls(tmp_path, monkeypatch, batches):
+    import sys
+    from loopx.control_plane.turn_driver import codex_cli
+    from tests.test_loopx_turn_codex_cli import _request
+
+    script = tmp_path / "host.py"
+    script.write_text("""
+import json, sys
+from pathlib import Path
+sys.stdin.read()
+print(json.dumps({"type": "thread.started", "thread_id": "parent-1"}), flush=True)
+for item in json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")):
+    print(json.dumps({"type": "item.completed", "item": item}), flush=True)
+Path(sys.argv[2]).write_text(json.dumps({"parent_work": "preserved"}), encoding="utf-8")
+""", encoding="utf-8")
+    event_file = tmp_path / "events.json"
+    sessions = []
+
+    def command(**kwargs):
+        sessions.append(kwargs["session_id"])
+        return [sys.executable, str(script), str(event_file), str(kwargs["output_path"])]
+
+    # Replace only executable selection; run the real process, stream parser,
+    # session store, receipt admission and durable readback.
+    monkeypatch.setattr(codex_cli, "_codex_command", command)
+    for attempt, items in enumerate(batches, 1):
+        request = _request(session_action="start_new" if attempt == 1 else "resume")
+        request["turn_instance_id"] = TURN
+        request["host_attempt"] = attempt
+        request["turn_envelope"].update(goal_id=GOAL, agent_id=AGENT, agent_context={
+            "contributions": [{"capability_id": "multi_subagent", "facts": {"max_children": 3}}]})
+        request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_native_1"
+        event_file.write_text(json.dumps(items), encoding="utf-8")
+        assert codex_cli.run_codex_cli_host(request, runtime_root=tmp_path, project=tmp_path,
+            codex_bin=sys.executable) == {"parent_work": "preserved"}
+    assert sessions == [None] + ["parent-1"] * (len(batches) - 1)
+    return load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+
+
+def test_real_cli_resume_wait_only_completes_original_spawn(tmp_path, monkeypatch):
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    activity = _real_cli_calls(tmp_path, monkeypatch, [[spawn], [wait, wait]])
+    assert activity["launched_count"] == 1
+    assert activity["operation_count"] == 1
+    assert activity["operations"][0]["result"] == "completed"
+    assert activity["quota_spend_slots"] == 0
+    assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL))) == 3
+
+
+def test_real_cli_resume_counter_reuse_and_exact_replay(tmp_path, monkeypatch):
+    _admit(tmp_path)
+    followup = {"type": "collab_tool_call", "id": "item_0", "sender_thread_id": "parent-1",
+        "tool": "send_input", "status": "completed", "receiver_thread_ids": ["child-1"]}
+    other_child = {**followup, "receiver_thread_ids": ["child-2"]}
+    failed = {**followup, "tool": "spawn_agent", "status": "failed", "receiver_thread_ids": []}
+    activity = _real_cli_calls(tmp_path, monkeypatch, [
+        [followup, followup], [other_child, other_child], [followup, followup],
+        [failed, failed], [failed, failed]])
+    assert activity["operation_count"] == 5
+    assert activity["attempted_count"] == 5
+    assert activity["host_failed_count"] == 2
+    assert activity["launched_count"] == 0
+    assert activity["quota_spend_slots"] == 0
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert len(events) == 6
+    assert "private child" not in json.dumps(events)
+
+
+def test_resume_restores_spawn_outside_the_visible_window(tmp_path):
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    items = [{**spawn, "receiverThreadIds": [f"child-{i}"], "agentsStates": {}}
+             for i in range(1, 11)]
+    _observe(tmp_path, items)
+    _observe(tmp_path, [wait])
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(event["event_kind"] == "native_child_decision" for event in events) == 10
+    assert sum(event["event_kind"] == "native_child_result" for event in events) == 1
+
+
+def test_resume_does_not_attest_coordinator_reported_or_unknown_children(tmp_path):
+    import hashlib
+    _admit(tmp_path)
+    operation = "codex-" + hashlib.sha256(b"child-1").hexdigest()[:32]
+    record_native_child(runtime_root=tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3, operation_id=operation, stage="decision",
+        operation="spawn", outcome="started", entrypoint_id="codex_native_tools", execute=True)
+    _observe(tmp_path, [_turn()["items"][1]])
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert not any(event["event_kind"] == "native_child_result" for event in events)
+
+
+def test_restart_replay_uses_the_original_invocation_binding(tmp_path):
+    _admit(tmp_path)
+    followup = {**_turn()["items"][0], "tool": "sendInput", "agentsStates": {}}
+    _observe(tmp_path, [followup])
+    _observe(tmp_path, [followup])
+    assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL))) == 2

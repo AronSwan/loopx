@@ -6,11 +6,14 @@ log. Prompts, child messages and raw tool output are never retained.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...capabilities.multi_subagent.native_child_receipts import record_native_child
+from ...capabilities.multi_subagent.native_child_receipts import (
+    _load_native_child_events, record_native_child,
+)
 
 
 def configured_native_child_limit(request: Mapping[str, Any]) -> int | None:
@@ -39,11 +42,14 @@ class CodexNativeChildObserver:
     """
 
     def __init__(self, *, runtime_root: Path, lineage: Mapping[str, str],
-                 turn_instance_id: str, configured_limit: int):
+                 turn_instance_id: str, configured_limit: int,
+                 goal_ref: Mapping[str, Any] | None = None, registry_path: Path | None = None):
         self.runtime_root = runtime_root
         self.lineage = lineage
         self.turn_instance_id = turn_instance_id
         self.configured_limit = configured_limit
+        self.goal_ref = goal_ref
+        self.registry_path = registry_path
         self.children: dict[str, str] = {}
 
     def _record(self, *, stage: str, **record: str) -> None:
@@ -52,10 +58,33 @@ class CodexNativeChildObserver:
             agent_id=self.lineage["agent_id"], turn_instance_id=self.turn_instance_id,
             configured_limit=self.configured_limit, stage=stage,
             entrypoint_id="codex_native_tools" if stage == "decision" else None,
-            execute=True, _host_observed=True, **record,
+            execute=True, _host_observed=True, goal_ref=self.goal_ref,
+            registry_path=self.registry_path, **record,
         )
 
-    def observe(self, item: Mapping[str, Any], *, session_id: str) -> None:
+    def _restore_spawn(self, child: str) -> None:
+        # Spawn IDs already bind the opaque child identity. Restore only an
+        # admitted, host-observed spawn from this exact Goal/agent/Turn owner,
+        # including operations outside the bounded presentation window.
+        operation_id = "codex-" + hashlib.sha256(child.encode()).hexdigest()[:32]
+        events = _load_native_child_events(
+            self.runtime_root, goal_id=self.lineage["goal_id"], agent_id=self.lineage["agent_id"],
+            turn_instance_id=self.turn_instance_id, goal_ref=self.goal_ref,
+            registry_path=self.registry_path,
+        )
+        for event in events:
+            details = event.get("details")
+            if not isinstance(details, Mapping):
+                continue
+            if (event.get("event_kind") == "native_child_decision"
+                    and event.get("case_id") == operation_id
+                    and details.get("operation") == "spawn" and details.get("outcome") == "started"
+                    and details.get("observation_source") == "host_observed"
+                    and details.get("entrypoint_id") == "codex_native_tools"):
+                self.children[child] = operation_id
+                return
+
+    def observe(self, item: Mapping[str, Any], *, session_id: str, invocation_id: str) -> None:
         item_type = item.get("type")
         if item_type not in {"collab_tool_call", "collabAgentToolCall"}:
             return
@@ -76,7 +105,10 @@ class CodexNativeChildObserver:
                 return
             # Successful spawn identity survives host event replay/restart; host
             # exec display-item counters alone are not globally unique.
-            identity = receivers[0] if tool == "spawn" and started else session_id + ":" + native_id
+            if not invocation_id:
+                raise ValueError("native child decision requires its owned host invocation")
+            identity = (receivers[0] if tool == "spawn" and started else
+                        json.dumps([session_id, invocation_id, native_id], separators=(",", ":")))
             operation_id = "codex-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
             self._record(stage="decision", operation_id=operation_id, operation=tool,
                          outcome="started" if started else "host_failed",
@@ -88,7 +120,11 @@ class CodexNativeChildObserver:
         if not isinstance(states, Mapping):
             return
         for child, state in states.items():
-            if child not in self.children or not isinstance(state, Mapping):
+            if not isinstance(child, str) or not child or not isinstance(state, Mapping):
+                continue
+            if child not in self.children:
+                self._restore_spawn(child)
+            if child not in self.children:
                 continue
             outcome = {"completed": "completed", "errored": "failed", "shutdown": "cancelled"}.get(state.get("status"))
             if outcome:
@@ -96,10 +132,14 @@ class CodexNativeChildObserver:
 
 
 def native_child_observer(request: Mapping[str, Any], *, runtime_root: Path,
-                          lineage: Mapping[str, str]) -> CodexNativeChildObserver | None:
+                          lineage: Mapping[str, str],
+                          registry_path: Path | None = None) -> CodexNativeChildObserver | None:
     limit = configured_native_child_limit(request)
     turn = request.get("turn_instance_id")
     if limit is None or not isinstance(turn, str) or not turn:
         return None
+    goal_ref = request.get("goal_ref")
     return CodexNativeChildObserver(runtime_root=runtime_root, lineage=lineage,
-                                    turn_instance_id=turn, configured_limit=limit)
+                                    turn_instance_id=turn, configured_limit=limit,
+                                    goal_ref=goal_ref if isinstance(goal_ref, Mapping) else None,
+                                    registry_path=registry_path)

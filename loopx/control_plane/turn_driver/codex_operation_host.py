@@ -431,13 +431,15 @@ def run_codex_operation_host(
                         recovery_kind="resume_session",
                     ) from exc
 
-        child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage)
+        child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+            registry_path=goal_admission.registry_path if goal_admission is not None else None)
 
         def observe_child(item: Mapping[str, Any]) -> None:
             if child_observer is None:
                 return
             def record_child() -> None:
-                child_observer.observe(item, session_id=session.thread_id)
+                child_observer.observe(item, session_id=session.thread_id,
+                                       invocation_id=session.current_turn_id)
 
             if goal_admission is None:
                 record_child()

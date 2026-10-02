@@ -143,12 +143,12 @@ def native_child_activity(
     }
 
 
-def load_native_child_activity(
+def _load_native_child_events(
     runtime_root: Path, *, goal_id: str, agent_id: str,
-    turn_instance_id: str, configured_limit: int,
+    turn_instance_id: str,
     goal_ref: Mapping[str, Any] | None = None,
     registry_path: Path | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     with quota_accounting_admission(
         runtime_root=runtime_root,
         registry_path=registry_path,
@@ -181,6 +181,7 @@ def load_native_child_activity(
             event
             for event in source
             if event.get("event_kind") in EVENT_KINDS.values()
+            and event.get("goal_id") == goal_id
             and event.get("agent_id") == agent_id
             and event.get("run_id") == turn_instance_id
             and (
@@ -189,14 +190,25 @@ def load_native_child_activity(
                 else "goal_ref" not in event
             )
         ]
-        return native_child_activity(
-            events,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            turn_instance_id=turn_instance_id,
-            configured_limit=configured_limit,
-            goal_ref=goal_ref,
-        )
+        return events
+
+
+def load_native_child_activity(
+    runtime_root: Path, *, goal_id: str, agent_id: str,
+    turn_instance_id: str, configured_limit: int,
+    goal_ref: Mapping[str, Any] | None = None,
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    events = _load_native_child_events(
+        runtime_root, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref,
+        registry_path=registry_path,
+    )
+    return native_child_activity(
+        events, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, configured_limit=configured_limit,
+        goal_ref=goal_ref,
+    )
 
 
 def latest_native_child_activity(
@@ -419,6 +431,7 @@ def record_native_child(
     evidence_ref: str | None = None, validation_ref: str | None = None,
     execute: bool = False, registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    _host_observed: bool = False,
 ) -> dict[str, Any]:
     """Preview or append one report under its exact quota owner."""
 
@@ -448,4 +461,5 @@ def record_native_child(
             registry_path=registry_path,
             goal_ref=goal_ref,
             source_admission=source_admission,
+            _host_observed=_host_observed,
         )

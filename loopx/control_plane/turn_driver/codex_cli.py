@@ -722,7 +722,14 @@ def run_codex_cli_host(
         else:
             goal_admission.accept_result(commit)
 
-    child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage)
+    child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+        registry_path=goal_admission.registry_path if goal_admission is not None else None)
+    invocation_id = ""
+    if child_observer is not None:
+        attempt = request.get("host_attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ValueError("native child CLI observation requires the durable host attempt")
+        invocation_id = f"exec:{request['turn_key']}:{attempt}"
 
     with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
         temporary = Path(directory)
@@ -764,7 +771,7 @@ def run_codex_cli_host(
                 if (child_observer is not None and observed_session
                         and event.get("type") == "item.completed" and isinstance(item, Mapping)):
                     def record_child() -> None:
-                        child_observer.observe(item, session_id=observed_session[0])
+                        child_observer.observe(item, session_id=observed_session[0], invocation_id=invocation_id)
 
                     if goal_admission is None:
                         record_child()
