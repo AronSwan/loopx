@@ -126,6 +126,34 @@ receipt → observed work or actionable failure → readable answer in the same 
 - Before dispatch, cancel only session preparation and state that the request
   was not submitted. After acceptance, existing exact-turn steering/interrupt
   controls own effects; stopping observation is not stopping the worker.
+- During a managed Codex Turn, the ordinary composer sends text instructions to
+  that exact Turn, without a second adjustment form or another Turn submission.
+  Attached-host messages keep their next-Turn queue semantics; unsupported
+  managed adapters keep the draft without advertising native steering. The
+  idle composer and initial presentation are unchanged. This changes the former
+  managed-running Send lockout; LoopX mode retains its explicit delivery choice.
+  A lost or mismatched receipt preserves draft and ingress identity, including
+  retry after completion or page reload in the same browser tab. The shared
+  composer persists the original Session/Turn/text/ingress before dispatch and
+  reuses it only for the matching Session and text; restoring the cache never
+  sends automatically. Only a confirmed non-delivery permits a new ingress.
+  Replaying a delivered receipt reads the current stored transcript rather than
+  reusing an earlier snapshot or inserting another local copy of the instruction.
+  History keeps the initial user request and later instructions as distinct messages
+  even while the initial request is still being reconciled with its stored identity.
+  The Codex provider sends the correction itself through native `turn/steer`,
+  retaining multiline text and the exact active Turn identity. Replaying the
+  initial task/policy envelope incorrectly declares the correction to be a new
+  standalone task and can displace the original deliverable. Initial Turn
+  admission, policy and response framing stay in their existing owners; queued
+  messages and resume context keep their caller-supplied scope. This transport
+  repair serves steward and Goal Chat alike in the existing Python provider
+  adapter under the TS migration boundary. HTTP/store/protocol regressions
+  prove the payload and replay behavior, not model adoption or a first result.
+  Unavailable browser storage keeps current-page retry behavior but cannot
+  promise reload recovery. This tab-local cache is not delivery authority.
+  Acceptance means the executor received the instructions, not that it adopted
+  them or that delegated/team work stopped. Live adoption stays a release gate.
 - The compact receipt and full conversation offer the same controls. Failure
   ends the live indicator, preserves the request/partial answer and names the
   next supported action. A completed delegation still shows receiver adoption
@@ -243,6 +271,17 @@ substitutes another instance; unavailable readback preserves the saved message.
 Production HTTP tests cover steward and Goal Chat with real disposable stores.
 This is readback qualification, not native executor or model-routing acceptance.
 
+Saved-answer readback retains the same distinction outside the timeline: the
+existing return phase labels a progress update or conclusion, and delivery
+verification remains visible beside it. Delivery alone never means completion.
+Navigation reuses the typed conversation-scope owner rather than a storage Goal:
+Goal answers return to that Goal, portfolio answers to Steward, and external
+answers offer **Open Steward**, without claiming to open the external audience.
+Packaged read-only validation uses the production HTTP/store and return
+projection with synthetic receiver results. This closes a saved-answer
+presentation gap; external-conversation selection, native adoption/correction
+and the two real collaboration cycles remain separate acceptance work.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional
@@ -307,12 +346,42 @@ The return-verification slice uses the existing TS classification owner for
 both adapter results and typed resolution failures. Exception text is diagnostic,
 not route/authority evidence: a transient read failure retains its locator and
 backoff, then reconciles the original result without another send. Explicit
-revocation, lost routing and missing initial receipts remain terminal. This
+revocation, lost routing and missing required provider acknowledgements remain terminal. This
 also holds after a `source_session_v1` Goal is recreated: a crash-persisted
 attempt recovers on the original GoalRef and conversation, transient verification
 backs off without resending, and typed terminal blockers stay stopped. This
 qualifies the persisted recovery boundary, not live provider availability or
 the complete GQ09 journey.
+
+Committed handoff recovery uses the existing typed collaboration lifecycle. A
+failed, timed-out or interrupted originating Turn does not cancel work already
+committed to a receiver's Inbox. Once that Turn settles, its receiver's saved
+result may return through the same trusted route even when the caller lost its
+handoff response. Recheck the current source grant, committed request identity,
+route and exact Goal instance; a conflicting saved handoff receipt blocks
+recovery rather than being ignored. Preserve the original failed Turn and append
+one idempotent return. Active originating Turns still wait; source revocation,
+missing entries and changed routes cannot authorize a send. Provider-specific
+initial-reply acknowledgement and post-send verification remain separate gates.
+
+The GQ07/GQ09 regression variant is “Keep going and bring me the result.” Inject
+failure after Inbox/route commit but before the caller's response is saved,
+reopen the real store, then publish the receiver's conclusion. Steward and Goal
+conversations must show that conclusion once without rerunning the model or
+rewriting the failed Turn. Synthetic production File/HTTP and typed counterexamples
+qualify this recovery boundary; they do not establish live owner selection,
+receiver adoption, native steering or two real team cycles.
+
+The same commitment now supplies owner-private App readback while the caller is
+active or its answer is missing. Prefer the saved answer; otherwise attach the
+existing delegation card to the original user message, without appending a fake
+answer or rewriting the failed Turn. The shared typed lifecycle admits observation
+independently of result-return admission: pending/supplied/adopted/returned remain
+separate facts. Match the exact saved conversation, client Turn, request and Goal
+instance; ambiguous routes or conflicting receipts do not produce a card. External
+sessions do not receive private brief or receiver rationale. Route discovery retains
+the existing bounded historical scan; full backlog indexing and installed/live
+journey qualification remain separate acceptance work.
 
 App history recovery is a shared TS read boundary for steward and Goal channels.
 One unavailable older Session must not hide readable messages, lose their
@@ -484,9 +553,14 @@ skips rather than presenting an unqualified profile as passing. The suite uses
 the production prompt/parser and fixed public contexts. Its frozen outcomes
 cover new work, existing owners, ambiguity, stopped/ungranted recipients, scope
 correction, current-Goal follow-ups, quotes, negation and ordinary questions in
-Chinese/English. Output conflicts, omitted envelopes and truncated generations
-fail rather than being counted as successful intent recognition. Report model,
-prompt/case hashes, request settings, token usage and repeat count. This layer
+Chinese/English. An empty answer fails for either provider. The API lane also
+checks raw envelope conflicts, omitted tags and truncated generations; the
+Codex lane consumes adapter protocol warnings, including missing tags, rather
+than certifying its readable fallback. Codex raw envelope integrity beyond the
+adapter's warnings remains unqualified. Both receive the same fixture context
+and normalized request. Report model, template and per-case effective prompt
+hashes, case hash, request settings, available token usage and repeat count.
+Offline provider fixtures exercise the CLI and report without paid calls. This layer
 qualifies model interpretation of supplied evidence, not live discovery, actual
 dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
 real collaboration transport tests qualify those separate boundaries.
@@ -495,3 +569,27 @@ The same conversation surface preserves reading position during streaming: outpu
 follows only while the reader stays near the bottom, and a latest-message action
 restores following. Multiline drafts expand within a bounded composer; suggestions
 remain on overview/empty entry states rather than displacing an active conversation.
+
+### Image admission and current-conversation position
+
+An ordinary request such as “Look at this screenshot and draft a community
+thank-you” must reach the existing conversation with its image intact. The turn
+HTTP budget includes the base64 representation of the existing attachment
+allowance: at most four images, 5 MiB each and 12 MiB total. Text and metadata
+retain their separate 64,000-byte budget; other JSON endpoints retain their
+existing ceiling. Only a confirmed rejection before turn admission restores the
+draft and images for manual resend. An uncertain or accepted submission must not
+be presented as safe to replay.
+
+Operation cards belong at their creation point among messages. Updating or
+restoring an old operation must not append it after a new answer; undated history
+must not masquerade as fresh activity. The shared TypeScript conversation read
+model owns ordering, while the Python HTTP/attachment adapter owns wire admission.
+Existing confirmation and effect authority remain unchanged.
+
+Source qualification covers HTTP admission, durable session readback and a
+synthetic Codex protocol process, plus packaged desktop/narrow-screen image send,
+historical cards and rejected-draft recovery. These fixtures establish transport
+and interface behavior, not live model quality, public posting or installed-host
+acceptance. GQ06's material entry and GQ07–09's continuity remain subject to their
+full delivery and recovery acceptance.

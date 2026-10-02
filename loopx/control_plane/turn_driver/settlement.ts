@@ -10,7 +10,7 @@ import {
   settlementResultPayload,
   type JsonObject,
   type SettlementFailureResult,
-  type SettlementIdentity,
+  type BoundSettlementIdentity,
   type SettlementResult,
   type SettlementStepKind,
   TURN_PROVIDER_STEP_KINDS,
@@ -288,7 +288,7 @@ function validateTurnOutcomeKind(
 }
 
 function completionOutcomeError(
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   payload: JsonObject,
 ): string | null {
   const completion = payload.completion;
@@ -323,7 +323,7 @@ function completionOutcomeError(
 }
 
 function terminalCompletionError(
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   payload: JsonObject,
 ): string | null {
   const error = completionOutcomeError(identity, payload);
@@ -336,7 +336,7 @@ function terminalCompletionError(
 }
 
 function nonTerminalCompletionError(
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   payload: JsonObject,
 ): string | null {
   const error = completionOutcomeError(identity, payload);
@@ -353,7 +353,7 @@ function reductionWithTurnOutcome(
   state: TurnSettlementState,
   receipts: SettlementResult<unknown>["receipts"],
   terminalPayload: JsonObject | null,
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
 ): TurnSettlementOutcome {
   validateTurnOutcomeKind(request);
   const result = settlementPure(state, receipts);
@@ -459,7 +459,7 @@ function failedState(
 }
 
 function providerFailure(
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   request: TurnSettlementRequest,
   stepKind: TurnProviderStepKind,
   receipts: SettlementResult<unknown>["receipts"],
@@ -498,7 +498,7 @@ function providerFailure(
 
 function pendingProviderEffects(
   request: TurnSettlementRequest,
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   firstStep: TurnProviderStepKind,
 ): readonly ProviderEffect[] {
   const completed = new Set(request.completed_phases);
@@ -550,7 +550,7 @@ function terminalCloseoutRequestFailure(
 
 function reduceBaseProviderAction(
   request: TurnSettlementRequest,
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   stepKind: TurnProviderStepKind,
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementReduction {
@@ -566,7 +566,7 @@ type TerminalCloseoutReduction =
 
 function reduceTerminalCloseout(
   request: TurnSettlementRequest,
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   receipts: SettlementResult<unknown>["receipts"],
 ): TerminalCloseoutReduction {
   if (!request.terminal_closeout_required) {
@@ -640,7 +640,7 @@ function reduceTerminalCloseout(
 
 function providerExecution(
   request: TurnSettlementRequest,
-  identity: SettlementIdentity,
+  identity: BoundSettlementIdentity,
   firstStep: TurnProviderStepKind,
   effects: readonly ProviderEffect[],
   receipts: SettlementResult<unknown>["receipts"],

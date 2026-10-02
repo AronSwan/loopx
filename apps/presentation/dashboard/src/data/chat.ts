@@ -1,9 +1,11 @@
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
 
 import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
+  type AgentResponse,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -427,6 +429,7 @@ const typedOperationEnvelopeSchema = z.object({
 
 export const typedActionProposalSchema = z.object({
   schema_version: z.literal("loopx_chat_action_proposal_v1"),
+  idempotency_key: z.string().optional(),
   proposal_id: z.string().min(1),
   action_kind: typedActionKindSchema,
   summary: z.string().min(1),
@@ -498,13 +501,13 @@ const typedActionListEnvelopeSchema = z.object({
   proposals: z.array(typedActionProposalSchema),
 });
 
-export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}) {
+export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (filters.contextKind) query.set("context_kind", filters.contextKind);
   if (filters.goalId) query.set("goal_id", filters.goalId);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return typedActionListEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions${suffix}`),
+    await requestJson<unknown>(`/api/actions${suffix}`, { signal }),
   ).proposals;
 }
 
@@ -701,6 +704,11 @@ export type ChatSessionMode = "managed_runtime" | "attached_host";
  */
 export function chatSessionQueuesFollowUps(session: Pick<ChatSessionSummary, "session_mode">) {
   return session.session_mode === "attached_host";
+}
+
+/** Native steering is offered only by the managed Codex adapter; attached follow-ups keep their queue contract. */
+export function chatSessionSupportsSteering(session: Pick<ChatSessionSummary, "session_mode" | "adapter_kind">) {
+  return session.session_mode !== "attached_host" && session.adapter_kind === "codex_app_server";
 }
 
 export type ManagerRuntimeSessionReadback = {
@@ -1027,12 +1035,12 @@ export async function interruptChatTurn(sessionId: string, turnId: string) {
 }
 
 export async function steerChatTurn(sessionId: string, turnId: string, message: string, ingressId: string) {
-  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string }>(
+  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string; created: boolean }>(
     `/api/chat/sessions/${sessionId}/turns/${turnId}/steer`,
     { method: "POST", body: JSON.stringify({ message, client_ingress_id: ingressId }) },
   );
   if (receipt.ok !== true || receipt.session_id !== sessionId || receipt.turn_id !== turnId
-    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered") {
+    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered" || typeof receipt.created !== "boolean") {
     throw new ChatApiError("追加指令的回执不匹配，请保留草稿并检查当前状态。", { error_code: "steer_receipt_mismatch" });
   }
   return receipt;
@@ -1101,16 +1109,34 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
     `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
   );
 }
+export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
+  | "executing" | "validating" | "dispatched" | "unknown";
+type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
-export function delegationStateLabel(row: {status: string; worker_active?: boolean; recovery_required: boolean | null}, zh: boolean) {
-  if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";
-  if (row.status === "accepted") return zh ? "已通过当前验收" : "Currently accepted";
-  if (row.status === "rejected") return zh ? "未通过验收" : "Rejected";
-  if (row.recovery_required) return zh ? "需要恢复原执行" : "Original execution needs recovery";
-  if (row.status === "running" && row.worker_active) return zh ? "执行中" : "Executing";
-  if (row.status === "turn_returned" && row.worker_active) return zh ? "正在验收" : "Validating";
-  if (["prepared", "running", "turn_returned"].includes(row.status)) return zh ? "已派发，等待执行回读" : "Dispatched; awaiting execution readback";
-  return zh ? "状态未知" : "Unknown state";
+// "executing" and "validating" require an active worker observation, never the stored status alone.
+export function delegationState(row: DelegationStateFacts): DelegationState {
+  if (row.status === "unavailable") return "unavailable";
+  if (row.status === "accepted") return "accepted";
+  if (row.status === "rejected") return "rejected";
+  if (row.recovery_required) return "recovery_required";
+  if (row.status === "running" && row.worker_active) return "executing";
+  if (row.status === "turn_returned" && row.worker_active) return "validating";
+  if (["prepared", "running", "turn_returned"].includes(row.status)) return "dispatched";
+  return "unknown";
+}
+const DELEGATION_STATE_LABELS: Record<DelegationState, {zh: string; en: string}> = {
+  unavailable: {zh: "无法核验", en: "Unavailable"},
+  accepted: {zh: "已通过当前验收", en: "Currently accepted"},
+  rejected: {zh: "未通过验收", en: "Rejected"},
+  recovery_required: {zh: "需要恢复原执行", en: "Original execution needs recovery"},
+  executing: {zh: "执行中", en: "Executing"},
+  validating: {zh: "正在验收", en: "Validating"},
+  dispatched: {zh: "已派发，等待执行回读", en: "Dispatched; awaiting execution readback"},
+  unknown: {zh: "状态未知", en: "Unknown state"},
+};
+export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
+  const label = DELEGATION_STATE_LABELS[delegationState(row)];
+  return zh ? label.zh : label.en;
 }
 export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
   return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
@@ -1140,7 +1166,7 @@ export async function sendChatTurnStreaming(
     attachments?: ChatImageAttachmentInput[];
     clientTurnId?: string;
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1168,7 +1194,7 @@ async function receiveChatTurnStreaming(
   eventsUrl: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1188,7 +1214,7 @@ async function receiveChatTurnStreaming(
         }
         if (event.kind === "agent.phase") {
           const label = typeof event.payload.label === "string" ? event.payload.label.trim() : "";
-          if (label) options.onActivity?.(label);
+          if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
           finalResponse = event.payload.response;
@@ -1235,12 +1261,24 @@ async function receiveChatTurnStreaming(
   };
 }
 
+/** Read a stored Turn's terminal outcome without submitting or resuming work.
+ * Failed/interrupted Turns have no completed proposals; transport failures throw
+ * so callers can retry instead of treating an unavailable response as empty.
+ */
+export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
+  let completed: AgentResponse | null = null;
+  await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
+    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+  }, signal);
+  return completed;
+}
+
 export async function resumeChatTurnStreaming(
   sessionId: string,
   turnId: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -2220,6 +2258,11 @@ const usageStatisticsSchema = z.object({
   notice: z.object({ version: z.number(), endpoint: z.string(), policy: z.string() }),
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
+  diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  identity_scope: z.string().optional(), delivery_history: z.array(z.object({
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    status: z.enum(["accepted", "rejected", "unavailable"]),
+  })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {

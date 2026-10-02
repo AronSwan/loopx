@@ -3,6 +3,7 @@
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
 import {setTimeout as delay} from "node:timers/promises";
 import {StringDecoder} from "node:string_decoder";
+import {waitForProcessGroupStop} from "./host_process_group.ts";
 
 export interface HostProcessRequest {
   argv: string[];
@@ -47,7 +48,8 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
 }
 
 export async function runHostProcess(request: HostProcessRequest,
-  output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal): Promise<HostProcessResult> {
+  output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
+  terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -74,7 +76,13 @@ export async function runHostProcess(request: HostProcessRequest,
     // Always signal the owned group, including after the leader's exit.
     const sent = signalGroup(child, "SIGTERM");
     base.group_signal_sent ||= sent;
-    if (sent) { await delay(HOST_PROCESS_TERMINATE_GRACE_MS); signalGroup(child, "SIGKILL"); }
+    if (sent) {
+      await delay(terminationGraceMs);
+      signalGroup(child, "SIGKILL");
+      // KILL delivery is asynchronous. Closed pipes and a reaped leader do not
+      // establish that descendants have stopped executing or writing.
+      await waitForProcessGroupStop(child.pid!);
+    }
   })();
   const stop = (reason: HostProcessResult["outcome"]) => {
     if (outcome === "exited") outcome = reason;

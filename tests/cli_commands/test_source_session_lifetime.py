@@ -408,7 +408,7 @@ def test_registration_reuses_reserved_instance_after_interruption(
     knowledge_root = tmp_path / "atlas"
     registry_path = knowledge_root / ".loopx" / "registry.json"
     state_file = (
-        knowledge_root / ".codex" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
+        knowledge_root / ".loopx" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
     )
     arguments = _registration_arguments(registry_path, knowledge_root)
     original_commit = registry_codec.ProjectRegistryTransaction.commit
@@ -567,7 +567,7 @@ def test_registration_recovers_same_instance_after_process_kill(
     knowledge_root = tmp_path / "atlas"
     registry_path = knowledge_root / ".loopx" / "registry.json"
     state_file = (
-        knowledge_root / ".codex" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
+        knowledge_root / ".loopx" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
     )
     ready = tmp_path / "registration-ready"
     resume = tmp_path / "registration-resume"
@@ -647,7 +647,7 @@ def test_registration_rejects_state_without_its_reservation_journal(
     knowledge_root = tmp_path / "atlas"
     registry_path = knowledge_root / ".loopx" / "registry.json"
     state_file = (
-        knowledge_root / ".codex" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
+        knowledge_root / ".loopx" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
     )
     arguments = _registration_arguments(registry_path, knowledge_root)
     monkeypatch.setattr(
@@ -704,7 +704,7 @@ def test_registration_rejects_a_competing_reserved_operation(
     knowledge_root = tmp_path / "atlas"
     registry_path = knowledge_root / ".loopx" / "registry.json"
     state_file = (
-        knowledge_root / ".codex" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
+        knowledge_root / ".loopx" / "goals" / "atlas-import" / "ACTIVE_GOAL_STATE.md"
     )
     arguments = _registration_arguments(registry_path, knowledge_root)
     original_commit = registry_codec.ProjectRegistryTransaction.commit
