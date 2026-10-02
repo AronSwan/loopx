@@ -102,11 +102,25 @@ def test_attempts_ledger_prefers_turn_journal(tmp_path, capsys):
     for h in ("home-planner", "home-reviewer-1", "home-reviewer-1-r1",
               "home-researcher-1", "home-researcher-1-r1"):  # researcher-1双home=残留
         (root / h).mkdir()
-    led = r2.attempts_ledger(root, 1)
+    led, jr, drift = r2.attempts_ledger(root, 1)
     assert led["planner"] == 1 and led["reviewer-1"] == 2
     assert led["researcher-1"] == 1  # journal赢(home残留2不计)
     out = capsys.readouterr().out
     assert "双源分叉" in out and "researcher-1" in out  # 分叉必须可见
+
+
+def test_attempts_ledger_zero_journal_residue_is_visible(tmp_path, capsys):
+    """杀甲席M4/H2: journal=0而home>0(纯残留方向)必须计入ledger=0且drift
+    输出(0,N)——旧phase级`or homes[ph]`回退恰好把这方向掩死。"""
+    root = tmp_path
+    _mk_journal(root, "planner", "committed", "a" * 64)
+    for h in ("home-reviewer-1", "home-reviewer-1-r1", "home-reviewer-1-r2"):
+        (root / h).mkdir()  # reviewer-1: journal缺席,home残留×3
+    led, jr, drift = r2.attempts_ledger(root, 1)
+    assert led["reviewer-1"] == 0  # 不被home掩(journal权威=0)
+    assert drift["reviewer-1"] == (0, 3)  # 分叉(0,3)可见
+    out = capsys.readouterr().out
+    assert "reviewer-1" in out and "双源分叉" in out
 
 
 def test_attempts_ledger_journal_status_truth(tmp_path):
@@ -118,11 +132,29 @@ def test_attempts_ledger_journal_status_truth(tmp_path):
     assert jr["researcher-2"] == {"attempts": 1, "committed": 0, "failed": 1}
 
 
+def test_journal_unreadable_counted_not_silent(tmp_path):
+    """甲席H1②: journal存在但不可读(损坏/缺lineage)≠无journal——计数落
+    _unreadable,全坏时才整根降级home。"""
+    root = tmp_path
+    td = root / "runtime" / "goals" / "adaptive-research" / "turns"
+    td.mkdir(parents=True)
+    (td / (("f" * 64) + ".json")).write_text("{NOT VALID", encoding="utf-8")
+    _mk_journal(root, "planner", "committed", "a" * 64)
+    jr = r2._journal_attempts(root)
+    assert jr["_unreadable"] == 1 and jr["planner"]["attempts"] == 1
+    root2 = tmp_path / "all_bad"
+    td2 = root2 / "runtime" / "goals" / "adaptive-research" / "turns"
+    td2.mkdir(parents=True)
+    (td2 / (("f" * 64) + ".json")).write_text("{NOT VALID", encoding="utf-8")
+    assert r2._journal_attempts(root2) is None  # 全坏→降级home
+
+
 def test_attempts_ledger_falls_back_to_homes(tmp_path):
     """老根无runtime/goals→回退home计数(与既有行为兼容)。"""
     for h in ("home-planner", "home-reviewer-2", "home-reviewer-2-r1"):
         (tmp_path / h).mkdir()
-    led = r2.attempts_ledger(tmp_path, 1)
+    led, jr, drift = r2.attempts_ledger(tmp_path, 1)
+    assert jr is None
     assert led["planner"] == 1 and led["reviewer-2"] == 2 and led["architect"] == 0
 
 
@@ -146,16 +178,26 @@ def test_gate_report_carries_wilson_and_source(tmp_path):
     assert w["n"] >= w["k"] >= 0 and 0.0 <= w["lo"] <= w["hi"] <= 1.0
 
 
+def test_gate_source_is_turn_journal_when_journal_present(tmp_path):
+    """杀甲席M5: 有journal的根跑gate()必须标attempts_source=turn_journal
+    (此前无任何测试断言turn_journal源)。"""
+    root = make_root(tmp_path)
+    _mk_journal(root, "planner", "committed", "a" * 64)
+    assert r2.gate(root, include_final=True) is True
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep["attempts_source"] == "turn_journal"
+    assert "attempts_drift" in rep and "journal_unreadable" in rep
+
+
 def test_r13_real_journal_regression():
     """真根回归(r13): journal与home完全吻合(reviewer×4/finalizer×1),
     attempts_source=turn_journal——防夹具造得好但真根读不对。"""
     root = Path(__file__).parent / ".local" / "research13-run"
     if not (root / "runtime" / "goals").exists():
         pytest.skip("r13运行根不在本机")
-    led = r2.attempts_ledger(root, 3)
+    led, jr, drift = r2.attempts_ledger(root, 3)
     assert led["reviewer-1"] == 4 and led["reviewer-2"] == 4
     assert led["planner"] == led["architect"] == led["finalizer"] == 1
-    jr = r2._journal_attempts(root)
     assert jr["reviewer-1"]["failed"] == 3 and jr["reviewer-1"]["committed"] == 1
 
 
@@ -370,7 +412,8 @@ def test_auto_final_conclusion_flows_to_manager_chat(tmp_path, monkeypatch):
                         lambda r, ph, sub=None: {"status": "committed"})
     monkeypatch.setattr(r2, "gate_with_repair", lambda r, include_final: True)
     monkeypatch.setattr(r2, "attempts_ledger",
-                        lambda r, n: {"planner": 1, "researcher-1": 1, "researcher-2": 2})
+                        lambda r, n: ({"planner": 1, "researcher-1": 1,
+                                       "researcher-2": 2}, None, {}))
     calls = {"lookup": [], "append": []}
 
     class FakeStore:
@@ -666,7 +709,7 @@ def test_attempts_ledger_counts_exact_home_dirs(tmp_path):
               "home-researcher-1", "home-researcher-1-r1", "home-researcher-1-r2",
               "home-reviewer-2"):
         (tmp_path / d).mkdir()
-    led = r2.attempts_ledger(tmp_path, 2)
+    led, _jr, _drift = r2.attempts_ledger(tmp_path, 2)
     assert led["planner"] == 2 and led["architect"] == 1
     assert led["researcher-1"] == 3 and led["researcher-2"] == 0
     assert led["reviewer-1"] == 0 and led["reviewer-2"] == 1

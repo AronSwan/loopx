@@ -258,23 +258,29 @@ def _journal_attempts(root):
     SAVI席洞察5: home-*目录计数是被重跑残留污染的粗化观测)。
     runtime/goals/*/turns/*.json → {agent_id: {attempts/committed/failed}};
     receipt.lineage.agent_id是turn→棒映射; 无turns目录→None(调用方回退home计数)。
+    解析异常(损坏JSON/缺lineage)计数落_unreadable——journal存在但不可读与
+    不存在journal是两回事(甲席H1②: 静默降级=证据根失明)。
     r13实测: reviewer-1×4(failed3+committed1)与home计数吻合;researcher-1的
     artifact_first案例(结算failed但工件采信)被journal如实记状态——两源分叉点。"""
-    out = {}
+    out = {"_unreadable": 0}
     for tdir in (root / "runtime" / "goals").glob("*/turns"):
         for f in tdir.glob("*.json"):
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
             except Exception:
-                continue  # 损坏journal不计入,不炸台账
+                out["_unreadable"] += 1
+                continue
             lin = ((d.get("receipt") or {}).get("lineage") or {})
             aid = lin.get("agent_id")
             if not aid:
+                out["_unreadable"] += 1
                 continue
             e = out.setdefault(aid, {"attempts": 0, "committed": 0, "failed": 0})
             e["attempts"] += 1
             e["committed" if d.get("status") == "committed" else "failed"] += 1
-    return out or None
+    if not (set(out) - {"_unreadable"}):
+        return None
+    return out
 
 
 def _wilson(k, n, z=1.96):
@@ -292,8 +298,13 @@ def _wilson(k, n, z=1.96):
 def attempts_ledger(root, n):
     """pass^k台账(P4;业界已证单次75%→3次全过仅42%,"最终全绿"可能掩盖"重试才绿"):
     每棒实际起跑次数。**权威=turn journal**(2026-10-02迁移,SAVI前提+C-1清账);
-    回退=home-*目录计数(老运行根/缺journal——与next_instance同源)。
-    journal可用时双源对账: 不一致=重跑残留污染信号,打印不静默。"""
+    回退=home-*目录计数(**仅当journal完全不可读**——老运行根/缺journal)。
+    journal可读时按棒直取journal真值,home只作对账: **两源各自比对**——
+    journal=0而home>0(纯残留方向)与journal>0而home≠它(漏记/漂移)都是分叉,
+    打印信号不静默(甲席H2: 原phase级`or homes[ph]`回退恰好把第一方向掩死,
+    且掩蔽数还会流进drain回传给主人的'首试X/Y棒')。
+    返回(ledger, journal数据或None, drift字典)——调用方勿再独立重读journal
+    (甲席H5③: gate()两次读之间journal变化会产出内部自相矛盾的report)。"""
     phases = (["planner", "architect", "reviewer-1", "reviewer-2", "finalizer"]
               + [f"researcher-{k}" for k in range(1, n + 1)])
     jr = _journal_attempts(root)
@@ -303,12 +314,12 @@ def attempts_ledger(root, n):
         exact = {x for x in names if x == f"home-{ph}" or re.fullmatch(rf"home-{ph}-r\d+", x)}
         homes[ph] = len(exact)
     if jr is None:
-        return homes
-    ledger = {ph: jr.get(ph, {}).get("attempts", 0) or homes[ph] for ph in phases}
+        return homes, None, {}
+    ledger = {ph: jr.get(ph, {}).get("attempts", 0) for ph in phases}
     drift = {ph: (ledger[ph], homes[ph]) for ph in phases if ledger[ph] != homes[ph]}
     if drift:
         print(f"!! 台账双源分叉(journal/home,残留或漏记信号): {drift}", flush=True)
-    return ledger
+    return ledger, jr, drift
 
 
 # 同质化告警阈值(单一常量,门禁打印与告警共用——审计批三#1: 曾两处0.7脱钩)
@@ -910,15 +921,16 @@ def gate(root, include_final=True):
                 "终稿须引用review-1和review-2(或评审A/B)——finalizer不可无视评审" if not refs_both else "")
             chk("final-plan.md 含评审处理", has_handling,
                 "终稿须含评审处理说明(采纳/驳回逐条)" if not has_handling else "")
-    led = attempts_ledger(root, plan["N"])
+    led, jr, drift = attempts_ledger(root, plan["N"])
     first = sorted(p for p, a in led.items() if a == 1)
     live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
     lo, hi = _wilson(len(first), len(live))
-    jr = _journal_attempts(root)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
               "attempts": led, "first_pass": first,
               "attempts_source": "turn_journal" if jr else "home_dirs",
+              "attempts_drift": drift,  # 甲席自由发现: 分叉信号只print=不可持久审计→落盘
+              "journal_unreadable": (jr or {}).get("_unreadable", 0),  # 甲席H1②: journal存在但不可读≠无journal
               "passk_wilson95": {"k": len(first), "n": len(live), "lo": lo, "hi": hi},
               "digests": _artifact_digests(root)}
     write(root / "gate-report.json", report)
@@ -1313,7 +1325,7 @@ def auto(root):
                                         agent_id=MANAGER_ENDPOINT_INDIVIDUAL))
         if sess is None:
             raise RuntimeError("无管家会话可回流(latest_session空)")
-        led = attempts_ledger(root, plan["N"])
+        led, _jr_unused, _drift_unused = attempts_ledger(root, plan["N"])
         first_n = sum(1 for a in led.values() if a == 1)  # 与gate()首试口径一致
         live_n = sum(1 for a in led.values() if a > 0)  # 0次棒不进分母(门六#4)
         _reply = (f"研究终案已产出并过终局门禁。终稿: agents/finalizer/outputs/"
