@@ -1013,14 +1013,29 @@ def _write_repair_receipt(root, rounds, final_ok):
     """修复环变更指纹回执(学底座change_quality: scope.py指纹+receipt.py stale语义——
     质量判定只对其被计算时的精确内容有效,内容一变旧判定即stale)。每轮记:
     被修工件修复前后sha256(证明'修复真动了工件';没变却过验=疑点,留给审计)
-    +下游陈旧信号(上游变了而下游本轮未修——LoopsBench obligation retention;
-    full re-gate本就会重验全部工件,此字段是审计信号不是拦截)。
-    无修复轮=底座no_changes/not_required语义,不落回执。"""
-    if not rounds:
-        return
-    write(root / "repair-receipt.json", {
+    +下游陈旧信号(前向stale: 上游变了而下游本轮未修,审计信号非拦截。
+    名分考据(LoopsBench席复核): LoopsBench的obligation retention是反向保持——
+    已过闸单元的测试此后每层持续强制作回归,论文不做前向失效传播;
+    与该词同构的是我们的full re-gate持续全量重验,不是本信号)。
+    语义(甲席审计F1根修): auto()中检/终检双调用同根——轮次跨调用累计(不覆写
+    中检历史),轮号在写出时统一重编号;失败路径必落盘('无从修复'≠'无需修复':
+    终检结构性失败时旧回执的final_gate_ok=True必须被翻成False,否则回执在审计
+    最需要的场景给出相反证词);仅当全程无修复轮且过验才不落(底座no_changes语义)。"""
+    path = root / "repair-receipt.json"
+    prior = []
+    if path.exists():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8")).get("rounds", [])
+        except Exception:
+            prior = []  # 旧回执损坏不阻断门禁——历史作废,本轮重起
+    all_rounds = prior + rounds
+    if not all_rounds and final_ok:
+        return  # 全程无修复轮且过验=no_changes,不落回执
+    for i, entry in enumerate(all_rounds, 1):
+        entry["round"] = i
+    write(path, {
         "schema_version": "repair_receipt_v0",
-        "rounds": rounds,
+        "rounds": all_rounds,
         "final_gate_ok": final_ok})
 
 

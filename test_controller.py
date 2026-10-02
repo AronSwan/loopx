@@ -6,6 +6,7 @@ P0-2 _failing_phases映射  P0-7 run_phase签名与委托(第10坑)  P0-8 next_i
 P0-1 gate_with_repair三态(救回/有界/结构性不修)  P0-3..6 ensure_phase四语义
 P1-9 auto阶段顺序与双门禁序列  P1-10 stage_route staging
 """
+import hashlib
 import inspect
 import json
 import sys
@@ -163,6 +164,74 @@ def test_no_repair_no_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(r2, "run_phase", lambda *a, **k: pytest.fail("不该有修复轮"))
     assert r2.gate_with_repair(root, include_final=True) is True
     assert not (root / "repair-receipt.json").exists()
+
+
+# ==== 甲席审计(2026-10-02)存活变异杀手+F1回归 ====
+def test_receipt_stale_excludes_repaired_artifact(tmp_path, monkeypatch):
+    """杀变异②: 同轮修researcher+architect——stale不得含被修工件自身(减除逻辑钉死)。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    (root / "agents/architect/outputs/architecture.md").write_text("太短", encoding="utf-8")
+
+    def fake_run_phase(r, ph, *a, **k):
+        if ph == "architect":
+            (r / "agents/architect/outputs/architecture.md").write_text(
+                "# 测试课题架构\n" + FILLER * 8 + GOOD_URLS + "\n", encoding="utf-8")
+        else:
+            (r / "agents/researcher-2/outputs/research-2.md").write_text(
+                "修复稿 " + GOOD_URLS * 5 + FILLER, encoding="utf-8")
+        return {"status": "committed"}
+    monkeypatch.setattr(r2, "run_phase", fake_run_phase)
+    assert r2.gate_with_repair(root, include_final=True) is True
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert len(rc["rounds"]) == 1
+    fixed = {rep["phase"] for rep in rc["rounds"][0]["repairs"]}
+    assert fixed == {"researcher-2", "architect"}
+    # researcher→architecture边存在,但architecture本轮也被修→必须被减除;只剩final-plan
+    assert rc["rounds"][0]["downstream_stale_signal"] == ["agents/finalizer/outputs/final-plan.md"]
+
+
+def test_receipt_before_hash_binds_pre_repair_content(tmp_path, monkeypatch):
+    """杀变异④: before_sha256必须绑定修复前真实内容哈希(before/after写反必死)。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    fixed_body = "修复稿 " + GOOD_URLS * 5 + FILLER
+    monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: (
+        (r / "agents/researcher-2/outputs/research-2.md").write_text(
+            fixed_body, encoding="utf-8"), {"status": "committed"})[1])
+    assert r2.gate_with_repair(root, include_final=True) is True
+    rep = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))["rounds"][0]["repairs"][0]
+    assert rep["before_sha256"] == hashlib.sha256("太短".encode("utf-8")).hexdigest()
+    assert rep["after_sha256"] == hashlib.sha256(fixed_body.encode("utf-8")).hexdigest()
+
+
+def test_receipt_mid_gate_stale_excludes_final(tmp_path, monkeypatch):
+    """杀变异⑥: include_final=False(中检)修复轮——stale不得含final-plan.md。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: (
+        (r / "agents/researcher-2/outputs/research-2.md").write_text(
+            "修复稿 " + GOOD_URLS * 5 + FILLER, encoding="utf-8"), {"status": "committed"})[1])
+    assert r2.gate_with_repair(root, include_final=False) is True
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["rounds"][0]["downstream_stale_signal"] == ["agents/architect/outputs/architecture.md"]
+
+
+def test_receipt_cross_call_structural_failure_flips_verdict(tmp_path, monkeypatch):
+    """F1回归: 中检修复留True回执→终检结构性失败(无从修复)——回执必须翻成False
+    且累计保留中检轮次(不覆写历史),'无从修复'≠'无需修复'。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: (
+        (r / "agents/researcher-2/outputs/research-2.md").write_text(
+            "修复稿 " + GOOD_URLS * 5 + FILLER, encoding="utf-8"), {"status": "committed"})[1])
+    assert r2.gate_with_repair(root, include_final=False) is True  # 中检: 修复一轮过
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["final_gate_ok"] is True and len(rc["rounds"]) == 1
+    # 终检: 制造盲评隔离泄漏=结构性失败(_failing_phases=[])
+    (root / "agents/reviewer-1/inputs").mkdir(parents=True)
+    (root / "agents/reviewer-1/inputs/review-2.md").write_text("x", encoding="utf-8")
+    assert r2.gate_with_repair(root, include_final=True) is False
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["final_gate_ok"] is False  # 旧True必须被翻成False
+    assert len(rc["rounds"]) == 1  # 中检历史保留,终检零轮
+    assert rc["rounds"][0]["round"] == 1
 
 
 # ==== P0-3..6 ensure_phase ====
