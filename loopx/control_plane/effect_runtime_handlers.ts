@@ -31,7 +31,7 @@ import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
 import {inspectLocalGoalAcceptance, commitLocalGoalAcceptance,
   commitLocalGoalAcceptanceVerification} from "./goals/acceptance_authority.ts";
 import {planLegacyHandoffMode} from "./coordination/handoff_mode_legacy_plan.ts";
-import {setLocalHandoffMode} from "./coordination/handoff_mode_runtime.ts";
+import {setLocalHandoffMode, migrateLocalHandoffMode} from "./coordination/handoff_mode_runtime.ts";
 import {projectOwnershipObservation} from "./coordination/ownership_observation.ts";
 import {observeLocalCoordinationOwnership} from "./coordination/local_authority_runtime.ts";
 import {evaluateTaskLeaseOwnerEligibility} from "./work_items/task_lease_eligibility.ts";
@@ -617,6 +617,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.monitor_poll", pollLocalCoordinationMonitor],
     ["coordination.handoff_mode.legacy_plan", planLegacyHandoffMode],
     ["coordination.local_authority.handoff_mode_set", setLocalHandoffMode],
+    ["coordination.local_authority.handoff_mode_migrate", migrateLocalHandoffMode],
     ["coordination.local_authority.todo_terminal", terminalLifecycleLocalCoordinationTodo],
     ["coordination.local_authority.todo_archive", archiveLocalCoordinationTodos],
     ["coordination.local_authority.todo_archive_ack", acknowledgeLocalCoordinationTodoArchive],

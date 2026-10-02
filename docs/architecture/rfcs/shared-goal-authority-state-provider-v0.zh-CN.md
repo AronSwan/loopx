@@ -34,6 +34,18 @@ drain 不再计作新待办 PR。此后 SQLite 读取证明优化
 [删除清单、工程窗口、本机证据及剩余工作](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)
 替代旧记录的当前数量估算，旧执行证据仍按历史保留。
 
+**所有权精简阶段（2026-10-01）。** R5/T4 将存储晋升与策略迁移分开：新 CLI
+promote 默认保留策略，正常策略目标收敛为 soft/hard。canonical 策略迁移复用晋升
+规则、完整归档和 command receipt owner，用一笔 CAS 保留 assignment、lease
+范围／计数器及完整历史。准入允许 standalone lease 的额外 scope，但保留每项
+任务要求。[操作与恢复](../../reference/handoff-mode.md)。
+
+下一阶段先验证 Host acquire／renew／release／阻塞结算，再选择默认：明确单执行者
+用 soft，本机并行或云端共享用 hard。本批不改变创建默认。随后逐 Goal 备份迁移
+legacy、证明最后调用方退出，并在同批删除对应 legacy 执行／Python 业务分支；
+旧 reader 只留在迁移／恢复边界。该阶段不关闭 SQLite D2、默认 onboarding、D1–D3
+或 PostgreSQL 部署，也不另建迁移框架。
+
 ## Todo 事件路径退役（2026-09-25）
 
 PR #5054 将原先的事件 writer 捕获方案改为删除这条实验性 Todo 来源。
@@ -1913,11 +1925,12 @@ decision authority，并且 caller-visible parity 与 rollback 能在同一有�
    reader。对应 PR 必须提供字段 inventory、producer/reader/writer 与静态引用调研、
    历史和外部兼容性结论、migration/rollback，以及行为等价证明；maintainer 必须在 RFC
    decision log 或 PR review 中对点名字段显式批准。没有发现 consumer 不等于批准删除。*
-9. v0 promotion 是否只覆盖 `hard_lease` goal？*已决议：向后兼容的默认路径仍要求
-   源端已资格化为 `hard_lease`。受评审的 operator 可以显式选择 `preserve`，在不改变
-   policy 的情况下 canonicalize `legacy`／`soft_claim` Goal；也可以显式选择
-   `hard_lease`，在 fenced cutover 内完成唯一获支持的 claim-preserving 升级。该路径
-   不伪造 lease；其他 mode 变化继续使用附录 B 的静止规则。*
+9. promotion 必须要求 `hard_lease` 吗？*已决议（2026-10-01）：新 CLI 预览默认
+   `preserve`，存储晋升不隐式改变所有权策略；显式 hard 才在 fenced cutover 内审核
+   保留 claim 的升级。旧 v0 hard-only 保存计划保留原决策。已 canonical 的 Goal
+   通过不可变评审计划、完整归档备份核验和 provider CAS，复用同一 TS 所有权规则；
+   普通 set 仍遵守附录 B 静止规则，不伪造 lease。新策略目标只有 soft/hard；legacy
+   只作为升级来源、原回执恢复输入，直到最后执行调用方退役。*
 10. provider-first read flip 后，Markdown 与 lease 文件成为投影，kernel 禁止回退。
     哪些数据进入 head，兼容视图如何渲染？*拟议答案：canonical Todo/lease manifest
     中的每个字段都持久化在 head，包括 monitor、dependency、resume、decision、

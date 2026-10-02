@@ -49,6 +49,22 @@ SQLite reuse logical archives for cross-provider isolated recovery.
 This adds no provider/default promotion and retires no Python business owner.
 [Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
 
+**Ownership simplification stage (2026-10-01).** R5/T4 separate storage
+promotion from policy migration. Fresh CLI promotion preserves policy; normal
+policy targets are soft/hard. Canonical policy migration reuses the promotion
+rules, complete archive and command receipt owner, preserving assignments,
+lease grants/counters and full history in one CAS. The same admission accepts
+standalone leases with additional scopes while retaining every named task
+requirement. See [operation and recovery](../../reference/handoff-mode.md).
+
+Next qualify Host acquire/renew/release/blocked settlement before choosing
+defaults: explicit single executor→soft; local parallel or shared cloud work→hard.
+Creation defaults remain unchanged here. Then back up and migrate remaining
+legacy Goals, prove last callers, and delete their legacy execution/Python
+business branches together. Keep historical readers only in migration/recovery.
+This stage does not close SQLite D2, default onboarding, D1–D3 or PostgreSQL
+deployment, and creates no parallel migration framework.
+
 ## Todo event retirement (2026-09-25)
 
 PR #5054 replaces its original event-writer capture proposal with removal of
@@ -2439,13 +2455,15 @@ remain reviewable in the same bounded slice.
    preserved. The maintainer must approve the named removal explicitly in the
    RFC decision log or PR review; absence of a discovered consumer is not
    approval.*
-9. Does v0 promotion cover only `hard_lease` goals? *Resolved answer: the
-   backward-compatible default still requires a qualified `hard_lease` source.
-   A reviewed operator may explicitly choose `preserve` to canonicalize a
-   `legacy` or `soft_claim` Goal without changing its policy, or `hard_lease` to
-   perform the one supported claim-preserving upgrade inside the fenced
-   cutover. No lease is invented, and every other mode change still uses the
-   Appendix B quiescence rule.*
+9. Does promotion require `hard_lease`? *Resolved answer (2026-10-01): fresh CLI
+   previews default to `preserve`; storage promotion does not implicitly change
+   ownership policy. Explicit `hard_lease` reviews a claim-preserving upgrade
+   in the fenced cutover. Historical saved v0 hard-only plans keep their original
+   decision. Already canonical Goals use the same typed ownership rules through
+   an immutable reviewed plan, verified complete archive backup and provider CAS;
+   ordinary `set` keeps Appendix B quiescence. No lease is invented. New policy
+   targets are soft/hard; legacy remains an upgrade source and original-receipt
+   input until its last execution caller is retired.*
 10. After the provider-first read flip, Markdown and lease files are
     projections and the kernel forbids fallback to them. Which data belongs in
     the head, and how are compatibility views rendered? *Proposed answer:
