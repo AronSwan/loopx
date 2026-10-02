@@ -282,9 +282,11 @@ def test_auto_orders_phases_and_gates(tmp_path, monkeypatch):
 def test_auto_final_conclusion_flows_to_manager_chat(tmp_path, monkeypatch):
     """Top-5#1回传语义钉死(12-2-3三层真相回归): 底座drain()投递runtime/replies/*
     (我们DAG不产→直调=空转)且external_sender须可调用(传字符串必TypeError)——
-    正确原语=append_message;会话按channel='manager'定位;稳定message_id幂等;
-    首试计数与gate口径一致(a==1分子/a>0分母)。r13根真跑已双验(落盘+重跑幂等)。"""
-    import loopx.chat_store as cs
+    正确原语=append_message;会话按底座常量定位(channel='manager');message_id按
+    结论文本派生(甲席B4: 固定ID=首跑锁死,同root第二场结论被首条查重吞掉);
+    首试计数与gate口径一致(a==1分子/a>0分母);回传状态落drain-return.json
+    (甲席B6: 只写stdout的吞噬面=假修复温床)。r13根真跑已双验(落盘+重跑幂等)。"""
+    import loopx.chat_manager as cm
     root = make_root(tmp_path, n=2)
     monkeypatch.setattr(r2, "ensure_phase",
                         lambda r, ph, sub=None: {"status": "committed"})
@@ -302,13 +304,72 @@ def test_auto_final_conclusion_flows_to_manager_chat(tmp_path, monkeypatch):
             calls["append"].append((sid, role, text, kw.get("message_id"), kw.get("origin")))
             return {"message_id": kw.get("message_id")}
 
-    monkeypatch.setattr(cs, "ChatSessionStore", lambda runtime: FakeStore())
+    monkeypatch.setattr(r2, "ChatSessionStore", lambda runtime: FakeStore())
     r2.auto(root)
-    assert calls["lookup"][0] == ("loopx-manager", "codex", "manager")  # 首选显式channel
+    assert calls["lookup"][0][2] == "manager"  # 首选显式channel(常量来自底座)
     sid, role, text, mid, origin = calls["append"][0]
-    assert (sid, role, mid, origin) == ("s1", "agent", "handoff.final-plan",
-                                        "manager_followup")
+    assert (sid, role, origin) == ("s1", "agent", "manager_followup")
+    # message_id按结论文本派生: 前缀+12位hex,同文本稳定/新文本变ID(非固定ID锁死)
+    import re as _re
+    assert _re.fullmatch(r"handoff\.final-plan\.[0-9a-f]{12}", mid), mid
     assert "首试2/3棒" in text  # 2个a==1 / 3个a>0,与gate首试口径一致
+    dr = json.loads((root / "drain-return.json").read_text(encoding="utf-8"))
+    assert dr["status"] == "delivered" and dr["message_id"] == mid
+
+
+def test_drain_failure_lands_on_disk_not_stdout_only(tmp_path, monkeypatch):
+    """甲席B6: 回传失败不得只活在stdout(吞噬面=假修复温床)——drain-return.json
+    必落skipped+错误原文。"""
+    class BoomStore:
+        def latest_session(self, **kw):
+            return None  # 触发RuntimeError路径
+
+    root = make_root(tmp_path, n=2)
+    monkeypatch.setattr(r2, "ensure_phase", lambda r, ph, sub=None: {"status": "committed"})
+    monkeypatch.setattr(r2, "gate_with_repair", lambda r, include_final: True)
+    monkeypatch.setattr(r2, "ChatSessionStore", lambda runtime: BoomStore())
+    r2.auto(root)
+    dr = json.loads((root / "drain-return.json").read_text(encoding="utf-8"))
+    assert dr["status"] == "skipped" and "RuntimeError" in dr["error"]
+
+
+def test_receipt_zero_round_structural_failure_still_writes(tmp_path, monkeypatch):
+    """杀甲席变异M3: 全新根首gate即结构性失败(零修复轮)——'失败必落盘'必须覆盖
+    此路径(rounds=[]+final_gate_ok=False),否则零轮失败无处留痕。"""
+    root = make_root(tmp_path)
+    (root / "agents/reviewer-1/inputs").mkdir(parents=True)
+    (root / "agents/reviewer-1/inputs/review-2.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(r2, "run_phase", lambda *a, **k: pytest.fail("结构性失败不得重跑"))
+    assert r2.gate_with_repair(root, include_final=True) is False
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["rounds"] == [] and rc["final_gate_ok"] is False
+
+
+def test_receipt_cross_call_renumber_unique_with_provenance(tmp_path, monkeypatch):
+    """杀甲席变异M4+B9: 跨调用(中检修researcher→终检修finalizer)——轮号必须全局
+    唯一重编号[1,2](不得[1,1]重复),且每轮带stage/at出处(混史可辨)。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    good_final = (root / "agents/finalizer/outputs/final-plan.md").read_text(encoding="utf-8")
+
+    def fake_run_phase(r, ph, *a, **k):
+        if ph == "researcher-2":
+            (r / "agents/researcher-2/outputs/research-2.md").write_text(
+                "修复稿 " + GOOD_URLS * 5 + FILLER, encoding="utf-8")
+        else:  # finalizer
+            (r / "agents/finalizer/outputs/final-plan.md").write_text(
+                good_final + "\n(终稿修订)\n", encoding="utf-8")
+        return {"status": "committed"}
+    monkeypatch.setattr(r2, "run_phase", fake_run_phase)
+
+    assert r2.gate_with_repair(root, include_final=False) is True  # 中检修researcher-2
+    # 人为弄坏终稿→终检走修复轮
+    (root / "agents/finalizer/outputs/final-plan.md").write_text("太短", encoding="utf-8")
+    assert r2.gate_with_repair(root, include_final=True) is True
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    rounds = rc["rounds"]
+    assert [r_["round"] for r_ in rounds] == [1, 2]  # 全局唯一重编号(M4)
+    assert [r_["stage"] for r_ in rounds] == ["mid", "final"]  # 出处可辨(B9)
+    assert all(r_.get("at") for r_ in rounds)
 
 
 # ==== P1-10 stage_route staging ====

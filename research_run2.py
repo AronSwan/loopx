@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loopx.capabilities.manager_context import deliver
@@ -775,10 +776,12 @@ def read_plan(root):
 
 def _artifact_digests(root):
     """全工件内容指纹(gate-report digests与修复回执共用)。键统一POSIX分隔——
-    Windows下str(relative_to)出反斜杠,跨快照比对会因键风不一致全miss。"""
+    Windows下str(relative_to)出反斜杠,跨快照比对会因键风不一致全miss。
+    sorted: set迭代序跨进程随机(甲席审计F1)——不排序则零内容变化的auto复跑
+    也改写gate-report字节,证据根的字节可复现性结构性丧失。"""
     return {pp.relative_to(root).as_posix(): hashlib.sha256(pp.read_bytes()).hexdigest()
-            for pp in set(root.glob("agents/*/outputs/*.md"))
-            | set(root.glob("agents/planner/outputs/plan.json"))}
+            for pp in sorted(set(root.glob("agents/*/outputs/*.md"))
+                             | set(root.glob("agents/planner/outputs/plan.json")))}
 
 
 def gate(root, include_final=True):
@@ -1098,7 +1101,8 @@ def gate_with_repair(root, include_final, max_rounds=2):
             if include_final:
                 stale.add("agents/finalizer/outputs/final-plan.md")
         receipt_rounds.append({
-            "round": rnd + 1,
+            "stage": "final" if include_final else "mid",  # provenance(甲席B9/F3)
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "repairs": repairs,
             "downstream_stale_signal": sorted(stale - {r["artifact"] for r in repairs})})
     _write_repair_receipt(root, receipt_rounds, final_ok=False)
@@ -1239,16 +1243,25 @@ def auto(root):
     # 回执机器),我们的DAG不产这些文件——直调drain=空转0投递;其external_sender须为
     # 可调用传输器(roundtrip.py:792-798直接调用),传字符串必TypeError(r12起两轮
     # "修复"只对了kwarg名没对类型)。正确原语=drain内部同款store.append_message
-    # (roundtrip.py:654/966);message_id稳定→幂等,auto重跑不重复回流。
+    # (roundtrip.py:654/966);message_id按结论文本派生(甲席B4: 固定ID使同root第二场
+    # 的不同结论被首条查重吞掉=幂等做成首跑锁死;文本哈希ID=同结论幂等/新结论新条目,
+    # 与底座"按请求派生ID"同哲学)。失败也落drain-return.json(甲席B6: 只写stdout
+    # 的吞噬面正是r12两轮假修复的存活温床)。
+    _drain_ret = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "status": "skipped", "error": "auto未到达回传段"}
     try:
-        from loopx.chat_store import ChatSessionStore
+        from loopx.chat_manager import (MANAGER_AGENT_GOAL_ID,
+                                        MANAGER_CHANNEL_ID,
+                                        MANAGER_ENDPOINT_INDIVIDUAL)
         store = ChatSessionStore(root / "runtime")
-        # 会话定位(r13实测): 管家会话channel_id='manager'非'goal.*',按goal推导
-        # 必空手——显式传channel,goal/channel两路回退防下场次命名漂移
-        sess = (store.latest_session(goal_id="loopx-manager", agent_id="codex",
-                                     channel_id="manager")
-                or store.latest_session(goal_id="loopx-manager", agent_id="codex")
-                or store.latest_session(goal_id=GOAL, agent_id="codex"))
+        # 常量来自底座(chat_manager.py:57/59/195),非字面量重复(甲席B1);三级回退
+        # 删GOAL级(甲席B2: channel推导goal.adaptive-research全系统无producer,
+        # 命中即错向——装饰性防御不如显式两级)
+        sess = (store.latest_session(goal_id=MANAGER_AGENT_GOAL_ID,
+                                     agent_id=MANAGER_ENDPOINT_INDIVIDUAL,
+                                     channel_id=MANAGER_CHANNEL_ID)
+                or store.latest_session(goal_id=MANAGER_AGENT_GOAL_ID,
+                                        agent_id=MANAGER_ENDPOINT_INDIVIDUAL))
         if sess is None:
             raise RuntimeError("无管家会话可回流(latest_session空)")
         led = attempts_ledger(root, plan["N"])
@@ -1257,13 +1270,20 @@ def auto(root):
         _reply = (f"研究终案已产出并过终局门禁。终稿: agents/finalizer/outputs/"
                   f"final-plan.md(交付链{6 + plan['N']}件齐,首试{first_n}/{live_n}棒)。"
                   f"详见 gate-report.json。")
+        _mid = "handoff.final-plan." + hashlib.sha256(_reply.encode("utf-8")).hexdigest()[:12]
         store.append_message(sess["session_id"], role="agent", text=_reply,
-                             origin="manager_followup",
-                             message_id="handoff.final-plan")
+                             origin="manager_followup", message_id=_mid)
+        _drain_ret = {"at": _drain_ret["at"], "status": "delivered",
+                      "session_id": sess["session_id"], "message_id": _mid,
+                      "first_pass": f"{first_n}/{live_n}"}
         print(f">>> drain回传: 终稿结论已回流管家对话"
               f"(session={sess['session_id'][:8]},首试{first_n}/{live_n})", flush=True)
     except Exception as e:
+        _drain_ret = {"at": _drain_ret["at"], "status": "skipped",
+                      "error": f"{type(e).__name__}: {str(e)[:120]}"}
         print(f">>> drain回传跳过({type(e).__name__}: {str(e)[:80]})——不影响交付", flush=True)
+    finally:
+        write(root / "drain-return.json", _drain_ret)  # 回传状态落盘,不再只活在stdout
 
     # Top-5 #5: tokenUsage采集(数据席: 数据藏session_projcache,入gate-report)
     try:
