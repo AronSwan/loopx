@@ -196,3 +196,15 @@ def test_long_readback_uses_existing_lossless_lark_transport(monkeypatch):
     body = "\n".join(card["elements"][0]["text"]["content"] for card in cards)
     assert result["plan_id"] in body and REF in body
     assert "Evidence completeness is unverified" in body and "truncated" not in body
+
+
+def test_pinned_paths_keep_case_sensitive_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(provider, "_read", reader)
+    refs = [REF, REF.replace("README.md", "readme.md")]
+    p = plan(refs)
+    receipt = provider.execute_public_github(p)["receipt"]
+    accepted = admission(p, receipt)
+    start_research(tmp_path, question=p["request"]["objective"], max_sources=8, max_subquestions=4)
+    result = readback(p, receipt, accepted, project=tmp_path, execute=True)
+    assert result["downstream_source_refs"] == refs
+    assert result["retirement"]["retire_ready"] is True

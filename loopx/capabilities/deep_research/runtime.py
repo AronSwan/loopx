@@ -263,7 +263,12 @@ def add_source(
             raise ValueError("--url-or-path must be non-empty")
         normalized = _normalize_source_ref(url_or_path)
         for source in state["sources"]:
-            if _normalize_source_ref(str(source["url_or_path"])) == normalized:
+            same_source = (
+                str(source["url_or_path"]).strip().rstrip("/") == url_or_path.rstrip("/")
+                if external_evidence is not None else
+                _normalize_source_ref(str(source["url_or_path"])) == normalized
+            )
+            if same_source:
                 if (external_evidence is not None and source.get("external_evidence") == external_evidence
                     and [claim["text"] for claim in state["claims"] if claim["id"] in source["claims"]]
                     == [str(claim.get("text", "")).strip() for claim in claims]):
