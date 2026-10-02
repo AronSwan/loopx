@@ -560,6 +560,19 @@ receipts do not imply a running or failed worker. Current integrity still needs
 the existing audit; no provider activation or D2/default gate changes. The next
 recovery-cost work remains the measured full-envelope rewrite and decode path,
 not another timeout increase or a second receipt/state format.
+
+The next measured File increment reuses `AuthorityStateReplay` while decoding
+one checkpoint window, instead of rebuilding a replay owner and canonicalizing
+the unchanged projection for every historical row. Untrusted metadata still
+uses the shared transaction decoder; every original revision, receipt and final
+head is verified. This changes no format, cache budget, writer or public API.
+On one detached 2,107-commit File history, three fresh Node 24.21.0 processes per
+arm on macOS arm64 reduce cold-load medians from 35.6 to 25.9 seconds (27%).
+Complete heads, revisions and cursors match. These consecutive sample groups
+do not flush OS caches or control other host activity; they are not p95, a
+provider comparison or a whole-restore result. File's full-envelope rewrite
+and remaining revision hashing cost still need their existing recovery work;
+no D2/default or legacy-writer retirement exit is closed by this measurement.
 The #4224 soak was started; its final evidence and applicability remain pending.
 
 ### Runtime retirement drains admitted effects
