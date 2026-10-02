@@ -997,6 +997,11 @@ def _ensure_turn_settlement_plan(
             transaction_plan.get("turn_instance_id")
             or transaction_plan.get("turn_key")
         ),
+        goal_ref=(
+            plan.get("goal_ref")
+            if isinstance(plan.get("goal_ref"), Mapping)
+            else None
+        ),
     )
     settlement_plan = built.get("settlement_plan")
     if isinstance(settlement_plan, Mapping):
