@@ -94,9 +94,10 @@ Extension: package and lifecycle
 这属于 Extension 自己的呈现合同。呈现面与 capability 无关：把结果画成一张 dashboard，不产生
 可被 routing 的 domain 结果。
 
-官方 placement 指南把"多个财经数据或研究 Provider 共享 outcome contract"作为未来
-`finance-value-discovery` Capability 的合理方向；这不等于当前 catalog 已经提供该 Capability。
-本章以下判断以当前 manifest、catalog readback 和 managed runtime 为准。
+官方 placement 指南让 Finance value discovery 保持 standalone extension 形态：公开市场、披露和新闻
+采集可以留在该 extension 内，直到出现真实的跨 Provider LoopX 合同；value connector 协议也明确不允许
+凭空发明 `finance-value-discovery` Capability。本章以下判断以当前 manifest、catalog readback 和
+managed runtime 为准。
 
 它的 placement rationale 是：
 
@@ -346,9 +347,11 @@ generic runner 要求 manifest 和 runtime 的权限都为空。发消息、写�
 | permissions | `[]` |
 | managed entrypoint | `loopx extension run` |
 
-覆盖这条决策的可执行证据是 `examples/capability-extension-placement-doc-smoke.py` 与
-`examples/capability-extension-registry-smoke.py`：前者核对放置文档与目录归属，后者核对 registry
-在一个 id 同时被声明两次时 fail closed。
+覆盖这条决策的可执行证据是 `examples/capability-extension-placement-doc-smoke.py`、
+`examples/capability-extension-registry-smoke.py` 与
+`tests/capabilities/test_capability_extension_registry.py::test_duplicate_capability_fails_closed`：
+第一项核对放置文档与目录归属；第二项核对内置 catalog 的来源，以及 extension 声明的 Capability 以
+`declared=true, installed=false` 组合进 registry；第三项核对一个 id 被声明两次时 registry fail closed。
 
 如果你要设计的不只是 standalone package，而是 Explore、Domain State、Capability Pack、
 multi-agent preset、Provider 或 presentation 的组合，继续阅读

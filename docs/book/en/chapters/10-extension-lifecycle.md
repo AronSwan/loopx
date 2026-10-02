@@ -158,7 +158,8 @@ loopx extension enable loopx-text-stats --execute --format json --state-file "$e
 ```
 
 Enable does not trust old readiness. It reruns doctor before setting the enabled bit. On failure it stays
-disabled and clears the old doctor proof, so no state claims to be enabled and ready at the same time.
+disabled and revokes the failed artifact's doctor proof, so no state claims to be enabled and ready at the
+same time.
 
 ## 6. Upgrade and rollback
 
@@ -190,13 +191,17 @@ Rollback:
 loopx extension rollback loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
-Rollback probes the previous validated revision before switching. It is a lifecycle transition over
-activation state, not an arbitrary Git checkout. Activation state retains a bounded number of validated
+Rollback probes the **currently installed** entrypoint against the previous revision's recorded manifest
+and entrypoint location, then switches. It is a lifecycle transition over activation state, not an
+arbitrary Git checkout. A passing probe does not show that the previous package version is installed: if
+the environment still holds the new package, LoopX records the old revision after rollback while the new
+code keeps running. Install the package that matches the target revision around the rollback, then read
+actual behavior back with `run`. Activation state retains a bounded number of validated
 revision snapshots (five today).
 
 `rollback_available=false` means no rollback revision is recorded, as after a first install. It is not a diagnosis of a damaged environment.
 
-If a target exists but its doctor fails, inspect or reinstall the matching package before rollback and doctor readback. Without a historical target, choose an explicit version and prepare an installation/upgrade path; repairing the environment cannot create history.
+If a target exists but its doctor fails, inspect or reinstall the matching package before rollback and doctor readback; when doctor passes, still confirm that the matching version is installed. Without a historical target, choose an explicit version and prepare an installation/upgrade path; repairing the environment cannot create history.
 
 ## 7. Inspect the exercise state and finish
 
@@ -269,7 +274,7 @@ after the kill.
 
 **Failed upgrade and failed enable write different state.** `test_failed_upgrade_keeps_the_active_revision` checks that a failed new-version probe preserves the original activation revision/history. It fails before activation-state mutation and does not clear the old proof fields.
 
-`test_failed_enable_remains_disabled_and_clears_old_proof` checks that failed enable stays disabled and clears old proof. Batch doctor failure/readiness handling is covered separately by `test_enabled_extension_doctor_batch_keeps_failed_provider_closed`.
+`test_failed_enable_remains_disabled_and_rejects_current_artifact` checks that failed enable stays disabled and revokes the current artifact's doctor proof. Batch doctor failure/readiness handling is covered separately by `test_enabled_extension_doctor_batch_keeps_failed_provider_closed`.
 
 Corresponding tests: `tests/extensions/test_extension_runtime.py`.
 
@@ -284,7 +289,7 @@ Corresponding tests: `tests/extensions/test_extension_runtime.py`.
 | Run reports disabled | Run `enable --execute` and inspect doctor |
 | Run rejects permissions | Whether the Provider belongs behind a Capability/domain command |
 | Upgrade does not switch | Whether doctor failed for the new revision, or the revision is already active |
-| Rollback is unavailable | Whether a validated previous revision exists and the old package is still installed |
+| Rollback is unavailable | Whether a previous revision is recorded (none after a first install) |
 
 Fix the contract or environment. Do not bypass managed runtime and pretend the Provider is activated.
 

@@ -105,10 +105,10 @@ It does declare `[[presentation_surfaces]]` (`investment-research`, `visibility 
 belongs to the Extension's own presentation contract. A presentation surface is unrelated to a
 capability: drawing the result as a dashboard does not create a routable domain outcome.
 
-The official placement guide treats a shared provider-neutral outcome across several Finance data or
-research Providers as a reasonable future `finance-value-discovery` Capability. That direction is not a
-claim that the current catalog already exposes it. The analysis below follows the current manifest,
-catalog readback, and managed runtime.
+The official placement guide keeps Finance value discovery as a standalone extension: public-market,
+filing, and news collection can stay inside that extension until a real cross-provider LoopX contract
+exists, and the value connector protocol explicitly rules out inventing a `finance-value-discovery`
+Capability. The analysis below follows the current manifest, catalog readback, and managed runtime.
 
 Its placement rationale is:
 
@@ -354,9 +354,12 @@ Abstraction follows the change reason, not the file count.
 | permissions | `[]` |
 | managed entrypoint | `loopx extension run` |
 
-The executable evidence for this decision is `examples/capability-extension-placement-doc-smoke.py` and
-`examples/capability-extension-registry-smoke.py`: the first checks the placement document against the
-directory ownership, the second checks that the registry fails closed when one id is declared twice.
+The executable evidence for this decision is `examples/capability-extension-placement-doc-smoke.py`,
+`examples/capability-extension-registry-smoke.py`, and
+`tests/capabilities/test_capability_extension_registry.py::test_duplicate_capability_fails_closed`. The
+first checks the placement document against directory ownership. The second checks built-in catalog
+origin and that an extension-declared Capability composes into the registry as `declared=true,
+installed=false`. The third checks that the registry fails closed when one id is declared twice.
 
 If you are designing more than a standalone package — such as Explore, Domain State, a Capability Pack,
 multi-agent preset, Provider, or presentation composition — continue to

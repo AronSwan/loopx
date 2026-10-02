@@ -167,7 +167,7 @@ loopx extension enable loopx-text-stats --execute --format json --state-file "$e
 ```
 
 enable 不会信任旧 readiness；它会重新运行 doctor，成功后才设置 enabled bit。失败时它保持
-disabled，并清掉旧的 doctor proof，避免留下"已启用且看似 ready"的假状态。
+disabled，并撤销失败 artifact 的 doctor proof，避免留下"已启用且看似 ready"的假状态。
 
 ## 6. Upgrade 与 rollback
 
@@ -196,13 +196,15 @@ upgrade 在切换 active revision 前验证并 probe 新 manifest。失败 probe
 loopx extension rollback loopx-text-stats --execute --format json --state-file "$extension_state"
 ```
 
-rollback 同样先 probe previous revision，再切换。它不是任意 Git checkout 回退，而是 activation
-state 中已验证 revision 的生命周期转换。activation state 保留最近的 validated revision 快照，
+rollback 先按 previous revision 记录的 manifest 与入口位置 probe **当前安装的** entrypoint，通过后再
+切换。它不是任意 Git checkout 回退，而是 activation state 中已验证 revision 的生命周期转换。probe
+通过不证明旧版本 package 已经装回：若环境里仍是新 package，rollback 后 LoopX 记录的是旧 revision，
+实际运行的却是新代码。回滚前后应安装与目标 revision 匹配的 package，再用 `run` 读回实际行为。activation state 保留最近的 validated revision 快照，
 数量有限（当前保留 5 个）。
 
 `rollback_available=false` 表示没有记录可回滚的 revision，例如首次安装后。它不能诊断环境是否损坏。
 
-如果存在 rollback target，但其 doctor 失败，才需要检查或重新安装与目标匹配的 package，再执行 rollback 和 doctor。若没有历史 target，需要按明确选定的版本准备新的安装/升级方案；修复环境本身不会生成回滚历史。
+如果存在 rollback target 但其 doctor 失败，先检查或重新安装与目标匹配的 package，再执行 rollback 和 doctor；doctor 通过时也要确认已安装的是匹配版本。若没有历史 target，需要按明确选定的版本准备新的安装/升级方案；修复环境本身不会生成回滚历史。
 
 ## 7. 检查练习状态并清理
 
@@ -269,7 +271,7 @@ scope 变宽、request 改变或 revision 不匹配都必须 fail closed。
 
 **失败 upgrade 与失败 enable 的写入不同。** `test_failed_upgrade_keeps_the_active_revision` 验证 upgrade 的新版本 probe 失败时保留原 activation revision/history；该失败在修改 activation state 之前发生，不清除原 proof 字段。
 
-`test_failed_enable_remains_disabled_and_clears_old_proof` 验证失败 enable 保持 disabled 并清除旧 proof。批量 doctor 的失败与 readiness 清理另由 `test_enabled_extension_doctor_batch_keeps_failed_provider_closed` 覆盖。
+`test_failed_enable_remains_disabled_and_rejects_current_artifact` 验证失败 enable 保持 disabled，并撤销当前 artifact 的 doctor proof。批量 doctor 的失败与 readiness 清理另由 `test_enabled_extension_doctor_batch_keeps_failed_provider_closed` 覆盖。
 
 对应测试：`tests/extensions/test_extension_runtime.py`。
 
@@ -284,7 +286,7 @@ scope 变宽、request 改变或 revision 不匹配都必须 fail closed。
 | run 报 disabled | 运行 `enable --execute` 并查看 doctor |
 | run 拒绝 permissions | 该 Provider 是否应进入 Capability/domain command |
 | upgrade 未切换 | 新 revision doctor 是否失败，或 revision 是否已经 active |
-| rollback 不可用 | 是否存在 validated previous revision，且旧 package 是否仍在 environment |
+| rollback 不可用 | 是否记录了 previous revision（首次安装后没有） |
 
 生命周期失败时修复 contract 或环境，不要绕过 managed runtime 直接把 provider 当作已激活。
 
