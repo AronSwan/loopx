@@ -229,7 +229,15 @@ operation cannot overwrite it. A worker on this machine receives `SIGTERM` for
 its whole process group, which ends its Turn child; the native host runs in
 its own process group, and its supervisor terminates that group once the Turn
 child is gone. The worker acknowledges from under its own lock, marks the
-record `stopped` and releases its hard task lease. When nobody holds the operation, the requester
+record `stopped`. Lease release waits for resource readback to prove that
+the worker, Turn lane and every owned Host group have drained. In hard-lease
+mode, the leased CLI supervisor and the actual nested Host have separate
+records and process groups; neither one proves the other has exited. The
+private CLI forwards a separate record address to the Turn transport, which
+consumes it before launching user Host code. Old hard-lease records that only
+cover the outer CLI cannot prove drain and remain `acknowledged`; reconcile
+that original execution rather than deleting its evidence or reusing its key.
+When nobody holds the operation, the requester
 acknowledges itself. A worker on another machine is never signalled; it finds
 the request at its next checkpoint or at its next record write, which is
 refused. The receipt `phase` is `settled` only when an acknowledgement exists,
@@ -240,7 +248,7 @@ and a required hard task lease was actually released. The obligation is read
 from the operation record, not from the stop sidecar: the acknowledgement is
 persisted before the lease is released, so a crash in between must not turn
 "not yet written" into "nothing was owed". A release that failed is
-retried under the stop's own lock on the next read, so it never becomes a
+retried under the stop's own lock on the next explicit `stop`, so it never becomes a
 `settled` receipt that leaves the member's Todo blocked until the lease TTL;
 while it is unproven the stop stays `acknowledged` with
 `required_lease_release_unproven`. If that host cannot be attributed, or its
@@ -269,13 +277,18 @@ before completion starts; a lock-acquisition timeout requires retrying `stop`.
 因此仍持有该 operation 的 worker 无法覆盖它。本机 worker 会收到整个进程组的
 `SIGTERM`，其 Turn 子进程随之结束；原生 host 在自己的进程组中运行，Turn 子进程
 退出后由其 supervisor 终止整个 host 进程组。worker 在自己的锁下确认，把记录标为
-`stopped` 并释放硬任务租约。没有持有者时由请求方自行确认。另一台机器上的
+`stopped`。只有读回证明 worker、Turn lane 及所有归属的 Host 进程组都已退出，
+才会释放硬任务租约。硬租约模式的外层 CLI 与内层真实 Host 分别记录、分别检查，
+外层退出不能证明内层退出。私有 CLI 只把独立记录地址交给 Turn transport，
+由它在启动用户 Host 前消费，用户 Host 不继承该标记。旧硬租约记录若只覆盖外层
+CLI，则无法证明排空，保持 `acknowledged`；应核对原执行，不能删除证据或复用其 key。
+没有持有者时由请求方自行确认。另一台机器上的
 worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
 只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
 worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
 都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。该义务取自
 操作记录而非 stop sidecar：确认会先于释放落盘，因此两者之间发生崩溃时，不能把
-「尚未写入」当成「本就不需要释放」。释放失败会在下一次读取时于 stop 自己的锁下重试，
+「尚未写入」当成「本就不需要释放」。释放失败会在下一次显式调用 `stop` 时于其锁下重试，
 因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
 `required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
 停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
