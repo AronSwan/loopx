@@ -12,12 +12,12 @@
 
 | # | 优点 | 证据 | 等级 |
 |---|---|---|---|
-| 1 | **27 个质量机制族**：turn 后验三态/`--validation-command-json`/goal 验收 pin/change_quality/typed 裁决/证据台账/穷举 oracle 示范/typed retry/turn journal/恢复评估/检查点/预合并闸门/就绪分等 | controller-vs-base.md（双席交叉） | 实证 |
+| 1 | **质量机制族：甲席全量 27 / 双席共识 18 核心**（口径注明，见 controller-vs-base.md §底座节）：turn 后验三态/`--validation-command-json`/goal 验收 pin/change_quality/typed 裁决/证据台账/穷举 oracle 示范/typed retry/turn journal/恢复评估/检查点/预合并闸门/就绪分等 | controller-vs-base.md（双席交叉；27 为甲席逐文件全量口径，18 为两席共识核心） | 实证 |
 | 2 | **turn journal 是 attempt 唯一权威**——外层观测只被对账、绝不被相信 | managed_step.py:14-16 逐字 | 铁证 |
 | 3 | **change_quality 的 scope_fingerprint+receipt stale 语义**——判定只对被计算时的精确内容有效 | scope.py:168/receipt.py:46-48；已移植为 repair-receipt | 实证 |
 | 4 | **typed 裁决契约**——verdict 枚举+强制 minimum_repair/validation_commands 字段 | review_contract.py:323-329/346-348/384-404 | 代码级 |
-| 5 | **Cordis 范式：无特权核心可逆组合**——一切能力是插件，判断永远在 policy/caller 层 | vendored @deepseek-ai/cordis@4.0.4；cordis-primer.md 五观念 | 实证 |
-| 6 | **实战成绩：13 场实跑零底座崩溃**（r9=宿主并发污染、r13=网络+我方旧代码，均非底座崩） | .local/research1-13-run 全存证 | 使用方证词 |
+| 5 | **Cordis 范式：无特权核心可逆组合**——一切能力是插件，判断永远在 policy/caller 层 | vendored `@deepseek-ai/cordis` **4.0.4**（harness-020/vendor/cordis/package.json 实证；上游 cordiverse/cordis 4.0.0-rc.7@56b3d4f，vendor/README.md 清单）；cordis-primer.md 五观念 | 实证 |
+| 6 | **实战成绩：13 场实跑零底座崩溃**（r9=宿主并发污染、r13=网络+我方旧代码，均非底座崩）。**对读注（精读审计补）**：中途死亡 3/13（r9/r12/r13）——锐利契约×无守卫控制器年代的代价面，须与缺点#1 对读，勿单引战绩 | .local/research1-13-run 全存证；台账 3-1-2/r12 复活/r13-run3 | 使用方证词 |
 | 7 | 冷启动 2.6-5.8s（三样本），180s initialize 门余量 30x+ | 台账 2-1-5（c356847） | 实证 |
 | 8 | **上游响应性好**：我方 #5356 当周合并、#5397 次日修复 | git 上游记录 | 铁证 |
 | 9 | 官方 demo 示范**独立穷举 oracle** 模式（8 正例+6 反例含无效输入拒收） | examples/collaboration-delivery/verify.py | 实证 |
@@ -27,13 +27,14 @@
 
 | # | 缺点 | 证据 | 等级 | 现状 |
 |---|---|---|---|---|
-| 1 | **契约锋利：三种静默失败**——append_message 同 ID 吞新文本无信号 / drain 入口不校验 external_sender 可调用性 / latest_session 双通道命名空間 goal 查询静默空手 | **issue #5462 已报**（三段复现脚本+两起我方生产受害）；chat_store.py:663-666/600/97-101, roundtrip.py:876/1119-1123 | 铁证 | 已上报，待响应 |
+| 1 | **契约锋利：三种静默失败**——append_message 同 ID 吞新文本无信号 / drain 入口不校验 external_sender 可调用性 / latest_session 双通道命名空间 goal 查询静默空手 | **issue #5462 已报**（三段复现脚本+两起我方生产受害）；chat_store.py:663-666/600/97-101, roundtrip.py:876/1119-1123 | 铁证 | 已上报+自纠评论（5951699007），待响应 |
 | 2 | **API 无文档**：四个公开方法三个零 docstring；append_message/channel 语义/external_sender 要求在 loopx 与 dsh 双 docs 语料**零命中**（python rglob 双语料复核） | docs 语料 grep=0 | 铁证 | 随 #5462 |
 | 3 | **硬常量无旋钮**：就绪/锁 15s 死线为模块级常量，无 env/config 通路 | effect_runtime.py:46-47 唯一定义+两处使用 | 代码级 | 裁定维持+翻案条件（台账 12-2-4 补丁版） |
 | 4 | **宿主并发无保护**：同 DSH_HOME 多进程官方明示未承诺；r9 首犯=宿主并发 pytest（非管线，防撞闸不覆盖） | 台账 2-1-7/3-1-2/乙席 C4 | 使用方证词+官方明示 | 一场一管（口头纪律，未入守则——待办） |
-| 5 | **提供方协议坑 12 条**（GLM 端点，非底座之罪但 SDK 不加警告）：thinking:disabled 静默吞/401 三信封并存/message_start usage 全零真值在 delta/tool_use 用 call_ 前缀/SSE 无首心跳（<5s 判活误杀）等 | 台账 2-2-1~12 | 实证 | 考场手册 v1.7 已载；v2.2 守卫判据表待三信封化 |
+| 5 | **提供方协议坑 12 条**（GLM 端点，非底座之罪但 SDK 不加警告）：thinking:disabled 静默吞/401 三信封并存/message_start usage 全零真值在 delta/tool_use 用 call_ 前缀/SSE 无首心跳（<5s 判活误杀）等 | 台账 2-2-1~12 | 实证 | 主手册 v1.7+ 已载（**版本引用须查台账 5-2-4 现值，勿引快照版本**）；v2.2 守卫判据表待三信封化 |
 | 6 | **观察通道单薄**：last-cli-failure.log 每次覆写只存末份——历史击穿全靠 stdout 重定向纪律 | 乙席 C5 边界 | 代码级 | 监测 grep 已钉收场清单（12-2-4） |
 | 7 | shutdown_timeout 默认 1.0s 激进（每棒收尾硬杀 292MB runtime） | 台账 2-1-2 | 实证 | 已用官方旋钮 10s（c356847） |
+| 8 | **context 预算紧（底座×GLM 组合，精读审计补）**：r9 finalizer 单棒 input 实测 **124,977 ≈ 128K 窗的 95.3%**；棒均 token +58%（台账 4-2-1）不疼钱（订阅制）但直接转化为 context 逼顶——staging 全量复制是最强压力源（DeMem 席：描述性组织在匹配预算下丢金证据 17pt） | r9 finalizer projcache 原始数据实测；台账 4-2-1 | 实证 | 待办：staging 决策相关性层+每棒注入字符会计（论文行动清单⑧） |
 
 ## 三、设计立场（像缺点，不是缺陷——引用时勿当弹药）
 
