@@ -81,6 +81,84 @@ def test_next_instance_counts_home_glob(tmp_path):
     assert r2.next_instance(tmp_path, "planner") == "planner-r2"
 
 
+# ==== pass^k迁turn journal(SAVI前提+C-1清理,2026-10-02) ====
+def _mk_journal(root, agent, status, turn_key):
+    """复刻r13真实journal契约(receipt.lineage.agent_id+status)的最小夹具。"""
+    td = root / "runtime" / "goals" / "adaptive-research" / "turns"
+    td.mkdir(parents=True, exist_ok=True)
+    rec = {"status": status, "turn_key": f"sha256:{turn_key}",
+           "receipt": {"lineage": {"goal_id": "adaptive-research",
+                                   "agent_id": agent, "todo_id": "t"}}}
+    (td / f"{turn_key}.json").write_text(json.dumps(rec), encoding="utf-8")
+
+
+def test_attempts_ledger_prefers_turn_journal(tmp_path, capsys):
+    """journal权威: attempts取journal计数;home计数只作对账——分叉打印信号不静默。"""
+    root = tmp_path
+    _mk_journal(root, "planner", "committed", "a" * 64)
+    _mk_journal(root, "reviewer-1", "failed", "b" * 64)
+    _mk_journal(root, "reviewer-1", "committed", "c" * 64)  # 2次尝试
+    _mk_journal(root, "researcher-1", "committed", "d" * 64)  # 1次(journal)
+    for h in ("home-planner", "home-reviewer-1", "home-reviewer-1-r1",
+              "home-researcher-1", "home-researcher-1-r1"):  # researcher-1双home=残留
+        (root / h).mkdir()
+    led = r2.attempts_ledger(root, 1)
+    assert led["planner"] == 1 and led["reviewer-1"] == 2
+    assert led["researcher-1"] == 1  # journal赢(home残留2不计)
+    out = capsys.readouterr().out
+    assert "双源分叉" in out and "researcher-1" in out  # 分叉必须可见
+
+
+def test_attempts_ledger_journal_status_truth(tmp_path):
+    """journal多给状态真值: 结算failed但工件采信(artifact_first)可查。"""
+    root = tmp_path
+    _mk_journal(root, "researcher-2", "failed", "e" * 64)  # 结算挂,工件过验
+    (root / "home-researcher-2").mkdir()
+    jr = r2._journal_attempts(root)
+    assert jr["researcher-2"] == {"attempts": 1, "committed": 0, "failed": 1}
+
+
+def test_attempts_ledger_falls_back_to_homes(tmp_path):
+    """老根无runtime/goals→回退home计数(与既有行为兼容)。"""
+    for h in ("home-planner", "home-reviewer-2", "home-reviewer-2-r1"):
+        (tmp_path / h).mkdir()
+    led = r2.attempts_ledger(tmp_path, 1)
+    assert led["planner"] == 1 and led["reviewer-2"] == 2 and led["architect"] == 0
+
+
+def test_wilson_interval_honesty():
+    """SAVI行动②: 12/13≈[0.67,0.99]——区间比'100%'单点诚实;空分母安全。"""
+    lo, hi = r2._wilson(12, 13)
+    assert 0.5 < lo < 12 / 13 < hi <= 1.0
+    assert round(lo, 2) == 0.67 and round(hi, 2) == 0.99
+    lo0, hi0 = r2._wilson(8, 8)
+    assert lo0 < 1.0 < hi0 or (lo0 < 1.0 and hi0 <= 1.0)  # 8/8也得给区间
+    assert r2._wilson(0, 0) == (0.0, 0.0)
+
+
+def test_gate_report_carries_wilson_and_source(tmp_path):
+    """gate-report新增passk_wilson95与attempts_source字段。"""
+    root = make_root(tmp_path)
+    assert r2.gate(root, include_final=True) is True
+    rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
+    assert rep["attempts_source"] == "home_dirs"  # make_root无runtime→回退源如实标注
+    w = rep["passk_wilson95"]
+    assert w["n"] >= w["k"] >= 0 and 0.0 <= w["lo"] <= w["hi"] <= 1.0
+
+
+def test_r13_real_journal_regression():
+    """真根回归(r13): journal与home完全吻合(reviewer×4/finalizer×1),
+    attempts_source=turn_journal——防夹具造得好但真根读不对。"""
+    root = Path(__file__).parent / ".local" / "research13-run"
+    if not (root / "runtime" / "goals").exists():
+        pytest.skip("r13运行根不在本机")
+    led = r2.attempts_ledger(root, 3)
+    assert led["reviewer-1"] == 4 and led["reviewer-2"] == 4
+    assert led["planner"] == led["architect"] == led["finalizer"] == 1
+    jr = r2._journal_attempts(root)
+    assert jr["reviewer-1"]["failed"] == 3 and jr["reviewer-1"]["committed"] == 1
+
+
 # ==== P0-7 第10坑回归: run_phase 签名与委托 ====
 def test_run_phase_signature_pinned():
     params = list(inspect.signature(r2.run_phase).parameters)

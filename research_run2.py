@@ -253,17 +253,61 @@ def homog_report(root, n):
 
 
 
+def _journal_attempts(root):
+    """turn journal权威读取(managed_step.py:14: Turn journal是attempt唯一权威;
+    SAVI席洞察5: home-*目录计数是被重跑残留污染的粗化观测)。
+    runtime/goals/*/turns/*.json → {agent_id: {attempts/committed/failed}};
+    receipt.lineage.agent_id是turn→棒映射; 无turns目录→None(调用方回退home计数)。
+    r13实测: reviewer-1×4(failed3+committed1)与home计数吻合;researcher-1的
+    artifact_first案例(结算failed但工件采信)被journal如实记状态——两源分叉点。"""
+    out = {}
+    for tdir in (root / "runtime" / "goals").glob("*/turns"):
+        for f in tdir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue  # 损坏journal不计入,不炸台账
+            lin = ((d.get("receipt") or {}).get("lineage") or {})
+            aid = lin.get("agent_id")
+            if not aid:
+                continue
+            e = out.setdefault(aid, {"attempts": 0, "committed": 0, "failed": 0})
+            e["attempts"] += 1
+            e["committed" if d.get("status") == "committed" else "failed"] += 1
+    return out or None
+
+
+def _wilson(k, n, z=1.96):
+    """Wilson置信区间(SAVI行动②: 纯点估计n=13时逐场差异在噪声里——
+    12/13≈[0.67,0.99]区间比单点'100%'诚实;无区间=无frontier)。"""
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    denom = 1 + z * z / n
+    center = p + z * z / (2 * n)
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)
+    return (round((center - half) / denom, 3), round((center + half) / denom, 3))
+
+
 def attempts_ledger(root, n):
-    """pass^k台账(P4,2026-10-01智囊团;业界已证单次75%→3次全过仅42%,"最终全绿"
-    可能掩盖"重试才绿"): 每棒实际起跑次数=home-*目录计数(与next_instance同源)。
-    attempts==1即首试通过;>1即经重试/修复环才绿。"""
+    """pass^k台账(P4;业界已证单次75%→3次全过仅42%,"最终全绿"可能掩盖"重试才绿"):
+    每棒实际起跑次数。**权威=turn journal**(2026-10-02迁移,SAVI前提+C-1清账);
+    回退=home-*目录计数(老运行根/缺journal——与next_instance同源)。
+    journal可用时双源对账: 不一致=重跑残留污染信号,打印不静默。"""
     phases = (["planner", "architect", "reviewer-1", "reviewer-2", "finalizer"]
               + [f"researcher-{k}" for k in range(1, n + 1)])
-    ledger = {}
+    jr = _journal_attempts(root)
+    homes = {}
     for ph in phases:
         names = {p.name for p in root.glob(f"home-{ph}*")}
         exact = {x for x in names if x == f"home-{ph}" or re.fullmatch(rf"home-{ph}-r\d+", x)}
-        ledger[ph] = len(exact)
+        homes[ph] = len(exact)
+    if jr is None:
+        return homes
+    ledger = {ph: jr.get(ph, {}).get("attempts", 0) or homes[ph] for ph in phases}
+    drift = {ph: (ledger[ph], homes[ph]) for ph in phases if ledger[ph] != homes[ph]}
+    if drift:
+        print(f"!! 台账双源分叉(journal/home,残留或漏记信号): {drift}", flush=True)
     return ledger
 
 
@@ -868,13 +912,18 @@ def gate(root, include_final=True):
                 "终稿须含评审处理说明(采纳/驳回逐条)" if not has_handling else "")
     led = attempts_ledger(root, plan["N"])
     first = sorted(p for p, a in led.items() if a == 1)
+    live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
+    lo, hi = _wilson(len(first), len(live))
+    jr = _journal_attempts(root)
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
               "attempts": led, "first_pass": first,
+              "attempts_source": "turn_journal" if jr else "home_dirs",
+              "passk_wilson95": {"k": len(first), "n": len(live), "lo": lo, "hi": hi},
               "digests": _artifact_digests(root)}
     write(root / "gate-report.json", report)
-    live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
-    print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒"
+    print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒 "
+          f"[Wilson95: {lo:.2f}-{hi:.2f}]"
           + ("" if len(first) == len(live) else f"(重试棒: { {p: a for p, a in live.items() if a > 1} })"),
           flush=True)
     top = next((p for p in report["homogenization"]
