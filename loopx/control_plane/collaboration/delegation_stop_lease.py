@@ -112,9 +112,9 @@ def settle(service, path, row, binding, stop):
     if recorded.get("released") is True:
         return True
     released = release(service, row, binding)
-    if released.get("required") is not True:
-        return None  # nothing owed: the receipt keeps no lease fact
     if released != stop.get("lease"):
         stop["lease"] = released
         _write(service._stop_path(path), stop)
+    if released.get("required") is not True:
+        return None  # preserve the no-obligation receipt, but add no release fact
     return None if released.get("held") is False else released.get("released") is True

@@ -43,7 +43,8 @@ from .control_plane.turn_driver.journal_store import (
 )
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.turn_driver.host_process_transport import (
-    HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV, HOST_PROCESS_UNSUPPORTED_PLATFORM,
+    HOST_PROCESS_DRAINED, HOST_PROCESS_DRAINING, HOST_PROCESS_NOT_LAUNCHED,
+    HOST_PROCESS_RECORD_ENV, HOST_PROCESS_UNATTRIBUTABLE, HOST_PROCESS_UNSUPPORTED_PLATFORM,
     host_process_drain,
 )
 from .control_plane.turn_driver.lane_fence import (
@@ -1141,19 +1142,42 @@ class Delegations:
         # The Host supervisor sits outside the worker's group and cleans up on its own.
         self._await_host_drain(path, time.monotonic() + DELEGATION_STOP_GRACE_SECONDS)
 
+    def _delegation_host_drain(self, path: Path) -> str:
+        """Read both groups of a hard-leased Turn; never signal from readback.
+
+        The leased CLI and actual Host use separate sessions. The CLI cannot
+        prove its nested Host exited merely by exiting itself. Old leased
+        records that only named that outer group lack the required proof.
+        """
+        host_record = self._host_process_record(path)
+        host = host_process_drain(host_record)
+        outer = host_process_drain(host_record.with_suffix(".cli.host.json"))
+        if HOST_PROCESS_UNSUPPORTED_PLATFORM in (outer, host):
+            return HOST_PROCESS_UNSUPPORTED_PLATFORM
+        if outer == HOST_PROCESS_NOT_LAUNCHED:
+            row = _read(path)
+            lease = row.get("task_lease")
+            if host != HOST_PROCESS_NOT_LAUNCHED and isinstance(lease, dict) and lease.get("required") is True:
+                return HOST_PROCESS_UNATTRIBUTABLE
+            return host
+        for fact in (HOST_PROCESS_UNATTRIBUTABLE, HOST_PROCESS_DRAINING):
+            if fact in (outer, host):
+                return fact
+        return HOST_PROCESS_DRAINED
+
     def _await_host_drain(self, path: Path, deadline: float) -> None:
         """Wait, never kill: the TS Host supervisor owns terminating its process group."""
-        while (host_process_drain(self._host_process_record(path)) == HOST_PROCESS_DRAINING
+        while (self._delegation_host_drain(path) == HOST_PROCESS_DRAINING
                and time.monotonic() < deadline):
             time.sleep(0.1)
 
     def _acknowledge_stop(self, path: Path, row: dict, binding: dict, *, source: str) -> None:
-        """Acknowledge from under the operation lock: mark stopped, then release the hard lease.
+        """Acknowledge under the operation lock; resource readback releases the lease later.
 
         Only the operation-lock holder calls this. The record is transitioned as
-        it is on disk, so state that a fenced write refused stays unwritten; the
-        lease is released from what this process acquired, which may be newer
-        than the record. A missing stop, one already acknowledged or finished,
+        it is on disk, so state that a fenced write refused stays unwritten. An
+        ACK cannot prove the nested Host drained and must not release its
+        lease. A missing stop, one already acknowledged or finished,
         and a record that already reached a terminal observation stay untouched.
         """
 
@@ -1189,11 +1213,6 @@ class Delegations:
             self._clear_delegation_bootstrap(row, binding)
         except (OSError, ValueError):
             pass  # the bootstrap is host input; its state never blocks the receipt
-        lease = delegation_stop_lease.release(self, row, binding)
-        with exclusive_file_lock(self._dispatch_lock(path)):
-            stop = self._read_stop(path) or stop
-            stop["lease"] = lease
-            _write(self._stop_path(path), stop)
 
     def _settle_stop(self, path: Path) -> dict:
         with exclusive_file_lock(self._dispatch_lock(path)):
@@ -1207,7 +1226,7 @@ class Delegations:
             # A launched Host on a platform that cannot prove its group exited
             # has no converging stop: say so plainly rather than leaving the
             # caller with an acknowledged receipt it can never settle.
-            unsupported = host_process_drain(self._host_process_record(path)) == HOST_PROCESS_UNSUPPORTED_PLATFORM
+            unsupported = self._delegation_host_drain(path) == HOST_PROCESS_UNSUPPORTED_PLATFORM
             if unsupported:
                 raise ValueError(
                     "delegation stop cannot prove the launched Host drained on this platform: "
@@ -1217,28 +1236,23 @@ class Delegations:
             facts = {"operation_lock_free": self._operation_lock_free(path)}
             facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
             # Read last: a Host seen drained after its worker and lane let go stays drained.
-            facts["host_process"] = host_process_drain(self._host_process_record(path))
-            # The obligation comes from the operation record, not from the stop
-            # sidecar. The acknowledgement writes its ACK before it releases the
-            # lease, so a process loss in between leaves the sidecar with no
-            # `lease` field at all — and reading that as "nothing was owed"
-            # settles a stop whose member still holds an active hard lease, with
-            # resume already refused and the Todo blocked until the TTL.
-            #
-            # The record names the execution key; the canonical lease decides
-            # whether that execution still holds it and at which version: a
-            # native claim commits before its annotation is saved, and renewal
-            # moves the version after it. A release is retried here, under the
-            # same lock that guards the record: every later read is another
-            # attempt rather than one failure becoming permanent.
-            lease_released = delegation_stop_lease.settle(self, path, row, binding, stop)
-            if lease_released is not None:
-                facts["lease_released"] = lease_released
-            decision = effect_runtime_result("collaboration.delegation.stop", {
+            facts["host_process"] = self._delegation_host_drain(path)
+            inputs = {
                 "phase": stop["phase"], "acknowledged": stop.get("ack") is not None,
                 "timed_out": time.time() - stop["requested_at"] > DELEGATION_STOP_GRACE_SECONDS,
                 **facts,
-            })
+            }
+            # Ask the existing typed owner whether ACK/lock/lane/Host facts
+            # permit settlement before attempting a lease release. This first
+            # decision is only a preflight, never a persisted receipt. In
+            # particular, an unavailable nested supervisor cannot hand off a
+            # lease while its actual Host is still running.
+            decision = effect_runtime_result("collaboration.delegation.stop", inputs)
+            if decision["phase"] == "settled":
+                lease_released = delegation_stop_lease.settle(self, path, row, binding, stop)
+                if lease_released is not None:
+                    facts["lease_released"] = lease_released
+                decision = effect_runtime_result("collaboration.delegation.stop", {**inputs, **facts})
             if decision["phase"] != stop["phase"] or decision.get("reason") != stop.get("reason"):
                 stop.update(phase=decision["phase"], reason=decision.get("reason"))
                 if decision["phase"] in DELEGATION_STOP_TERMINAL_PHASES:
@@ -1302,9 +1316,16 @@ class Delegations:
             from .control_plane.turn_driver.host_process_transport import run_host_process
 
             chunks = []
+            nested_record_args = []
+            if host_record is not None:
+                # Only our private CLI re-arms the marker for the real Turn
+                # transport. Never pass it through an arbitrary user Host.
+                environment[HOST_PROCESS_RECORD_ENV] = str(host_record.with_suffix(".cli.host.json"))
+                nested_record_args = ["--host-process-record", str(host_record)]
             try:
                 observation = run_host_process(
-                    [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"), *arguments],
+                    [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"),
+                     *nested_record_args, *arguments],
                     project=Path(binding["workspace"]), input_text="", timeout_seconds=timeout,
                     environment=environment, delegated_lease=delegated_lease,
                     on_stdout=chunks.append,
@@ -1387,9 +1408,9 @@ class Delegations:
                         if row["status"] == "prepared":
                             self._observe(path, row, "rejected")
             except DelegationStopRequested as stop:
-                # SIGTERM, a checkpoint or a fenced write: the host child is already
-                # gone (its run-once exits with this process's exception), the
-                # bootstrap was cleared, and only the acknowledgement remains.
+                # SIGTERM, a checkpoint or a fenced write acknowledges intent.
+                # Each Host supervisor may still be cleaning its own group;
+                # only subsequent resource readback may settle or release.
                 self._acknowledge_stop(path, row, binding, source=stop.source)
 
     def _execution_arguments(self, binding: dict, operation_id: str) -> list[str]:
