@@ -35,8 +35,8 @@ schema 选成现在这样、这个失败是不是预期内的、用户上次说�
 却缺少能把一个未决问题送到人面前的那个表面。两次失败的形状相同：**工作都停下来了，而且
 没有人被告知要停下来等谁。**
 
-代价并不止于这一次返工。从周一到周二，控制面每次唤醒都重新编译一次同样的结论，quota
-窗口在这段时间里被反复占用，而任务的完成时间没有任何变化。
+代价并不止于这一次返工。从周一到周二，控制面每次唤醒都重新编译一次同样的结论，消耗 Host
+唤醒、时间和模型调用（这类无变化的 Gate 等待不扣 LoopX quota），而任务的完成时间没有任何变化。
 
 ## 为什么"大任务用 LoopX，小任务用会话"不够用
 
@@ -99,9 +99,9 @@ LoopX 同时处理 Goal、Agent 和 Host，但三者回答的是不同问题：
 3. 已存在已注册 lane，且 `--agent-id` 与 `--new-peer` 都未给出时，若当前 host thread 没有已存绑定，
    `start-goal` 返回 `thread_binding_selection_required`（`select_agent_identity`）：默认动作是选择
    已有 lane，不会自动注册新身份，也不会自动接管；
-4. 没有任何已注册 lane（首次接入），或显式给出 `--new-peer` 时，才默认注册 fresh identity：
-   `start-goal` 返回 `fresh_agent_registration_required`（`register_fresh_agent`），首次接入无需额外
-   `--new-peer`；
+4. 没有任何已注册 lane（首次接入），或显式给出 `--new-peer` 且当前 host thread 没有已存绑定时，
+   才默认注册 fresh identity：`start-goal` 返回 `fresh_agent_registration_required`
+   （`register_fresh_agent`），首次接入无需额外 `--new-peer`；已绑定的 thread 沿用其绑定的 lane；
 5. 只有用户明确要求接管某个已有 Agent，才以该精确 `agent_id` 继续；
 6. Agent 名称或前缀不证明 Host，实际运行面要由 host/runtime metadata 说明。
 
@@ -215,8 +215,8 @@ acceptance summary 与 replan trigger；它是 per-Agent 的路线，也不是�
 
 这使"目标仍 active"与"当前谁可以做哪件事"成为两个问题。Agent id 是工作身份，不证明 Host
 身份；`codex-*` 前缀也不能证明任务实际运行在 Codex App 还是 CLI。新 session 可以复用同一
-Goal 的历史与 frontier，同时以 fresh Agent identity 进入；已有 claim 则通过显式 takeover 或
-handoff 处理。
+Goal 的历史与 frontier，并在没有已注册 lane 或显式 `--new-peer` 时以 fresh Agent identity 进入；
+已有 claim 则通过显式 takeover 或 handoff 处理。
 
 ### 2. Gate 与 authority
 
@@ -275,7 +275,7 @@ environment read 与 replan，不需要新 Host 继承旧 transcript。
 
 LoopX 保留同一 control-plane contract，但不同 Host 的启动和唤醒机制并不相同。当前公开
 [Runtime Connector Catalog](https://github.com/huangruiteng/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
-给出的主要路径是：
+与各 Host adapter 文档给出的主要路径是：
 
 | Host surface | 驱动 | 关键限制 |
 | --- | --- | --- |
@@ -325,8 +325,9 @@ evidence lineage。维护成本随任务数量增长，而它换来的是任务�
 **代价二：多了一层需要正确填写的输入。** 资格卡上的 `acceptance` 和 `stop_condition` 必须由
 人先写清楚。写不清楚，LoopX 只能在一个说不清何时算完的目标上空转，这比留在会话里更贵。
 
-**代价三：启动之前要多回答几个问题。** Goal id、agent identity 和 host surface 都要显式
-声明，推断被明确禁止。这在单次任务上显得啰嗦，在跨会话任务上正是恢复的依据。
+**代价三：启动之前要多回答几个问题。** 存在多个 Goal 时必须精确选择；agent 身份不能凭名称
+前缀或相似度推断；host surface 未知时先走只读选择 Gate。这在单次任务上显得啰嗦，在跨会话任务上正是
+恢复的依据。
 
 **边界一：任务规模不作为判据。** 资格卡问的是任务停下来时需要什么，规模只出现在
 `duration` 一行里，而且是以"会不会跨 session"的形式出现。
@@ -351,8 +352,8 @@ evidence lineage。维护成本随任务数量增长，而它换来的是任务�
 **失败二：升级到 LoopX，但没有能唤醒人的表面。** 这正是开头第二段故事。Gate 建得对，
 Todo 阻塞得对，控制面每次 tick 都做出正确判断，而那个人从头到尾没有收到任何消息。
 
-**失败三：跨 Host 续跑时继承了错误的身份。** 新 session 复用同一 Goal 的历史，同时以
-fresh Agent identity 进入，这是合法路径。若推断出一个相似的 `goal_id`，或者直接接管旧
+**失败三：跨 Host 续跑时继承了错误的身份。** 新 session 复用同一 Goal 的历史，并在没有已注册
+lane 或显式 `--new-peer` 时以 fresh Agent identity 进入，这是合法路径。若推断出一个相似的 `goal_id`，或者直接接管旧
 `agent_id`，得到的就是两个写入者对同一份"当前进度"的假设。
 
 对应的观察方式是读状态，而不是读 transcript：重启之后控制面还能说出任务停在哪、在等谁，

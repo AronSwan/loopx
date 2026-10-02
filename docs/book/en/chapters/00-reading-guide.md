@@ -252,7 +252,7 @@ work.
 
 ### Updating your mental model from `v0.4.4` to `v0.5.4`
 
-If you read an earlier edition of the Dev Book, recalibrate these four areas first:
+If you read an earlier edition of the Dev Book, recalibrate these five areas first:
 
 | Area | Shipped in `v0.5.4` | Continue with |
 | --- | --- | --- |

@@ -37,8 +37,9 @@ In the first story the task stayed in the session layer and the next person knew
 the task was escalated to LoopX without the surface that delivers a pending question to a person. Both
 failures have the same shape: **work stopped, and nobody was told who it was waiting for.**
 
-The cost is not only the rework. From Monday to Tuesday, every wake-up recompiles the same conclusion,
-the quota window is spent again on each one, and the task's completion date does not move.
+The cost is not only the rework. From Monday to Tuesday, every wake-up recompiles the same conclusion
+and costs Host wake-ups, time, and model calls (these no-change gated waits spend no LoopX quota), while
+the task's completion date does not move.
 
 ## Why "big tasks use LoopX, small ones use a session" is not enough
 
@@ -107,9 +108,10 @@ Goal-start contract keeps those choices explicit:
 3. when registered lanes exist and neither `--agent-id` nor `--new-peer` is given, a host thread that has
    no stored binding returns `thread_binding_selection_required` (`select_agent_identity`): the default is
    to select an existing lane, neither registering a new identity nor taking one over;
-4. fresh identity registration is the default only when no registered lane exists (first onboarding) or
-   `--new-peer` is explicit: `start-goal` returns `fresh_agent_registration_required`
-   (`register_fresh_agent`), and first onboarding needs no extra `--new-peer`;
+4. fresh identity registration is the default only when no registered lane exists (first onboarding), or
+   `--new-peer` is explicit and the current host thread has no stored binding: `start-goal` returns
+   `fresh_agent_registration_required` (`register_fresh_agent`), and first onboarding needs no extra
+   `--new-peer`; a bound thread keeps its bound lane;
 5. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
 6. an Agent name or prefix does not prove the Host surface; runtime metadata does.
 
@@ -224,8 +226,8 @@ direction, acceptance summary, and replan trigger. It is a per-Agent route, not 
 
 This separates "the Goal is active" from "who may perform which work now." An agent id labels a LoopX work
 lane; it does not prove which Host is currently executing it. A new session may reuse the Goal history and
-frontier while registering a fresh Agent identity. Existing claims move only through an explicit takeover
-or handoff.
+frontier, registering a fresh Agent identity when no lane is registered or `--new-peer` is explicit.
+Existing claims move only through an explicit takeover or handoff.
 
 ### 2. Gate and authority
 
@@ -286,7 +288,7 @@ inherit the old transcript.
 LoopX preserves one control-plane contract, but Hosts do not share one wake-up implementation. The current
 public
 [Runtime Connector Catalog](https://github.com/huangruiteng/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
-defines these main paths:
+and each Host adapter's documentation define these main paths:
 
 | Host surface | Driver | Key limit |
 | --- | --- | --- |
@@ -338,9 +340,10 @@ task that can still continue after an interruption.
 qualification card must be written by a person first. Left vague, LoopX can only spin on a goal that
 cannot say when it is finished, which is more expensive than leaving the task in a session.
 
-**Cost three: more questions before starting.** Goal id, agent identity, and host surface must all be
-declared, and inference is explicitly banned. That is noisy for a one-shot task and is exactly what makes
-recovery possible for a cross-session one.
+**Cost three: more questions before starting.** With several Goals, one must be selected exactly; an
+agent identity cannot be inferred from a name prefix or similarity; an unknown host surface goes through a
+read-only selection Gate first. That is noisy for a one-shot task and is exactly what makes recovery
+possible for a cross-session one.
 
 **Boundary one: task size is not the criterion.** The qualification card asks what the task needs when it
 stops. Size appears only in the `duration` row, and only in the form "does it cross sessions."
@@ -371,7 +374,7 @@ story. The Gate was right, the Todo was blocked correctly, and every tick reache
 while the person who could unblock it was never told.
 
 **Failure three: continuing across Hosts on an inherited identity.** Reusing one Goal's history while
-registering a fresh Agent identity is a legal path. Inferring a similar `goal_id`, or taking over an old
+registering a fresh Agent identity (when no lane is registered or `--new-peer` is explicit) is a legal path. Inferring a similar `goal_id`, or taking over an old
 `agent_id` directly, leaves two writers assuming they own the same "current progress."
 
 The way to check is to read state, not the transcript. After a restart, the control plane should still be
