@@ -1234,17 +1234,34 @@ def auto(root):
         raise SystemExit("终局门禁 FAIL(修复轮耗尽)")
     stamp("finalizer+终局门禁")
 
-    # Top-5 #1: drain回传激活(官方差距席: 终稿结论回流管家对话,协议闭环)
+    # Top-5 #1: 终稿结论回流管家对话(官方差距席: 协议闭环)
+    # 正名(12-2-3核查三层真相): 底座drain()投递runtime/replies/*/*.json(manager_context
+    # 回执机器),我们的DAG不产这些文件——直调drain=空转0投递;其external_sender须为
+    # 可调用传输器(roundtrip.py:792-798直接调用),传字符串必TypeError(r12起两轮
+    # "修复"只对了kwarg名没对类型)。正确原语=drain内部同款store.append_message
+    # (roundtrip.py:654/966);message_id稳定→幂等,auto重跑不重复回流。
     try:
-        from loopx.capabilities.manager_context.roundtrip import drain
-        # drain导入路径检查(r12实测ImportError): chat_store在包根非control_plane
-        _store = None  # chat_store路径待查;先用print回传
-        _reply = (f"研究终案已产出并过终局门禁。终稿路径: "
-                  f"agents/finalizer/outputs/final-plan.md (交付链{6 + plan['N']}件齐, "
-                  f"首试率{len(attempts_ledger(root, plan['N']).get('first_pass', []))}/{plan['N'] + 5})。"
+        from loopx.chat_store import ChatSessionStore
+        store = ChatSessionStore(root / "runtime")
+        # 会话定位(r13实测): 管家会话channel_id='manager'非'goal.*',按goal推导
+        # 必空手——显式传channel,goal/channel两路回退防下场次命名漂移
+        sess = (store.latest_session(goal_id="loopx-manager", agent_id="codex",
+                                     channel_id="manager")
+                or store.latest_session(goal_id="loopx-manager", agent_id="codex")
+                or store.latest_session(goal_id=GOAL, agent_id="codex"))
+        if sess is None:
+            raise RuntimeError("无管家会话可回流(latest_session空)")
+        led = attempts_ledger(root, plan["N"])
+        first_n = sum(1 for a in led.values() if a == 1)  # 与gate()首试口径一致
+        live_n = sum(1 for a in led.values() if a > 0)  # 0次棒不进分母(门六#4)
+        _reply = (f"研究终案已产出并过终局门禁。终稿: agents/finalizer/outputs/"
+                  f"final-plan.md(交付链{6 + plan['N']}件齐,首试{first_n}/{live_n}棒)。"
                   f"详见 gate-report.json。")
-        drain(root / "runtime", root / "registry.json", store=_store, external_sender=_reply)
-        print(">>> drain回传: 终稿结论已回流管家对话", flush=True)
+        store.append_message(sess["session_id"], role="agent", text=_reply,
+                             origin="manager_followup",
+                             message_id="handoff.final-plan")
+        print(f">>> drain回传: 终稿结论已回流管家对话"
+              f"(session={sess['session_id'][:8]},首试{first_n}/{live_n})", flush=True)
     except Exception as e:
         print(f">>> drain回传跳过({type(e).__name__}: {str(e)[:80]})——不影响交付", flush=True)
 

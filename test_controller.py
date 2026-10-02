@@ -279,6 +279,38 @@ def test_auto_orders_phases_and_gates(tmp_path, monkeypatch):
     assert gates == [False, True]
 
 
+def test_auto_final_conclusion_flows_to_manager_chat(tmp_path, monkeypatch):
+    """Top-5#1回传语义钉死(12-2-3三层真相回归): 底座drain()投递runtime/replies/*
+    (我们DAG不产→直调=空转)且external_sender须可调用(传字符串必TypeError)——
+    正确原语=append_message;会话按channel='manager'定位;稳定message_id幂等;
+    首试计数与gate口径一致(a==1分子/a>0分母)。r13根真跑已双验(落盘+重跑幂等)。"""
+    import loopx.chat_store as cs
+    root = make_root(tmp_path, n=2)
+    monkeypatch.setattr(r2, "ensure_phase",
+                        lambda r, ph, sub=None: {"status": "committed"})
+    monkeypatch.setattr(r2, "gate_with_repair", lambda r, include_final: True)
+    monkeypatch.setattr(r2, "attempts_ledger",
+                        lambda r, n: {"planner": 1, "researcher-1": 1, "researcher-2": 2})
+    calls = {"lookup": [], "append": []}
+
+    class FakeStore:
+        def latest_session(self, *, goal_id, agent_id, channel_id=None):
+            calls["lookup"].append((goal_id, agent_id, channel_id))
+            return {"session_id": "s1"} if channel_id == "manager" else None
+
+        def append_message(self, sid, *, role, text, **kw):
+            calls["append"].append((sid, role, text, kw.get("message_id"), kw.get("origin")))
+            return {"message_id": kw.get("message_id")}
+
+    monkeypatch.setattr(cs, "ChatSessionStore", lambda runtime: FakeStore())
+    r2.auto(root)
+    assert calls["lookup"][0] == ("loopx-manager", "codex", "manager")  # 首选显式channel
+    sid, role, text, mid, origin = calls["append"][0]
+    assert (sid, role, mid, origin) == ("s1", "agent", "handoff.final-plan",
+                                        "manager_followup")
+    assert "首试2/3棒" in text  # 2个a==1 / 3个a>0,与gate首试口径一致
+
+
 # ==== P1-10 stage_route staging ====
 def test_stage_route_stages_inputs_and_tasks(tmp_path, monkeypatch):
     root = make_root(tmp_path, n=2)
