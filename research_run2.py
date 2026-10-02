@@ -642,7 +642,10 @@ def stage_route(root, phase, subtopics=None):
         _op_id = f"{phase}-handoff" if _n_homes == 0 else f"{phase}-handoff-r{_n_homes}"
         input_entries = [{"ref": "REQUIREMENTS.md", "description": "Research brief"}]
         for dst_ref, h in staged_hashes.items():
-            input_entries.append({"ref": f"inputs/{dst_ref}", "sha256": h})
+            # sha256嵌入description(r12事故: 独立sha256字段触发TS侧协议校验
+            # "unsupported fields";官方demo用sha256字段但schema可能版本不同)
+            input_entries.append({"ref": f"inputs/{dst_ref}",
+                                  "description": f"sha256:{h[:16]}"})
         _peers.request(
             root / "runtime", root / "registry.json", GOAL,
             source_agent_id=source, target_agent_id=actor,
