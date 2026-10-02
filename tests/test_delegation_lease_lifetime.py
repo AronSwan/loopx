@@ -19,10 +19,10 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
-def prepare_lease(root, runner, monkeypatch, *, ttl=20):
+def prepare_lease(root, runner, monkeypatch, *, ttl=20, operation_id="lease-lifetime", renew=True):
     monkeypatch.setattr(runner, "_spawn", lambda _: None)
-    runner.start("analysis", "lease-lifetime", brief())
-    row = _read(runner.path("lease-lifetime"))
+    runner.start("analysis", operation_id, brief())
+    row = _read(runner.path(operation_id))
     # Only a brand-new disposable fixture. Do not migrate an active Goal or
     # weaken the public quiescent mode-change contract to set up a test.
     program = '''
@@ -40,8 +40,10 @@ if(committed.status!=="applied") throw new Error(JSON.stringify(committed));
                    capture_output=True, text=True, timeout=30)
     assert prepared.returncode == 0, prepared.stderr
     binding = runner.binding("analysis")
-    runner._acquire_delegation_lease(runner.path("lease-lifetime"), row, binding)
+    runner._acquire_delegation_lease(runner.path(operation_id), row, binding)
     lease = row["task_lease"]["lease"]
+    if not renew:
+        return lease
     renewed = runner._cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
         "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
         "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]),
@@ -151,3 +153,80 @@ def test_real_revocation_or_new_execution_stops_nested_host_without_acceptance(s
     runner.execute("lease-lifetime")
     assert _read(runner.path("lease-lifetime"))["status"] != "accepted"
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
+
+
+def settled_stop(runner, operation_id):
+    receipt = runner.stop(operation_id, execute=True)
+    assert receipt["phase"] == "settled" and receipt["status"] == "stopped", receipt
+    return receipt
+
+
+@pytest.mark.parametrize("window", ["annotated", "renewed", "unannotated"])
+def test_real_stop_releases_the_lease_its_execution_acquired(service, monkeypatch, window):
+    """Native acquire -> public stop -> independent inspect, on both providers.
+
+    `annotated` is the ordinary record `_acquire_delegation_lease` writes,
+    `renewed` moves the canonical version past the recorded one, and
+    `unannotated` drops the annotation as if the process were lost between the
+    native claim and the record write. Each must release the exact lease and
+    settle; a retry is the same receipt.
+    """
+    root, runner = service
+    original = prepare_lease(root, runner, monkeypatch, operation_id="lease-stop",
+                             renew=window == "renewed")
+    path = runner.path("lease-stop")
+    if window == "unannotated":
+        row = _read(path)
+        del row["task_lease"]
+        runner._fenced_write(path, row)
+    if window == "renewed":
+        assert inspect(runner)["lease"]["version"] > _read(path)["task_lease"]["lease"]["version"]
+    receipt = settled_stop(runner, "lease-stop")
+    assert receipt["stop"]["lease"]["released"] is True
+    assert receipt["stop"]["settled"]["lease_released"] is True
+    released = inspect(runner)["lease"]
+    assert released["status"] == "released"
+    assert released["idempotency_key"] == original["idempotency_key"]
+    assert runner.stop("lease-stop", execute=True) == receipt
+    with pytest.raises(ValueError, match="start a new operation id"):
+        runner.resume("lease-stop")
+
+
+def test_real_stop_survives_loss_after_its_acknowledgement(service, monkeypatch):
+    """ACK durable, release never committed, then a fresh instance reads the stop."""
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    prepare_lease(root, runner, monkeypatch, operation_id="lease-ack-loss")
+
+    def lost(**kwargs):
+        raise RuntimeError("fixture lost the process before release")
+
+    with monkeypatch.context() as loss:
+        loss.setattr(delegation, "release_task_lease", lost)
+        receipt = runner.stop("lease-ack-loss", execute=True)
+    assert receipt["phase"] == "acknowledged", receipt
+    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
+    assert inspect(runner)["lease"]["status"] == "active"
+    fresh = delegation.Delegations(runner.root, runner.registry, runner.goal_id, runner.agent_id, runner.config)
+    settled_stop(fresh, "lease-ack-loss")
+    assert inspect(runner)["lease"]["status"] == "released"
+
+
+def test_real_stop_leaves_a_newer_generation_alone(service, monkeypatch):
+    """Another execution's lease on the same Todo is not this stop's to release."""
+    root, runner = service
+    original = prepare_lease(root, runner, monkeypatch, operation_id="lease-foreign")
+    binding = runner.binding("analysis")
+    current = inspect(runner)["lease"]
+    runner._cli(binding, "task-lease", "release", "--goal-id", runner.goal_id,
+                "--todo-id", "todo_analyst-initial", "--owner", "analyst",
+                "--idempotency-key", original["idempotency_key"], "--expected-version", str(current["version"]))
+    acquired = runner._cli(binding, "task-lease", "acquire", "--goal-id", runner.goal_id,
+                           "--todo-id", "todo_analyst-initial", "--owner", "analyst",
+                           "--idempotency-key", "new-execution", "--expected-version", str(current["version"]))
+    assert acquired["lease"]["lease_epoch"] > original["lease_epoch"]
+    receipt = settled_stop(runner, "lease-foreign")
+    assert "lease_released" not in receipt["stop"]["settled"]
+    held = inspect(runner)["lease"]
+    assert held["status"] == "active" and held["idempotency_key"] == "new-execution"

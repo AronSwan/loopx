@@ -787,6 +787,15 @@ def test_a_stop_written_before_the_effects_linearizes_against_them(service, monk
     assert receipt["phase"] == "settled" and receipt["status"] == "stopped"
 
 
+def held_lease(monkeypatch, row, key):
+    """The annotation `_acquire_delegation_lease` writes, and a canonical lease that still holds it."""
+    row["turn_instance_id"] = key
+    lease = {"owner": "analyst", "idempotency_key": key, "status": "active", "version": 1, "lease_epoch": 1}
+    monkeypatch.setattr(delegation_module, "inspect_task_lease",
+                        lambda **kwargs: {"ok": True, "action": "inspect", "active": True, "lease": lease})
+    return {"required": True, "handoff_mode": "hard_lease", "lease": dict(lease)}
+
+
 def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service, monkeypatch):
     """A required lease the stop could not release is not a settlement.
 
@@ -804,7 +813,7 @@ def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service
     path = runner.path("analysis-lease")
     row = _read(path)
     # A bounded member task holds a required lease; make the record say so.
-    row["task_lease"] = {"required": True, "idempotency_key": "lease-1", "version": 1}
+    row["task_lease"] = held_lease(monkeypatch, row, "lease-1")
     row["status"] = "stopped"
     runner._fenced_write(path, row)
     write_inbox(runner._stop_path(path), {
@@ -895,7 +904,7 @@ def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(servic
     path = runner.path("analysis-crash")
     row = _read(path)
     # The member holds a real required lease, as a bounded task does.
-    row["task_lease"] = {"required": True, "idempotency_key": "lease-crash", "version": 1}
+    row["task_lease"] = held_lease(monkeypatch, row, "lease-crash")
     right_after_ack = {**row, "status": "stopped"}
     runner._fenced_write(path, right_after_ack)
 
@@ -934,7 +943,7 @@ def test_a_crash_between_the_ack_and_the_lease_result_never_settles_unreleased(s
     runner.start("analysis", "analysis-crash-open", brief())
     path = runner.path("analysis-crash-open")
     row = _read(path)
-    row["task_lease"] = {"required": True, "idempotency_key": "lease-open", "version": 1}
+    row["task_lease"] = held_lease(monkeypatch, row, "lease-open")
     right_after_ack = {**row, "status": "stopped"}
     runner._fenced_write(path, right_after_ack)
     write_inbox(runner._stop_path(path), {

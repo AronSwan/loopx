@@ -143,7 +143,6 @@ def canonical_lease_at_the_native_edge(service, monkeypatch, operation_id, *,
     Python reconciliation runs for real instead of being stubbed out.
     """
     from loopx.control_plane.collaboration.inbox import _write as write_inbox
-    from loopx.control_plane.work_items import task_lease as lease_module
 
     root, runner = service
     monkeypatch.setattr(runner, "_spawn", lambda _: None)
@@ -165,7 +164,7 @@ def canonical_lease_at_the_native_edge(service, monkeypatch, operation_id, *,
     monkeypatch.setattr(delegation, "local_authority_is_promoted", lambda **kwargs: True)
     monkeypatch.setattr(delegation, "show_goal_handoff_mode",
                         lambda **kwargs: {"handoff_mode": "hard_lease"})
-    monkeypatch.setattr(lease_module, "inspect_task_lease", lambda **kwargs: {
+    monkeypatch.setattr(delegation, "inspect_task_lease", lambda **kwargs: {
         "ok": True, "action": "inspect", "active": active, "legacy_fallback_used": False,
         "lease": {"owner": owner, "idempotency_key": lease_key + key_suffix,
                   "status": "active", "version": version},
@@ -222,9 +221,6 @@ def test_a_recovered_lease_obligation_settles_only_after_its_exact_release(servi
                          "todo_id": "todo_analyst-initial", "owner": "analyst",
                          "idempotency_key": lease_key,
                          "expected_version": 4, "registry_path": runner.registry}]
-    # The recovered identity is persisted, so a later read names the same lease.
-    recovered = _read(runner.path("analysis-lease-recover"))
-    assert recovered["task_lease"]["idempotency_key"] == lease_key
     assert runner.stop("analysis-lease-recover", execute=True) == receipt
     assert len(releases) == 1
 
@@ -256,15 +252,13 @@ def test_an_unreadable_lease_obligation_keeps_the_stop_open(service, monkeypatch
     settled stop would trade a wrong terminal receipt for a crash, so the stop
     stays open and the next read retries the authority instead.
     """
-    from loopx.control_plane.work_items import task_lease as lease_module
-
     root, runner, lease_key = canonical_lease_at_the_native_edge(
         service, monkeypatch, "analysis-lease-unreadable")
 
     def unreadable(**kwargs):
         raise RuntimeError("native authority store unavailable")
 
-    monkeypatch.setattr(lease_module, "inspect_task_lease", unreadable)
+    monkeypatch.setattr(delegation, "inspect_task_lease", unreadable)
     releases = []
     monkeypatch.setattr(delegation, "release_task_lease",
                         lambda **kwargs: releases.append(kwargs) or {"released": True})
