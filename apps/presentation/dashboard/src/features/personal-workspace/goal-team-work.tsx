@@ -21,7 +21,7 @@ const PULSE_LABELS: Record<PulseBucket, {zh: string; en: string}> = {
   validating: {zh: "正在验收", en: "Validating"},
   accepted: {zh: "已通过", en: "Accepted"},
   attention: {zh: "需要处理", en: "Needs attention"},
-  stopped: {zh: "停止已登记", en: "Stop recorded"},
+  stopped: {zh: "已登记停止", en: "Stop on record"},
   dispatched: {zh: "等待回读", en: "Awaiting readback"},
   unknown: {zh: "状态未知", en: "Unknown"},
 };
