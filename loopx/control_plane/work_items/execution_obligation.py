@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..quota.effective_action import EffectiveAction
+
 
 SUCCESSOR_REPLAN_REQUIRED_MODE = "successor_replan_required"
 
@@ -74,7 +76,7 @@ def build_execution_obligation(
             ),
         }
     if should_run and (
-        effective_action == "autonomous_replan_required"
+        effective_action == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
         or recommended_mode == "autonomous_replan_required"
     ):
         raw_replan_obligation = heartbeat_recommendation.get("replan_obligation")
