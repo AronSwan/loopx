@@ -45,6 +45,8 @@ from ..control_plane.work_items.semantic_replan_writeback import (
 from ..extensions.lark.goal_channel_lifecycle import (
     goal_channel_gate_sync_failure,
     sync_human_gate_after_refresh,
+    blocked_notice_sync_failure,
+    sync_blocked_notice_after_refresh,
 )
 from ..history import load_registry
 from ..paths import resolve_runtime_root
@@ -777,6 +779,24 @@ def handle_refresh_state_command(
                 goal_id=args.goal_id,
                 exception=error,
             )
+        try:
+            blocked_sync = sync_blocked_notice_after_refresh(
+                registry_path=registry_path,
+                runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                external_sink_delivery_authorized=payload[
+                    "external_sink_delivery_authorized"
+                ]
+                is True,
+            )
+        except Exception as error:
+            blocked_sync = blocked_notice_sync_failure(
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                exception=error,
+            )
+        payload["goal_channel_blocked_notice_sync"] = blocked_sync
         payload["goal_channel_gate_sync"] = gate_sync
         apply_external_sink_postcondition(
             payload,
