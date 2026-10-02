@@ -877,6 +877,18 @@ def read_plan(root):
     return plan
 
 
+def _write_lock(root, lock_hash, pushed=False):
+    """窗口开启时写锁定锚lock.json(兑付K3写锁侧——原只有读方_load_lock,
+    条件分支永不触发;由controller在首场确认性运行prepare/auto起点调用)。
+    at钉UTC ISO秒格式(乙席K4注记: _journal_order_ok字典序比较须同格式)。"""
+    payload = {"hash": lock_hash,
+               "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "pushed": bool(pushed),
+               "schema_version": "research_lock_v1"}
+    write(root / "lock.json", payload)
+    return payload
+
+
 def _load_lock(root):
     """读根内锁定锚(lock.json,v1.1§5场内写锁兑付K3): {hash, at, pushed};无→None。"""
     p = root / "lock.json"
@@ -1364,6 +1376,21 @@ def auto(root):
                          f"(该版本要求 {want});检查launch模板端点行")
     timing = {}
     t_all = time.time()
+
+    # 锁定协议§5场内写锁(兑付K3写锁侧——窗口开启锚: 若根内已有锁锚则沿用
+    # 复跑不重置;否则首场写。锁hash=locking-protocol.md的commit锚,推送后生效)
+    if _load_lock(root) is None:
+        _proto_lock = (root / "docs" / "locking-protocol.md")
+        _lh = ""
+        try:
+            _lh = subprocess.run(
+                ["git", "-C", str(HERE), "log", "-1", "--format=%H", "--",
+                 "docs/locking-protocol.md"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10).stdout.strip()
+        except Exception:
+            pass
+        if _lh:
+            _write_lock(root, _lh, pushed=bool(os.environ.get("RESEARCH_LOCK_PUSHED")))
 
     def stamp(stage):
         timing[stage] = round(time.time() - t_all, 1)
