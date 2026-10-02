@@ -301,6 +301,26 @@ delivery persistently with:
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-human-gates --execute
 ```
 
+Blocked Todo notices use a separate, default-off opt-in. They carry the task,
+cause, impact, responsible party, recovery condition, and next action. A blocked
+primary Todo remains visible when safe fallback work continues. Enable or
+remove this delivery through the same private Goal Channel binding:
+
+```bash
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices --execute
+loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
+```
+
+A material refresh sends a notice only through the authorized Lark sink. The
+blocker identity and revision deduplicate unchanged messages; a resolved blocker
+that becomes blocked again gets a new delivery. The binding records pending,
+sent-but-unverified, verified, resolved, and superseded receipts. A provider
+failure or missing sink leaves the notice pending and does not stop safe fallback
+work. `status.json` exposes only public-safe counts and the two opt-ins; the
+private message identity stays in the binding. Chat replies do not approve or
+resolve a Todo; canonical Todo state must record recovery.
+
 The opt-in is stored only in the project-local private Goal Channel binding.
 It does not grant repository or LoopX transition authority. Chat replies can
 provide context, but a gate changes only after LoopX validates and records the

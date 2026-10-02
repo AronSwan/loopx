@@ -272,6 +272,22 @@ loopx goal-channel configure --goal-id <goal-id> --auto-notify-human-gates --exe
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-human-gates --execute
 ```
 
+受阻 Todo 通知有独立的 opt-in，默认关闭。通知包含任务、原因、影响、解除责任人、
+恢复条件和下一步；安全回退继续时，主要受阻任务仍会显式呈现。通过同一个私有
+Goal Channel binding 开启或关闭：
+
+```bash
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices --execute
+loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
+```
+
+实际刷新只向已授权的 Lark sink 发送。阻塞身份与修订用于抑制重复通知；解除后再次受阻
+会形成新的投递。私有 binding 保存待发送、已发送但未核验、已核验、已解除及被取代
+状态。发送失败或没有可用 sink 时保持待发送状态，安全回退不受阻。`status.json`
+只公开计数与两个 opt-in，不公开私有消息身份。群聊回复不构成 Todo 批准或解除；
+恢复须由 canonical Todo 状态确认。
+
 该 opt-in 只保存在项目本地私有的 Goal Channel binding 中，不授予仓库或 LoopX
 状态迁移权限。群聊回复可以补充 context，但只有经过 LoopX 校验并记录的 decision
 才能改变 gate 状态。
