@@ -896,6 +896,32 @@ def _write_lock(root, lock_hash, pushed=False):
     return payload
 
 
+def _load_lock_anchor(root):
+    """读锁锚工件lock-anchor.json(v2§5机器绑定): {protocol_hash, pushed_sha,
+    push_event_at}。锁=锚工件(第三方push事件时间),非任何本地时间戳。"""
+    p = root / "lock-anchor.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if d.get("protocol_hash") and d.get("push_event_at") else None
+    except Exception:
+        return None
+
+
+def _anchor_is_pushed_ancestor(anchor):
+    """锚校验fail-closed(v2§5): 锚工件protocol_hash必须是origin/local-harness
+    的祖先——协议推送后又本地改则拒绝开窗,不静默锚到未推送commit(合规组死角①)。"""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(HERE), "merge-base", "--is-ancestor",
+             anchor["protocol_hash"], "origin/local-harness"],
+            capture_output=True, timeout=15)
+        return r.returncode == 0
+    except Exception:
+        return False  # 校验不了=不放行(fail-closed)
+
+
 def _load_lock(root):
     """读根内锁定锚(lock.json,v1.1§5场内写锁兑付K3): {hash, at, pushed};无→None。"""
     p = root / "lock.json"
@@ -1384,19 +1410,30 @@ def auto(root):
     timing = {}
     t_all = time.time()
 
-    # 锁定协议§5场内写锁(兑付K3写锁侧)+锚工件(合规组G1③: pushed自报布尔、
-    # push事件时间无一处落盘——锁锚须有机器绑定的第三方锚工件,否则君子协定)
+    # 锁定协议v2§5场内写锁+锚校验(fail-closed): 有锁锚工件则锚定它(机器绑定
+    # 第三方push事件时间),无工件且未开窗则按v1.1动态取锚(向后兼容老根)。
+    _anchor = _load_lock_anchor(root)
     if _load_lock(root) is None:
-        _lh = ""
-        try:
-            _lh = subprocess.run(
-                ["git", "-C", str(HERE), "log", "-1", "--format=%H", "--",
-                 "docs/locking-protocol.md"], capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=10).stdout.strip()
-        except Exception:
-            pass
-        if _lh:
-            _write_lock(root, _lh, pushed=bool(os.environ.get("RESEARCH_LOCK_PUSHED")))
+        if _anchor is not None:
+            # v2路径: 锚工件在场——先fail-closed校验锚是origin/local-harness祖先
+            if not _anchor_is_pushed_ancestor(_anchor):
+                raise SystemExit(
+                    f"锁定锚校验失败: lock-anchor.json的protocol_hash="
+                    f"{_anchor['protocol_hash'][:12]} 不是origin/local-harness的祖先"
+                    f"——协议推送后又被本地改动,拒绝开窗(合规组死角①fail-closed)")
+            _write_lock(root, _anchor["protocol_hash"], pushed=True)
+        else:
+            # v1.1兼容路径: 无锚工件(老根/未开窗)——动态取锚(仅exploratory用)
+            _lh = ""
+            try:
+                _lh = subprocess.run(
+                    ["git", "-C", str(HERE), "log", "-1", "--format=%H", "--",
+                     "docs/locking-protocol.md"], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=10).stdout.strip()
+            except Exception:
+                pass
+            if _lh:
+                _write_lock(root, _lh, pushed=bool(os.environ.get("RESEARCH_LOCK_PUSHED")))
 
     # controller-start快照(合规组G3缺口: §4底座崩溃排除须'场start记录控制器
     # git HEAD+dirty快照'——原全仓零实现。发射起点落盘,崩溃排除援引的法定证据)
