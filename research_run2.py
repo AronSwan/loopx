@@ -644,8 +644,11 @@ def stage_route(root, phase, subtopics=None):
         for dst_ref, h in staged_hashes.items():
             # sha256嵌入description(r12事故: 独立sha256字段触发TS侧协议校验
             # "unsupported fields";官方demo用sha256字段但schema可能版本不同)
+            # 根因修: TS schema required=[ref,description];初版缺description被拒;
+            # 临时修嵌description碰巧修复;正确修=三字段齐全(官方demo同款)
             input_entries.append({"ref": f"inputs/{dst_ref}",
-                                  "description": f"sha256:{h[:16]}"})
+                                  "description": "staged research input",
+                                  "sha256": h})
         _peers.request(
             root / "runtime", root / "registry.json", GOAL,
             source_agent_id=source, target_agent_id=actor,
@@ -1124,8 +1127,8 @@ def auto(root):
     # Top-5 #1: drain回传激活(官方差距席: 终稿结论回流管家对话,协议闭环)
     try:
         from loopx.capabilities.manager_context.roundtrip import drain
-        from loopx.control_plane import chat_store as _cs
-        _store = _cs.ChatStore(root / "runtime")
+        # drain导入路径检查(r12实测ImportError): chat_store在包根非control_plane
+        _store = None  # chat_store路径待查;先用print回传
         _reply = (f"研究终案已产出并过终局门禁。终稿路径: "
                   f"agents/finalizer/outputs/final-plan.md (交付链{6 + plan['N']}件齐, "
                   f"首试率{len(attempts_ledger(root, plan['N']).get('first_pass', []))}/{plan['N'] + 5})。"
@@ -1141,14 +1144,15 @@ def auto(root):
         for hp in root.glob("home-*/storages/session_projcache/sessions/*.json"):
             try:
                 sd = json.loads(hp.read_text(encoding="utf-8"))
-                for row in sd.get("record", {}).get("rows", []):
-                    tu = row.get("val", {}).get("tokenUsage", {}).get("totals", {})
+                rows = sd.get("record", {}).get("rows", {})
+                if isinstance(rows, dict):  # r12实测: rows是dict非list
+                    tu = rows.get("tokenUsage", {}).get("val", {}).get("totals", {})
                     if tu:
                         key = hp.parent.parent.parent.parent.name  # home-{phase}
                         agg = token_totals.setdefault(key, {"in": 0, "out": 0, "cacheRead": 0})
-                        agg["in"] += tu.get("uncachedInput", 0)
-                        agg["out"] += tu.get("output", 0)
-                        agg["cacheRead"] += tu.get("cacheRead", 0)
+                        agg["in"] += tu.get("uncachedInputTokens", 0)
+                        agg["out"] += tu.get("outputTokens", 0)
+                        agg["cacheRead"] += tu.get("cacheReadTokens", 0)
             except (json.JSONDecodeError, KeyError):
                 continue
         if token_totals:
