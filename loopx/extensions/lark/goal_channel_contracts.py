@@ -25,6 +25,8 @@ GOAL_CHANNEL_CONNECTION_SET_SCHEMA_VERSION = "loopx_goal_channel_connection_set_
 # now own repeat-notification timing.
 DEFAULT_GATE_COOLDOWN_SECONDS = 3600
 HUMAN_GATE_AUTO_NOTIFY_SETTING = "human_gate_auto_notify_enabled"
+BLOCKED_NOTICE_AUTO_NOTIFY_SETTING = "blocked_notice_auto_notify_enabled"
+BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION = "loopx_goal_channel_blocked_notice_marker_v0"
 HUMAN_GATE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION = (
     "loopx_goal_channel_auto_notify_marker_v0"
 )
@@ -43,6 +45,39 @@ GATE_ACTION_PREFIX = re.compile(
 )
 
 
+class BlockedNoticeReceiptState(str, Enum):
+    """Provider delivery lifecycle; it does not mutate canonical Todo state."""
+
+    PENDING = "pending"
+    SENT_UNVERIFIED = "sent_unverified"
+    DELIVERED = "delivered"
+    RESUMED = "resumed"
+    RESOLVED = "resolved"
+    SUPERSEDED = "superseded"
+
+
+BLOCKED_NOTICE_RETIRED_STATES = frozenset({
+    BlockedNoticeReceiptState.RESUMED,
+    BlockedNoticeReceiptState.RESOLVED,
+    BlockedNoticeReceiptState.SUPERSEDED,
+})
+
+
+def blocked_notice_receipt_matches_target(
+    key: str, receipt: Mapping[str, Any], *, goal_id: str, chat_id: str,
+) -> bool:
+    if not chat_id or receipt.get("kind") != "blocked_notice":
+        return False
+    if receipt.get("chat_id"):
+        return receipt["chat_id"] == chat_id
+    # Older initial receipts encode the destination in their semantic key.
+    # An unbound historical/reopened receipt cannot prove this target's delivery.
+    return key == semantic_key(
+        goal_id, "lark", "blocked_notice", str(receipt.get("blocker_identity") or ""),
+        str(receipt.get("blocker_revision") or ""), chat_id,
+    )
+
+
 class LarkTopicEventDecisionReason(str, Enum):
     """Typed, content-free outcome of Goal Topic routing."""
 
@@ -55,6 +90,9 @@ class LarkTopicEventDecisionReason(str, Enum):
     SELF_MESSAGE = "self_message"
     INVALID_ROUTING_STATE = "invalid_routing_state"
     NOT_ADDRESSED = "not_addressed"
+    HISTORICAL_CONTEXT_ONLY = "historical_context_only"
+    BOT_MESSAGE = "bot_message"
+    HUMAN_IDENTITY_UNVERIFIED = "human_identity_unverified"
 
 
 LARK_TOPIC_EVENT_REJECTION_REASONS = {
@@ -299,6 +337,16 @@ def human_gate_auto_notify_enabled(binding: Mapping[str, Any] | None) -> bool:
     return automation.get(HUMAN_GATE_AUTO_NOTIFY_SETTING) is True
 
 
+def blocked_notice_auto_notify_enabled(binding: Mapping[str, Any] | None) -> bool:
+    automation = (
+        binding.get("automation")
+        if isinstance(binding, Mapping)
+        and isinstance(binding.get("automation"), Mapping)
+        else {}
+    )
+    return automation.get(BLOCKED_NOTICE_AUTO_NOTIFY_SETTING) is True
+
+
 def human_gate_auto_notify_marker_path(
     binding_path: Path,
     goal_id: str,
@@ -346,6 +394,46 @@ def clear_human_gate_auto_notify_marker(path: Path) -> None:
     path.expanduser().unlink(missing_ok=True)
 
 
+def blocked_notice_auto_notify_marker_path(binding_path: Path, goal_id: str) -> Path:
+    human_marker = human_gate_auto_notify_marker_path(binding_path, goal_id)
+    return human_marker.with_name(
+        human_marker.name.replace(
+            ".human-gate-auto-notify.json", ".blocked-notice-auto-notify.json"
+        )
+    )
+
+
+def blocked_notice_auto_notify_marker_enabled(path: Path) -> bool:
+    marker_path = path.expanduser()
+    if not marker_path.exists():
+        return False
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A damaged enabled marker must leave the sink visibly failed.
+        return True
+    return bool(
+        isinstance(payload, Mapping)
+        and payload.get("schema_version")
+        == BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION
+        and payload.get("enabled") is True
+    )
+
+
+def write_blocked_notice_auto_notify_marker(path: Path) -> None:
+    write_private_json_atomic(
+        path,
+        {
+            "schema_version": BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION,
+            "enabled": True,
+        },
+    )
+
+
+def clear_blocked_notice_auto_notify_marker(path: Path) -> None:
+    path.expanduser().unlink(missing_ok=True)
+
+
 def quota_human_gate_identity(quota_packet: Mapping[str, Any]) -> str:
     summary = quota_packet.get("user_todo_summary")
     summary = summary if isinstance(summary, Mapping) else {}
@@ -379,6 +467,19 @@ def _quota_human_gate_items(
         if items:
             return items[:3]
     return []
+
+
+def notification_request_snapshot(status: Mapping[str, Any], goal_id: str) -> dict[str, Any]:
+    """Adapt the existing complete same-read Goal Todo projection for transport.
+
+    This never admits requests: the shared TS owner joins only already selected
+    quota IDs and verifies their version/lifecycle before taking display fields.
+    """
+    queue = status.get("attention_queue") or {}
+    rows = [row for row in queue.get("items", [])
+            if isinstance(row, Mapping) and row.get("goal_id") == goal_id]
+    summary = (rows[0].get("user_todos") or {}) if len(rows) == 1 else {}
+    return {"goal_id": goal_id, "items": summary.get("items", [])}
 
 
 def quota_human_gate_state_generation(
@@ -417,6 +518,12 @@ def quota_human_gate_state_generation(
         "gate_identity": quota_human_gate_identity(quota_packet),
         "items": material_items,
     }
+    if "request_snapshot" in quota_packet:
+        # Delivery idempotency must cover the complete selected display body,
+        # not only the first 180/300 characters of a scheduling label.
+        material["request_content"] = _gate_notice_projection(
+            quota_packet=quota_packet, goal_id=str(quota_packet.get("goal_id") or ""),
+        )
     if not material_items:
         material["state"] = str(quota_packet.get("state") or "")
         material["question"] = public_safe_compact_text(
@@ -701,6 +808,49 @@ def control_message(
     return "\n".join(lines)
 
 
+def _gate_notice_projection(
+    *, goal_id: str, quota_packet: Mapping[str, Any],
+) -> dict[str, Any]:
+    # Scheduling labels cannot substitute for a decision request body.
+    from ...control_plane.effect_runtime import effect_runtime_result
+
+    def request_fields(item: Mapping[str, Any]) -> dict[str, Any]:
+        # Privacy filtering sees the whole field; truncation is NOT sanitization
+        # or completeness. TS owns the bounded-notice decision below.
+        def full_safe(value: Any) -> str | None:
+            return public_safe_compact_text(
+                value, normalize_text=lambda value, **_: " ".join(value.strip().split()),
+            )
+
+        fields = {key: item[key] for key in (
+            "todo_id", "goal_id", "role", "status", "task_class", "updated_at",
+            "done", "superseded_by",
+        ) if key in item}
+        for key, value in (("text", item.get("text")),
+                           ("note", item.get("note") or item.get("reason")),
+                           ("evidence", item.get("evidence"))):
+            fields[key] = full_safe(value)
+            if value and fields[key] is None:
+                fields["content_redacted"] = True
+        return fields
+
+    requests = []
+    for item in _quota_human_gate_items(quota_packet):
+        fields = request_fields(item)
+        fields["request_id"] = public_safe_compact_text(item.get("todo_id") or item.get("gate_id"), limit=120)
+        fields["reason"] = fields["note"]
+        requests.append(fields)
+    notice_input: dict[str, Any] = {"goal_id": goal_id, "requests": requests}
+    if "request_snapshot" in quota_packet:
+        snapshot = quota_packet.get("request_snapshot") or {}
+        notice_input["request_snapshot"] = {
+            "goal_id": snapshot.get("goal_id"),
+            "items": [request_fields(item) for item in snapshot.get("items", [])
+                      if isinstance(item, Mapping)],
+        }
+    return dict(effect_runtime_result("presentation.decision_notice.project", notice_input))
+
+
 def gate_message(
     *,
     goal_id: str,
@@ -715,20 +865,7 @@ def gate_message(
         or "A human decision is required.",
         limit=900,
     )
-    # Scheduling labels cannot substitute for a decision request body.
-    from ...control_plane.effect_runtime import effect_runtime_result
-
-    notice = effect_runtime_result("presentation.decision_notice.project", {
-        "requests": [
-            {
-                "request_id": public_safe_compact_text(item.get("todo_id") or item.get("gate_id"), limit=120),
-                "text": public_safe_compact_text(item.get("text"), limit=900),
-                "reason": public_safe_compact_text(item.get("note") or item.get("reason"), limit=450),
-                "evidence": public_safe_compact_text(item.get("evidence"), limit=450),
-            }
-            for item in _quota_human_gate_items(quota_packet)
-        ],
-    })
+    notice = _gate_notice_projection(goal_id=goal_id, quota_packet=quota_packet)
     lines = [
         "LoopX · Action required",
         "",
@@ -739,6 +876,8 @@ def gate_message(
     lines.extend(["", "Decision requests:"])
     if notice["source"] == "unavailable":
         lines.append("Request details are unavailable. Open the current request in LoopX; a scheduling summary is not a decision body.")
+    for item in notice.get("incomplete", []):
+        lines.append(f"Request {item['request_id']}: details incomplete ({item['reason_code']}); not decision-ready. Open the current request in LoopX.")
     for index, item in enumerate(notice["items"], start=1):
         body = GATE_ACTION_PREFIX.sub("", item["text"]).strip()
         lines.append(f"{index}. {body}")

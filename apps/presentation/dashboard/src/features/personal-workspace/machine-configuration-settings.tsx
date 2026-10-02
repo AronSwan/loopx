@@ -1,3 +1,4 @@
+import { PerformanceDiagnosisPanel } from "./performance-diagnosis-panel";
 import { UsageStatisticsSettings } from "./usage-statistics-settings";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Code2, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
@@ -102,7 +103,7 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section }: { section: "steward" | "other" }) {
+export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "other"; onChanged?: () => void }) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
@@ -279,6 +280,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setNotice(result.status === "applied"
         ? t(operation === "remove" ? "machine.removed" : "machine.applied")
         : t("machine.unchanged"));
+      onChanged?.();
     } catch (cause) {
       setPreview(null);
       setPreviewOperation("upsert");
@@ -312,6 +314,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setPreview(null);
       await reload();
       setNotice(t("machine.rolledBack"));
+      onChanged?.();
     } catch (cause) {
       setRollbackPlan(null);
       setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
@@ -320,23 +323,25 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
     }
   }
 
+  const diagnosis = section === "other" ? <PerformanceDiagnosisPanel /> : null;
   if (busy === "load") {
-    return <div className="personal-machine-loading" role="status">{t("common.loading")}</div>;
+    return <>{diagnosis}<div className="personal-machine-loading" role="status">{t("common.loading")}</div></>;
   }
   if (!inspection) {
-    return <section className="personal-capability-error" role="alert">
+    return <>{diagnosis}<section className="personal-capability-error" role="alert">
       <AlertTriangle aria-hidden size={18} />
       <span><strong>{t("machine.loadError")}</strong><small>{error}</small></span>
       <button onClick={() => void retryLoad()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.retry")}</button>
-    </section>;
+    </section></>;
   }
   if (!selected) {
-    return <p className="personal-capability-empty">{t("machine.capabilityEmpty")}</p>;
+    return <>{diagnosis}<p className="personal-capability-empty">{t("machine.capabilityEmpty")}</p></>;
   }
 
   return (
     <section className="personal-capability-settings" data-revision={inspection?.revision}>
       <div>
+        {diagnosis}
         {section === "steward" ? <details className="personal-capability-scope-note">
           <summary><ShieldCheck aria-hidden size={17} />{t("machine.liveDefault")}</summary>
           <p>{t("machine.liveDefaultDescription")}</p>

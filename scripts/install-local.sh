@@ -217,10 +217,8 @@ acquire_install_lock() {
 
 warn_stale_promotion_readiness() {
   local python_bin="${LOOPX_PYTHON:-python3}"
-  local runtime_root="${LOOPX_RUNTIME_ROOT:-$codex_home/loopx}"
   # Reuse the same collector and registry resolution without importing every CLI.
-  LOOPX_PROMOTION_WARNING_RUNTIME_ROOT="$runtime_root" \
-    PYTHONSAFEPATH=1 PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHONSAFEPATH=1 PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
     "$python_bin" - <<'PY_WARNING' || true
 import argparse
 import os
@@ -230,7 +228,7 @@ from loopx.cli_runtime import resolve_cli_registry
 from loopx.paths import default_registry_path
 from loopx.promotion_gate import build_promotion_gate
 
-runtime_root = os.environ["LOOPX_PROMOTION_WARNING_RUNTIME_ROOT"]
+runtime_root = os.environ.get("LOOPX_RUNTIME_ROOT") or None
 args = argparse.Namespace(command="promotion-gate", registry=str(default_registry_path()), runtime_root=runtime_root)
 registry_path, _ = resolve_cli_registry(args, [])
 try:
@@ -261,6 +259,36 @@ copy_path() {
     fi
     cp -R "$src" "$dst"
   fi
+}
+
+copy_apps() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -d "$src" || -L "$src" ]]; then
+    copy_path "$src" "$dst"
+    return
+  fi
+  # Application dependencies and build outputs never belong to a release.
+  # Exclude them before copying so staging does not pay to copy and delete them.
+  "${LOOPX_PYTHON:-python3}" - "$src" "$dst" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+excluded = {"node_modules", ".next", "dist", "build", "coverage"}
+
+def ignore(directory, names):
+    root = Path(directory)
+    # Cargo's default output directory belongs to its manifest, not every
+    # source/asset directory named target. It can also be a cache symlink.
+    ignored = excluded | ({"target"} if (root / "Cargo.toml").is_file() else set())
+    return [
+        name for name in names
+        if name in ignored and ((root / name).is_dir() or (root / name).is_symlink())
+    ]
+
+shutil.copytree(sys.argv[1], sys.argv[2], symlinks=True, ignore=ignore)
+PY
 }
 
 append_legacy_line() {
@@ -294,15 +322,21 @@ disable_legacy_shim() {
   append_legacy_line "legacy command disabled: $disabled"
 }
 
-install_symlink() {
-  local target="$1"
-  local link="$2"
-  local tmp="$link.tmp.$$"
-  rm -f "$tmp"
+check_symlink_destination() {
+  local link="$1"
   if [[ ! -L "$link" && -d "$link" ]]; then
     echo "loopx installer error: $link is a directory; remove it before installing" >&2
     return 1
   fi
+}
+
+install_symlink() {
+  local target="$1"
+  local link="$2"
+  local tmp="$link.tmp.$$"
+  # Repeat the check at replacement time in case a caller changed the path.
+  check_symlink_destination "$link" || return 1
+  rm -f "$tmp"
   ln -s "$target" "$tmp"
   LOOPX_LINK_TMP="$tmp" LOOPX_LINK_TARGET="$link" "${LOOPX_PYTHON:-python3}" - <<'PY'
 import os
@@ -683,6 +717,19 @@ promote_default=0
 if resolve_default_promotion; then
   promote_default=1
 fi
+# Reject unusable entry targets before building candidates or upgrading data.
+# Canary-only installs must leave the default entry alone, even if it is a directory.
+if [[ "$promote_default" == "1" ]]; then
+  check_symlink_destination "$bin_dir/loopx"
+  check_symlink_destination "$bin_dir/loopx-apply-rrule"
+elif [[ "$install_canary" == "0" ]]; then
+  echo "loopx installer error: default promotion is guarded and LOOPX_INSTALL_CANARY=0 leaves no install target" >&2
+  echo "Set LOOPX_PROMOTE_DEFAULT=1 only after explicitly approving this checkout." >&2
+  exit 2
+fi
+if [[ "$install_canary" != "0" ]]; then
+  check_symlink_destination "$bin_dir/loopx-canary"
+fi
 if [[ "$promote_default" == "1" ]]; then
   # Preparing shared Chat assets is part of the guarded installation.
   mkdir -p "$releases_dir"
@@ -703,11 +750,6 @@ fi
 "${LOOPX_PYTHON:-python3}" "$repo_root/scripts/chat_bundle.py" "${chat_bundle_args[@]}"
 
 if [[ "$promote_default" == "0" ]]; then
-  if [[ "$install_canary" == "0" ]]; then
-    echo "loopx installer error: default promotion is guarded and LOOPX_INSTALL_CANARY=0 leaves no install target" >&2
-    echo "Set LOOPX_PROMOTE_DEFAULT=1 only after explicitly approving this checkout." >&2
-    exit 2
-  fi
   mkdir -p "$bin_dir"
   chmod +x "$repo_root/scripts/loopx"
   install_symlink "$repo_root/scripts/loopx" "$bin_dir/loopx-canary"
@@ -749,7 +791,7 @@ copy_path "$repo_root/skills" "$release_tmp/skills"
 copy_path "$repo_root/docs" "$release_tmp/docs"
 copy_path "$repo_root/man" "$release_tmp/man"
 copy_path "$repo_root/examples" "$release_tmp/examples"
-copy_path "$repo_root/apps" "$release_tmp/apps"
+copy_apps "$repo_root/apps" "$release_tmp/apps"
 copy_path "$repo_root/.github" "$release_tmp/.github"
 copy_path "$repo_root/README.md" "$release_tmp/README.md"
 copy_path "$repo_root/LICENSE" "$release_tmp/LICENSE"
@@ -759,11 +801,6 @@ copy_path "$repo_root/MANIFEST.in" "$release_tmp/MANIFEST.in"
 printf '%s\n' "$LOOPX_PYTHON" >"$release_tmp/.loopx-python"
 find "$release_tmp" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$release_tmp" -name '*.pyc' -type f -delete
-if [[ -d "$release_tmp/apps" ]]; then
-  find "$release_tmp/apps" \
-    \( -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage \) \
-    \( -type d -o -type l \) -prune -exec rm -rf {} +
-fi
 PYTHONPATH="$release_tmp" "${LOOPX_PYTHON:-python3}" \
   "$release_tmp/scripts/render-manpage.py" \
   --output "$release_tmp/man/loopx.1"

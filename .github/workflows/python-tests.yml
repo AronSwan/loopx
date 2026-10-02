@@ -3,6 +3,8 @@ name: Python Tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  # Inert until the main ruleset enables a merge queue; queue runs are full.
+  merge_group:
   workflow_dispatch:
   push:
     branches:
@@ -105,19 +107,42 @@ jobs:
           cache-dependency-path: apps/presentation/dashboard/package-lock.json
       - run: python scripts/chat_bundle.py build --install
       - run: python scripts/chat_bundle.py verify --source
-      - name: Qualify the actual compiled UI before saving the artifact
-        working-directory: apps/presentation/dashboard
-        run: |
-          ./node_modules/.bin/playwright install --with-deps chromium
-          npm run smoke:personal-workspace-packaged
-          npm run smoke:chat-turn-acceptance-retry
-          npm run smoke:chat-upgrade
+      # Publish as soon as the bundle is built and verified so consumers start
+      # in parallel with browser qualification; `checks` still requires it.
       - uses: actions/upload-artifact@v7
         with:
           name: chat-bundle-${{ github.sha }}
           path: loopx/web/chat/
           if-no-files-found: error
           retention-days: 7
+
+  chat-bundle-browser:
+    needs: [changes, chat-bundle]
+    if: needs.changes.outputs.core_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
+      - name: Qualify the actual compiled UI
+        working-directory: apps/presentation/dashboard
+        run: |
+          npm ci --ignore-scripts
+          ./node_modules/.bin/playwright install --with-deps chromium
+          npm run smoke:personal-workspace-packaged
+          npm run smoke:chat-turn-acceptance-retry
+          npm run smoke:chat-upgrade
 
   kernel-static-checks:
     needs: [changes, chat-bundle]
@@ -299,6 +324,12 @@ jobs:
           npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix apps/presentation/dashboard
 
+      - name: Check the CSS custom-property classifier contract
+        run: node scripts/check-css-custom-properties.test.mjs
+
+      - name: Reject undefined CSS custom properties
+        run: node scripts/check-css-custom-properties.mjs dashboard
+
       - name: Measure Dashboard unit and browser interactions
         env:
           LOOPX_DASHBOARD_COVERAGE: "1"
@@ -320,12 +351,13 @@ jobs:
   checks:
     # Preserve the required check name while exposing independent failure lanes.
     if: always() && needs.changes.outputs.core_tests == 'true'
-    needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance]
+    needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance, chat-bundle-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Require kernel and Dashboard qualification
         env:
+          BROWSER_RESULT: ${{ needs.chat-bundle-browser.result }}
           DASHBOARD_RESULT: ${{ needs.dashboard-acceptance.result }}
           KERNEL_RESULT: ${{ needs.kernel-static-checks.result }}
           TYPESCRIPT_RESULT: ${{ needs.typescript-coverage.result }}
@@ -333,6 +365,7 @@ jobs:
           test "$KERNEL_RESULT" = success
           test "$TYPESCRIPT_RESULT" = success
           test "$DASHBOARD_RESULT" = success
+          test "$BROWSER_RESULT" = success
 
   node-minimum-compatibility:
     needs: changes
@@ -363,7 +396,7 @@ jobs:
     needs: changes
     # The unsharded full suite outlasts a PR's qualification window, so the
     # non-blocking probe runs on main and on demand where it can finish.
-    if: github.event_name != 'pull_request' && needs.changes.outputs.core_tests == 'true'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.core_tests == 'true'
     continue-on-error: true
     runs-on: ubuntu-latest
     # This runs the full core conformance suite. Allow forward-runtime/runner
@@ -503,6 +536,8 @@ jobs:
 
   sonar:
     needs: pytest
+    # Queue refs are temporary; analyse PRs and main, not gh-readonly-queue/*.
+    if: github.event_name != 'merge_group'
     uses: ./.github/workflows/sonarcloud.yml
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -655,6 +690,25 @@ jobs:
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
+      - name: Check Windows collaboration lock sidecars
+        run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
+
+      - name: Validate local-state routing and interruption recovery on Windows
+        run: >-
+          python -m pytest -q
+          tests/test_local_state_migration.py::test_windows_junction_goal_source_never_reads_or_moves_outside_project
+          tests/test_local_state_migration.py::test_windows_junction_rollback_destination_never_writes_outside_project
+          tests/test_local_state_migration.py::test_windows_junction_goal_destination_never_writes_outside_project
+          tests/test_local_state_migration.py::test_extension_cli_keeps_legacy_machine_state_without_a_global_registry
+          tests/test_local_state_migration.py::test_first_global_registration_keeps_legacy_machine_state
+          tests/test_local_state_migration.py::test_rollback_io_failure_can_retry_to_consistent_original_routes
+          tests/test_local_state_migration.py::test_hard_interruption_has_a_recoverable_receipt
+          tests/test_local_state_migration.py::test_partial_rollback_rejects_subsequent_work_and_keeps_it
+          tests/test_local_state_migration.py::test_home_project_metadata_does_not_claim_the_machine_runtime
+          tests/test_local_state_migration.py::test_registry_writes_pin_bytes_across_host_newline_translation
+          tests/test_local_state_migration.py::test_earlier_v1_windows_registry_bytes_remain_recoverable
+          tests/test_local_state_migration.py::test_new_operation_does_not_accept_unrecorded_registry_newlines
+
       - name: Set up the qualified SQLite runtime
         uses: actions/setup-node@v6
         with:
@@ -707,7 +761,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Verify the source-bound, browser-qualified Dashboard artifact
+      - name: Verify the source-bound Dashboard artifact
         run: python scripts/chat_bundle.py verify --source
 
   merge-gate:

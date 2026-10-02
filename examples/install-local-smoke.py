@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -71,7 +72,9 @@ def run_install(
     cwd: Path = REPO_ROOT,
     revalidate_extensions: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    print(f"install-local-smoke: installing {release_id}", flush=True)
+    started = time.monotonic()
+    result = subprocess.run(
         [str(INSTALL_SCRIPT)],
         cwd=cwd,
         env={
@@ -85,6 +88,11 @@ def run_install(
         capture_output=True,
         text=True,
     )
+    print(
+        f"install-local-smoke: installed {release_id} in {time.monotonic() - started:.2f}s",
+        flush=True,
+    )
+    return result
 
 
 def write_promotion_readiness(
@@ -212,12 +220,15 @@ def main() -> int:
             **os.environ,
             "HOME": str(home),
             "CODEX_HOME": str(codex_home),
+            "LOOPX_REGISTRY": str(home / ".loopx" / "registry.global.json"),
+            "LOOPX_RUNTIME_ROOT": str(home / ".loopx"),
             "OPENCODE_CONFIG_DIR": str(home / ".config" / "opencode"),
             "LOOPX_BIN_DIR": str(bin_dir),
             "LOOPX_SHELL_PROFILE": str(profile),
             "LOOPX_INSTALL_SKILL": "1",
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_PYTHON": sys.executable,
+            "LOOPX_USAGE_PING": "0",
             "PATH": os.environ.get("PATH", ""),
             "SHELL": "/bin/zsh",
         }
@@ -438,10 +449,10 @@ def main() -> int:
             "pull_requests[review_action_kind!=null].evidence_commands",
             "Do not pipe the only copy through `jq`",
             "completion_gate",
-            "Never infer `verified` from metadata or CI",
+            "never infer `verified` from metadata or CI",
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
-            "Merge still routes through `loopx-pr-merge`",
+            "Merge routes through `loopx-pr-merge`",
         ):
             assert phrase in pr_review_text, phrase
         assert "Do not use this skill to approve" not in pr_review_text, pr_review_text
@@ -567,7 +578,7 @@ def main() -> int:
                 )
 
         cli_env = {**env, "PATH": f"{bin_dir}:{env['PATH']}"}
-        runtime_run_dir = home / ".codex" / "loopx" / "goals" / "loopx-meta" / "runs"
+        runtime_run_dir = home / ".loopx" / "goals" / "loopx-meta" / "runs"
         generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         write_promotion_readiness(runtime_run_dir, generated_at=generated_at, label="fresh")
 
@@ -798,7 +809,7 @@ def main() -> int:
         assert payload["ok"] is True, payload
         assert payload["schema_version"] == "heartbeat_agent_input_v1", payload
         expected_quota_guard = (
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
             'quota should-run --goal-id installer-smoke-goal '
             '--turn-instance-id "${LOOPX_TURN:?}"'
         )
@@ -859,60 +870,60 @@ def main() -> int:
         assert "```bash\n" in canary_task_body and "LOOPX_TURN=<current_time_iso>" in canary_task_body, canary_payload
         assert "not a command-prefix assignment" in canary_task_body, canary_payload
 
-        # The initial install exercises the default post-install extension
-        # revalidation. Repeated fixture installs do not add coverage for that
-        # same provider scan, so skip the optional pass to keep this smoke
-        # inside the public-suite timeout budget.
-        fresh_install = run_install(
-            env, "install-smoke-fresh", revalidate_extensions=False
-        )
-        assert "loopx installed locally" in fresh_install.stdout, fresh_install.stdout
-        assert "loopx install warning" not in fresh_install.stderr, fresh_install.stderr
-
-        stale_generated_at = (datetime.now(timezone.utc) - timedelta(hours=25)).replace(microsecond=0).isoformat()
-        write_promotion_readiness(runtime_run_dir, generated_at=stale_generated_at, label="stale")
-        stale_install = run_install(
-            env, "install-smoke-stale", revalidate_extensions=False
-        )
-        assert "loopx installed locally" in stale_install.stdout, stale_install.stdout
-        assert "promotion-readiness evidence is stale" in stale_install.stderr, stale_install.stderr
-        assert "age_hours=" in stale_install.stderr, stale_install.stderr
-        assert "non-blocking" in stale_install.stderr, stale_install.stderr
-
+        # Exercise two actual upgrades after the default install. Readiness
+        # freshness and optional Host configuration are independent inputs:
+        # pair fresh evidence with a broken OpenCode config, then stale evidence
+        # with a healthy config. Keep every warning/Host assertion without
+        # paying for two extra copies and complete candidate checks.
+        # The initial install covers post-install extension revalidation;
+        # repeating that same provider scan does not add upgrade coverage.
         blocked_opencode_root = home / ".config" / "opencode-blocked"
         blocked_opencode_root.mkdir(parents=True)
         (blocked_opencode_root / "opencode.jsonc").write_text(
             "{ invalid\n",
             encoding="utf-8",
         )
-        blocked_opencode_install = run_install(
+        fresh_install = run_install(
             {
                 **env,
                 "LOOPX_INSTALL_OPENCODE": "1",
                 "OPENCODE_CONFIG_DIR": str(blocked_opencode_root),
             },
-            "install-smoke-opencode-blocked",
+            "install-smoke-fresh",
             revalidate_extensions=False,
         )
+        assert "loopx installed locally" in fresh_install.stdout, fresh_install.stdout
+        assert "loopx install warning" not in fresh_install.stderr, fresh_install.stderr
         assert (
             "loopx OpenCode bridge: install attempted; run manually:"
-            in blocked_opencode_install.stdout
-        ), blocked_opencode_install.stdout
+            in fresh_install.stdout
+        ), fresh_install.stdout
         assert (blocked_opencode_root / "commands" / "loopx.md").is_file()
         assert not (blocked_opencode_root / "plugins" / "loopx-goal.js").exists()
         assert not (blocked_opencode_root / "loopx" / "goal-bridge-runtime.mjs").exists()
         assert not (blocked_opencode_root / "package.json").exists()
+        assert wrapper.resolve().parents[1].name == "install-smoke-fresh"
+        assert fallback_wrapper.resolve().parents[1] == wrapper.resolve().parents[1]
 
-        opencode_install = run_install(
+        stale_generated_at = (datetime.now(timezone.utc) - timedelta(hours=25)).replace(microsecond=0).isoformat()
+        write_promotion_readiness(runtime_run_dir, generated_at=stale_generated_at, label="stale")
+        stale_install = run_install(
             {**env, "LOOPX_INSTALL_OPENCODE": "1"},
-            "install-smoke-opencode",
+            "install-smoke-stale",
             revalidate_extensions=False,
         )
-        assert "loopx OpenCode bridge:" in opencode_install.stdout, opencode_install.stdout
+        assert "loopx installed locally" in stale_install.stdout, stale_install.stdout
+        assert "promotion-readiness evidence is stale" in stale_install.stderr, stale_install.stderr
+        assert "age_hours=" in stale_install.stderr, stale_install.stderr
+        assert "non-blocking" in stale_install.stderr, stale_install.stderr
+
+        assert "loopx OpenCode bridge:" in stale_install.stdout, stale_install.stdout
         assert (opencode_root / "commands" / "loopx.md").is_file()
         assert (opencode_root / "plugins" / "loopx-goal.js").is_file()
         assert (opencode_root / "loopx" / "goal-bridge-runtime.mjs").is_file()
         assert (opencode_root / "package.json").is_file()
+        assert wrapper.resolve().parents[1].name == "install-smoke-stale"
+        assert fallback_wrapper.resolve().parents[1] == wrapper.resolve().parents[1]
 
     print("install-local-smoke ok")
     return 0

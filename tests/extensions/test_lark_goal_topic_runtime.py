@@ -7,7 +7,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,18 @@ from loopx.extensions.lark.goal_channel_contracts import (
 )
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
 from loopx.extensions.lark.goal_topic_connections import connect_lark_goal_topic
+
+
+_FIXTURE_TIME_ANCHOR = datetime.now(UTC).replace(second=0, microsecond=0)
+
+
+def _fixture_time(minutes_ago: int) -> str:
+    """Return one stable, recent UTC minute for manager-context fixtures."""
+    return (
+        (_FIXTURE_TIME_ANCHOR - timedelta(minutes=minutes_ago))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def test_goal_topic_runtime_exposes_the_inbox_bridge() -> None:
@@ -95,12 +107,12 @@ def test_a_stale_steward_session_names_the_rebind_instead_of_a_generic_failure(
     assert "管家处理失败" not in text
 
 
-def test_existing_collector_uses_the_real_compact_event_schema() -> None:
+def test_compact_collector_preserves_optional_reply_lineage() -> None:
     projection = _jq_projection("oc_public_fixture")
 
     assert "message_id:(.message_id // .id)" in projection
-    assert "root_id" not in projection
-    assert "parent_id" not in projection
+    assert "root_id:.root_id" in projection
+    assert "parent_id:.parent_id" in projection
     assert "mentions" not in projection
     assert "mentioned" not in projection
 
@@ -287,21 +299,6 @@ def test_mention_uses_existing_inbox_reply_and_ack_path(tmp_path: Path) -> None:
     assert projection["processed_count"] == 1
 
 
-@pytest.fixture
-def manager_context_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the dated fixture within retention without disabling compaction."""
-    from loopx.extensions.lark import manager_context
-
-    class FixtureDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            instant = datetime(2026, 9, 13, 6, 1, tzinfo=UTC)
-            return instant.astimezone(tz) if tz is not None else instant.replace(tzinfo=None)
-
-    monkeypatch.setattr(manager_context, "datetime", FixtureDatetime)
-
-
-@pytest.mark.usefixtures("manager_context_clock")
 def test_manager_captures_unaddressed_context_without_granting_turn_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -361,7 +358,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_context_only",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
             "mentions": [],
             "sender_type": "user",
@@ -382,7 +379,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_context_only",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
             "mentions": [],
             "sender_type": "user",
@@ -406,7 +403,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_authorized",
             "chat_id": "oc_public_fixture",
             "root_id": "om_unrelated_thread",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "@linkmacbot 结合上文给结论",
             "mentions": [{"id": "cli_public_fixture"}],
             "sender_type": "user",
@@ -423,7 +420,7 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
     assert route["context_materials"] == [
         {
             "message_id": "om_context_only",
-            "create_time": "2026-09-13T05:59:00Z",
+            "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
         }
     ]
@@ -469,7 +466,7 @@ def test_manager_route_rejects_missing_or_unknown_authority_mode(
             "message_id": "om_invalid_authority",
             "chat_id": "oc_public_fixture",
             "root_id": "om_topic_alpha",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "continue",
             "mentions": [],
             "sender_type": "user",
@@ -486,7 +483,6 @@ def test_manager_route_rejects_missing_or_unknown_authority_mode(
     assert answer_calls == []
 
 
-@pytest.mark.usefixtures("manager_context_clock")
 def test_manager_authorized_turn_quietly_recovers_history_as_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -536,7 +532,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
                     {
                         "message_id": "om_old_authorized",
                         "root_id": "om_topic_alpha",
-                        "create_time": "2026-09-13T05:59:00Z",
+                        "create_time": _fixture_time(61),
                         "content": "@linkmacbot 历史请求只作背景",
                         "mentions": [{"id": "cli_public_fixture"}],
                         "sender_type": "user",
@@ -565,7 +561,7 @@ def test_manager_authorized_turn_quietly_recovers_history_as_context(
             "message_id": "om_current_authorized",
             "chat_id": "oc_public_fixture",
             "root_id": "om_topic_alpha",
-            "create_time": "2026-09-13T06:00:00Z",
+            "create_time": _fixture_time(60),
             "content": "@linkmacbot 结合刚才内容回答",
             "mentions": [{"id": "cli_public_fixture"}],
             "sender_type": "user",
@@ -3469,3 +3465,103 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
     )
     assert saved[PART_STALL_NOTICE_KEY] is True
     assert saved["status"] == "pending"
+
+
+@pytest.mark.parametrize("manager", [False, True])
+@pytest.mark.parametrize("thread", [False, True])
+def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
+    tmp_path: Path, manager: bool, thread: bool,
+) -> None:
+    """Real inbox/controller/store; only the external provider/model are fixtures."""
+    import runpy
+    import stat
+
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.extensions.lark.event_collector_runtime import enrich_lark_event_reply_context
+    from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic, process_lark_goal_topic_event
+
+    executable = tmp_path / "codex"
+    fixture = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))
+    executable.write_text(fixture["FAKE_CODEX"], encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    store = ChatSessionStore(tmp_path / "chat")
+    controller = ChatRuntimeController(store=store, codex_bin=str(executable))
+    parent_text = "Dependency review is ready; the draft card has not been approved."
+    messages = {
+        "om_question": {
+            "message_id": "om_question", "chat_id": "oc_public_fixture",
+            "content": "Where is the card?", "root_id": "om_topic_alpha",
+            "parent_id": "om_parent", "mentions": [],
+            "sender": {"sender_type": "user", "id": "ou_owner_fixture"},
+        },
+        "om_parent": {
+            "message_id": "om_parent", "chat_id": "oc_public_fixture",
+            "body": {"content": json.dumps({"text": parent_text})},
+            "sender": {"sender_type": "app", "id": "cli_public_fixture"},
+        },
+    }
+    if thread:
+        # Real formatted provider shape: ancestry is on the event, while mget
+        # supplies a thread position and root expansion rather than parent_id.
+        question = messages["om_question"]
+        question.pop("parent_id")
+        question.pop("root_id")
+        question.update(thread_id="omt_fixture", thread_message_position="2",
+                        mentions=[{"name": "linkmacbot", "id": "cli_public_fixture"}])
+        root = {"message_id": "om_topic_alpha", "chat_id": "oc_public_fixture",
+                "thread_id": "omt_fixture", "thread_message_position": "-1",
+                "content": "Review the initial draft."}
+        revised = {**root, "message_id": "om_revision", "thread_message_position": "1",
+                   "content": parent_text}
+        messages["om_topic_alpha"] = {**root, "thread_replies": [revised, question]}
+
+    def provider(argv: list[str], **_kwargs: Any):
+        mid = argv[argv.index("--message-ids") + 1]
+        return subprocess.CompletedProcess(argv, 0, json.dumps({
+            "ok": True, "data": {"messages": [messages[mid]]},
+        }), "")
+
+    event = enrich_lark_event_reply_context(
+        {"schema_version": "lark_event_inbox_event_v0", "message_id": "om_question",
+         "event_id": "evt_question", "chat_id": "oc_public_fixture",
+         **({"root_id": "om_topic_alpha"} if thread else {})},
+        runner=provider, command_prefix=["lark-cli"], profile="mew",
+        profile_app_id="cli_public_fixture", configured_chat_id="oc_public_fixture",
+    )
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    state: dict[str, Any] = {}
+
+    def answer(route: Any, text: str):
+        return answer_lark_goal_topic(
+            route={**route, **({"conversation_kind": "manager"} if manager else {})},
+            text=text, work_dir=tmp_path, objective="Inspect dependency review.",
+            runtime_controller=controller,
+        )
+
+    options = dict(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        runtime_root=tmp_path / "runtime", answer=answer,
+        reply_runner=_reply_runner(state),
+    )
+    try:
+        result = process_lark_goal_topic_event(**options, event=event)
+        assert result["status"] == "replied_and_acknowledged"
+        session = store.list_sessions()[0]
+        user_messages = [r for r in store.messages(session["session_id"]) if r["role"] == "user"]
+        assert len(user_messages) == 1
+        assert parent_text in user_messages[0]["text"]
+        assert "context only" in user_messages[0]["text"]
+        assert user_messages[0]["text"].endswith("Where is the card?")
+        assert state["reply_text"] == "Runtime response."
+        readback = inspect_lark_event_inbox(
+            project=tmp_path / "runtime", config_path=result["inbox_config_ref"], limit=0,
+        )
+        assert readback["processed_count"] == 1
+        assert process_lark_goal_topic_event(**options, event=event)["status"] == "already_acknowledged"
+        assert len([r for r in store.messages(session["session_id"]) if r["role"] == "user"]) == 1
+    finally:
+        for session in store.list_sessions():
+            controller.close_session(session["session_id"])

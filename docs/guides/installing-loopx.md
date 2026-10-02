@@ -121,7 +121,7 @@ If installation used `-AddToUserPath`, remove the chosen `BinDir` from the
 Windows user PATH through Windows Environment Variables after uninstalling.
 Installation and PATH opt-in only expose local command and skill files. They do
 not grant repository, network, credential, external-system, or merge authority,
-and uninstall does not delete project-local `.loopx/`, `.codex/goals/`, or
+and uninstall does not delete project-local `.loopx/`, legacy `.codex/goals/`, or
 evidence state.
 
 ## Host Command Surfaces
@@ -140,10 +140,20 @@ one. Host integration changes command discovery only. It does not grant LoopX
 permission to write a repository, contact external systems, or bypass a user
 gate.
 
-Codex installs expose only canonical `loopx-*` skills. Older managed
-`loop-global-*` skill aliases are retired; their catalog entries and native
-slash-host compatibility remain available. This changes the Codex picker,
-not goal execution or write authority.
+Every host skill root exposes only canonical `loopx-*` skills. Install and
+uninstall retire older LoopX-managed `loop-global-*` skill files; unmarked
+user-owned files are preserved and reported. This prevents cross-host imports
+from republishing a deprecated facade beside its canonical outcome.
+
+**Invocation migration:** on Claude Code and Kiro, the skill is also the slash
+command, so use `/loopx-global-summary`, `/loopx-global-gates`,
+`/loopx-global-todos` and `/loopx-global-risks` instead of `/loop-global-*`.
+Other skill-backed hosts likewise expose only the canonical names. OpenCode
+alone retains independently installed `commands/loop-global-*.md` when legacy
+aliases are enabled. `--no-legacy-aliases` omits those command files from new
+installs; it does not retire existing native command files. The command catalog
+still describes aliases, but a catalog row does not install a host invocation.
+Goal execution and write authority are unchanged.
 
 Both workflow and command installation reconcile managed duplicates between
 `CODEX_HOME/skills` (default `~/.codex/skills`) and `~/.agents/skills`.
@@ -223,6 +233,16 @@ loopx update check       # read-only freshness and installation-owner check
 loopx update plan        # read-only command, validation, and rollback plan
 loopx update apply       # explicit local-environment mutation
 ```
+
+An upgrade does not move local state directories. Existing installations keep
+their selected legacy `$HOME/.codex/loopx` route and registered Goal state;
+fresh installations use `$HOME/.loopx`. Check `local_state_route` in
+`loopx --format json doctor` before and after upgrading. Directory migration is
+optional, separate from `update apply`, and requires the explicit offline
+[preview and recovery procedure](../product/migrations/local-state-path-migration.md).
+If both default runtime roots contain state, implicit routing refuses the
+conflict; use explicit `--registry` and `--runtime-root` for diagnosis or
+independent work until the conflict is resolved.
 
 For archive installs, `update apply` downloads the bootstrap installer to a
 private temporary file before executing it. Downloading is limited to three
@@ -371,7 +391,7 @@ python3 -m pip uninstall loopx
 ```
 
 Both host uninstallers preserve same-name files whose content changed after
-LoopX installed them. Project-local `.loopx/`, `.codex/goals/`, evidence, and
+LoopX installed them. Project-local `.loopx/`, legacy `.codex/goals/`, evidence, and
 runtime state are not deleted by package uninstall.
 
 Contributors who need a live canary should use a real checkout and

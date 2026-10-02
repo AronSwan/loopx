@@ -32,6 +32,7 @@ from ..scheduler.execution_context import (
 )
 from .unsettled_host_turn import (
     apply_unsettled_host_turn_recovery_if_required,
+    apply_receipt_bound_wait_recovery,
 )
 
 
@@ -491,6 +492,7 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
     resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -538,6 +540,8 @@ def build_live_quota_should_run_decision(
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
         replan_obligation_id=receipt_bound_replan_obligation_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     receipt_bound_monitor_phase = (
         settlement_readback.monitor_phase if settlement_readback else None
@@ -609,6 +613,7 @@ def build_live_quota_should_run_decision(
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        goal_ref=goal_ref,
     )
     _apply_retained_action_selection_reentry(
         payload,
@@ -662,7 +667,8 @@ def build_live_quota_should_run_decision(
     )
     if original_replan_settlement and settlement_readback is not None:
         attach_settlement_progress(payload, settlement_readback,
-            registry_path=registry_path, runtime_root=runtime_root)
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_ref=goal_ref)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
@@ -673,6 +679,20 @@ def build_live_quota_should_run_decision(
             current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
+            goal_ref=goal_ref,
+        )
+    if (
+        receipt_bound_todo_id and agent_id and turn_instance_id
+        and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
+        and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+        and (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
+    ):
+        apply_receipt_bound_wait_recovery(
+            payload, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
+            turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
+            scheduler_execution_context=resolved_context,
+            monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

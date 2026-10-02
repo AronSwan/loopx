@@ -61,12 +61,12 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S2 typed 内核与 durable authority · P0/P1** | Effect/Todo/quota/recovery owner、TS 事务迁移与 store 候选已存在；writer 和 provider 晋升仍未全闭合 | 每次迁移一个真实事务/恢复生命周期，先语义反例再切换/删除旧 owner；R1 正确性先于迁移数量。真实 backend、并发/fence、ambiguous commit、保留/导出恢复、bridge 成本及 D1–D3 资格 |
 | **S3 目标规划与 multi-Agent 协作 · P0/P1** | Vision/replan、peer frontier、claim/lease、directory、manager_context 和显式接续有基础；通用 handoff/共享修订未闭环 | R2 必须证明 peer 依赖；R3 完成并行汇合、流水线、求助/复核、接续、自动回报；R4 做一个保持 intent 的 amendment class。检查依赖环、输入失效、拒绝/延期、lease 转移、同基线竞争及 aggregate acceptance |
 | **S4 runtime/host/daemon · P0/P1** | attached/managed、Turn、broker、runtime connector 和 Desktop 修复存在；“registered”不等于可执行 | 选择一个真实合格组合完成多 Turn supervision；restart/cancel/drain/stop 不丢工作且旧 executor 被 fence。之后扩 host parity、service-profile 唯一 owner、干净安装与版本升级；按 adapter 能力显示不支持项 |
-| **S5 前端、Lark 与人机交互 · P0/P1** | 本地对话、settings、proposal 和部分 Goal Channel vertical 已有；统一受众/会话/工作回读仍需资格 | 用一个团队旅程贯穿设置、工作图、handoff、阻塞、成本、修订、产物和回报；共享 typed projection，验证重连/重复点击/stale/原路反馈。再做 intelligent review、无障碍键盘流程、中英术语、错误可恢复和离线降级；只在真实决策处打断人；[团队实时工作区](live-team-workspace-v0.zh-CN.md)让交换、修订与原协调员继续推进可见 |
+| **S5 前端、Lark 与人机交互 · P0/P1** | 本地对话、settings、proposal 和部分 Goal Channel vertical 已有；统一受众/会话/工作回读仍需资格 | 用一个团队旅程贯穿设置、工作图、handoff、阻塞、成本、修订、产物和回报；共享 typed projection，验证重连/重复点击/stale/原路反馈。再做 intelligent review、无障碍键盘流程、中英术语、错误可恢复和离线降级；只在真实决策处打断人；[团队实时工作区](live-team-workspace-v0.zh-CN.md)让交换、修订与原协调员继续推进可见；其[工作尺度地图分线](live-team-workspace-v0.zh-CN.md#11-交付顺序与激进推进-r2-的关系)先画出每个 Goal 的类型化 Todo 关系（W1），再在同一节点叠加实时状态与产出 |
 | **S6 材料、证据、记忆与学习 · P1** | authority registry、material lifecycle/frontier、decision context、reward memory、turn recall 已有；方向基线和部分归因仍是提案 | 先打通“材料 revision→同 Agent 阅读→决策引用→产物/结果”；失效、撤销、来源消失与遗忘策略可回读。handoff 保存影响决策的摘要与授权 artifact；OpenViking/Obelisk 按可选 provider 资格化。utility 的因果收益另以对照证明，不把相关性当提升 |
 | **S7 预算、调度与 fleet 规模 · P0 观测/P1–P2 扩展** | quota/scheduler 与部分 usage aggregate 存在；全 provider 成本、分布式资源预留及百 Agent 并发尚需证据 | 先区分配置预算、准入、消耗与估算；未知成本不记零、重复事件不双记。R7 分页/有界摘要及[完整历史传输](typescript-control-plane-migration-v0.zh-CN.md)，验收超出 RPC 上限后的写回/重放/单次扣记；provider/host 限流、公平性、背压、事件唤醒与失败隔离；分别报告注册数/活跃数/吞吐量和每个验收成果成本 |
 | **S8 能力、扩展与领域集成 · P1/P2** | 已有 capability catalog、extension 生命周期、hook、工程/研究/content/office 能力及 computer-use 合同 | 优先用现有 issue-fix/PR-review 和材料/研究 caller 检验共享控制面；每个 provider 带 readiness、版本、权限、默认关闭、卸载/回滚、失败隔离与真实入口证据。新 domain effect 从模拟单操作闭环开始，不先建市场或通用工作流 DSL |
 | **S9 身份、权限、隐私与信任 · P0 持续/P1–P2 远端** | public/private 边界、作用域、capability gate、fence 与确认合同分布在已有 owner | 随 R1/R3 验 sender/audience/artifact scope 和 stale authority；远端 R6 必须认证 tenant/Goal/actor/host、轮换撤销与最小权限。凭据保管、非可信工具/文档输入、依赖供应链、审计留存/删除及漏洞响应纳入真实路径；角色、消息或 memory 不铸造写权限 |
-| **S10 可靠性、诊断与运行运营 · P0/P1** | recovery/canary、read-only diagnostics 原型及 DSH event adapter 已有；C0/C1、开销和完整运营资格仍未闭合 | 故障分类→可观察状态→恢复演练→防复发；覆盖进程/存储/网络/投递故障和数据增长。定义并冻结 SLO、RPO/RTO、容量/保留边界，实测后标 qualified；运行手册含升级、备份恢复、停止与人工接管，不以测试数代替恢复结果 |
+| **S10 可靠性、诊断与运行运营 · P0/P1** | recovery/canary、read-only diagnostics 原型及 DSH event adapter 已有；C0/C1、开销和完整运营资格仍未闭合 | 故障分类→可观察状态→恢复演练→防复发；覆盖进程/存储/网络/投递故障和数据增长。Chat 上下文或 provider 读取晚于停止等待返回时，按持久 Turn 和精确 Session claim 判断：即使新请求已完成，也不得再启动旧请求或交接迟到结果。这项有界 GQ08 修复不证明上游 interrupt 保真，也不取消其他 owner 已准入的效果；完整恢复仍遵循[共享对话运行契约](capable-manager-semantic-handoff-v0.md#10-operational-contract)。定义并冻结 SLO、RPO/RTO、容量/保留边界，实测后标 qualified；运行手册含升级、备份恢复、停止与人工接管，不以测试数代替恢复结果 |
 | **S11 评测与科学研究 · P1 持续/P2 研究** | benchmark toolkit、Explore、长程 portfolio 与十轨 frontier science 有设计/局部实现 | 固定 native/passive/governed arm、模型/harness/预算/task split 与 evaluator；报告原生分数、成本、失败、人工介入和不确定性。sequential evidence、continuation、stride 为早期研究；memory、formal kernel、curriculum/evolution、主动实验与多尺度状态按 T01–T10 分阶段，不自动影响生产 |
 | **S12 发布、开发体验与社区治理 · P0 卫生/P1** | 安装、源码验证、扩展注册、DCO/PR、测试层级、contributor route 与双语文档已存在 | 从干净机器/发布包验一条首次工作和一次升级/回滚；host/OS 支持以 release contract 为准。缩短合理改动的定位、测试和 review 成本；公开精确 head、可重复 fixture、兼容窗口、维护者路由和贡献归属，退休重复协议及过时证据 |
 | **S13 采用、生态与商业可持续性 · P1 发现/P2 试点** | 公开 adoption loop、showcase、license/governance、observer-first 产品合同已存在；付费 PMF 未证明 | 先收集真实独立首次使用/重复使用/退出原因，做可复现案例和有固定预算/验收/回滚的试点；沉淀 reusable adapter 与交付手册。核算模型/计算/存储/支持成本及维护负担；满足重复需求后再决策商业托管边界、支持等级和分发，不承诺 SLA 或擅改开源条款 |
@@ -178,6 +178,12 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 性能数据。同时记录包含环境准备/登录的完整引导耗时与就绪后耗时，认证或环境
 失败仍计入漏斗。小规模试用用于发现问题，不能据此宣称统计可靠性或 PMF。
 
+[App 独立首次/重复使用协议](../../product/use-cases/steward/first-use-evaluation.md)
+已准备五个固定样本的冻结表、简短 GQ01 参与者请求、独立答案依据，以及分别记录
+引导/成果/注意力/成本的观察表。复用已有可选 first-run/usage-story 反馈，失败或
+未参与样本保留在分母中。目前仅完成协议准备；执行仍等待验收过的固定发行包和
+自愿参与者，不宣称试用结果，也未发起招募。
+
 已合并 [#4814](https://github.com/loopx-project/loopx/pull/4814) 推进可选 S1/S5 入口：
 管家和 Goal 飞书卡片共享 canonical 团队计划决策、认证投递绑定与重试恢复。真实
 双卡交互单独验收；分配不是执行、采用或完整投研旅程。可读成果与本地首次使用
@@ -234,6 +240,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 
 | RFC | 工作流 | 当前边界 | 下一切片 / 验收要求 |
 | --- | --- | --- | --- |
+| [可组合状态机与恢复验证 v0](composable-state-machines-recovery-verification-v0.zh-CN.md) | S2/S3/S10 | 仅设计；复用局部 conformance 证据 | P1：一条 typed 边界，再验 ownership/writeback/settlement 故障序列与有条件推进；真实入口及后端证据 |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
@@ -257,7 +264,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | S7/S5 | 已接受；Codex aggregate/cost 展示已有切片 | P0 观测→P1 多 provider：未知不作零、重复扣费去重、价格来源/时效；usage 不自动授权预算 |
 | [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | S5 | 已接受；action/attention 纵切及本地交付链/验收复盘已实现 | P1：跨渠道披露和受治理的修订/结算复盘；本地可见性不代表 G2 通过 |
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | S5/S11 | 已接受；Held | P3：第二个重复真实需求出现才重开；sidecar 不改变 gate/quota/调度 |
-| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 | 已接受；proposal only | P2：模拟 adapter 的一次不可变确认→effect→对账→原路回报；金融 provider 独立包，不扩普通协调权限 |
+| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 + R2/R3 | 已接受；规范操作接缝存在，受管原生传输待 owner review | 验收来源上下文与已准入执行者分离、精确用户批准→单次消费→垂域证据→原路返回；自有 Turn/delegation 不等待 Desktop 认证。真实批准/效果/唤醒仍未资格化；金融 provider 保持独立 |
 | [Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | S8/S9，S2/S4 支撑 | 已接受设计；尚未接入 runtime，也未准入 provider | M1：controlled provider 与 deterministic revoke/crash/replay conformance；strict production 接线仍需精确 Goal 生命周期、receipt retention 与独立 provider 资格 |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现 | P1：observation/write-time gate/closure basis 独立验证；自选模型和推断触发继续 defer |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 只读观测 | P2：matched shadow stride 实验，定义代价与事件；不直接改变生产节奏 |
@@ -351,6 +358,22 @@ P0 从入口开始：创建请求发出后不能消失；创建 Goal、接入已
 P0 首批是负责人路由和真实 2–3-worker 协调：两轮并行汇合、同伴求助、分歧处理、独立复核、工程交付给研究采用，伴随入口检查、纠偏、中断和恢复。P1 做材料分发、决策摘要、依赖重排、合格混合模型分配和约束复用；P2 在真实结果可理解后扩展规模和宣传表现力。可读结果、真实活动和 scoped controls 服务于同一 P0 旅程，不再要求先打磨完所有展示渠道才能尝试路由。必要的 R1/TS 事务修复保留 owner，但整条旅程不等待全面迁移或新的可选记忆设施。
 
 验收集在运行前冻结成对基线/候选任务、结果与注意力指标、反例和逐入口证据；所有真实运行初始都未验收。沿用 R/G/M/A 编号和 canonical Todo，不另建路线图、调度器或成绩账本。发布主张依据实际结果，不能以规划或前置 PR 合并代替。
+
+### 创建与小团队交付中的 Goal 生命周期
+
+R1–R3/G1 通过既有 [golden-query 生命周期变体](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery)
+接入 [Goal-instance RFC 的产品集成路径](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md#通过既有-roadmap-旅程接入产品)。
+优先将 GQ01/02 的创建与 Agent 复用、GQ05/11/12 的依赖交付与复核、GQ08/09 的
+纠偏/停止/恢复串成一条小团队旅程。区分同一 Goal 的正常继续和明确退役后的同名重建；
+注册 Agent、host session/执行代次、工作尝试仍是独立身份。旧工作不能结算继任者的
+额度、完成其工作或进入其已验收汇总；当前工作和无关工作仍须推进并返回发起会话。
+
+R5 生命周期/恢复交付继续归 #5206；R1–R3 保留入口、接收方采用、独立验收和返回。
+#5389 资格化 quota owner，不代表整条旅程完成。普通试点使用已支持 profile；隔离的
+重建变体须满足所选 profile 的 M2/M3 门槛，涉及恢复时还需 M4。保留 activation 与
+`execution_authority: false` hold。P1 增加 GQ15 预算分配及创建/接入时的孤儿恢复；
+P2 增加 GQ16 的认证跨主机恢复。先做 packaged App 与独立 CLI 回读，Lark 单独资格化。
+这些细化既有验收，不新增 roadmap 里程碑，也不把前置 PR 合并记为产品完成。
 
 ## 6. 核心交付路径：R1–R7 执行卡
 
@@ -470,6 +493,12 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 - **退出：** manager→worker 和 worker→worker 两个真实 caller，补充消息、来源会话消失、超长答案、重复回调、发送成功但 ACK 丢失及传输重启；同一结果在 CLI、packaged frontend、Lark 回读一致且受众隔离。普通已授权工作不增加第二次人工确认。
 - **迁移/回滚：** characterization 先行，记录旧 writer/reader 映射与删除收益；关新 producer 后可 drain 旧请求。不要同时保留两份可写生命周期。
 
+App 纠偏复用共享 TS 客户端缓存，在切换视图和刷新时保留追加指令与 ingress 身份；
+恢复不自动派发，终止回合不能继承新回合的目标。共享对话排序把原请求放在进行中的
+工作之前，即使持久受理时间稍晚；已接收的纠偏保留会话身份与创建时间。打包恢复、
+存储不可用、共存草稿及真实 Chat ingress/store 回归仅为有界证据；真实接收者采用、
+安装后读回与 Lark 纠偏仍须完成 R3 验收。
+
 R3 还需验证 handoff RFC 的分层 A6/A8/A13 扩展：普通 managed worker 请求、验证并
 综合另一 peer 的产物后再返回主 Agent；各层复用相同 request/work owner。入口
 fixture 在未决工具、取消、迟到结果下区分 inbox 收件、后续 queue 工作和已采用
@@ -502,11 +531,14 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 - **退出：** 相关真实 CLI/backend、不可变 baseline 与候选对照、负例/mutation、三臂演练及适用 D2 至少十日 soak；D3 切换保留明确批准。此次审计没有执行新的 soak，也未晋升 provider。
 - **回滚：** 按已审阅的 fenced export/import 和 schema-aware downgrade，不能靠替换二进制恢复旧写权威。
 
-[Goal instance/recovery 提案](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
-为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。M0 codec 已交付，lifetime
-admission、commit fence 和 recovery 尚未交付。复用 TS transaction 与既有 provider
-owner，先资格化本地路径；R6 service identity、D1–D3 promotion 独立验收。本检查点
-不激活 identity，也不要求所有 R1–R4 改动等待完整 lifecycle。
+[Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
+为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。Codec 和 source-session lifetime
+transaction 已存在；attached Chat、handoff、Turn journal 的 fence 已分别资格化，
+#5389 补充 quota settlement。第一方 host enforcement 仍为部分实现；其余 inventory
+owner、旧 writer/effect-drain 资格、M4 恢复、M5 产品验收继续在 #5206 保持开放。
+复用这些 TS/provider owner 和前述创建/协作旅程；R6 service identity 与 D1–D3
+promotion 独立验收。本检查点不激活 identity，也不要求所有 R1–R4 改动等待完整
+lifecycle。
 
 ### R6：本地与云端汇合
 
@@ -581,7 +613,7 @@ owner，先资格化本地路径；R6 service identity、D1–D3 promotion 独�
 见[验收合同](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)。
 这修复局部恢复缺口，不代表 R1/R2 协同整体验收完成。
 
-**R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。
+**R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。Agent 发起的结算在 journal 首次写入时绑定同一状态基线并在结算时重读；基线缺失或已变动、或全部 lane 均为缺口的计划，记录为类型化的失败回执，不创建 Todo，重放结果不变。
 
 这完成 F4 的本地分配/重试部分，不等于 R1 协同验收。注册接收者可以被分配任务，但不会被冒充为作者；Agent 发起的结算未经业主确认不能给另一 peer 分配任务。分配不证明接收者采纳、lease、执行、依赖消费或独立验收。普通已授权工作不应普遍增加第二次确认。解决缺口需要明确的新意图；重放不能静默扩展原确认子集。fingerprint 绑定当前本地状态与 canonical revision，不是完整共享 Goal 意图事务。R2/R3/R4 仍负责执行器资格、接收者采纳/结果返回及共享意图/授权；跨主机 Turn lease 不是计划屏障。
 

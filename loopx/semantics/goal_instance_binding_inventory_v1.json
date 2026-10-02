@@ -180,19 +180,22 @@
       "locator": "<runtime_root>/goals/<goal_id>/runs/index.jsonl#quota_event",
       "revision_signal": "run_generated_at and effect_id",
       "content_digest_signal": "quota accounting artifact digest",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id for source_session_v1; goal_id otherwise",
       "producer_sites": [
-        "loopx/control_plane/quota/spend_commit.py::record_quota_slot_spend_from_preview"
+        "loopx/control_plane/quota/accounting_admission.py::quota_accounting_admission",
+        "loopx/control_plane/quota/spend_commit.py::record_quota_slot_spend_from_preview",
+        "loopx/control_plane/quota/void_commit.py::commit_quota_slot_void"
       ],
       "consumer_sites": [
-        "loopx/control_plane/quota/settlement_readback.ts::readQuotaSettlementFromSnapshot",
+        "loopx/control_plane/quota/settlement_readback.ts::readQuotaSettlement",
+        "loopx/control_plane/quota/slot_accounting.py::_latest_unspent_turn_settlement_run",
         "loopx/control_plane/quota/slot_accounting.py::net_quota_slot_spend"
       ],
       "effect_boundary": "loopx/control_plane/quota/accounting_artifact_transaction.ts::commitQuotaAccountingArtifactTransaction",
       "authority_role": "quota_accounting_ledger",
-      "current_identity_strength": "goal_alias_only",
+      "current_identity_strength": "exact_goal_ref_enforced",
       "cleanup_support": "typed_quota_void",
-      "m1_disposition": "alias_only_inventory",
+      "m1_disposition": "m3_qualified",
       "target_milestone": "M3"
     },
     {
@@ -217,20 +220,22 @@
     {
       "owner_id": "turn_journal",
       "locator": "<runtime_root>/goals/<goal_id>/turns/<turn_key>.json",
-      "revision_signal": "turn_key and turn_instance_id",
+      "revision_signal": "turn_key, turn_instance_id, and exact GoalRef",
       "content_digest_signal": "turn key SHA-256",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id for source_session_v1; goal_id otherwise",
       "producer_sites": [
+        "loopx/control_plane/goals/first_party_host_admission.py::FirstPartyHostGoalAdmission.source_journal_admission",
         "loopx/control_plane/turn_driver/turn_journal_runtime.py::write_turn_journal"
       ],
       "consumer_sites": [
-        "loopx/control_plane/turn_driver/journal_store.py::load_loopx_turn_plan_from_journal"
+        "loopx/control_plane/turn_driver/journal_store.py::load_loopx_turn_plan_from_journal",
+        "loopx/control_plane/turn_driver/turn_journal.ts::parseTurnJournalGoalBinding"
       ],
-      "effect_boundary": "loopx/control_plane/turn_driver/turn_journal.ts::interpretTurnJournalEffect",
+      "effect_boundary": "loopx/control_plane/turn_driver/turn_journal_effects.ts::commitTurnJournal",
       "authority_role": "turn_execution_journal",
-      "current_identity_strength": "goal_alias_only",
+      "current_identity_strength": "exact_goal_ref_enforced",
       "cleanup_support": "journal_recovery_and_terminal_closeout",
-      "m1_disposition": "alias_only_inventory",
+      "m1_disposition": "m3_qualified",
       "target_milestone": "M3"
     }
   ]

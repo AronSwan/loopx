@@ -71,6 +71,33 @@ refreshed golden.
 行为，不授予其正确性；发现矛盾时应修复规则并增加反例或 mutation 覆盖，不得刷新
 golden 来让测试通过。
 
+### State Composition Qualification / 状态组合验证
+
+For a change spanning domain machines, select a bounded journey under the
+[composition verification RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.md).
+Reuse the quality catalog and existing validation matrix. Record independent
+invariants, explored actor/resource counts and trace bounds, fault orderings,
+real-entrypoint/readback evidence and conditional progress assumptions. A
+bounded sequence check is not an unbounded liveness proof. Existing deterministic
+checks, real-backend gates and required validation remain in force.
+
+跨领域状态机变更沿[组合验证 RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.zh-CN.md)
+选择有界旅程，复用 quality catalog 与已有验证矩阵。记录独立不变量、探索的 actor／
+resource 数与轨迹上限、故障顺序、真实入口／回读证据及有条件推进前提。有界序列
+检查不等于无界活性证明；既有确定性检查、真实后端门禁与必需验证继续适用。
+
+For a selected typed-core replacement, check illegal combinations at compile
+time and malformed/historical input at runtime. Compare pinned base/head through
+the same public path. Prove sensitivity with a historical failure or deliberate
+semantic mutation; a golden generated from the candidate is not an oracle.
+Retain only durable counterexamples, and do not build a general harness when an
+existing conformance family can express the causal sequence.
+
+选中的 typed core 替换同时验证编译期非法组合与运行时损坏／历史输入。相同公开
+路径比较 pinned base/head，用历史失败或语义 mutation 证明敏感性；候选实现生成
+的 golden 不是 oracle。只保留持久反例；已有 conformance 测试族能表达因果序列时，
+不另建通用 harness。
+
 ## Pull-Request Baseline / PR 基线
 
 ### Synthetic Runs Must Not Report Adoption / 合成运行不计入使用遥测
@@ -113,11 +140,24 @@ is authoritative for activation. The lead maintainer alone retains the
 existing bypass exception; record the exact head, reason, validation and known
 failures whenever using it. A bypass does not turn failed tests into a pass.
 
+Both required workflows also run on `merge_group`, so a GitHub merge queue can
+qualify the exact candidate that would land on `main`. Queue candidates never
+receive a job exemption: the classifier plans them as full, exactly like
+`main`. `Sign-off` checks the same contribution range and exempts only
+verified GitHub-generated two-parent merges, so configure the queue with the
+merge method `merge`. The trigger is inert until the live ruleset enables a
+merge queue. Enabling the queue, and then relaxing the up-to-date-branch
+requirement, is a ruleset decision for the lead maintainer.
+
 每个 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
 原有核心测试；失败、取消、缺失或意外跳过均不能通过。仅白名单根目录 Markdown
 或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时 prompt、可执行文档、代码删除
 及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用 owner bypass
 必须留下版本、原因、验证和已知失败的记录。
+两个必需工作流同样响应 `merge_group`，合并队列可在合入 `main` 前验证确切候选；
+队列候选一律全量验证、不享受豁免。队列合并方式应设为 `merge`，因为 `Sign-off`
+只豁免已验证的 GitHub 双父合并提交。在线规则启用合并队列前该触发不生效；启用
+队列并放宽“分支必须最新”要求由首席维护者决定。
 
 To validate or change the classifier locally:
 
@@ -455,6 +495,21 @@ override when a separate compatible environment is intentional.
 Python `>=3.11`；不会静默退回不兼容的系统 `python3`。回归测试会拦截测试入口
 重新引入裸 `python3` 子进程或默认值。
 
+The control-plane test and coverage commands run at most four test files at a
+time. Many files start additional Node/Python processes or exercise real SQLite;
+CPU-count-based fan-out can starve those children and turn resource contention
+into apparent transport failures. The SQLite capacity rehearsal remains in the
+full suite with its existing workload and deadlines; this concurrency bound
+does not relax capacity admission criteria. Test transport timeouts with
+controlled clocks or observable request cancellation, separately from loaded
+whole-suite throughput measurements.
+Healthy external-worker fixtures use the production quota timeout; only timeout
+cases inject a short deadline. Detached telemetry integration waits for a local
+start/end record with a bounded watchdog. That observation includes process
+startup and is separate from the HTTP cancellation contract. Rebuild Chat after
+changing shared TS inputs before running packaged-dashboard tests; a stale
+source witness must still reject the bundle.
+
 Canary executes Python checks with the interpreter that launched LoopX
 (`sys.executable`). Its displayed `python3` command is not a second interpreter
 selection. Keep subprocesses on `sys.executable`; use `uv run` at the developer
@@ -567,6 +622,24 @@ The complete public sweep remains explicit and bounded:
 loopx canary smoke-suite --suite full-public --jobs 4 --timeout-seconds 120
 ```
 
+The smoke runner gives every check a disposable HOME, host configuration and
+temporary directory, removes inherited registry/runtime routes, disables usage
+telemetry, and stops only that fixture's managed Effect process before cleanup.
+Serial and parallel checks have the same isolation. It preserves the caller's
+PATH: grouped checks append discovery fallbacks rather than overriding an
+explicitly selected toolchain. Prepare Python 3.11+, Node 24, jq and zsh before
+a complete release sweep, and record their versions with the exact-source
+receipts. A missing tool is an environment gap, not a product regression or a
+passing skip. Installed-host expected sets remain explicit so a missing bundled
+skill still fails; update their owning fixtures when the shipped contract changes.
+
+每项 smoke 都使用独立的一次性 HOME、宿主配置和临时目录，清除继承的 registry/runtime
+路由，关闭 usage telemetry，并在清理前只停止该 fixture 的 Effect 进程；串行、并行隔离
+一致。分组检查保留调用方 PATH 的优先级，只在末尾补充发现路径。完整发布验证前准备
+Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺工具属于环境缺口，
+不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
+正式契约变化时同步更新其归属 fixture。
+
 `full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
 not a required PR check. This separation protects repository quality without
 making every small patch wait for the broadest suite.
@@ -637,6 +710,15 @@ backend capacity, retention and cutover qualification belong to the
 [shared-authority RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md).
 Use the existing task/PR evidence and update its owning checkpoint when warranted;
 this adds no approval, receipt or requirement to complete unrelated milestones.
+
+For a demonstrated slow command, the opt-in
+[performance diagnosis workflow](../../loopx/capabilities/performance_diagnosis/README.md)
+selects language-appropriate capture recipes and reads local Speedscope/V8 CPU
+stacks. Measure the original workload without instrumentation, profile the
+actual owning process, then test the proposed cause and repeat the original
+semantic/latency checks. Tool plans, overlapping thread weights and inclusive
+hotspots are not elapsed-time, root-cause or admission proof. Raw profiles remain
+local-private; the workflow adds no profiler service or receipt gate.
 
 - **Locate the cost before selecting an abstraction.** Separate caller repeats,
   output/context expansion, process/bridge/serialization cost, shared semantic

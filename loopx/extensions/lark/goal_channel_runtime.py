@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from .goal_channel_contracts import (
     binding_for_goal,
+    blocked_notice_auto_notify_enabled,
+    blocked_notice_auto_notify_marker_path,
+    clear_blocked_notice_auto_notify_marker,
+    write_blocked_notice_auto_notify_marker,
     clear_human_gate_auto_notify_marker,
     gate_message,
     goal_from_registry,
@@ -26,10 +30,12 @@ from .goal_channel_contracts import (
     semantic_key,
     write_human_gate_auto_notify_marker,
 )
+from .identity_shapes import (
+    LARK_CHAT_ID_SEARCH as CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN,
+)
 from .goal_channel_transport import (
     APP_ID_PATTERN,
-    CHAT_ID_PATTERN,
-    MESSAGE_ID_PATTERN,
     auth_verified,
     call,
     chat_verified,
@@ -85,7 +91,8 @@ def configure_lark_goal_channel_automation(
     registry: Mapping[str, Any],
     goal_id: str,
     binding_path: Path,
-    human_gate_auto_notify: bool,
+    human_gate_auto_notify: bool | None = None,
+    blocked_notice_auto_notify: bool | None = None,
     execute: bool = False,
 ) -> dict[str, Any]:
     goal_from_registry(registry, goal_id)
@@ -101,7 +108,11 @@ def configure_lark_goal_channel_automation(
             blocker="channel_binding_missing",
             public_summary="configure the Goal Channel before enabling automation",
         )
-    if human_gate_auto_notify and binding.get("enabled") is not True:
+    if human_gate_auto_notify is None and blocked_notice_auto_notify is None:
+        raise ValueError("choose an automation setting")
+    if (
+        human_gate_auto_notify is True or blocked_notice_auto_notify is True
+    ) and binding.get("enabled") is not True:
         return operation_packet(
             ok=False,
             goal_id=goal_id,
@@ -111,13 +122,24 @@ def configure_lark_goal_channel_automation(
             blocker="channel_binding_incomplete",
             public_summary="complete Goal Channel setup before enabling automation",
         )
-    current = human_gate_auto_notify_enabled(binding)
-    changed = current != human_gate_auto_notify
-    marker_path = human_gate_auto_notify_marker_path(binding_path, goal_id)
+    current_human = human_gate_auto_notify_enabled(binding)
+    current_blocked = blocked_notice_auto_notify_enabled(binding)
+    next_human = (
+        current_human if human_gate_auto_notify is None else human_gate_auto_notify
+    )
+    next_blocked = (
+        current_blocked
+        if blocked_notice_auto_notify is None
+        else blocked_notice_auto_notify
+    )
+    changed = current_human != next_human or current_blocked != next_blocked
     if execute and changed:
         mutable_binding = dict(binding)
         automation = _mapping(binding.get("automation"))
-        automation["human_gate_auto_notify_enabled"] = human_gate_auto_notify
+        if human_gate_auto_notify is not None:
+            automation["human_gate_auto_notify_enabled"] = next_human
+        if blocked_notice_auto_notify is not None:
+            automation["blocked_notice_auto_notify_enabled"] = next_blocked
         mutable_binding["automation"] = automation
         save_goal_binding(
             binding_path=binding_path,
@@ -125,11 +147,23 @@ def configure_lark_goal_channel_automation(
             goal_id=goal_id,
             binding=mutable_binding,
         )
-    if execute:
-        if human_gate_auto_notify:
-            write_human_gate_auto_notify_marker(marker_path)
+    if execute and human_gate_auto_notify is not None:
+        human_marker = human_gate_auto_notify_marker_path(binding_path, goal_id)
+        if next_human:
+            write_human_gate_auto_notify_marker(human_marker)
         else:
-            clear_human_gate_auto_notify_marker(marker_path)
+            clear_human_gate_auto_notify_marker(human_marker)
+    if execute and blocked_notice_auto_notify is not None:
+        blocked_marker = blocked_notice_auto_notify_marker_path(binding_path, goal_id)
+        if next_blocked:
+            write_blocked_notice_auto_notify_marker(blocked_marker)
+        else:
+            clear_blocked_notice_auto_notify_marker(blocked_marker)
+    saved = (
+        binding_for_goal(read_goal_channel_binding(binding_path), goal_id)
+        if execute
+        else None
+    )
     return operation_packet(
         ok=True,
         goal_id=goal_id,
@@ -137,22 +171,25 @@ def configure_lark_goal_channel_automation(
         execute=execute,
         status="configured" if execute else "preview_ready",
         public_summary=(
-            "enabled automatic human gate notifications for this Goal Channel"
-            if execute and human_gate_auto_notify
-            else "disabled automatic human gate notifications for this Goal Channel"
+            "updated Goal Channel automatic notification settings"
             if execute
             else "previewed the Goal Channel automation change"
         ),
         readback_verified=bool(
             execute
-            and human_gate_auto_notify_enabled(
-                binding_for_goal(read_goal_channel_binding(binding_path), goal_id)
+            and (
+                human_gate_auto_notify is None
+                or human_gate_auto_notify_enabled(saved) == next_human
             )
-            == human_gate_auto_notify
+            and (
+                blocked_notice_auto_notify is None
+                or blocked_notice_auto_notify_enabled(saved) == next_blocked
+            )
         ),
         details={
             "changed": changed,
-            "human_gate_auto_notify_enabled": human_gate_auto_notify,
+            "human_gate_auto_notify_enabled": next_human,
+            "blocked_notice_auto_notify_enabled": next_blocked,
         },
     )
 
@@ -166,6 +203,7 @@ def auto_notify_lark_goal_channel_gate(
     provider_target: Mapping[str, Any] | None = None,
     external_sink_delivery_authorized: bool,
     runner: CommandRunner = default_subprocess_runner,
+    admit_delivery: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -201,6 +239,7 @@ def auto_notify_lark_goal_channel_gate(
         provider_target=provider_target,
         execute=True,
         runner=runner,
+        admit_delivery=admit_delivery,
     )
     result["notification"] = notification
     blocker = str(notification.get("blocker") or "")
@@ -496,6 +535,7 @@ def notify_lark_goal_channel_gate(
     provider_target: Mapping[str, Any] | None = None,
     execute: bool = False,
     runner: CommandRunner = default_subprocess_runner,
+    admit_delivery: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal = goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -660,6 +700,8 @@ def notify_lark_goal_channel_gate(
             idempotency_key=key,
             receipt_id=f"receipt_{key.removeprefix('sha256:')[:16]}",
         )
+    if admit_delivery is not None:
+        admit_delivery()
     configured_app_id = str(identity_config.get("bot_app_id") or "")
     if not (
         identity == "bot"

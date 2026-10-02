@@ -270,24 +270,49 @@ function teamPlanApplyReceipt(proposal) {
   return receipt;
 }
 
-export function startServer() {
+export async function startServer() {
   if (packaged) {
     // An explicit installed interpreter must resolve its own package, not the checkout.
     const isolation = process.env.LOOPX_PYTHON_BIN ? ["-I"] : [];
-    return spawn(resolveTestPython(), [...isolation, "-c", `
+    const server = spawn(resolveTestPython(), [...isolation, "-c", `
+from pathlib import Path
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 from loopx.presentation.chat_bundle import validate_bundle
 assets = default_chat_assets_dir()
-validate_bundle(assets)
+validate_bundle(assets, source_root=${process.env.LOOPX_PYTHON_BIN ? "None" : `Path(${JSON.stringify(repoRoot)})`})
 server = ChatHTTPServer(("127.0.0.1", ${port}), ChatRequestHandler)
 server.assets_dir = assets
 server.verbose = False
+print("loopx-packaged-smoke-ready", flush=True)
 server.serve_forever()
 `], {
       cwd: repoRoot,
       env: { ...process.env },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    // An unrelated process on the same port is not this bundle's readiness.
+    await new Promise((resolveReady, rejectReady) => {
+      let output = "";
+      let diagnostic = "";
+      const timer = setTimeout(() => {
+        server.kill("SIGTERM");
+        rejectReady(new Error("Packaged workspace server did not start within 20 seconds"));
+      }, 20_000);
+      server.stderr.on("data", (chunk) => { diagnostic = (diagnostic + chunk).slice(-8000); });
+      server.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (/loopx-packaged-smoke-ready\r?\n/u.test(output)) {
+          clearTimeout(timer);
+          resolveReady();
+        }
+      });
+      server.once("error", (error) => { clearTimeout(timer); rejectReady(error); });
+      server.once("exit", (code) => {
+        clearTimeout(timer);
+        rejectReady(new Error(`Packaged workspace server exited (${code}): ${diagnostic}`));
+      });
+    });
+    return server;
   }
   return startViteDashboardServer({ dashboardDir, port });
 }
@@ -366,7 +391,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
+export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -379,7 +404,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   }
   // Like ChatStore, persist completion before serving it and replay after disconnect.
   const completedTurns = runtime.completedTurns ??= new Map();
-  const finishTurn = (sessionId, turnId, answer, protectedAction = null, goalDraft = null) => {
+  const finishTurn = (sessionId, turnId, answer, protectedAction = null, goalDraft = null, proposals = []) => {
     const key = JSON.stringify([sessionId, turnId]);
     if (completedTurns.has(key)) return completedTurns.get(key);
     const current = sessions.get(sessionId);
@@ -390,7 +415,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     }
     messages.set(sessionId, visible);
     const event = (id, kind, payload) => `id: ${id}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: id, sequence: Number(id), kind, created_at: "2026-08-13T01:00:02Z", payload })}\n\n`;
-    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), proposals: [], protected_action: protectedAction, gate: null } });
+    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), proposals, protected_action: protectedAction, gate: null } });
     completedTurns.set(key, body);
     sessions.set(sessionId, { ...current, active_turn_id: null, status: "ready", updated_at: "2026-08-13T01:00:02Z" });
     return body;
@@ -453,6 +478,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    decidedGateTodoIds: new Set(),
     hostThreadActivity: {},
     answerForMessage: null,
     loopxModeRequests: [],
@@ -480,6 +506,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     }
     if (progressiveWorkspace && requestedGoalId) state.goalStatusRequests.push(requestedGoalId);
     const fixture = structuredClone(require(resolve(repoRoot, "examples/status.example.json")));
+    if (notificationProjection) fixture.goal_channel_notification_projection = structuredClone(notificationProjection);
     const defaultSubagentConfiguration = { mode: "default", spawn_allowed: false, max_children: 0, allowed_domains: [] };
     const projectedSubagentConfiguration = (goalId, fallback) => state.freezeGoalSubagentStatusProjection
       ? fallback ?? defaultSubagentConfiguration
@@ -531,9 +558,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const first = fixture.attention_queue?.items?.[0];
     if (first) {
       first.waiting_on = "user_or_controller";
+      const gateDecided = state.decidedGateTodoIds.has("todo-browser-user-gate");
       first.user_todos = {
-        items: [{ done: false, goal_id: first.goal_id, index: 0, role: "user", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
-        open_count: 1,
+        items: [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
+        open_count: gateDecided ? 0 : 1,
         source_section: "User Todo",
         total_count: 1,
       };
@@ -1282,9 +1310,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (resumedEvents && request.method() === "GET") {
       const sessionId = resumedEvents[1];
       const turnId = resumedEvents[2];
-      const answer = "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
+      const completed = completedTurns.get(JSON.stringify([sessionId, turnId]));
+      if (completed) {
+        await route.fulfill({ contentType: "text/event-stream", body: completed, status: 200 });
+        return;
+      }
+      // A resumed Turn completes with the same scripted answer it was sent for.
+      const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(turnMessages.get(turnId) ?? "") : null;
+      const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
+        || "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
       await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(turnMessages.get(turnId) ?? "") ? 5000 : 1200));
-      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer), status: 200 });
+      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
       return;
     }
     if (url.pathname === "/api/chat/goals/contexts") {
@@ -1468,6 +1504,24 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       }, status: 200 });
       return;
     }
+    if (url.pathname === "/api/chat/projection-messages" && request.method() === "POST") {
+      const body = request.postDataJSON();
+      const channel_id = body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`;
+      const session_id = `session-projection-${channel_id}`;
+      if (!sessions.has(session_id)) sessions.set(session_id, {
+        session_id, goal_id: body.goal_id || "loopx-manager", agent_id: "status-only", adapter_kind: "status_projection",
+        channel_id, status: "ready", active_turn_id: null, resumable: true,
+        created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", last_error_code: null,
+      });
+      const rows = messages.get(session_id) ?? [];
+      const user_message_id = `${session_id}-${rows.length}`;
+      const answer_message_id = `${session_id}-${rows.length + 1}`;
+      rows.push({ message_id: user_message_id, role: "user", text: body.question, created_at: "2026-08-13T01:00:01Z" },
+        { message_id: answer_message_id, role: "agent", text: body.answer, created_at: "2026-08-13T01:00:02Z" });
+      messages.set(session_id, rows);
+      await route.fulfill({ status: 201, json: { ok: true, schema_version: "loopx_chat_projection_exchange_v1", session_id, user_message_id, answer_message_id } });
+      return;
+    }
     if (url.pathname === "/api/chat/sessions" && request.method() === "GET") {
       const requestedGoal = url.searchParams.get("goal_id");
       const requestedAgent = url.searchParams.get("agent_id");
@@ -1484,12 +1538,14 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const body = request.postDataJSON();
       if (body.context_kind === "manager" && body.goal_id) throw new Error("Global manager request still carries a project anchor");
       const resolvedGoalId = body.context_kind === "manager" ? "loopx-manager" : body.goal_id;
-      const session_id = `session-${body.context_kind}-${resolvedGoalId}-${body.agent_id}`;
+      // Like the real runtime, an omitted steward endpoint resolves on the host.
+      const resolvedAgentId = body.agent_id ?? managerChannelBinding?.executor_endpoint ?? state.machineNamespaces?.steward_executor?.executor_endpoint ?? "codex";
+      const session_id = `session-${body.context_kind}-${resolvedGoalId}-${resolvedAgentId}`;
       const existing = body.mode === "resume_latest" ? sessions.get(session_id) : null;
-      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: body.agent_id, adapter_kind: body.agent_id, channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
+      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: resolvedAgentId, adapter_kind: resolvedAgentId === "codex" ? "codex_app_server" : resolvedAgentId === "claude-code" ? "claude_code_cli" : "acp", channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
       sessions.set(session_id, session);
       messages.set(session_id, messages.get(session_id) ?? []);
-      await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: body.agent_id, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
+      await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: resolvedAgentId, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
       return;
     }
     const loopxMode = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/loopx$/);
@@ -1683,14 +1739,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             ? "我识别到一个明确的合并请求。LoopX 会先展示受保护操作预览，不会直接执行。"
             : "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。");
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
-    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft), status: 200 });
+    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
   });
-  await page.route("**/api/actions?**", async (route) => {
+  await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
     const matching = Array.from(actionProposals.values()).filter((proposal) => {
-      if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
     });
@@ -1736,10 +1791,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         return;
       }
       const proposal_id = `proposal-${body.idempotency_key}`;
+      // Match the native store: replay preserves even an applied/cancelled
+      // preview's identity and lifecycle, rather than resetting it to ready.
+      const existing = actionProposals.get(proposal_id);
+      if (existing) {
+        await route.fulfill({ contentType: "application/json", json: { ok: true, proposal: existing }, status: 200 });
+        return;
+      }
       actionKinds.set(proposal_id, body.action_kind);
       state.actionPreviews.push({ ...body, proposalId: proposal_id });
       const proposal = {
-        schema_version: "loopx_chat_action_proposal_v1", proposal_id, action_kind: body.action_kind,
+        schema_version: "loopx_chat_action_proposal_v1", proposal_id, idempotency_key: body.idempotency_key, action_kind: body.action_kind,
         summary: body.summary, normalized_parameters: body.normalized_parameters, context: body.context,
         expected_state_fingerprint: "fixture-r1", permission_classification: "durable_write",
         validation_evidence: ["fixture validation"], available_transitions: ["apply", "cancel"],
@@ -1808,7 +1870,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           session_id: sessionId,
           goal_id: preview.normalized_parameters.goal_id,
           agent_id: "codex",
-          adapter_kind: "codex",
+          adapter_kind: "codex_app_server",
           channel_id: `goal.${preview.normalized_parameters.goal_id}`,
           active_turn_id: null,
           status: "ready",
@@ -1835,11 +1897,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       // previews, so the plan a confirmed card carries has to be read there.
       const teamPlanReceipt = teamPlanApplyReceipt(actionProposals.get(apply[1]));
       if (teamPlanReceipt && replay) teamPlanReceipt.outcome = "team_plan_commit_recovered";
+      // Mirrors ChatActionService's gate.resolve receipt (tests/control_plane/test_chat_gate_decisions.py).
+      const decisionParameters = actionKind === "gate.resolve" ? preview?.normalized_parameters : null;
+      if (decisionParameters) state.decidedGateTodoIds.add(decisionParameters.todo_id);
+      const decisionReceipt = decisionParameters ? { projection_verified: true, receipt_id: "fixture-receipt", outcome: "gate_resolved",
+        decision_outcome: decisionParameters.decision,
+        unblock_resume_state: { approve: "resumed", reject: "decision_rejected", cancel: "decision_cancelled" }[decisionParameters.decision] ?? null } : null;
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
         summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? actionProposals.get(apply[1])?.normalized_parameters ?? {}, context: preview?.context ?? actionProposals.get(apply[1])?.context ?? {}, expected_state_fingerprint: "fixture-r1",
         permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
-        status: "applied", receipt: teamPlanReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
       };
       actionProposals.set(apply[1], proposal);
       if (actionKind === "team.plan" && state.loseNextTeamPlanResponse) {

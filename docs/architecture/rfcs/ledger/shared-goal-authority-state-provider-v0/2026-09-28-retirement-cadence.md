@@ -49,6 +49,29 @@ public CLI/import or serialized contracts. Retain public behavior tests; remove
 only characterization scaffolding whose retired implementation has no consumer.
 Deletion is code retirement, not deletion of users' state, receipts or backups.
 
+### Merged T4 slice: unused Python lease/handoff facades
+
+The caller audit at `e240730ec` led to #5395, merged at `8474c8d86`.
+The following unused internal crossings are retired. Native decision and
+transaction owners remain; this is independent of D2 qualification and
+default-entry adoption.
+
+| Removed boundary | Last caller / replacement | Compatibility and validation |
+| --- | --- | --- |
+| `authority_core.py` acquire/renew/transfer/release, owner-eligibility and handoff-transition command facades | Only the old core tests; real lease and handoff adapters already use whole native transactions | No persisted command format or public CLI schema changes. Retain independent native generation, replay, conflict, cleanup and quiescence tests; exercise real File/SQLite entrypoints. |
+| `task_lease.acquire.decide`, `task_lease.lifecycle.decide`, `coordination.handoff_mode.plan` RPC registrations | Only those retired facades / handler tests; native transactions call the same typed rules directly | Obsolete private RPCs now reject unsupported methods. Keep `task_lease.owner_eligibility` and write-scope overlap: actual Python callers remain. |
+| Lease-only `local_snapshot.py` normalization and error projection | No remaining caller; native executors own lease facts and errors | Keep `todo_snapshot_from_mapping`, used by live Todo mutation authorization. No store, receipt, backup or migration reader is removed. |
+
+`authority_core.py` is still a live Todo bridge. `LeaseAction` and
+`LeaseModeGateCommand` also remain because the semantic-vocabulary registry
+explicitly retains that input contract until its M4 review. This slice does not
+lower semantic coverage floors to discard a declared compatibility obligation.
+Old facade-only tests retired with their implementation; public/native behavior
+tests remain. Reverting this slice restores the internal crossing without a data
+conversion. Local CLI adoption at `db3672f3c` verifies a clean source manifest,
+qualified SQLite runtime, current known authority formats and healthy canonical
+contract readback. This does not certify every installed Host or D2.
+
 ## Next delivery order
 
 | Order | Complete outcome / owner | Concrete exit and deletion opportunity |
@@ -76,6 +99,17 @@ where the changed caller needs them; do not turn them into an unimplemented
 universal gate. CAS success does not prove current Goal identity or task quality.
 
 ## Aggressive local qualification before deleting writers
+
+Physical backup consistency is part of the recovery row. Copying a live SQLite
+database and WAL as separate tar members can lose already acknowledged rows
+when a checkpoint lands between the copies, even if the restored database
+passes `integrity_check`. The general state-backup entry therefore reuses the
+qualified TS online snapshot owner from format upgrade, omits its live sidecars,
+and publishes only after snapshot verification. Python retains directory
+discovery and archive IO, not a second SQLite engine or migration decision.
+This closes a per-database backup defect; whole-Goal multi-file quiescence,
+subsequent-write rollback, installed consumer recovery and D2 observation remain
+separate evidence requirements.
 
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;
@@ -237,9 +271,57 @@ Scale characterization with 4,101 synthetic Agent Todos still hits the existing
 repair for File/SQLite. The repaired contract API can read that collection;
 this does not qualify the remaining whole-command payload boundary.
 
-The next B work remains history artifact lookup and remaining public payload/
-cold-path costs, preserving file-change freshness, full decision inputs and
-corruption rejection. Contract checks and attention now share one request-local, validated canonical
+B distinguishes a bounded provider PR, a recoverable opt-in developer cohort,
+and the release default, as specified in Section 7.2 of the owning RFC. Proposed
+absolute latency budgets do not veto every merge or trial: use matched current
+release measurements, disclose absolute and relative regressions, and inspect
+their consumer impact. Correctness, original receipts, complete metadata and
+recoverable migrations remain hard requirements. Frozen reports retain their
+original budgets and failed/missing rows; revising a decision does not rewrite
+past evidence.
+
+[PR #5251](https://github.com/loopx-project/loopx/pull/5251) refines strict JSON
+materialization behind the existing codec owner. It preserves persisted
+canonical encoding while avoiding repeated immutable primitive allocation in
+historical projections. Its historical formal reports are source-specific:
+the author reports 8 passed / 6 failed / 10 missing on `d767b06f1`, then
+14 passed / 0 failed / 10 missing on `02d3dee83`; neither report qualifies a
+later head, nor completes the missing axes. The next qualification reconciles
+changed-path measurements and affected real providers/callers, then verifies
+concurrency, recovery, consumer lag and retained natural-time soak applicability.
+The comparison runner's former conflict expectation contradicted merged #5169:
+an identical historical intent must return its original applied revision/cursor.
+The runner now checks that result, independently rejects projection/event/receipt
+drift, and walks the complete history before and after retries without retaining
+all expected snapshots. A failing invariant prevents report publication; checks
+stay outside the unchanged timing windows. This repairs the qualification tool,
+not a provider defect or a D2/default pass. #4224 already reports a soak started
+on September 14 at `e98191faa`; its final result and applicability to the current
+candidate still need evidence. Do not call it unstarted or restart its clock
+solely because an unrelated source revision changed.
+
+At source `613180ae`, the matched 64 KiB macOS run passes 13 rows, fails
+cold CLI status p95 (4.39 s against 2 s), and leaves 11 missing. The Linux
+storage-only run passes 12 rows with 13 missing; its smaller CLI rehearsal is
+not the formal CLI axis. Opt-in `performance-diagnosis` captures Python wall
+time, independent Node CPU, and Linux thread stacks on disposable targets.
+Startup, candidate scanning and waits are hypotheses to test with unchanged
+uninstrumented workloads; profile weights do not replace this admission failure.
+
+[#5283](https://github.com/loopx-project/loopx/pull/5283) is the adjacent
+read-only delegation preflight optimization, not a provider implementation.
+Its current process-reuse candidate reports paired File/SQLite warm gains with
+an explicit cold-start cost; retain it for exact-head review, installed readback
+and real requester adoption. Qualify that repeated consumer independently from
+the cold-only status workload above. Keep decisions fresh at the existing TS/CLI
+owners; the pinned Python worker remains transport, not a new decision cache.
+Retire Python rules only when their TS replacement and last callers are proven.
+
+Last-caller Python decision retirement can proceed independently where the TS
+replacement and affected real callers are proven. Whole Markdown writer removal
+still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,
+freshness and decision inputs remain acceptance requirements. Contract checks
+and attention now share one request-local, validated canonical
 Todo snapshot per runtime/Goal. Standalone checks and subsequent requests read
 afresh; lease and projection-writeback reads do not participate. Consumer edits
 cannot mutate retained input, and a failed first read cannot recover midway
@@ -311,3 +393,109 @@ metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
 or permission to change the default provider. Full-Goal summary/list/detail
 adoption and sustained observation remain separate work.
+
+### Packaged-source fingerprint cost
+
+The B-lane increment overlaps source-byte reads through the existing bounded,
+ordered file reader. It preserves relative names, raw bytes, metadata
+invalidation, request-scoped memoization and failure/retry behavior. The Python
+filesystem adapter gains no state-policy owner or persistent cache.
+
+Current validation compared baseline `0538bf1631a7` with this implementation on
+macOS arm64, Python 3.13.13 and Node 24.21.0. Each arm ran nine alternating fresh
+CLI processes after one startup warm-up, against the same disposable synthetic
+File/SQLite fixtures. Effect processes were isolated; OS caches were not flushed.
+The source snapshot contained 249 TS/JSON files (3,065,799 bytes). Fingerprint
+stage medians were 123.5→53.8 ms for File and 111.3→48.0 ms for SQLite.
+Whole `status` medians were 1.032→1.054 s and 1.019→1.010 s; sampled p95 values
+were 1.745→1.104 s and 1.114→1.086 s (with nine samples, p95 is the maximum).
+Twenty full-response pairs differed only at explicitly enumerated observation
+timestamps; malformed-registry rejection was unchanged.
+
+This supports a bounded cold-caller cost improvement, not a general status
+speedup, provider throughput or D2/default qualification. A warm same-process
+microbenchmark with fingerprint memoization explicitly cleared regressed from
+6.7 to 12.8 ms; normal unchanged requests retain memoization. Thread scheduling
+costs more when all bytes are already hot. Neither workload establishes a fleet
+latency guarantee. Whole-Goal payload/consumer work and sustained operation
+remain open; this increment authorizes no legacy-writer deletion or UI truncation.
+
+### File recovery receipt batches
+
+Archive restore and audit already use the provider-neutral 1–64 operation
+receipt batch contract. File now implements that contract with one exact-byte
+and store-identity proof per batch instead of rereading its envelope for each
+receipt. Caller order, duplicates, missing results and original receipt bodies
+remain intact; each returned body is detached. Invalid input or corrupt retained
+history rejects the batch. Array holes are rejected before storage access,
+including through the shared helper. Single-receipt error projection stays unchanged.
+
+On the same detached, restored 1,287-commit history, nine warm samples per arm
+on macOS arm64 / Node 24.21.0 reduce a 16-receipt File batch median from
+346.2 to 21.3 ms; the unchanged SQLite control measures 111.3 and 111.1 ms.
+Receipt results and authority heads match within each provider. These are warm
+component timings, not equivalent provider-integrity work, whole-restore latency,
+cold-read or D2/default qualification. File still rewrites the retained envelope
+on each restored commit; a prior full-history restore exceeded its caller's
+300-second timeout and later published an exact matching acknowledgement.
+That remaining recovery cost is not closed by this receipt-read optimization.
+The #4224 soak was started; its final evidence and applicability remain pending.
+
+### Runtime retirement drains admitted effects
+
+The shared TS Effect server now counts pending handlers independently of TCP
+connections. The idle window starts after the last handler and private response
+sink finish. Explicit shutdown stops accepting connections, waits for admitted
+effects (including disconnected clients), and then removes only its own locator.
+Authentication, request budgets, original receipts and caller recovery remain
+unchanged. No additional provider or Python decision owner is introduced.
+
+The previous close handler could exit while a disconnected caller's write still
+waited for a live mutation lock. A real-server regression reproduces this under
+both idle retirement and explicit shutdown; connected callers are controls.
+It also verifies concurrent ping, rejected authentication, listener closure,
+durable write readback and eventual retirement. Existing replacement-locator,
+restart and File/SQLite archive crash/recovery tests remain required.
+
+This repairs one S4/runtime-lifetime dependency of R5/D2 recovery. It does not
+qualify sustained operation, choose the release default, increase a frozen
+capacity budget or authorize deleting a legacy writer.
+
+### Delegated execution keeps its original lease
+
+The delegated CLI now reuses the TS managed-process owner to renew the original
+canonical execution while the Host and independent Turn validation run. Its
+private control pipe carries the initial lease and unchanged claim/renew
+commands; the model request does not carry those commands or acquire authority.
+Claim replay must prove the same owner, key and epoch. A lease read cannot
+replace mutation-time CAS, and an expired execution is never reacquired to
+accept its old result.
+
+Renewal uses the latest proved version, one unchanged-intent retry for a lost
+transport reply, and the last proved expiry even when renewal hangs. A rejected
+proof cancels the CLI; its TERM adapter unwinds nested managed Hosts before
+returning. Ordinary non-hard delegation keeps the existing subprocess route.
+Completion reads the current claim, persists its terminal CAS intent before the
+effect, and replays that exact completion after an ambiguous reply. Canonical
+completion releases the execution lease; subsequent original-Turn accounting
+uses its terminal receipt rather than reacquiring an open-work lease.
+
+Explicit registry/runtime commands also survive coexistence of both machine
+roots: projection discovery inspects both declarations without selecting an
+implicit authority, and still reports competing routes as ambiguous. Implicit
+Goal CLI defaults retain their existing conflict rejection. Repository canaries
+without a Goal receipt do not select machine authority; a first explicit
+bootstrap has no previous Goal authority to fence. Existing Goals still require
+their original-route replacement authorization. Local smoke fixtures declare
+their own runtime instead of inheriting operator state.
+
+The acceptance slice uses disposable File/SQLite providers, real CLI/Turn
+execution and a synthetic model process: crossing the initial expiry, canonical
+release, a new execution epoch, lost completion/renewal replies and rejected or
+hung renewal, including control-pipe loss with a TERM-resistant process. It
+does not qualify a paid model, remote job cancellation or
+Windows process-tree cleanup. Stop acknowledgements and interrupted-Turn
+no-progress settlement remain with the existing delegation-stop work (#5308);
+this slice leaves an interrupted operation explicitly recoverable, never
+accepted from incomplete output. Sustained D2 operation, default onboarding and
+last-writer retirement still require their owning evidence.

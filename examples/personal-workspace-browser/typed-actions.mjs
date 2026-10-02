@@ -79,8 +79,15 @@ function operationProposal({ id, title, lifecycleState, status, resultDelivery =
       confirmation_digest: "a".repeat(64),
       payload_digest: "b".repeat(64),
       projection_digest: "c".repeat(64),
-      expires_at: "2026-09-15T10:00:00Z",
-      delivery: { provider: "lark", message_id: `${id}-message` },
+      // Pending confirmation must remain live when the test runs later;
+      // a dated fixture becomes expired and legitimately leaves the gate view.
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      delivery: {
+        provider: "lark", message_id: `${id}-message`,
+        chat_id: "synthetic-group", app_id: "synthetic-app",
+        binding_digest: "d".repeat(64), card_digest: "e".repeat(64),
+        delivered_at: new Date().toISOString(),
+      },
       confirmation: outcomeObserved ? { provider: "lark" } : null,
       claim: outcomeObserved ? { claim_id: `${id}-claim` } : null,
       outcome: outcomeObserved ? {
@@ -199,11 +206,14 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "operation-result-verified.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
-      const gatedSummary = page.locator(".personal-gated-summary");
-      await gatedSummary.locator("summary").click();
-      const awaiting = gatedSummary.locator(".personal-proposal-row", {
+      const awaiting = page.locator(".personal-proposal-row", {
         hasText: "Simulated order awaiting group confirmation",
       });
+      // Current operations remain visible beside their outcomes. Older views
+      // fold them into the gate section; either route must reach the same card.
+      if (!(await awaiting.isVisible())) {
+        await page.locator(".personal-gated-summary summary").click();
+      }
       await awaiting.waitFor({ state: "visible" });
       if (!(await awaiting.innerText()).includes("前往飞书群确认")) {
         throw new Error("Awaiting operation did not route confirmation to Feishu");
@@ -1563,7 +1573,7 @@ export const typedActionsScenario = {
       const naturalTodoRequest = "添加一个「补充回归测试」普通 Todo，并交给 Codex。不要设置 Heartbeat，也不要创建定时检查";
       await composer.fill(naturalTodoRequest);
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
       if (api.actionPreviews.length !== beforeNaturalTodo || api.turnRequests.at(-1)?.message !== naturalTodoRequest) throw new Error("Natural Todo request was intercepted before Chat");
 
       const previewCountBeforeAnalysis = api.actionPreviews.length;
@@ -1602,7 +1612,7 @@ export const typedActionsScenario = {
       const beforeNaturalBinding = api.actionPreviews.length;
       await composer.fill("让 Claude Code 负责管理这个 Goal");
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
       if (api.actionPreviews.length !== beforeNaturalBinding || api.turnRequests.at(-1)?.message !== "让 Claude Code 负责管理这个 Goal") throw new Error("Assignment was interpreted by browser rules");
 
       const selectedGoalId = new URL(page.url()).searchParams.get("goalId");
@@ -1770,6 +1780,8 @@ export const typedActionsScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByRole("dialog").filter({ hasText: "确认执行" }).waitFor({ state: "hidden" });
 
+      // Configuration shortcuts live in the overview, outside an active conversation.
+      await goalNavigation.getByRole("button", { name: /^(Overview|概览)$/ }).click();
       const writesBeforeMonitorShortcut = api.durableWriteCount;
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "配置定时检查" }).click();
@@ -1900,14 +1912,23 @@ export const typedActionsScenario = {
       await page.locator(".personal-object-list").first().getByRole("button").first().click();
       await page.getByText("需要你", { exact: true }).last().waitFor({ state: "visible" });
       await page.getByText("更多决定").click();
-      await page.getByRole("button", { name: "稍后决定", exact: true }).click();
-      await page.getByText("确认执行").waitFor({ state: "visible" });
-      const deferredDecision = api.actionPreviews.find((preview) => preview.action_kind === "gate.resolve" && preview.normalized_parameters.decision === "defer");
-      if (!deferredDecision) throw new Error("Decision defer did not create a Gate preview");
-      await page.getByRole("button", { name: "稍后", exact: true }).click();
-      await page.getByText(/已暂缓/).waitFor({ state: "visible" });
-      if (!api.actionTransitions.some((transition) => transition.transition === "defer")) throw new Error("Proposal defer transition was not sent");
-      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      const writesBeforeDecision = api.durableWriteCount;
+      await page.getByRole("button", { name: "撤回这项请求", exact: true }).click();
+      await page.getByText("确认执行", { exact: true }).waitFor({ state: "visible" });
+      const cancelledDecision = api.actionPreviews.find((preview) => preview.action_kind === "gate.resolve" && preview.normalized_parameters.decision === "cancel");
+      if (!cancelledDecision) throw new Error("Withdrawing a request did not preview its canonical cancel decision");
+      if (api.durableWriteCount !== writesBeforeDecision) throw new Error("Decision preview wrote before owner confirmation");
+      const review = page.getByRole("dialog");
+      if (await review.getByRole("button", { name: "稍后", exact: true }).count()) throw new Error("A decision review still exposes proposal defer");
+      if (await review.getByRole("button", { name: "拒绝", exact: true }).count()) throw new Error("A decision review still exposes proposal reject");
+      if (/loopx todo complete|todo_[a-z0-9]+/u.test(await review.innerText())) throw new Error("Decision review requires raw protocol or CLI information");
+      await review.getByRole("button", { name: "确认撤回", exact: true }).click();
+      await review.getByText("已撤回。", { exact: true }).waitFor({ state: "visible" });
+      if (api.durableWriteCount !== writesBeforeDecision + 1) throw new Error("A confirmed decision must write exactly once");
+      if (!api.actionApplies.includes(cancelledDecision.proposalId)) throw new Error("Confirm did not apply the previewed decision");
+      if (await review.getByRole("button", { name: "确认撤回", exact: true }).count()) throw new Error("Applied decision still offers confirm");
+      await review.getByRole("button", { name: "查看更新后的 Goal", exact: true }).click();
+      await review.waitFor({ state: "hidden" });
       await page.locator(".personal-manager-link").first().click();
       const sourceGoalCard = page.locator(".personal-home-goal-card").first();
       await sourceGoalCard.click();

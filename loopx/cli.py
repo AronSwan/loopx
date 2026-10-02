@@ -92,17 +92,18 @@ from .capabilities.external_research.cli import (
     handle_external_evidence_command,
     register_external_evidence_commands,
 )
+from .capabilities.performance_diagnosis.cli import (
+    handle_performance_diagnosis_command,
+    register_performance_diagnosis_commands,
+)
 from .cli_commands import (
     handle_benchmark_command,
     handle_bootstrap_connect_command,
     handle_canary_command,
     handle_coordination_shadow_command,
-    handle_authority_archive_command,
     handle_capability_command,
-    handle_doctor_command,
     handle_dreaming_command,
     handle_evidence_log_command,
-    handle_extension_command,
     handle_explore_command,
     handle_first_run_report_command,
     handle_goal_channel_command,
@@ -120,7 +121,6 @@ from .cli_commands import (
     handle_ready_score_command,
     handle_review_batch_command,
     handle_registry_admin_command,
-    handle_slash_commands_command,
     handle_starter_command,
     handle_summary_all_command,
     handle_support_control_command,
@@ -207,8 +207,7 @@ from .extensions.lark.periodic_report_cli import (
     register_lark_periodic_report_commands,
 )
 from .help_surface import (
-    build_command_reference_payload,
-    render_command_reference_markdown,
+    register_command_reference,
     render_concise_help,
     top_level_help_requested,
 )
@@ -271,11 +270,7 @@ def build_parser() -> LoopXArgumentParser:
 
     register_version_command(sub, add_subcommand_format)
 
-    commands_parser = sub.add_parser(
-        "commands",
-        help="Show grouped LoopX command reference for operators and contributors.",
-    )
-    add_subcommand_format(commands_parser)
+    register_command_reference(sub)
 
     register_bootstrap_connect_command(sub)
 
@@ -338,6 +333,7 @@ def build_parser() -> LoopXArgumentParser:
     register_connector_commands(sub, add_subcommand_format)
 
     register_external_evidence_commands(sub, add_subcommand_format)
+    register_performance_diagnosis_commands(sub, add_subcommand_format)
 
     register_ml_experiment_commands(sub, add_subcommand_format)
 
@@ -406,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
         pass  # demo package absent in installed builds; no question rewrite
     parser = build_parser()
     args = parser.parse_args(raw_argv)
+    from .usage_ping import select_operation
+    select_operation(args)
     args.format = resolve_global_output_format(args)
     guard_result = enforce_native_controller_guard(args)
     if guard_result is not None:
@@ -424,14 +422,6 @@ def main(argv: list[str] | None = None) -> int:
     if version_result is not None:
         return version_result
 
-    if args.command == "commands":
-        print_payload(
-            build_command_reference_payload(),
-            output_format(args),
-            render_command_reference_markdown,
-        )
-        return 0
-
     bootstrap_connect_result = handle_bootstrap_connect_command(
         args,
         registry_path=registry_path,
@@ -443,9 +433,6 @@ def main(argv: list[str] | None = None) -> int:
     starter_result = handle_starter_command(args, print_payload)
     if starter_result is not None:
         return starter_result
-
-    if args.command == "doctor":
-        return handle_doctor_command(args, print_payload)
 
     workflow_skills_result = handle_workflow_skills_command(
         args,
@@ -512,15 +499,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if reliability_diagnostics_result is not None:
         return reliability_diagnostics_result
-
-    extension_result = handle_extension_command(
-        args,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if extension_result is not None:
-        return extension_result
 
     change_quality_result = handle_change_quality_command(
         args,
@@ -727,6 +705,12 @@ def main(argv: list[str] | None = None) -> int:
     if external_evidence_result is not None:
         return external_evidence_result
 
+    performance_diagnosis_result = handle_performance_diagnosis_command(
+        args, output_format=output_format, print_payload=print_payload,
+    )
+    if performance_diagnosis_result is not None:
+        return performance_diagnosis_result
+
     registry_admin_result = handle_registry_admin_command(
         args,
         registry_path=registry_path,
@@ -880,14 +864,6 @@ def main(argv: list[str] | None = None) -> int:
     if deepresearch_result is not None:
         return deepresearch_result
 
-    slash_commands_result = handle_slash_commands_command(
-        args,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if slash_commands_result is not None:
-        return slash_commands_result
-
     if args.command == "dreaming":
         return handle_dreaming_command(
             args,
@@ -924,13 +900,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if cadence_result is not None:
         return cadence_result
-    authority_archive_result = handle_authority_archive_command(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if authority_archive_result is not None:
-        return authority_archive_result
-
     coordination_shadow_result = handle_coordination_shadow_command(
         args,
         registry_path=registry_path,

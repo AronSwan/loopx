@@ -23,7 +23,11 @@ from ..extensions.lark.goal_channel import (
     setup_lark_goal_channel,
     sync_lark_goal_channel,
 )
-from ..extensions.lark.goal_channel_contracts import binding_for_goal, operation_packet
+from ..extensions.lark.goal_channel_contracts import (
+    binding_for_goal,
+    notification_request_snapshot,
+    operation_packet,
+)
 from ..extensions.lark.goal_topic_batch import upgrade_lark_goal_topics
 from ..extensions.runtime import (
     default_extension_state_file,
@@ -169,6 +173,21 @@ def register_goal_channel_commands(
         dest="auto_notify_human_gates",
         action="store_false",
         help="Disable automatic human gate notifications.",
+    )
+    automation.add_argument(
+        "--auto-notify-blocked-notices",
+        dest="auto_notify_blocked_notices",
+        action="store_true",
+        help="Send new or materially changed blocked Todo notices to the Goal Channel.",
+    )
+    automation.add_argument(
+        "--no-auto-notify-blocked-notices",
+        dest="auto_notify_blocked_notices",
+        action="store_false",
+        help="Disable automatic blocked Todo notices.",
+    )
+    configure.set_defaults(
+        auto_notify_human_gates=None, auto_notify_blocked_notices=None
     )
     configure.add_argument("--execute", action="store_true")
 
@@ -420,11 +439,16 @@ def _quota_packet(
         limit=20,
         goal_id=goal_id,
     )
-    return build_quota_should_run(
+    packet = build_quota_should_run(
         status,
         goal_id=goal_id,
         agent_id=agent_id,
     )
+    # Transport adapter: retain the complete same-read Todo projection only
+    # for this notification. Quota's 180-character hot path stays unchanged;
+    # the shared TS presentation owner checks identity/version/lifecycle.
+    packet["request_snapshot"] = notification_request_snapshot(status, goal_id)
+    return packet
 
 
 def handle_goal_channel_command(
@@ -458,7 +482,31 @@ def handle_goal_channel_command(
         )
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 0 if payload.get("ok") else 1
-    if command == "configure" and bool(args.auto_notify_human_gates):
+    if command in {"inspect-operation", "consume-operation", "report-operation"}:
+        # Original-Agent continuations do not call Lark. They must remain
+        # readable/settleable even if that transport extension is unavailable.
+        assert goal_id is not None
+        _, source_path, source_binding, source_root = _source_context(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id=goal_id,
+        )
+        payload = run_goal_channel_operation(
+            args,
+            context=GoalChannelOperationContext(
+                invoked_runtime_root=runtime_root,
+                source_registry_path=source_path,
+                source_runtime_root=source_root,
+                binding_path=source_binding,
+            ),
+        )
+        assert payload is not None
+        print_payload(payload, output_format(args), render_goal_channel_markdown)
+        return 0 if payload.get("ok") else 1
+    if command == "configure" and (
+        args.auto_notify_human_gates is True
+        or getattr(args, "auto_notify_blocked_notices", None) is True
+    ):
         assert goal_id is not None
         _, source_registry_path, binding_path, _ = _source_context(
             registry=registry,
@@ -472,7 +520,10 @@ def handle_goal_channel_command(
         default_binding_path = None
     if (
         command == "configure"
-        and bool(args.auto_notify_human_gates)
+        and (
+            args.auto_notify_human_gates is True
+            or getattr(args, "auto_notify_blocked_notices", None) is True
+        )
         and binding_path is not None
         and default_binding_path is not None
         and binding_path.resolve() != default_binding_path.resolve()
@@ -483,13 +534,16 @@ def handle_goal_channel_command(
             execute=execute,
             blocker="noncanonical_binding_path",
             summary=(
-                "automatic human gate delivery requires the project-local "
+                "automatic Goal Channel delivery requires the project-local "
                 "default Goal Channel binding"
             ),
         )
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 1
-    if command == "configure" and not bool(args.auto_notify_human_gates):
+    if command == "configure" and (
+        args.auto_notify_human_gates is False
+        or getattr(args, "auto_notify_blocked_notices", None) is False
+    ):
         assert goal_id is not None
         source_registry, _, binding_path, _ = _source_context(
             registry=registry,
@@ -502,7 +556,10 @@ def handle_goal_channel_command(
                 registry=source_registry,
                 goal_id=goal_id,
                 binding_path=binding_path,
-                human_gate_auto_notify=False,
+                human_gate_auto_notify=args.auto_notify_human_gates,
+                blocked_notice_auto_notify=getattr(
+                    args, "auto_notify_blocked_notices", None
+                ),
                 execute=execute,
             )
         except Exception:
@@ -658,7 +715,10 @@ def handle_goal_channel_command(
                             registry=source_registry,
                             goal_id=goal_id,
                             binding_path=binding_path,
-                            human_gate_auto_notify=bool(args.auto_notify_human_gates),
+                            human_gate_auto_notify=args.auto_notify_human_gates,
+                            blocked_notice_auto_notify=getattr(
+                                args, "auto_notify_blocked_notices", None
+                            ),
                             execute=execute,
                         )
                     elif command == "doctor":

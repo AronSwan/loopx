@@ -169,12 +169,14 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # TurnEnvelope intentionally carries the complete authoring schema
             # that the validator accepts, plus the typed executor and selection
             # facts needed to decide whether execution is authorized. The
-            # latest-main fixture measures 14,159 chars, so 14,500 retains a
-            # narrow 341-char regression margin without relaxing Todo growth.
+            # Explicit registry routing adds 75 necessary command characters:
+            # the same fixture measured 14,482 before routing and 14,557 after.
+            # Keep the executable authority binding intact; 14,600 leaves a
+            # 43-character margin without relaxing line or per-Todo growth.
             # The over-target TurnEnvelope diagnostic remains visible instead
             # of hiding authority overflow; latest main renders it in 542
             # characters, leaving a narrow 58-character presentation margin.
-            "crowded": {"json": 14_500, "markdown": 600},
+            "crowded": {"json": 14_600, "markdown": 600},
             "multi_agent": {"json": 12_000, "markdown": 300},
         },
         max_lines={
@@ -595,6 +597,12 @@ CLI_OUTPUT_MODE_VARIANT_BY_ID = {
 # here. Tests fail closed when help adds a command without a budget or a named
 # cold-path exception.
 CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] = (
+    CliOutputCommandClassification(
+        command_id="migrate-local-state",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="explicit offline local-state migration preview, execution, and receipt-bound rollback",
+    ),
     CliOutputCommandClassification(
         command_id="doctor",
         qualification="explicit_cold_path_exception",

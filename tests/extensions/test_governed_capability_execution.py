@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import loopx.extensions.governed_capability_execution as governed_execution
+from loopx import paths
 from loopx.control_plane.effect_program import SettlementIdentity
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.extensions.capability_admission import (
@@ -22,6 +23,28 @@ from loopx.extensions.governed_capability_execution import (
 )
 from loopx.extensions.runtime import install_extension
 from loopx.todos import list_goal_todos
+
+
+def test_default_governed_run_dir_follows_single_runtime_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_root = tmp_path / ".loopx"
+    legacy_root = tmp_path / ".codex" / "loopx"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current_root)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy_root)
+    suffix = Path("extensions") / "governed-capability-runs"
+
+    assert governed_execution.default_governed_capability_run_dir() == current_root / suffix
+    legacy_root.mkdir(parents=True)
+    (legacy_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    assert governed_execution.default_governed_capability_run_dir() == legacy_root / suffix
+
+    current_root.mkdir()
+    (current_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        governed_execution.default_governed_capability_run_dir()
+    assert governed_execution.default_governed_capability_run_dir(current_root) == current_root / suffix
 
 
 def _provider(path: Path, *, call_log: Path) -> Path:
@@ -92,7 +115,12 @@ json.dump(result, sys.stdout)
     return path
 
 
-def _installed_material_extension(tmp_path: Path) -> tuple[Path, Path, Path]:
+_MONITOR_PROPOSAL_KINDS = ("continuous_monitor_upsert", "continuous_monitor_complete")
+
+
+def _installed_material_extension(
+    tmp_path: Path, *, proposal_kinds: tuple[str, ...] = _MONITOR_PROPOSAL_KINDS
+) -> tuple[Path, Path, Path]:
     call_log = tmp_path / "provider-calls.txt"
     provider = _provider(tmp_path / "provider", call_log=call_log)
     (tmp_path / "profile.json").write_text(
@@ -110,10 +138,7 @@ def _installed_material_extension(tmp_path: Path) -> tuple[Path, Path, Path]:
                             "target_key_prefixes": ["fixture-material:"],
                         },
                         "transition_contract": {
-                            "proposal_kinds": [
-                                "continuous_monitor_upsert",
-                                "continuous_monitor_complete",
-                            ],
+                            "proposal_kinds": list(proposal_kinds),
                             "monitor_key_prefixes": ["fixture:"],
                             "monitor_action_kinds": ["poll_material_delivery"],
                             "monitor_target_key_prefixes": ["fixture-run:"],
@@ -223,8 +248,12 @@ def _admission(identity: SettlementIdentity) -> dict[str, object]:
     }
 
 
-def _start_arguments(tmp_path: Path) -> dict[str, object]:
-    state_file, registry, _call_log = _installed_material_extension(tmp_path)
+def _start_arguments(
+    tmp_path: Path, *, proposal_kinds: tuple[str, ...] = _MONITOR_PROPOSAL_KINDS
+) -> dict[str, object]:
+    state_file, registry, _call_log = _installed_material_extension(
+        tmp_path, proposal_kinds=proposal_kinds
+    )
     identity = _identity()
     return {
         "state_file": state_file,
@@ -872,3 +901,98 @@ def test_material_reconcile_recovers_completion_after_pre_receipt_crash(
     )["todos"]
     assert len(monitors) == 1
     assert monitors[0]["status"] == "done"
+
+
+def _journal(tmp_path: Path, invocation_id: str) -> dict:
+    return json.loads(
+        (tmp_path / "runs" / f"{invocation_id}.json").read_text(encoding="utf-8")
+    )
+
+
+def test_an_operation_that_cannot_propose_a_team_plan_reads_no_plan_basis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A monitor-only operation starts exactly as before.
+
+    Its provider cannot return a team plan, so the start neither reads a plan
+    basis nor stores one: no extra runtime read, no new way to fail before the
+    provider runs.
+    """
+
+    reads: list[dict] = []
+    monkeypatch.setattr(
+        governed_execution,
+        "team_plan_state_fingerprint",
+        lambda **kwargs: reads.append(kwargs) or "sha256:unexpected",
+    )
+
+    started = start_governed_external_capability(
+        **_start_arguments(tmp_path), execute=True
+    )
+
+    assert reads == []
+    assert "team_plan_state_basis" not in _journal(tmp_path, started["invocation_id"])
+    assert [item["status"] for item in started["transition_receipts"]] == ["committed"]
+
+
+def test_an_operation_that_may_propose_a_team_plan_binds_the_basis_before_its_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stored basis is the state the agent saw before its provider ran.
+
+    No shipped contract admits a team plan yet, so this widens the manifest's
+    admitted kinds in-test to stand in for that future contract. State moves
+    while the provider runs; the journal keeps the earlier basis, and a replay
+    never re-binds it from the current state.
+    """
+
+    from loopx.control_plane.work_items.team_plan_adapter import (
+        team_plan_state_fingerprint,
+    )
+    from loopx.extensions import manifest
+
+    team_plan_kind = "steward_team_plan_preview"
+    monkeypatch.setattr(
+        manifest,
+        "_EXTERNAL_CAPABILITY_TRANSITION_PROPOSAL_KINDS",
+        {*manifest._EXTERNAL_CAPABILITY_TRANSITION_PROPOSAL_KINDS, team_plan_kind},
+    )
+    arguments = _start_arguments(
+        tmp_path, proposal_kinds=(*_MONITOR_PROPOSAL_KINDS, team_plan_kind)
+    )
+
+    def basis() -> str:
+        return team_plan_state_fingerprint(
+            registry_path=Path(str(arguments["registry_path"])),
+            goal_id="fixture-goal",
+            basis_agent_id="fixture-agent",
+        )
+
+    before = basis()
+    active_state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    run_provider = governed_execution.execute_extension_runtime_binding
+
+    def provider_while_state_moves(*args, **kwargs):
+        active_state.write_text(
+            active_state.read_text(encoding="utf-8").replace(
+                "# Active Goal State", "# Active Goal State, revised"
+            ),
+            encoding="utf-8",
+        )
+        return run_provider(*args, **kwargs)
+
+    monkeypatch.setattr(
+        governed_execution,
+        "execute_extension_runtime_binding",
+        provider_while_state_moves,
+    )
+
+    started = start_governed_external_capability(**arguments, execute=True)
+
+    assert _journal(tmp_path, started["invocation_id"])["team_plan_state_basis"] == before
+    assert basis() != before
+    replay = start_governed_external_capability(**arguments, execute=True)
+    assert replay["transition_receipts"] == started["transition_receipts"]
+    assert _journal(tmp_path, started["invocation_id"])["team_plan_state_basis"] == before

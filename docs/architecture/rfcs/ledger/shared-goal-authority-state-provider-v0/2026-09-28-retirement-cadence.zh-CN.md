@@ -44,6 +44,25 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 内部删除必要但不充分，不能忽略公开 CLI/import 和序列化契约。保留公共行为测试，
 只删没有消费者的旧实现专属 characterization。删的是代码，不是用户状态、回执和备份。
 
+### 已合入的 T4 切片：已无调用方的 Python lease／handoff facade
+
+在 `e240730ec` 核对调用方后，#5395 已于 `8474c8d86` 合入，退役了下列
+无生产消费者的内部跨界。原生决策和事务 owner 保留；这项删除不等待 D2 资格或
+默认入口接入，也不宣称完成它们。
+
+| 删除边界 | 最后调用方／替代 owner | 兼容与验证 |
+| --- | --- | --- |
+| `authority_core.py` 的 acquire／renew／transfer／release、owner eligibility、handoff transition command facade | 只剩旧 core 测试；真实 lease／handoff adapter 已直接使用完整 native 事务 | 不改持久化命令格式或公共 CLI schema。保留独立的原生 generation、重放、冲突、清理、静止规则测试，并走真实 File／SQLite 入口。 |
+| `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
+| `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
+
+`authority_core.py` 仍是活跃 Todo bridge。`LeaseAction`、`LeaseModeGateCommand`
+也保留：semantic-vocabulary 注册表明确将该输入契约保留到 M4 评审。本切片不通过
+降低语义覆盖下限丢弃已有兼容义务。仅服务旧 facade 的测试随实现退役，公共／原生
+行为测试保留。回退该切片可恢复内部跨界，无需转换数据。本机 CLI 已采用
+`db3672f3c`，验证了干净源码清单、具备资格的 SQLite runtime、已知权威格式均为
+当前版本及健康的 canonical 合同读回。这不证明所有已安装 Host 或 D2 已验收。
+
 ## 下一轮交付顺序
 
 | 顺序 | 完整结果／owner | 具体出口与删除机会 |
@@ -183,8 +202,41 @@ Todo 写入时的业务校验，也不重审完成／deferred 历史的授权。
 仍触及既有 `todo.succession.project` RPC 响应预算；修复后的合同 API 能读取该集合，
 不代表剩余整命令包体边界已完成验收。
 
-B 下一步仍是历史 artifact 查找和剩余公共包体／冷路径，保留文件变化 freshness、
-完整决策输入及损坏拒绝。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
+B 按主 RFC 7.2 区分有界 provider PR、可恢复的小范围开发者试用和发布默认值。
+提议的绝对延迟预算不否决每次合入或试用：在匹配负载下比较当前受支持版本，
+公开绝对增量与相对变化，并核对消费者影响。正确性、原始回执、完整 metadata 和
+可恢复迁移仍是硬要求。冻结报告保留原预算及失败／缺失项，调整决策不改写旧证据。
+
+[PR #5251](https://github.com/loopx-project/loopx/pull/5251) 在已有 strict JSON codec
+owner 中优化历史数据物化，保留持久化 canonical 编码，减少历史投影中不可变值的
+重复分配。旧正式报告各自绑定 source：作者报告 `d767b06f1` 为 8 通过／6 失败／10
+缺失，`02d3dee83` 为 14 通过／0 失败／10 缺失；这些结果不验证后续 head，也不补齐
+缺失轴。下一步核对变更路径的配对测量与真实 provider／调用方，再对齐并发、恢复、
+consumer lag 及保留的自然时间 soak 适用性。
+比较 runner 原先要求历史重试返回 conflict，与已合并 #5169 矛盾：相同完整意图应
+返回原 applied revision／cursor。现在核对原结果，分别拒绝 projection／event／receipt
+漂移，在重试前后分页验证全部历史，不保留所有预期快照。不变量失败就不发布成功
+报告；这些检查放在既有计时窗口之外。这修复的是验证工具，不代表 provider 故障、
+D2 通过或默认切换。#4224 已报告在 `e98191faa` 上于 9 月 14 日开始 soak，仍需最终
+结果及对当前候选的适用性证据，不能称为未开始，也不能仅因无关 source 修订就重启计时。
+
+在 source `613180ae` 上，64 KiB 匹配负载的 macOS 正式测量有 13 项通过、1 项失败、
+11 项缺失：冷 CLI status p95 为 4.39 秒，超过 2 秒预算。Linux 的仅存储正式测量
+有 12 项通过、13 项缺失；小规模 CLI 演练不能替代正式 CLI 轴。按需调用的
+`performance-diagnosis` 已在隔离目标上采集 Python 墙钟、独立 Node CPU 和 Linux
+线程栈。启动、候选扫描和等待仍是待验证假设，需复跑未插桩的原负载；不能用
+profile 权重替换这项准入失败。
+
+[#5283](https://github.com/loopx-project/loopx/pull/5283) 是相邻的只读 delegation
+预检优化，不是 provider 实现。当前进程复用候选报告了 File/SQLite 配对暖调用收益，
+同时披露冷启动成本；保留并推进精确 head 评审、安装读回和真实请求方采用。
+重复调用消费者与上述单次冷 status 分别验收。沿原 TS／CLI owner 读取当前决策，
+固定 Python worker 只作传输，不缓存权限或验收结果；TS 替代与最后调用方验证完成
+后再退役 Python 规则，不能凭进程复用就宣称退役或 SQLite 准入。
+
+已有 TS 替代且真实受影响调用方验证完成的 Python 重复决策，可以按最后调用方独立
+退役；整条 Markdown writer 删除仍需 C 的新 Goal／升级／恢复出口。消费者完整
+metadata、freshness 和决策输入继续验收。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
 canonical Todo 快照。独立检查和下一次请求重新读取；租约与投影写回读取不参与。消费者修改
 不会污染保留输入，首次读取失败不会在请求中途恢复成功。这不代表 registry、Markdown、
 历史或多个 Goal 之间的原子快照。集成后继续核对安装态消费者，A/C 与 D2
@@ -233,3 +285,39 @@ Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9�
 真实 File/SQLite CLI 验证精确计数、跨远端记录的推断后继、metadata 保留与
 provider 状态不变。这只修复有界容量，不证明任意规模、稳定延迟、D2 验收，
 也不授予默认 provider 切换；整 Goal summary/list/detail 消费和持续观察仍待推进。
+
+### 打包源码指纹成本
+
+B 阶段增量复用已有的有界、有序文件读取器，并发读取源码字节。摘要保留全部
+相对文件名和原始字节、metadata 失效、请求内缓存及失败／重试行为；Python
+文件系统适配层不新增状态规则或持久缓存。
+
+当前复核对比基线 `0538bf1631a7` 与本实现，使用 macOS arm64、Python 3.13.13、
+Node 24.21.0。启动预热一次后，每组交替运行九个独立 CLI 进程，读取相同的可丢弃
+合成 File/SQLite fixture；Effect 进程隔离，没有清空 OS 缓存。源码快照包含
+249 个 TS/JSON 文件（3,065,799 字节）。指纹阶段中位数分别为 123.5→53.8 毫秒、
+111.3→48.0 毫秒。完整 `status` 中位数为 1.032→1.054 秒、1.019→1.010 秒；
+样本 p95 为 1.745→1.104 秒、1.114→1.086 秒（九个样本的 p95 就是最大值）。
+二十组完整响应仅明确列出的观测时间字段不同，畸形 registry 的拒绝结果不变。
+
+这支持有界的冷调用成本改善，不证明通用 status 提速、provider 吞吐或 D2／默认项
+验收。显式清除指纹缓存后，同进程热缓存微基准从 6.7 退化到 12.8 毫秒；正常未变更
+请求仍复用缓存。字节已经在热缓存中时，线程调度成本更高。两种负载都不能外推为
+用户群体的延迟保证。整 Goal 大包／消费者与持续运行仍待推进，本增量不授权删除
+旧 writer 或裁剪 UI 数据。
+
+### File 恢复的批量回执读取
+
+Archive restore／audit 已使用 provider 通用的 1–64 个操作批量回执合同。File 现在
+也实现该合同：每批只做一次完整字节与 store identity 证明，不再为每条回执重读
+整个文件。调用顺序、重复 ID、缺失结果、原始回执内容均保留，每个返回内容独立。
+非法输入或损坏历史会拒绝整批；数组空位在访问存储前被拒绝，公共 helper 入口也
+遵循该规则。单条回执查询的错误投影不变。
+
+在同一份已恢复、隔离的 1,287 笔历史上，macOS arm64／Node 24.21.0 每组九次暖读
+样本，File 查询 16 条回执的中位数从 346.2 降至 21.3 毫秒；未改动的 SQLite 对照为
+111.3／111.1 毫秒。每个 provider 的回执结果与权威 head 均保持一致。这是暖读组件
+测量，不是相同完整性工作下的 provider 比较、整次恢复延迟、冷读或 D2／默认项
+验收。File 每恢复一笔仍重写保留的文件；此前一次完整历史恢复超出调用方的
+300 秒超时，随后才发布精确匹配的确认。批量回执优化没有闭合这项恢复成本。
+#4224 的 soak 已启动；其最终证据和对当前候选的适用性仍待核对。

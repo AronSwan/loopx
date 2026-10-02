@@ -1,4 +1,6 @@
 import { goalCreateRequest } from "./goal-create-request";
+import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
+import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
@@ -20,7 +22,6 @@ import {
   fetchGoalChannelTargets,
   fetchLarkConnections,
   fetchLoopXMode,
-  listTypedActions,
   previewTypedAction,
   setupGoalChannel,
   stewardPrompts,
@@ -31,14 +32,17 @@ import {
   type ManagerRuntimeSessionReadback,
   type TypedActionProposal,
 } from "../../data/chat";
+import { useTypedActionReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
 import { GoalTeamResults } from "./goal-team-results";
 import { GoalManagedResults } from "./goal-managed-results";
 import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
+import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
+import { monitorScheduleReadback } from "./monitor-readback";
 import { GoalSidebar } from "./goal-sidebar";
 import { GoalTasksView } from "./goal-tasks-view";
 import { GoalOverview } from "./goal-overview";
@@ -79,7 +83,8 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
+    const key = proposal.actionKind === "operation.execute" ? proposal.previewId
+      : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
     // restored list and a session-created draft arrive in opposite orders.
@@ -104,11 +109,17 @@ function ManagerHomeBoard({
   onSelectGoal,
   onRetry,
   systemHealth,
+  operations,
+  onSelectOperation,
+  onViewAllOperations,
 }: {
   goals: WorkspaceGoal[];
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
   systemHealth?: WorkspaceSystemHealth;
+  operations: WorkspaceActionPreview[];
+  onSelectOperation: (proposal: WorkspaceActionPreview) => void;
+  onViewAllOperations: () => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const currentGoals = goals.filter((goal) => goal.activationState === "active");
@@ -161,7 +172,8 @@ function ManagerHomeBoard({
           <button className="min-h-11 rounded-md border px-3 py-2 text-sm" onClick={onRetry} type="button">{t("startup.retryFailed")}</button></div> : null}
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
-      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal} /> : null}
+      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
+        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
       <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
@@ -263,6 +275,9 @@ function ManagerConversationTray({
   onReviewGoalDraft,
   onSuggestReply,
   onOpenConversation,
+  onInterruptTurn,
+  onSteerTurn,
+  onCancelPreparation,
   title,
 }: {
   agentLabel?: string;
@@ -272,6 +287,9 @@ function ManagerConversationTray({
   onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
   onSuggestReply?: (text: string) => void;
   onOpenConversation: () => void;
+  onInterruptTurn?: (turnId: string) => Promise<void>;
+  onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
+  onCancelPreparation?: () => void;
   title?: string;
 }) {
   const { t } = useWorkspaceI18n();
@@ -329,7 +347,7 @@ function ManagerConversationTray({
             <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.pending ? <small>{t("conversation.agentPending")}</small> : null}
+              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
               <CollaborationCard request={message.collaboration} />
               <ReturnDeliveryStatus delivery={message.returnDelivery} />
@@ -439,7 +457,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
     id: `schedule:${goal.goalId}:${todo.todoId}`,
     kind: "schedule",
     schedule: {
-      agentId: goal.agentId,
+      ...monitorScheduleReadback(todo),
       executionHistory: monitorRun ? [{
         label: monitorRun.run.latestActivity || monitorRun.run.title,
         runId: monitorRun.run.runId,
@@ -448,14 +466,11 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
       }] : [],
       goalId: goal.goalId,
       label: todo.text,
-      schedule: todo.evidence ?? t("schedule.summary"),
       scheduleId: todo.todoId,
       scheduleKind: "monitor",
       sessionId: monitorRun?.run.sessionId,
       status: todo.done || todo.status === "paused" ? "paused" : "active",
-      stopCondition: t("drawer.scheduleDefaultStop"),
-      target: todo.text,
-      timezone: "Asia/Shanghai",
+      target: todo.targetKey || todo.text,
     },
     });
   });
@@ -547,9 +562,18 @@ function operationProposalFields(
     {
       key: "operation_state",
       label: t("proposal.field.operationState"),
-      value: frame?.lifecycleState ?? proposal.status,
+      value: frame?.kind === "pending" && frame.executionState
+        ? t(`proposal.operationState.${frame.executionState}`)
+        : frame?.kind === "inactive" ? t(`actionReview.${frame.reason}`)
+        : frame?.kind === "result" && frame.resultKind === "unknown"
+        ? t("proposal.operationState.submission_unknown")
+        : frame?.kind === "result" && frame.resultKind === "cancelled"
+        ? t("proposal.primary.operationCancelled")
+        : frame?.kind === "confirmation" && !frame.confirmationDeliveryVerified
+        ? t("proposal.primary.operationDeliveryPending")
+        : frame?.lifecycleState ?? proposal.status,
     },
-    ...(frame?.kind === "result" ? [{
+    ...(frame?.kind === "result" && frame.resultKind !== "cancelled" ? [{
       key: "result_delivery",
       label: t("proposal.field.resultDelivery"),
       value: frame.resultDeliveryVerified
@@ -600,7 +624,7 @@ function workspaceCandidatesFromGate(gate: Record<string, unknown> | null | unde
 
 function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate): WorkspaceActionPreview {
   const lifecycleOperation = lifecycleOperationFor(proposal);
-  const reviewPlan = compileActionReviewPlan(proposal);
+  const reviewPlan = compileActionReviewPlan(proposal, Date.now());
   const title = typeof proposal.normalized_parameters.title === "string"
     ? proposal.normalized_parameters.title
     : typeof proposal.normalized_parameters.goal_id === "string"
@@ -611,6 +635,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     ? proposal.normalized_parameters.target
     : "";
   const operationFrame = reviewPlan.operationFrame;
+  const decision = reviewPlan.decisionFrame?.decision;
   const operationTitle = operationFrame?.content.title ?? proposal.summary;
   const localizedSummary = proposal.action_kind === "operation.execute"
     ? operationTitle
@@ -641,12 +666,25 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       ? operationProposalFields(proposal, reviewPlan, t)
       : proposal.action_kind === "team.plan"
       ? teamPlanFields(proposal.normalized_parameters, t)
+      : decision ? []
       : proposalFields(proposal.normalized_parameters, t),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
     impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
-      ? t("proposal.impact.operation")
+      ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
+        : operationFrame?.kind === "pending" && operationFrame.executionState
+        ? t(operationFrame.executionState === "consumed_outcome_pending"
+          ? "proposal.impact.operationConsumed" : operationFrame.executionState === "managed_turn_pending"
+          ? "proposal.impact.operationManagedPending" : operationFrame.executionState === "managed_turn_started"
+          ? "proposal.impact.operationManagedStarted" : "proposal.impact.operationAuthorized")
+        : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
+        ? t("proposal.impact.operationUnknown")
+        : operationFrame?.kind === "result"
+        ? t(operationFrame.resultKind === "cancelled" ? "proposal.impact.operationCancelled" : "proposal.impact.operationResult")
+        : operationFrame?.kind === "confirmation" && !operationFrame.confirmationDeliveryVerified
+        ? t("proposal.impact.operationDeliveryPending") : t("proposal.impact.operation")
       : proposal.action_kind === "team.plan"
       ? proposal.status === "applied" ? t("proposal.teamPlan.assignedHint") : t("proposal.impact.teamPlan")
+      : decision ? proposal.status === "applied" ? "" : t(`proposal.impact.gate.${decision}`)
       : proposal.action_kind === "goal.create"
       ? t("proposal.impact.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
@@ -674,12 +712,20 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     } : undefined,
     workspaceCandidates,
     primaryLabel: reviewPlan.retryOriginal ? t("drawer.retryOriginal") : proposal.action_kind === "operation.execute"
-      ? operationFrame?.kind === "result"
-        ? operationFrame.resultDeliveryVerified
+      ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
+        : operationFrame?.kind === "pending" && operationFrame.executionState
+        ? t(`proposal.operationState.${operationFrame.executionState}`)
+        : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
+        ? t("proposal.operationState.submission_unknown")
+        : operationFrame?.kind === "result"
+        ? operationFrame.resultKind === "cancelled"
+          ? t("proposal.primary.operationCancelled") : operationFrame.resultDeliveryVerified
           ? t("proposal.primary.operationResultVerified")
           : t("proposal.primary.operationResultPending")
-        : t("proposal.primary.operationGroup")
+        : operationFrame?.kind === "confirmation" && operationFrame.confirmationDeliveryVerified
+        ? t("proposal.primary.operationGroup") : t("proposal.primary.operationDeliveryPending")
       : proposal.action_kind === "team.plan" ? t(proposal.status === "applied" ? "proposal.teamPlan.viewResult" : "proposal.primary.teamPlan")
+      : decision ? t(`proposal.primary.gate.${decision}`)
       : proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.primary.lifecycleStop")
@@ -690,7 +736,8 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
         ? t("proposal.primary.todoStart")
         : t("proposal.primary.apply"),
-    status: reviewPlan.retryOriginal ? "error" : proposal.status === "applied"
+    status: reviewPlan.retryOriginal || (operationFrame?.kind === "result" && operationFrame.resultKind === "unknown")
+      ? "error" : proposal.status === "applied"
       && proposal.action_kind !== "operation.execute"
       && reviewPlan.interaction !== "completed"
       ? "error"
@@ -710,6 +757,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
 const acceptedImageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const maxImageAttachmentBytes = 5 * 1024 * 1024;
 const maxImageAttachmentCount = 4;
+const maxImageAttachmentTotalBytes = 12 * 1024 * 1024;
 
 function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
   return new Promise((resolve, reject) => {
@@ -727,30 +775,42 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
 }
 
 export function PersonalWorkspacePage({
+  conversationQueuesFollowUps = false,
+  conversationSupportsSteering = false,
   conversationSessionId,
+  conversationHistoryState,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
-  initialManagerChatOpen = false,
+  selectedView: controlledView,
   managerChannelBinding,
   managerRuntime,
   model,
   readOnly = false,
+  typedActionsRevision = 0,
   selectedAgentId: controlledAgentId,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
   serviceNotice,
 }: {
+  /** The bound Session's mode queues a message sent while its Turn runs. */
+  conversationQueuesFollowUps?: boolean;
+  /** The bound managed executor offers native exact-turn steering. */
+  conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
+  conversationHistoryState?: ConversationHistoryStatus;
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen?: boolean;
+  selectedView?: WorkspaceGoalTab;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
   ownerLabel?: string;
   readOnly?: boolean;
+  // Bumped when typed previews were stored outside this page, so the page
+  // re-reads the store instead of waiting for the next mount.
+  typedActionsRevision?: number;
   selectedAgentId?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
@@ -763,8 +823,13 @@ export function PersonalWorkspacePage({
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
-  const [selectedGoalTab, setSelectedGoalTab] = useState<WorkspaceGoalTab>("chat");
-  const [managerChatOpen, setManagerChatOpen] = useState(initialManagerChatOpen);
+  const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
+  const selectedGoalTab = controlledView ?? localView;
+  const managerChatOpen = selectedGoalTab === "chat";
+  function setSelectedGoalTab(view: WorkspaceGoalTab) {
+    setLocalView(view);
+    callbacks.onSelectView?.(view);
+  }
   const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
   const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
@@ -779,6 +844,7 @@ export function PersonalWorkspacePage({
     }
   });
   const [sending, setSending] = useState(false);
+  const [steering, setSteering] = useState(false);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -789,8 +855,13 @@ export function PersonalWorkspacePage({
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
+  // Cards this page created from the Manager channel. A card created from a
+  // Goal conversation stays in that Goal's timeline and never joins Manager Chat.
+  const [managerSessionProposalIds, setManagerSessionProposalIds] = useState<string[]>([]);
+  const restoredProposalIdsRef = useRef(new Set<string>());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
@@ -799,12 +870,15 @@ export function PersonalWorkspacePage({
   const digestSinceRef = useRef(Number.NaN);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const channelScrollRef = useRef<HTMLDivElement>(null);
+  const followConversationRef = useRef(true);
+  const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lifecyclePendingGoalIdsRef = useRef(new Set<string>());
   const quickCompletingTodoIdsRef = useRef(new Set<string>());
   const [digest, setDigest] = useState<{ done: number; failed: number } | null>(null);
   const selectedGoalId = controlledGoalId === undefined ? localGoalId : controlledGoalId;
+  const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const composerDraftKey = `${selectedGoalId ?? "manager"}:${selectedAgentId}`;
   const composer = drafts[composerDraftKey] ?? "";
@@ -812,8 +886,15 @@ export function PersonalWorkspacePage({
     setImageAttachments([]);
     setImageAttachmentError(null);
   }, [composerDraftKey]);
-  function setComposerDraft(key: string, value: string) {
+  useEffect(() => {
+    const input = composerRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  }, [composer, selectedGoalId, managerChatOpen]);
+  function setComposerDraft(key: string, value: string, expectedValue?: string) {
     setDrafts((current) => {
+      if (expectedValue !== undefined && current[key] !== expectedValue) return current;
       const next = { ...current };
       if (value) {
         next[key] = value;
@@ -855,12 +936,6 @@ export function PersonalWorkspacePage({
   function stewardPromptText(id: string) {
     return stewardPrompts.find((item) => item.id === id)?.prompt ?? "";
   }
-  useEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [composer]);
   const workspaceGoals = useMemo(() => model.goals.map((goal) => {
     const repository = goalContexts[goal.goalId];
     return repository ? {
@@ -933,6 +1008,8 @@ export function PersonalWorkspacePage({
       .filter((item) => item.kind !== "proposal"
         || !["stale", "error"].includes(item.proposal.status)
         || item.proposal.reviewPlan?.retryOriginal === true
+        || (item.proposal.reviewPlan?.operationFrame?.kind === "result"
+          && item.proposal.reviewPlan.operationFrame.resultKind === "unknown")
         || sessionProposalIds.includes(item.proposal.previewId));
     return projected.filter((item) => {
       if (!selectedGoalId) return true;
@@ -995,23 +1072,49 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
+  // One composer for both conversations. Running managed Codex work receives
+  // exact-turn instructions; attached hosts and LoopX mode keep their queues.
+  const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
+    && loopxMode?.enabled && loopxMode.active_turn_id);
+  const runningMessage = managerMessages.find((message) => message.pending && Boolean(message.sourceTurnId)
+    && message.sourceSessionId === conversationSessionId);
+  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
+  const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
+    && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
+  const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
+  const quickPromptBlocked = steering || sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
-      || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
+      || (item.kind === "proposal" && (managerSessionProposalIds.includes(item.proposal.previewId)
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
-    [items, sessionProposalIds, managerChannelProposalIds],
+    [items, managerSessionProposalIds, managerChannelProposalIds],
   );
-  const lastChatItem = managerChatItems[managerChatItems.length - 1];
-  const latestMessageTextLength = lastChatItem?.kind === "message" ? lastChatItem.message.text.length : 0;
+  const conversationOpen = selectedGoal ? selectedGoalTab === "chat" : managerChatOpen;
+  const conversationMessages = selectedGoal ? goalMessages : managerMessages;
+  const latestMessage = conversationMessages.at(-1);
+  const latestMessageTextLength = latestMessage?.text.length ?? 0;
+  function scrollToLatestMessage() {
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
+    const scroller = channelScrollRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
   useEffect(() => {
-    if (!managerChatOpen || !channelScrollRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (channelScrollRef.current) channelScrollRef.current.scrollTop = channelScrollRef.current.scrollHeight;
-    });
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
+  }, [selectedGoalId, selectedAgentId, conversationOpen]);
+  useEffect(() => {
+    if (!conversationOpen || !followConversationRef.current) return;
+    const frame = window.requestAnimationFrame(scrollToLatestMessage);
     return () => window.cancelAnimationFrame(frame);
-  }, [managerChatItems.length, managerChatOpen, latestMessageTextLength]);
+  }, [conversationOpen, selectedGoalId, selectedAgentId, conversationMessages.length,
+    latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length, latestMessage?.steps]);
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
+    if (selection?.kind === "proposal") {
+      const current = proposals[selection.item.previewId];
+      return current ? { kind: "proposal", item: current } : selection;
+    }
     if (selection?.kind === "attention") return { kind: "attention", item: refreshAttention(selection.item, model.attentionHistory ?? model.userTodos) };
     if (selection?.kind === "goal") {
       const currentGoal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
@@ -1022,7 +1125,7 @@ export function PersonalWorkspacePage({
       item.kind === "run" && item.run.runId === selection.item.runId
     );
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
-  }, [items, selection, workspaceGoals, model.attentionHistory, model.userTodos]);
+  }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos]);
 
   useEffect(() => {
     if (readOnly) {
@@ -1086,39 +1189,52 @@ export function PersonalWorkspacePage({
   useEffect(() => {
     if (readOnly) {
       setProposals({});
+      restoredProposalIdsRef.current.clear();
+      setManagerChannelProposalIds([]);
       return;
     }
-    let cancelled = false;
-    void listTypedActions(selectedGoalId ? { goalId: selectedGoalId } : { contextKind: "manager" })
-      .then((stored) => {
-        if (cancelled) return;
-        const restoreable = stored
-          .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
-            || compileActionReviewPlan(proposal).retryOriginal === true
-            || (proposal.action_kind === "team.plan" && proposal.status === "applied")
-            || (proposal.action_kind === "operation.execute" && proposal.status === "applied"))
-          .map((proposal) => workspaceProposal(proposal, t));
-        const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
-        setProposals((current) => ({ ...current, ...restored }));
-        // The manager conversation shows the cards this channel offered: a team
-        // plan the steward proposed from here is confirmed here, instead of the
-        // owner hunting for the Goal whose workspace happens to hold the card.
-        // A Goal-scoped fetch belongs to that Goal's workspace, not to this
-        // conversation, so it is left alone.
-        if (!selectedGoalId) {
-          setManagerChannelProposalIds(restoreable.map((proposal) => proposal.previewId));
-        }
-      })
-      .catch(() => {
-        // The workspace remains usable when the optional local proposal store is unavailable.
-      });
-    return () => { cancelled = true; };
-  }, [readOnly, selectedGoalId, t]);
+    if (!actionReadback.data) return;
+    const knownGoals = new Set(workspaceGoals.map(goal => goal.goalId));
+    const stored = actionReadback.data.filter(proposal => selectedGoalId || proposal.context.kind === "manager"
+      || (proposal.action_kind === "operation.execute" && knownGoals.has(String(proposal.normalized_parameters.goal_id))));
+    const restoreable = stored
+      .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
+        || compileActionReviewPlan(proposal).retryOriginal === true
+        || (proposal.action_kind === "team.plan" && proposal.status === "applied")
+        // Terminal operations replace cached gated cards, including in an
+        // already-open drawer. They never authorize local execution.
+        || proposal.action_kind === "operation.execute")
+      .map((proposal) => workspaceProposal(proposal, t));
+    const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
+    const previousIds = restoredProposalIdsRef.current;
+    restoredProposalIdsRef.current = new Set(Object.keys(restored));
+    setProposals((current) => ({...Object.fromEntries(Object.entries(current).filter(([id]) => !previousIds.has(id))), ...restored}));
+    // The manager conversation shows the cards this channel offered: a team
+    // plan the steward proposed from here is confirmed here, instead of the
+    // owner hunting for the Goal whose workspace happens to hold the card.
+    // A Goal-scoped fetch belongs to that Goal's workspace, not to this
+    // conversation, so it is left alone.
+    if (!selectedGoalId) setManagerChannelProposalIds(stored.filter(proposal => proposal.context.kind === "manager"
+      || proposal.action_kind === "operation.execute")
+      .map(proposal => proposal.proposal_id));
+  }, [readOnly, selectedGoalId, actionReadback.data, actionReadback.dataUpdatedAt, t, workspaceGoals]);
+
+  const homeOperations = Object.values(proposals).filter(proposal => proposal.actionKind === "operation.execute"
+    && proposal.reviewPlan?.operationFrame?.kind === "confirmation" && proposal.status === "gated");
+  function rememberSessionProposal(previewId: string, channelGoalId: string | null) {
+    setSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    if (channelGoalId === null) {
+      setManagerSessionProposalIds((current) => current.includes(previewId) ? current : [...current, previewId]);
+    }
+  }
 
   async function createPreview(
     request: WorkspaceActionPreviewRequest,
     options: { select?: boolean } = {},
   ) {
+    // The card belongs to the conversation on screen when the request started
+    // (this render's selectedGoalId), even if its answer lands after the owner
+    // moved elsewhere.
     if (readOnly) throw new Error(t("source.readOnlyWriteError"));
     let local: WorkspaceActionPreview;
     try {
@@ -1156,7 +1272,7 @@ export function PersonalWorkspacePage({
         workspaceCandidates,
       };
     }
-    setSessionProposalIds((current) => current.includes(local.previewId) ? current : [...current, local.previewId]);
+    rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
     if (options.select !== false) setSelection({ item: local, kind: "proposal" });
     return local;
@@ -1392,7 +1508,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
       }
-      if (applied.actionKind === "goal.lifecycle") {
+      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
     } catch (error) {
@@ -1450,8 +1566,8 @@ export function PersonalWorkspacePage({
   const drawerCallbacks: PersonalWorkspaceCallbacks = {
     ...callbacks,
     onOpenRunSession: async (run) => {
-      if (run.goalId !== selectedGoalId) selectGoal(run.goalId);
-      setSelectedGoalTab("chat");
+      if (run.goalId !== selectedGoalId) selectGoal(run.goalId, "chat");
+      else setSelectedGoalTab("chat");
       await callbacks.onOpenRunSession?.(run);
       setActiveSessionRun(run);
       setSelection(null);
@@ -1466,8 +1582,8 @@ export function PersonalWorkspacePage({
       setSelection(null);
     },
     onOpenOutput: (output) => {
-      if (output.goalId !== selectedGoalId) selectGoal(output.goalId);
-      setSelectedGoalTab("files");
+      if (output.goalId !== selectedGoalId) selectGoal(output.goalId, "files");
+      else setSelectedGoalTab("files");
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: applyProposal,
@@ -1488,7 +1604,9 @@ export function PersonalWorkspacePage({
     },
     onTransitionProposal: async (proposal, transition) => {
       const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition), t);
-      setSessionProposalIds((current) => current.includes(transitioned.previewId) ? current : [...current, transitioned.previewId]);
+      const managerOwned = managerSessionProposalIds.includes(proposal.previewId)
+        || managerChannelProposalIds.includes(proposal.previewId);
+      rememberSessionProposal(transitioned.previewId, managerOwned ? null : proposal.goalId ?? selectedGoalId);
       setProposals((current) => {
         const next = { ...current };
         if (transition === "regenerate") delete next[proposal.previewId];
@@ -1546,16 +1664,15 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null) {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = goalId ? "tasks" : "overview") {
     setLocalGoalId(goalId);
-    setManagerChatOpen(false);
     setManagerConversationReceiptVisible(false);
     setGoalConversationReceiptVisible(false);
     setActiveSessionRun(null);
     setSelection(null);
-    setSelectedGoalTab("tasks");
+    setLocalView(view);
     setMobileSidebarOpen(false);
-    callbacks.onSelectGoal?.(goalId);
+    callbacks.onSelectGoal?.(goalId, view);
   }
 
   function selectAgent(agentId: string) {
@@ -1571,7 +1688,38 @@ export function PersonalWorkspacePage({
   async function sendMessage(messageOverride?: string) {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || sending) return;
+    if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
+    const previousSteering = readSteeringRequest(composerDraftKey);
+    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
+      ? previousSteering : undefined;
+    if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
+      if (pendingImages.length) {
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        return;
+      }
+      const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
+      retainSteeringRequest(composerDraftKey, request);
+      setSteering(true);
+      setActionFeedback(null);
+      setImageAttachmentError(null);
+      try {
+        await callbacks.onSteerConversationTurn(selectedGoalId ?? "manager", request.turnId, message, request.id);
+        retireSteeringRequest(composerDraftKey, request.id);
+        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
+        setActionFeedback(locale === "zh-CN" ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn.");
+      } catch (error) {
+        // Unknown delivery retries the original Turn even after it completes.
+        // A confirmed non-delivery may use a new ingress after recovery.
+        if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") {
+          retireSteeringRequest(composerDraftKey, request.id);
+        }
+        setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
+      } finally { setSteering(false); }
+      return;
+    }
+    if (sending) return;
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
     if (loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id && conversationSessionId) {
       if (pendingImages.length) {
         setImageAttachmentError(locale === "zh-CN" ? "运行中的消息投递暂不支持图片，请暂停后发送。" : "Pause execution before sending images.");
@@ -1586,6 +1734,7 @@ export function PersonalWorkspacePage({
       finally {setSending(false);}
       return;
     }
+    if (conversationTurnRunning) return;
     if (!messageOverride) {
       setComposer("");
       setImageAttachments([]);
@@ -1595,8 +1744,13 @@ export function PersonalWorkspacePage({
     try {
       if (!selectedGoalId) setManagerConversationReceiptVisible(true);
       else if (selectedGoalTab !== "chat") setGoalConversationReceiptVisible(true);
-      const semanticPreview = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
-      if (semanticPreview) await createPreview(semanticPreview);
+      const previews = await callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId, pendingImages.length ? pendingImages : undefined);
+      if (previews?.candidates?.length) {
+        const drafted = await Promise.allSettled(previews.candidates.map((request) => createPreview(request, { select: false })));
+        if (drafted.some((result) => result.status === "rejected")) setActionFeedback(t("feedback.proposalDraftFailed"));
+      }
+      // The decision is created last so it keeps the drawer selection.
+      if (previews?.decision) await createPreview(previews.decision);
     } catch (error) {
       if (!messageOverride) {
         setComposer(message);
@@ -1628,6 +1782,10 @@ export function PersonalWorkspacePage({
     }
     if (oversized) {
       setImageAttachmentError(t("composer.imageSizeError", { size: maxImageAttachmentBytes / 1024 / 1024 }));
+      return;
+    }
+    if ([...imageAttachments, ...selected].reduce((total, image) => total + image.size, 0) > maxImageAttachmentTotalBytes) {
+      setImageAttachmentError(t("composer.imageTotalSizeError", { size: maxImageAttachmentTotalBytes / 1024 / 1024 }));
       return;
     }
     try {
@@ -1670,6 +1828,7 @@ export function PersonalWorkspacePage({
     setRefreshState("loading");
     try {
       await callbacks.onRefresh();
+      setHistoryRefreshRevision((revision) => revision + 1);
       setRefreshState("done");
     } catch {
       setRefreshState("error");
@@ -1697,7 +1856,10 @@ export function PersonalWorkspacePage({
     <div hidden={settingsOpen}>
     <WorkspaceShell
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections} onClose={() => {
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+        proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
+          || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
+        proposalReadbackFetching={actionReadback.isFetching} onRetryProposalReadback={() => void actionReadback.refetch()} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
           && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
@@ -1725,11 +1887,12 @@ export function PersonalWorkspacePage({
             managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
+            onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
               setManagerConversationReceiptVisible(false);
-              setManagerChatOpen(true);
+              setSelectedGoalTab("chat");
             }}
             onSelectGoalTab={(tab) => {
               if (tab === "chat") openGoalConversation();
@@ -1737,7 +1900,7 @@ export function PersonalWorkspacePage({
             }}
             onSelectAgent={selectAgent}
             onReturnManagerHome={() => {
-              setManagerChatOpen(false);
+              setSelectedGoalTab("overview");
               setManagerConversationReceiptVisible(false);
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
@@ -1754,7 +1917,14 @@ export function PersonalWorkspacePage({
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
-          <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}>
+          <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
+            onScroll={(event) => {
+              if (!conversationOpen) return;
+              const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+              const nearBottom = scrollHeight - scrollTop - clientHeight < 64;
+              followConversationRef.current = nearBottom;
+              setShowLatestMessage(!nearBottom);
+            }}>
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
               sessionId={conversationSessionId} zh={locale === "zh-CN"}
@@ -1772,14 +1942,14 @@ export function PersonalWorkspacePage({
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null}</>}</p></div>
+                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null} {!actionReadback.isError && homeOperations.length ? t("home.operationSummary", {count: homeOperations.length}) : null}</>}</p></div>
               </section>
             ) : null}
             {selectedGoal?.loadState ? (
               <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
                 <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
                 <p>{t(selectedGoal.loadError ? `startup.error.${selectedGoal.loadError}` : "startup.independent")}</p>
-                {selectedGoal.loadState === "error" ? <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.()}>{t("startup.retry")}</button> : null}</div>
+                {selectedGoal.loadState === "error" ? <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.("missing")}>{t("startup.retry")}</button> : null}</div>
               </section>
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
@@ -1788,6 +1958,7 @@ export function PersonalWorkspacePage({
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab} />,
                   tasks: (<GoalTasksView
                     historyEnabled={!readOnly}
+                    historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
                     onDraftTaskFromMessage={readOnly ? undefined : (reply) => {
@@ -1822,41 +1993,68 @@ export function PersonalWorkspacePage({
                       onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
                         ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId)
                         : undefined}
+                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
+                        ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                         ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
                         : undefined} />
                   </>),
                 }} />
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.()} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
+              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
+                onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
               <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
                 onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
                   ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId)
                   : undefined}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
+                  ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                   ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId)
                   : undefined}
-                onOpenGoalEvidence={(goalId) => { selectGoal(goalId); openGoalConversation(); }} />
+                onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
           </div>
           <div className="personal-composer-wrap">
+            {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
+              <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
+                onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>
+            </div> : null}
+            {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
+              <div className="personal-history-notice" role="status">
+                <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
+                  {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
+                    ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>
+                {conversationHistoryState.phase !== "loading" ? <button type="button"
+                  disabled={conversationHistoryState.reading} onClick={conversationHistoryState.retry}>
+                  {t(conversationHistoryState.reading ? "history.retrying" : "history.retry")}
+                </button> : null}
+              </div>
+            ) : null}
             {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode">{locale === "zh-CN" ? "消息处理" : "Message delivery"}<select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select><span role="status">{loopxMessageReceipt}</span></label> : null}
             {readOnly ? (
               <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
             ) : <>
             {!selectedGoal && !managerChatOpen && managerConversationReceiptVisible && managerMessages.length ? (
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
+                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId) : undefined}
                 messages={managerMessages}
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
                   setManagerConversationReceiptVisible(false);
-                  setManagerChatOpen(true);
+                  setSelectedGoalTab("chat");
                 }} />
             ) : null}
             {selectedGoal && selectedGoalTab !== "chat" && goalConversationReceiptVisible && goalMessages.length ? (
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
                 agentLabel={selectedAgentLabel}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId) : undefined}
+                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId) : undefined}
                 messages={goalMessages}
                 onClose={() => setGoalConversationReceiptVisible(false)}
                 onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
@@ -1873,24 +2071,27 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("common.closeActionReceipt")} onClick={() => setActionFeedback(null)} type="button"><X size={14} /></button>
               </div>
             ) : null}
-            <details className="personal-composer-tools" key={selectedGoalId ?? "manager"}>
+            {conversationOpen && showLatestMessage ? <button className="personal-conversation-latest" type="button" onClick={scrollToLatestMessage}>
+              {locale === "zh-CN" ? "回到最新消息 ↓" : "Latest message ↓"}
+            </button> : null}
+            {(!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={selectedGoalId ?? "manager"}>
               <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.nextAction")} disabled={sending} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
-                <button aria-label={t("composer.agentProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
+                <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
+                <button aria-label={t("composer.agentProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
                 <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
-                <button aria-label={t("composer.blockers")} disabled={sending || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
-                <button aria-label={t("composer.evidence")} disabled={sending || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
+                <button aria-label={t("composer.blockers")} disabled={quickPromptBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
+                <button aria-label={t("composer.evidence")} disabled={quickPromptBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
               </div>
             ) : (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.globalTasks")} disabled={sending} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
-                <button aria-label={t("composer.globalProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
+                <button aria-label={t("composer.globalTasks")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
+                <button aria-label={t("composer.globalProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
-            </details>
+            </details> : null}
             {actionDraft ? <WorkspaceActionForm draft={actionDraft} onClose={() => setActionDraft(null)} onPreview={(request) => createPreview(request)} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
@@ -1899,6 +2100,9 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
+            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
+              ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
+              : t("composer.turnRunning")}</p> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
@@ -1934,13 +2138,18 @@ export function PersonalWorkspacePage({
                   }
                 }}
                 onPaste={handleComposerPaste}
-                placeholder={selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : t("composer.managerPlaceholder")}
+                placeholder={sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : t("composer.managerPlaceholder")}
                 ref={composerRef}
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || sending} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
+            {conversationOpen ? <div className="personal-composer-hint">{steering
+              ? (locale === "zh-CN" ? "正在发送本轮追加指令…" : "Sending instructions for this turn…")
+              : sending && !steeringTurnId
+              ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
+              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </>}
           </div>
         </div>

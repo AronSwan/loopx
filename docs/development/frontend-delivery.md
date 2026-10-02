@@ -23,6 +23,12 @@ mandatory acceptance source. If none applies, the task, failure and owning
 contract still define acceptance. Inspect current main and related work first.
 A passing implementation-shaped test is not an independent experience oracle.
 
+Caller-facing capabilities require an appropriate shipped frontend journey,
+including discoverability, authorized operation, feedback and result readback.
+CLI-only prerequisites are partial delivery; catalog text or a command-copy
+button is not the journey. Reuse the typed capability owner rather than adding
+frontend-only decisions or a setting for a capability with no persistent policy.
+
 Carry the same task through these steps:
 
 1. **Compare the journey.** Write the current and proposed user steps in the
@@ -120,9 +126,12 @@ and freshness metadata, not a signature or a replacement for release attestation
 
 ## PR qualification and releases
 
-PR CI builds a clean bundle once, exercises its actual pages in a browser, then
-uploads `chat-bundle-<checkout SHA>`. Consumers download that qualified artifact;
-both frontend-only and mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
+PR CI builds and verifies a clean bundle once, then uploads
+`chat-bundle-<checkout SHA>`. Consumers download that one artifact, and
+`chat-bundle-browser` exercises its actual pages in a browser in parallel. The
+`checks` aggregate requires that browser lane, so `merge-gate` cannot pass on
+an artifact that failed browser qualification. Both frontend-only and
+mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.
 

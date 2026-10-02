@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -97,14 +97,27 @@ def collaboration_goal_scope(
     agents: tuple[str, ...],
     caller_goal_ref: dict[str, str] | None = None,
     require_active: bool = False,
+    lock_registry: bool = False,
 ) -> Iterator[CollaborationGoalScope]:
     """Hold the alias lifetime guard while one collaboration operation commits."""
 
     registry_path = Path(registry_path).expanduser().resolve()
-    with exclusive_cross_runtime_file_lock(
-        guard_path(registry_path, goal_id),
-        operation="collaboration_goal_lifetime",
-    ):
+    with ExitStack() as guards:
+        guards.enter_context(
+            exclusive_cross_runtime_file_lock(
+                guard_path(registry_path, goal_id),
+                operation="collaboration_goal_lifetime",
+            )
+        )
+        if lock_registry:
+            # Same lock as thread binding transactions, held through the
+            # downstream commit. Order: Goal lifetime -> registry -> work store.
+            guards.enter_context(
+                exclusive_cross_runtime_file_lock(
+                    registry_path,
+                    operation="collaboration_registry_snapshot",
+                )
+            )
         registry = load_project_registry(registry_path)
         goal = _registered_goal(
             registry,
@@ -162,9 +175,9 @@ def decide_collaboration_lifecycle(
     operation: str,
     record: dict[str, Any] | None = None,
     route: dict[str, Any] | None = None,
-    initial_delivery_proved: bool = False,
+    initial_delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not scope.exact:
+    if not scope.exact and operation not in {"original_return_admit", "original_return_settle", "original_request_inspect"}:
         return {"kind": "legacy"}
     result = effect_runtime_result(
         "collaboration.goal_instance.decide",
@@ -179,7 +192,7 @@ def decide_collaboration_lifecycle(
             "route_goal_ref": (
                 route.get("goal_ref") if isinstance(route, dict) else None
             ),
-            "initial_delivery_proved": initial_delivery_proved,
+            "initial_delivery": initial_delivery,
         },
     )
     if not isinstance(result, dict):
