@@ -1007,3 +1007,54 @@ def test_structural_gate_catches_ignored_reviews(tmp_path):
     failed = [c["check"] for c in rep["checks"] if not c["pass"]]
     assert not ok and any("引用双评审" in f for f in failed), \
         f"删掉评审引用的终稿应被拦: {failed}"
+
+
+# ==== 论文行动⑧a 注入字符会计(审计判决修正: reference+REQUIREMENTS入账+CJK加权) ====
+def test_inject_budget_counts_reference_and_requirements(tmp_path, monkeypatch):
+    """审计判决②修正钉死: 最强注入源REQUIREMENTS.md+reference/必须入账——
+    reference_chars>0且计入total与est_tokens(原漏称=秤缺最大砝码)。"""
+    from loopx.control_plane.collaboration import peers as _peers
+    monkeypatch.setattr(_peers, "request", lambda *a, **k: None)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []} if "list" in a else {})
+    root = make_root(tmp_path, n=2)
+    ref = root / "project" / "reference"
+    ref.mkdir(parents=True)
+    (ref / "ctx.md").write_text("背景资料" * 100, encoding="utf-8")  # 400 CJK字符
+    r2.stage_route(root, "architect")
+    b = json.loads((root / "agents/architect/inject-budget.json").read_text(encoding="utf-8"))
+    assert b["requirements_chars"] > 0  # REQUIREMENTS入账
+    assert b["reference_files"] == 1 and b["reference_chars"] >= 400  # reference入账
+    assert b["total_inject_chars"] >= b["reference_chars"]
+
+
+def test_inject_budget_cjk_weighting(tmp_path, monkeypatch):
+    """审计判决①修正钉死: CJK≈1.5字/token非4——构造纯CJK文本验证折算生效
+    (est_tokens明显高于'全按÷4'的值;canary.py CJK÷2旧教训应用)。"""
+    from loopx.control_plane.collaboration import peers as _peers
+    monkeypatch.setattr(_peers, "request", lambda *a, **k: None)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []} if "list" in a else {})
+    root = make_root(tmp_path, n=2)
+    ref = root / "project" / "reference"
+    ref.mkdir(parents=True)
+    (ref / "ctx.md").write_text("汉字" * 500, encoding="utf-8")  # 1000纯CJK字符
+    r2.stage_route(root, "architect")
+    b = json.loads((root / "agents/architect/inject-budget.json").read_text(encoding="utf-8"))
+    assert b["est_basis"].startswith("CJK≈1.5")
+    assert b["reference_chars"] >= 1000
+    # est_tokens必须明显高于"全部按÷4"(证明CJK加权生效而非摆设)
+    assert b["est_tokens"] > b["total_inject_chars"] / 4 * 1.2
+    assert b["est_tokens"] <= b["total_inject_chars"]
+
+
+def test_inject_budget_est_tokens_arithmetic(tmp_path, monkeypatch):
+    """est_tokens与各分项同量级(审计判决③: 算术钉死,防张冠李戴)。"""
+    from loopx.control_plane.collaboration import peers as _peers
+    monkeypatch.setattr(_peers, "request", lambda *a, **k: None)
+    monkeypatch.setattr(r2, "cli", lambda *a, **k: {"todos": []} if "list" in a else {})
+    root = make_root(tmp_path, n=2)
+    r2.stage_route(root, "finalizer")
+    b = json.loads((root / "agents/finalizer/inject-budget.json").read_text(encoding="utf-8"))
+    for k in ("task_chars", "operating_chars", "inputs_bytes",
+              "requirements_chars", "reference_chars", "total_inject_chars", "est_tokens"):
+        assert isinstance(b[k], int) and b[k] >= 0, k
+    assert 0 < b["est_tokens"] <= b["total_inject_chars"]

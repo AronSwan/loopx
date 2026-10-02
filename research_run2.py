@@ -778,30 +778,43 @@ def stage_route(root, phase, subtopics=None):
     else:
         cli(root, "todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", actor,
             "--text", text, "--action-kind", "implement")
-    # 注入字符会计(论文行动⑧a,DeMem席E.5 realized answer-time footprint:
-    # r9'96%案'的教训前置指标——无度量则无frontier;staging全量复制是最强增长源,
-    # 先量后改)。task/OPERATING.md/staged inputs/repair-feedback逐项计数(token≈字符/4,
-    # 中英混合粗估),staged件数+总字节落盘inject-budget.json,供下棒与验收对账。
+    # 注入字符会计(论文行动⑧a,DeMem席E.5 realized answer-time footprint)
+    # 两漏修正(审计判决): ①最强注入源REQUIREMENTS.md+reference/必须入账——reference/
+    # 全量复制正是'最强增长源'(r13实测60.4KB),漏称=秤缺了最大砝码;②CJK加权折算
+    # (canary.py CJK÷2旧教训): 中文≈1.5字符/token非4,英文≈4——分CJK/非CJK计数。
     try:
+        def _cjk(s):
+            return sum(1 for c in s if "一" <= c <= "鿿")
         def _tk(s):
-            return max(1, len(s) // 4)
+            cjk, other = _cjk(s), len(s) - _cjk(s)
+            return max(1, round(cjk / 1.5 + other / 4))
+        def _read(p):
+            return p.read_text(encoding="utf-8") if p.exists() else ""
         task_txt = (ws / "tasks" / f"{phase}.md").read_text(encoding="utf-8")
         oper_txt = (ws / "OPERATING.md").read_text(encoding="utf-8")
         inputs_files = sorted((ws / "inputs").glob("*.md")) if (ws / "inputs").exists() else []
-        inputs_bytes = sum(f.stat().st_size for f in inputs_files)
+        inputs_txt = "".join(_read(f) for f in inputs_files)
+        req_txt = _read(root / "project" / "REQUIREMENTS.md")
+        ref_files = sorted((root / "project" / "reference").glob("*.md")) \
+            if (root / "project" / "reference").exists() else []
+        ref_txt = "".join(_read(f) for f in ref_files)
         fb_txt = fb.read_text(encoding="utf-8") if fb.exists() else ""
         attached_fb = bool(fb.exists() and (not art.exists()
                                             or fb.stat().st_mtime >= art.stat().st_mtime))
         budget = {
             "phase": phase, "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "task_chars": len(task_txt), "operating_chars": len(oper_txt),
-            "inputs_files": len(inputs_files), "inputs_bytes": inputs_bytes,
+            "inputs_files": len(inputs_files), "inputs_bytes": sum(f.stat().st_size for f in inputs_files),
+            "requirements_chars": len(req_txt),
+            "reference_files": len(ref_files), "reference_chars": len(ref_txt),
             "repair_feedback_chars": (len(fb_txt) if attached_fb else 0),
             "repair_feedback_attached": attached_fb,
-            "total_inject_chars": (len(task_txt) + len(oper_txt) + inputs_bytes
+            "total_inject_chars": (len(task_txt) + len(oper_txt) + len(inputs_txt)
+                                   + len(req_txt) + len(ref_txt)
                                    + (len(fb_txt) if attached_fb else 0)),
-            "est_tokens": _tk(task_txt) + _tk(oper_txt) + _tk("x" * inputs_bytes)
-            + (_tk(fb_txt) if attached_fb else 0),
+            "est_tokens": (_tk(task_txt) + _tk(oper_txt) + _tk(inputs_txt) + _tk(req_txt)
+                           + _tk(ref_txt) + (_tk(fb_txt) if attached_fb else 0)),
+            "est_basis": "CJK≈1.5字/token, 非CJK≈4(canary.py CJK÷2旧教训)",
         }
         write(ws / "inject-budget.json", budget)
     except OSError:
