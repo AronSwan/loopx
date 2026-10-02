@@ -79,7 +79,7 @@
 
 > 议程：`git fetch upstream` → 记旧/新 tip+`rev-list --count` → **换线事件机械侦测**（`git merge-base --is-ancestor <上次tip> upstream/main` 返回否=历史被改写，告警）→ 读新 tag release notes+当周 PR 主题 → 依赖面净差（`git diff --stat <上次同步点>..upstream/main -- loopx/file_lock.py loopx/chat_store.py loopx/capabilities/manager_context/ loopx/control_plane/quota/ loopx/dsh_goal_mode/turn_host_adapter.py examples/collaboration-delivery/ pyproject.toml`)→ 分级（无关/知晓/行动）→ 更新偏离台账 → 记录决定（升/观望+理由）。
 
-- **2026-10-03**：落后 upstream/main 8572 commits；**换线事件实证**（我们 10-1/10-2 合入的 #5438/#5400 提交全不在新 main 祖先链，v1.2.3 tag 在旧线非新 main 祖先——升级组甲乙互证）。决定：**等 v1.2.4 tag 再升**（乙席建议；一周不落则钉新 main tip 写锚 base_sha）。跟 tag 不跟 tip；**场中不升级**（硬规则）。
+- **2026-10-03**：落后 upstream/main 8572 commits；**换线事件实证**（**我们线上的 SHA 副本**（0c8189975/#5438、e5b98b252/#5400、6fb23d93f/#5382）与 v1.2.3 tag 不在新 main 祖先链——但 PR **内容**经 patch-id 等价全部在新线（#5400 原 commit 42e843ac4 实测在链上）：SHA 层重写为实、内容未丢。门一勘误：原"提交全不在"系 PR 层绝对化转述失真）。决定：**等 v1.2.4 tag 再升**（乙席建议；一周不落则钉新 main tip 写锚 base_sha）。跟 tag 不跟 tip；**场中不升级**（硬规则）。
 
 ---
 *立档：协调会话 2026-10-03。补立——机制席点名 papers-archive.md 曾引用此文件而本体缺失（空头文件，已清偿）。资格状态每次巡读/实战后更新。*
