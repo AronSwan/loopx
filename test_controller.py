@@ -124,6 +124,47 @@ def test_gate_structural_failure_never_reruns(tmp_path, monkeypatch):
     assert called == []
 
 
+# ==== 修复回执(学底座change_quality scope_fingerprint) ====
+def test_repair_receipt_records_hash_transition(tmp_path, monkeypatch):
+    """修复真动了工件→回执记changed=True+前后sha256不同+下游陈旧信号。"""
+    root = make_root(tmp_path, bad=("research-2",))
+
+    def fake_run_phase(r, ph, *a, **k):
+        (r / "agents/researcher-2/outputs/research-2.md").write_text(
+            "修复稿 " + GOOD_URLS * 5 + FILLER, encoding="utf-8")
+        return {"status": "committed"}
+    monkeypatch.setattr(r2, "run_phase", fake_run_phase)
+    assert r2.gate_with_repair(root, include_final=True) is True
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["schema_version"] == "repair_receipt_v0" and rc["final_gate_ok"] is True
+    assert len(rc["rounds"]) == 1
+    rep = rc["rounds"][0]["repairs"]
+    assert len(rep) == 1 and rep[0]["phase"] == "researcher-2"
+    assert rep[0]["changed"] is True
+    assert rep[0]["before_sha256"] and rep[0]["before_sha256"] != rep[0]["after_sha256"]
+    stale = rc["rounds"][0]["downstream_stale_signal"]
+    assert "agents/architect/outputs/architecture.md" in stale
+    assert "agents/finalizer/outputs/final-plan.md" in stale
+
+
+def test_repair_receipt_flags_unchanged_artifact(tmp_path, monkeypatch):
+    """修复轮没动工件→changed=False(疑点信号: 过验若是别的工件变的/门禁flake,审计可查)。"""
+    root = make_root(tmp_path, bad=("research-2",))
+    monkeypatch.setattr(r2, "run_phase", lambda r, p, *a, **k: {})
+    assert r2.gate_with_repair(root, include_final=True, max_rounds=2) is False
+    rc = json.loads((root / "repair-receipt.json").read_text(encoding="utf-8"))
+    assert rc["final_gate_ok"] is False and len(rc["rounds"]) == 2
+    assert all(not rep["changed"] for rnd in rc["rounds"] for rep in rnd["repairs"])
+
+
+def test_no_repair_no_receipt(tmp_path, monkeypatch):
+    """一次过=底座no_changes语义,不落回执。"""
+    root = make_root(tmp_path)
+    monkeypatch.setattr(r2, "run_phase", lambda *a, **k: pytest.fail("不该有修复轮"))
+    assert r2.gate_with_repair(root, include_final=True) is True
+    assert not (root / "repair-receipt.json").exists()
+
+
 # ==== P0-3..6 ensure_phase ====
 def test_ensure_phase_skips_validated(tmp_path, monkeypatch):
     root = make_root(tmp_path)

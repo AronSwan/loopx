@@ -773,6 +773,14 @@ def read_plan(root):
     return plan
 
 
+def _artifact_digests(root):
+    """全工件内容指纹(gate-report digests与修复回执共用)。键统一POSIX分隔——
+    Windows下str(relative_to)出反斜杠,跨快照比对会因键风不一致全miss。"""
+    return {pp.relative_to(root).as_posix(): hashlib.sha256(pp.read_bytes()).hexdigest()
+            for pp in set(root.glob("agents/*/outputs/*.md"))
+            | set(root.glob("agents/planner/outputs/plan.json"))}
+
+
 def gate(root, include_final=True):
     """穷举门禁: 全工件齐+引用足+双盲评在场+(可选)终稿结构词。中检不含终稿。"""
     plan = read_plan(root)
@@ -860,9 +868,7 @@ def gate(root, include_final=True):
     report = {"ok": ok, "N": plan["N"], "checks": checks,
               "homogenization": homog_report(root, plan["N"]),
               "attempts": led, "first_pass": first,
-              "digests": {str(pp.relative_to(root)): hashlib.sha256(pp.read_bytes()).hexdigest()
-                          for pp in set(root.glob("agents/*/outputs/*.md"))
-                          | set(root.glob("agents/planner/outputs/plan.json"))}}
+              "digests": _artifact_digests(root)}
     write(root / "gate-report.json", report)
     live = {p: a for p, a in led.items() if a > 0}  # 0次棒不进首试率分母(门六#4)
     print(f"pass^k: 首试通过 {len(first)}/{len(live)} 棒"
@@ -995,17 +1001,43 @@ def _failing_phases(report):
     return out
 
 
+def _phase_artifact_rel(phase):
+    """phase → 工件相对路径(POSIX风,与_artifact_digests键对齐)。"""
+    if phase.startswith("researcher"):
+        return f"agents/{phase}/outputs/research-{phase.split('-')[1]}.md"
+    actor, ref = ARTIFACT[phase]
+    return f"agents/{actor}/{ref}"
+
+
+def _write_repair_receipt(root, rounds, final_ok):
+    """修复环变更指纹回执(学底座change_quality: scope.py指纹+receipt.py stale语义——
+    质量判定只对其被计算时的精确内容有效,内容一变旧判定即stale)。每轮记:
+    被修工件修复前后sha256(证明'修复真动了工件';没变却过验=疑点,留给审计)
+    +下游陈旧信号(上游变了而下游本轮未修——LoopsBench obligation retention;
+    full re-gate本就会重验全部工件,此字段是审计信号不是拦截)。
+    无修复轮=底座no_changes/not_required语义,不落回执。"""
+    if not rounds:
+        return
+    write(root / "repair-receipt.json", {
+        "schema_version": "repair_receipt_v0",
+        "rounds": rounds,
+        "final_gate_ok": final_ok})
+
+
 def gate_with_repair(root, include_final, max_rounds=2):
     """门禁失败不再死刑(第9坑): 定位负责phase→写修复反馈→强制重跑→重验;有限轮后仍败才真败。"""
+    receipt_rounds = []
     for rnd in range(max_rounds + 1):
         if gate(root, include_final=include_final):
+            _write_repair_receipt(root, receipt_rounds, final_ok=True)
             return True
         if rnd == max_rounds:
-            return False
+            break
         rep = json.loads((root / "gate-report.json").read_text(encoding="utf-8"))
         bad = _failing_phases(rep)
         if not bad:
-            return False
+            break
+        before = rep.get("digests", {})  # 失败门禁写下的修复前指纹
         for ph in bad:
             stem = (f"research-{ph.split('-')[1]}" if ph.startswith("researcher")
                     else ARTIFACT[ph][1].split("/")[-1])
@@ -1033,6 +1065,28 @@ def gate_with_repair(root, include_final, max_rounds=2):
                 # cli()报错让整个auto死亡)——落账后继续下一轮,由门禁自然重验。
                 print(f">>> 修复轮 {ph} 执行异常(已落账,继续): "
                       f"{type(exc).__name__}: {str(exc)[:120]}", flush=True)
+        # 修复后指纹快照(须在下一轮gate覆写gate-report前采)→本轮回执
+        after = _artifact_digests(root)
+        repairs = []
+        for ph in bad:
+            rel = _phase_artifact_rel(ph)
+            b, a = before.get(rel), after.get(rel)
+            repairs.append({"phase": ph, "artifact": rel,
+                            "before_sha256": b, "after_sha256": a,
+                            "changed": bool(a and a != b)})
+        changed_phases = {r["phase"] for r in repairs if r["changed"]}
+        stale = set()  # DAG依赖边: researcher→architect→finalizer, reviewer→finalizer
+        if any(p.startswith("researcher") for p in changed_phases):
+            stale.add("agents/architect/outputs/architecture.md")
+        if (any(p.startswith(("researcher", "reviewer")) for p in changed_phases)
+                or "architect" in changed_phases):
+            if include_final:
+                stale.add("agents/finalizer/outputs/final-plan.md")
+        receipt_rounds.append({
+            "round": rnd + 1,
+            "repairs": repairs,
+            "downstream_stale_signal": sorted(stale - {r["artifact"] for r in repairs})})
+    _write_repair_receipt(root, receipt_rounds, final_ok=False)
     return False
 
 
