@@ -1,4 +1,5 @@
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
 
 import {
@@ -1170,7 +1171,7 @@ export async function sendChatTurnStreaming(
     attachments?: ChatImageAttachmentInput[];
     clientTurnId?: string;
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1198,7 +1199,7 @@ async function receiveChatTurnStreaming(
   eventsUrl: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1218,7 +1219,7 @@ async function receiveChatTurnStreaming(
         }
         if (event.kind === "agent.phase") {
           const label = typeof event.payload.label === "string" ? event.payload.label.trim() : "";
-          if (label) options.onActivity?.(label);
+          if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
           finalResponse = event.payload.response;
@@ -1282,7 +1283,7 @@ export async function resumeChatTurnStreaming(
   turnId: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
