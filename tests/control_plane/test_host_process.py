@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from loopx import collaboration_mcp as delegation_module
 from loopx.control_plane.turn_driver.executor import _run_host
 from loopx.control_plane.turn_driver.host_process_transport import (
+    HOST_PROCESS_RECORD_ENV,
     HostOutputLines,
     run_host_process,
 )
@@ -267,3 +269,72 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
     finally:
         live.kill()
         live.wait(timeout=10)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group transport parity")
+def test_explicit_environment_reaches_the_host_and_stays_out_of_the_record(tmp_path: Path) -> None:
+    """A caller-supplied environment is used, and the record marker is not inherited.
+
+    The bridge runs on the caller's mapping: it may pin the release the Host must
+    run, and it names the record the supervisor owns. Replacing that mapping with
+    the ambient one would silently change which code the Host runs and lose the
+    record; passing it through unchanged would leak the record marker into a
+    nested run that must not overwrite its parent's record.
+    """
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_ENV, host_process_drain, run_host_process,
+    )
+
+    record_path = tmp_path / "op.host.json"
+    excluded = "LOOPX_TRANSPORT_PARITY_EXCLUDED"
+    selected = "LOOPX_TRANSPORT_PARITY_SELECTED"
+    host = ("import json,os,sys;print(json.dumps({'selected': os.environ.get(%r),"
+            " 'excluded': os.environ.get(%r), 'record': os.environ.get(%r),"
+            " 'pgid': os.getpgid(0), 'pid': os.getpid()}))" % (selected, excluded, HOST_PROCESS_RECORD_ENV))
+    environment = {**os.environ, selected: "caller-selected", HOST_PROCESS_RECORD_ENV: str(record_path)}
+    environment.pop(excluded, None)
+    chunks: list[str] = []
+    observation = run_host_process([sys.executable, "-c", host], project=tmp_path, input_text="",
+                                   timeout_seconds=15, environment=environment,
+                                   on_stdout=chunks.append)
+    assert observation["outcome"] == "exited", observation
+    value = json.loads("".join(chunks))
+    assert value["selected"] == "caller-selected"
+    assert value["excluded"] is None
+    # The record is the supervisor's, and it is not a Host input.
+    assert value["record"] is None
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == "finished"
+    assert record["host_pid"] == value["pid"] == record["process_group"] == value["pgid"]
+    assert host_process_drain(record_path) == "drained"
+    # The caller's mapping is the caller's.
+    assert environment[HOST_PROCESS_RECORD_ENV] == str(record_path)
+    assert environment[selected] == "caller-selected"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group transport parity")
+def test_hard_leased_cli_pins_the_release_and_the_record_through_the_transport(tmp_path, monkeypatch) -> None:
+    """`_cli`'s pinned release and Host record only reach the CLI through the transport.
+
+    The managed CLI runs under the bridge, so the environment `_cli` builds is
+    only effective if the transport consumes it. Capture what `_cli` hands the
+    transport instead of restating the native propagation the parity test covers.
+    """
+    from loopx.collaboration_mcp import Delegations
+
+    runner = Delegations(tmp_path, tmp_path / "registry.json", "goal", "lead", tmp_path / "config.json")
+    monkeypatch.setenv("PYTHONPATH", "/ambient")
+    handed = {}
+
+    def transport(*args, **kwargs):
+        handed.update(kwargs)
+        kwargs["on_stdout"]("{}")
+        return {"outcome": "exited", "output_complete": True, "returncode": 0}
+
+    monkeypatch.setattr("loopx.control_plane.turn_driver.host_process_transport.run_host_process", transport)
+    record = tmp_path / "op.host.json"
+    runner._cli({"agent_id": "analyst", "todo_id": "todo", "workspace": str(tmp_path)}, "todo", "claim",
+                host_record=record, delegated_lease={"lease": {}, "ttl_seconds": None,
+                                                     "renew_argv": [], "read_argv": []})
+    assert handed["environment"]["PYTHONPATH"].split(os.pathsep)[0] == str(delegation_module._release_root())
+    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record)

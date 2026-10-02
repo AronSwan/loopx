@@ -166,8 +166,13 @@ def run_host_process(
     if delegated_lease is not None:
         request["delegated_lease"] = delegated_lease
     bridge = Path(__file__).with_name("host_process_bridge.ts")
-    environment = os.environ.copy()
-    record_value = environment.pop(HOST_PROCESS_RECORD_ENV, "")
+    # The bridge runs on the caller's environment, which may pin the release the
+    # Host must run and name the record its supervisor owns. Copy it instead of
+    # replacing it with the ambient one, and consume the record env from the
+    # copy only: the Host below must not inherit a marker for its supervisor's
+    # record, and the caller's mapping is never mutated.
+    bridge_environment = os.environ.copy() if environment is None else dict(environment)
+    record_value = bridge_environment.pop(HOST_PROCESS_RECORD_ENV, "")
     record_path = Path(record_value) if record_value else None
     with subprocess.Popen(
         [
@@ -183,7 +188,7 @@ def run_host_process(
         encoding="utf-8",
         errors="strict",
         start_new_session=True,
-        env=environment,
+        env=bridge_environment,
     ) as proc:
         assert proc.stdin is not None and proc.stdout is not None
         result = None
