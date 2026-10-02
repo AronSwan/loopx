@@ -2,10 +2,10 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Identity/recovery 提案；codec 前置已由 #4917 交付
+- **交付成熟度：** source-session 生命周期与 binding owner 部分实现；#5389 资格化 quota settlement；activation、孤儿恢复与产品验收仍受限
 - **作者／Owner：** LoopX contributors
 - **创建日期：** 2026-09-23
-- **最后规范修订：** 2026-09-23
+- **最后规范修订：** 2026-10-02
 - **实现基线：** `23edcb19c70394480e3a9ebe8a960f5a320c5342`
 - **相关契约：** [Issue #4801](https://github.com/loopx-project/loopx/issues/4801)、[orphan fence 切片 #4808](https://github.com/loopx-project/loopx/pull/4808)
 - **语言镜像：** [英文语义镜像](goal-instance-identity-and-orphan-recovery-v0.md)
@@ -652,10 +652,39 @@ retry 必须幂等。External manual cleanup 只作提示，因为 logical revoc
 | M4：orphan recovery | 复用 fence/diagnosis/path/backup owner；journaled file-state resolution 与精确 legacy cleanup | Preview、destructive/retry/rollback negative、原入口 readback；archive/delete 可提前交付但不创建身份，native-provider adoption 仍阻塞。 |
 | M5：迁移与产品验收 | M2–M4、多 Goal quiescence/reconnection、packaged frontend、已资格化 Lark | 2–3 worker、一条产物依赖、中断 A、重建 B、迟到 A return；无关 Goal 继续，B 独立验收；无重复 protected effect。 |
 
-M0 是前置 checkpoint，不是下一个尚未开始的任务。下一切片承担 M1 compatibility/
-consumer 刻画及 M2 本地 lifecycle seam，不能把加字段当作 ABA outcome。M2/M3
+M0 已交付；保留已实现的 source-session lifetime transaction 和已资格化 binding
+owner。继续处理 binding inventory 的剩余 owner/compatibility 缺口以及 #5206
+跟踪的 M4 恢复路径；不重建 codec，也不把加字段当作 ABA outcome。M2/M3
 描述实现顺序，不授权激活部分有 fence 的系统。R2/R3 消费完成的本地切片；R6
 service adoption、D1–D3 provider promotion 保留各自验收。不授权付费 cohort/soak。
+
+### 通过既有 roadmap 旅程接入产品
+
+生命周期与恢复交付继续归 [#5206](https://github.com/loopx-project/loopx/issues/5206)，
+产品采用归 [#4574](https://github.com/loopx-project/loopx/issues/4574) 下既有 R1–R3/G1
+owner。[golden-query 生命周期变体](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery)
+是共用场景规范。以下是计划中的集成出口，不表示 source profile 已激活或 G1/M5 已通过。
+
+| 优先级 / 既有旅程 | 生命周期贡献与配套 owner | 决定性的可观察结果 |
+| --- | --- | --- |
+| P0 · GQ01/02、R1/R2：创建 Goal，创建或复用 Agent | Source lifecycle 发布精确 GoalRef；registry/onboarding 与 session owner 核对创建重试并绑定获授权工作 | 响应丢失、重复点击不产生重复 Goal、Agent 或 executor；同名旧 attachment 不能自行接入新 Goal |
+| P0 · GQ05/11/12、R2/R3/G1：依赖产物与独立复核 | Collaboration 在请求、采用、结果与原会话返回中携带实例身份；Todo/lease 与 quota 保留各自验收和效果检查 | 两轮真实协作使用精确产物版本；迟到 A 工作不能完成 B、扣 B 的额度或进入 B 已验收汇总；B 和无关工作继续推进 |
+| P0 · GQ08/09、R2/R3：停止、纠偏、恢复 | Session/执行代次和 claim/lease 隔离同一 Goal 内过期执行；本 RFC 隔离已退役 Goal 的生命周期 | 普通纠偏、重连、恢复保留 GoalRef；明确退役后重建才改变它；两条路径都保留结果返回义务且不重复执行效果 |
+| P1 · GQ15、S7/R2/R3：既定预算内的混合小队 | #5389 按实例隔离 quota spend/replay/repair/void/readback；团队分配仍由既有 quota/scheduler owner 强制执行 | 重放不重复扣账，也不扣继任实例；团队额度不会复制给每个 worker。实例记账本身不资格化共享预算分配 |
+| P1 · R5/M4/M5：从创建/接入入口恢复孤儿工作 | 既有诊断与生命周期 resolution 驱动 preview、backup、apply/resume 和明确重连 | Packaged App 与 CLI 显示选定处置和恢复结果；不猜测 candidate，不静默继承旧 authority |
+| P2 · GQ16、R6/G3：本地/云端协作与重连 | 认证服务、远端 binding、撤销和 lease owner 在独立资格化后消费精确身份 | 返回的远端 executor 不能向继任实例提交或扣账；本地文件证据不资格化远端 provider |
+
+区分 Goal 生命周期、注册 Agent 身份、host session/执行代次和工作请求/尝试身份。
+复用 Agent 不授予新 Goal 权限；换模型、重连或新开 Turn 不生成 Goal 实例。
+意图纠偏和产物修订继续归既有 R4/work-graph owner。身份匹配不转移 lease，也不验收
+产物。不新增 Agent factory、scheduler 或平行任务账本。
+
+先在已支持 profile 上验收创建/复用、两轮协作和同生命周期中断。隔离资格化环境中的
+M5 退役/重建变体，须等待所选 source profile 的 M2/M3 owner、旧 writer 排除与
+effect-drain 门槛全部满足；涉及孤儿 resolution 时还需 M4。组件夹具可提前运行，
+但不能证明真实旅程完成。以 packaged App 和独立 CLI/source 回读验收；Lark 保留
+独立 transport/受众资格。分别记录入口/重试、接收方采用、产物验收、实例内结算和
+原路返回。#5389 仅资格化 `quota_settlement`；缺失配套 owner 继续在 #5206 跟踪。
 
 ## 12. 未决事项与 hold
 
