@@ -894,8 +894,26 @@ def _artifact_ok(root, phase):
 
 
 
+def _should_run(root, actor):
+    """底座原生调度决策(用户令"充分用到底座先进功能"): LoopX quota should-run
+    含配额/协调/目标状态/调度提示——比自制API探针更聪明的"该不该重试"判断。
+    返回(True/False, 原因);底座不可达时保守放行(True, 探针级fallback)。"""
+    try:
+        r = cli(root, "quota", "should-run", "--goal-id", GOAL,
+                "--agent-id", actor, "--runtime-profile", "outer_controller")
+        ok = r.get("should_run")
+        reason = str(r.get("decision", ""))[:80]
+        return (bool(ok), f"should-run={ok}({reason})")
+    except SystemExit:
+        # 底座决策不可用→退到API探针(保底,不是替代)
+        return (_api_reachable(), "should-run不可用→API探针fallback")
+    except Exception:
+        return (_api_reachable(), "should-run异常→API探针fallback")
+
+
 def _api_reachable(timeout=8):
-    """API健康探针(r13事故: 网络掉线10分钟,6次重试全灭=没有环境感知)."""
+    """API健康探针(r13事故: 网络掉线10分钟,6次重试全灭=没有环境感知)。
+    仅作_should_run不可用时的保底,不是首选(首选=底座quota should-run)。"""
     base = os.environ.get("DEEPSEEK_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
     try:
         req = urllib.request.Request(base, method="HEAD",
@@ -944,13 +962,15 @@ def ensure_phase(root, phase, subtopics=None, max_tries=3):
             # 工件优先: turn结算可能挂,但交付物已过验证器——门禁才是权威,不重跑模型
             print(f">>> {phase} 工件已过验(turn结算异常,采信工件)", flush=True)
             return {"status": "committed", "artifact_first": True}
-        # r13网络掉线事故系统性修法: 环境故障≠模型错误——重试间隔指数退避+API健康检查
-        # (3次紧连重试在10分钟掉线窗口内全灭=必然;环境恢复前重试=烧token无产出)
+        # r13网络掉线事故系统性修法: 底座quota should-run决策→API探针保底
+        # (充分用底座先进功能: should-run含配额/协调/目标状态,比自制探针更聪明)
         _env_wait = min(300, 30 * (2 ** (t - 1)))  # 30s→60s→120s,封顶300s
-        if _api_reachable():
-            time.sleep(min(10, _env_wait // 6))  # API正常→短暂等待(模型方差场景)
+        _go, _why = _should_run(root, actor)
+        if _go:
+            time.sleep(min(10, _env_wait // 6))  # 环境正常→短暂等待(模型方差)
         else:
-            print(f">>> {phase} API不可达,等{_env_wait}s后重试(环境退避,r13事故修法)", flush=True)
+            print(f">>> {phase} 底座判不宜继续({_why}),等{_env_wait}s",
+                  flush=True)
             time.sleep(_env_wait)
         print(f">>> {phase} 第{t}次未过({last[:100]}), 重试", flush=True)
     raise SystemExit(f"{phase} {max_tries}次未过: {last}")
