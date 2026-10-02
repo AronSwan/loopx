@@ -79,6 +79,7 @@ def test_goal_without_binding_is_unconfigured(tmp_path: Path) -> None:
             "configured": False,
             "enabled": False,
             "human_gate_auto_notify_enabled": False,
+            "blocked_notice_auto_notify_enabled": False,
             "receipt_count": 0,
         }
     ]

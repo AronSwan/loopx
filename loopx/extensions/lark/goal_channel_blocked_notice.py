@@ -7,10 +7,19 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.quota.blocked_transition_notice import (
+    blocked_transition_notice_identity,
     blocked_transition_notice_owner_reason,
     build_blocked_transition_notice,
 )
+from ...control_plane.todos.contract import (
+    TODO_STATUS_OPEN,
+    TODO_TERMINAL_STATUS_VALUES,
+    normalize_todo_status,
+)
 from .goal_channel_contracts import (
+    BLOCKED_NOTICE_RETIRED_STATES,
+    BlockedNoticeReceiptState,
+    blocked_notice_receipt_matches_target,
     binding_for_goal,
     blocked_notice_auto_notify_enabled,
     now_iso,
@@ -49,11 +58,13 @@ def _active_notices(
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     fallback = _mapping(quota_packet.get("blocked_priority_fallback"))
     selected = _mapping(fallback.get("selected_executable"))
-    notices = [
-        dict(value)
+    notices = {
+        str(value["blocker_identity"]): dict(value)
         for value in fallback.get("blocked_transition_notices", [])
         if isinstance(value, Mapping)
-    ]
+        and value.get("blocker_identity") and value.get("blocker_revision")
+        and not value.get("superseded_by")
+    }
     observed: dict[str, dict[str, Any]] = {}
     queue = _mapping(status.get("attention_queue"))
     for goal in queue.get("items", []):
@@ -64,21 +75,84 @@ def _active_notices(
             for item in group.get("items", []):
                 if not isinstance(item, Mapping):
                     continue
-                todo_id = str(item.get("todo_id") or "")
-                if todo_id:
-                    observed[f"todo:{todo_id}"] = dict(item)
+                identity = blocked_transition_notice_identity(item)
+                if identity is None:
+                    continue
+                observed[identity] = dict(item)
                 notice = build_blocked_transition_notice(
                     item, selected_executable=selected or None
                 )
-                if notice is not None:
-                    notices.append(notice)
-    unique: dict[tuple[str, str], dict[str, Any]] = {}
-    for notice in notices:
-        identity = str(notice.get("blocker_identity") or "")
-        revision = str(notice.get("blocker_revision") or "")
-        if identity and revision:
-            unique[(identity, revision)] = notice
-    return list(unique.values())[:8], observed
+                # Explicit canonical rows supersede an older quota projection.
+                if notice is not None and not notice.get("superseded_by"):
+                    notices[identity] = notice
+                else:
+                    notices.pop(identity, None)
+    return list(notices.values()), observed
+
+
+MAX_BLOCKED_NOTICE_EFFECTS_PER_REFRESH = 8
+
+
+def _reconcile_receipts(
+    receipts: dict[str, Any], observed: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    changed = False
+    for key, receipt in list(receipts.items()):
+        if (not isinstance(receipt, Mapping)
+                or receipt.get("kind") != "blocked_notice"
+                or receipt.get("state") in BLOCKED_NOTICE_RETIRED_STATES):
+            continue
+        item = observed.get(str(receipt.get("blocker_identity") or ""))
+        if item is None:
+            continue  # A missing or paginated row is not a recovery observation.
+        status = normalize_todo_status(item.get("status"))
+        notice = build_blocked_transition_notice(item)
+        state = None
+        if item.get("superseded_by"):
+            state = BlockedNoticeReceiptState.SUPERSEDED
+        elif notice is not None:
+            if notice["blocker_revision"] != receipt.get("blocker_revision"):
+                state = BlockedNoticeReceiptState.SUPERSEDED
+        elif status == TODO_STATUS_OPEN:
+            state = BlockedNoticeReceiptState.RESUMED
+        elif status in TODO_TERMINAL_STATUS_VALUES:
+            state = BlockedNoticeReceiptState.RESOLVED
+        if state is not None:
+            receipts[key] = {**receipt, "state": state, "reconciled_at": now_iso()}
+            changed = True
+    return changed
+
+
+def _counter(receipt: Mapping[str, Any], name: str) -> int:
+    value = receipt.get(name)
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _receipt_for_notice(
+    receipts: Mapping[str, Any], notice: Mapping[str, Any], *, goal_id: str, chat_id: str,
+) -> tuple[str, dict[str, Any]]:
+    identity, revision = str(notice["blocker_identity"]), str(notice["blocker_revision"])
+    previous = [
+        (key, receipt) for key, receipt in receipts.items()
+        if isinstance(receipt, Mapping)
+        and receipt.get("blocker_identity") == identity
+        and receipt.get("blocker_revision") == revision
+        and blocked_notice_receipt_matches_target(key, receipt, goal_id=goal_id, chat_id=chat_id)
+    ]
+    if previous:
+        key, latest = max(previous, key=lambda pair: _counter(pair[1], "generation"))
+        if latest.get("state") not in BLOCKED_NOTICE_RETIRED_STATES:
+            return key, dict(latest)
+        generation = _counter(latest, "generation") + 1
+    else:
+        generation = 0
+    parts = [goal_id, "lark", "blocked_notice", identity, revision, chat_id]
+    key = semantic_key(*parts, "generation", str(generation)) if generation else semantic_key(*parts)
+    return key, {
+        "kind": "blocked_notice", "blocker_identity": identity, "blocker_revision": revision,
+        "chat_id": chat_id, "generation": generation,
+        "state": BlockedNoticeReceiptState.PENDING, "readback_verified": False,
+    }
 
 
 def _notice_message(goal_id: str, notice: Mapping[str, Any]) -> str:
@@ -138,6 +212,7 @@ def deliver_blocked_notices(
     }
     if not enabled:
         return result
+    result["delivery_postcondition"]["satisfied"] = not notices
     if not external_sink_delivery_authorized:
         result["status"] = "external_sink_suppressed"
         return result
@@ -197,151 +272,85 @@ def deliver_blocked_notices(
         )
         return result
     receipts = _mapping(raw_binding.get("receipts"))
-    delivered = 0
+    changed = _reconcile_receipts(receipts, observed)
+    candidates = []
     for notice in notices:
-        identity = str(notice["blocker_identity"])
-        revision = str(notice["blocker_revision"])
-        previous = [
-            (receipt_key, receipt)
-            for receipt_key, receipt in receipts.items()
-            if isinstance(receipt, Mapping)
-            and receipt.get("kind") == "blocked_notice"
-            and receipt.get("blocker_identity") == identity
-            and receipt.get("blocker_revision") == revision
-        ]
-        latest_key, latest = previous[-1] if previous else ("", {})
-        key = (
-            semantic_key(
-                goal_id,
-                "lark",
-                "blocked_notice",
-                identity,
-                revision,
-                chat_id,
-                "reopened",
-                str(latest.get("reconciled_at") or ""),
-            )
-            if latest.get("state") in {"resolved", "superseded"}
-            else latest_key
-            or semantic_key(
-                goal_id, "lark", "blocked_notice", identity, revision, chat_id
-            )
-        )
-        existing = _mapping(receipts.get(key))
-        if (
-            existing.get("readback_verified") is True
-            and existing.get("state") == "delivered"
-        ):
+        key, receipt = _receipt_for_notice(receipts, notice, goal_id=goal_id, chat_id=chat_id)
+        if key not in receipts:
+            receipts[key] = receipt
+            changed = True
+        candidates.append((notice, key, receipt))
+    # Unattempted effects precede retries, so a persistent failure cannot starve
+    # later candidates. Already verified receipts never consume the send budget.
+    candidates.sort(key=lambda candidate: _counter(candidate[2], "attempt_count"))
+    delivered = attempts = deferred = 0
+    for notice, key, existing in candidates:
+        if (existing.get("readback_verified") is True
+                and existing.get("state") == BlockedNoticeReceiptState.DELIVERED):
             delivered += 1
             continue
+        if attempts >= MAX_BLOCKED_NOTICE_EFFECTS_PER_REFRESH:
+            deferred += 1
+            continue
+        attempts += 1
+        existing = {
+            **existing, "chat_id": chat_id,
+            "attempt_count": _counter(existing, "attempt_count") + 1,
+        }
         message = _notice_message(goal_id, notice)
         send = call(
             runner,
             lark_args(
-                cli_bin=cli_bin,
-                profile=profile,
+                cli_bin=cli_bin, profile=profile,
                 tail=[
-                    "im",
-                    "+messages-send",
-                    "--chat-id",
-                    chat_id,
-                    "--text",
-                    message,
-                    "--idempotency-key",
-                    provider_idempotency_key(key),
-                    "--as",
-                    "bot",
-                    "--format",
-                    "json",
+                    "im", "+messages-send", "--chat-id", chat_id,
+                    "--text", message, "--idempotency-key", provider_idempotency_key(key),
+                    "--as", "bot", "--format", "json",
                 ],
             ),
         )
-        message_id = (
-            find_first_string(json_payload(send), {"message_id"}, MESSAGE_ID_PATTERN)
-            or ""
-        )
+        message_id = find_first_string(json_payload(send), {"message_id"}, MESSAGE_ID_PATTERN) or ""
         if send.get("returncode") != 0 or not message_id:
             receipts[key] = {
-                "kind": "blocked_notice",
-                "blocker_identity": identity,
-                "blocker_revision": revision,
-                "state": "pending",
-                "readback_verified": False,
-                "failure_code": "provider_api_failed",
+                **existing, "state": BlockedNoticeReceiptState.PENDING,
+                "readback_verified": False, "failure_code": "provider_api_failed",
             }
-            mutable = dict(raw_binding)
-            mutable["receipts"] = receipts
-            save_goal_binding(
-                binding_path=binding_path,
-                payload=payload,
-                goal_id=goal_id,
-                binding=mutable,
+            result.update(ok=False, status="provider_api_failed", blocker="provider_api_failed")
+        else:
+            result["external_write_performed"] = True
+            verified = message_readback_verified(
+                runner=runner, cli_bin=cli_bin, profile=profile, identity="bot",
+                message_id=message_id, expected_text=message,
             )
-            result.update(
-                ok=False, status="provider_api_failed", blocker="provider_api_failed"
-            )
-            break
-        result["external_write_performed"] = True
-        verified = message_readback_verified(
-            runner=runner,
-            cli_bin=cli_bin,
-            profile=profile,
-            identity="bot",
-            message_id=message_id,
-            expected_text=message,
-        )
-        sent_at = now_iso()
-        receipts[key] = {
-            "kind": "blocked_notice",
-            "blocker_identity": identity,
-            "blocker_revision": revision,
-            "message_id": message_id,
-            "sent_at": sent_at,
-            "verified_at": sent_at if verified else None,
-            "readback_verified": verified,
-            "state": "delivered" if verified else "sent_unverified",
-        }
-        mutable = dict(raw_binding)
-        mutable["receipts"] = receipts
-        save_goal_binding(
-            binding_path=binding_path, payload=payload, goal_id=goal_id, binding=mutable
-        )
-        payload = read_goal_channel_binding(binding_path)
-        raw_binding = binding_for_goal(payload, goal_id) or mutable
-        if not verified:
-            result.update(
-                ok=False, status="sent_unverified", blocker="readback_mismatch"
-            )
-            break
-        delivered += 1
-    # Reconcile only explicit terminal/superseding source facts. Missing rows
-    # alone do not prove recovery and must not silently close a blocker.
-    changed = False
-    for key, receipt in receipts.items():
-        if not isinstance(receipt, Mapping) or receipt.get("kind") != "blocked_notice":
-            continue
-        item = observed.get(str(receipt.get("blocker_identity") or ""))
-        if item is None:
-            continue
-        terminal = str(item.get("status") or "") in {"done", "completed", "cancelled"}
-        superseded = bool(item.get("superseded_by"))
-        new_state = "superseded" if superseded else "resolved" if terminal else None
-        if new_state and receipt.get("state") != new_state:
+            sent_at = now_iso()
             receipts[key] = {
-                **dict(receipt),
-                "state": new_state,
-                "reconciled_at": now_iso(),
+                **existing, "message_id": message_id, "sent_at": sent_at,
+                "verified_at": sent_at if verified else None, "readback_verified": verified,
+                "state": (BlockedNoticeReceiptState.DELIVERED if verified
+                          else BlockedNoticeReceiptState.SENT_UNVERIFIED),
             }
-            changed = True
-    if changed:
-        mutable = dict(raw_binding)
-        mutable["receipts"] = receipts
+            receipts[key].pop("failure_code", None)
+            if verified:
+                delivered += 1
+            else:
+                result.update(ok=False, status="sent_unverified", blocker="readback_mismatch")
+        mutable = {**raw_binding, "receipts": receipts}
         save_goal_binding(
-            binding_path=binding_path, payload=payload, goal_id=goal_id, binding=mutable
+            binding_path=binding_path, payload=payload, goal_id=goal_id, binding=mutable,
+        )
+        changed = False
+    if changed:
+        save_goal_binding(
+            binding_path=binding_path, payload=payload, goal_id=goal_id,
+            binding={**raw_binding, "receipts": receipts},
         )
     result["delivered_count"] = delivered
-    result["pending_count"] = max(0, len(notices) - delivered)
+    result["pending_count"] = len(notices) - delivered
+    result["deferred_count"] = deferred
     result["readback_verified"] = bool(notices and delivered == len(notices))
+    result["delivery_postcondition"]["satisfied"] = not result["pending_count"]
     if result["ok"]:
-        result["status"] = "sent_verified" if notices else "no_active_blocker"
+        result["status"] = (
+            "pending" if result["pending_count"] else "sent_verified" if notices else "no_active_blocker"
+        )
     return result
