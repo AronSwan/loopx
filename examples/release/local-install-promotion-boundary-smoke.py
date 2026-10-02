@@ -87,6 +87,7 @@ def assert_untrusted_checkout_is_canary_only() -> None:
             "loopx-pr-review",
             "loopx-project",
             "loopx-self-repair",
+            "loopx-performance-diagnosis",
         }
         assert {
             path.parent.name for path in skills_dir.glob("*/SKILL.md")
