@@ -104,10 +104,12 @@ Goal-start contract keeps those choices explicit:
 1. if several registered Goals exist, return a read-only `goal_selection_gate` and rerun with one exact
    `--goal-id`;
 2. do not infer a Goal from similar objective text, a chat summary, or a directory name;
-3. with neither `--agent-id` nor `--new-peer` given, a host thread that has no stored binding returns
-   `thread_binding_selection_required` (`select_agent_identity`): the default is to select an existing lane,
-   not to register a new identity;
-4. fresh identity registration is the default only when `--new-peer` is explicit;
+3. when registered lanes exist and neither `--agent-id` nor `--new-peer` is given, a host thread that has
+   no stored binding returns `thread_binding_selection_required` (`select_agent_identity`): the default is
+   to select an existing lane, neither registering a new identity nor taking one over;
+4. fresh identity registration is the default only when no registered lane exists (first onboarding) or
+   `--new-peer` is explicit: `start-goal` returns `fresh_agent_registration_required`
+   (`register_fresh_agent`), and first onboarding needs no extra `--new-peer`;
 5. continue an existing Agent only when the user explicitly selects that exact `agent_id`;
 6. an Agent name or prefix does not prove the Host surface; runtime metadata does.
 
