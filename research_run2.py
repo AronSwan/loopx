@@ -1174,7 +1174,7 @@ def auto(root):
                   f"agents/finalizer/outputs/final-plan.md (交付链{6 + plan['N']}件齐, "
                   f"首试率{len(attempts_ledger(root, plan['N']).get('first_pass', []))}/{plan['N'] + 5})。"
                   f"详见 gate-report.json。")
-        drain(root / "runtime", root / "registry.json", store=_store, reply=_reply)
+        drain(root / "runtime", root / "registry.json", store=_store, external_sender=_reply)
         print(">>> drain回传: 终稿结论已回流管家对话", flush=True)
     except Exception as e:
         print(f">>> drain回传跳过({type(e).__name__}: {str(e)[:80]})——不影响交付", flush=True)
