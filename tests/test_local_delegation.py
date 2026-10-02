@@ -17,7 +17,7 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "managed-research-team"))
 import research_team as demo  # noqa: E402
 from test_managed_research_scenario import fixture  # noqa: E402
-from loopx import collaboration_mcp as delegation_module  # noqa: E402
+from loopx.control_plane.collaboration import delegation_stop_lease as stop_lease  # noqa: E402
 from loopx.collaboration_mcp import DelegationFenced, DelegationStopRequested, Delegations  # noqa: E402
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
@@ -791,7 +791,7 @@ def held_lease(monkeypatch, row, key):
     """The annotation `_acquire_delegation_lease` writes, and a canonical lease that still holds it."""
     row["turn_instance_id"] = key
     lease = {"owner": "analyst", "idempotency_key": key, "status": "active", "version": 1, "lease_epoch": 1}
-    monkeypatch.setattr(delegation_module, "inspect_task_lease",
+    monkeypatch.setattr(stop_lease, "inspect_task_lease",
                         lambda **kwargs: {"ok": True, "action": "inspect", "active": True, "lease": lease})
     return {"required": True, "handoff_mode": "hard_lease", "lease": dict(lease)}
 
@@ -804,7 +804,6 @@ def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service
     retried under the stop's own lock on the next read instead of being attempted
     once and forgotten.
     """
-    from loopx import collaboration_mcp as delegation
     from loopx.control_plane.collaboration.inbox import _write as write_inbox
 
     root, runner = service
@@ -835,7 +834,7 @@ def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service
             raise outcome
         return outcome
 
-    monkeypatch.setattr(delegation, "release_task_lease", flaky_release)
+    monkeypatch.setattr(stop_lease, "release_task_lease", flaky_release)
 
     # The first settle read tries the release, fails, and must not settle.
     receipt = runner.stop("analysis-lease", execute=True)
@@ -921,7 +920,7 @@ def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(servic
 
     # A release that succeeds on this read lets the stop settle, and the receipt
     # says the lease really is gone.
-    monkeypatch.setattr(delegation_module, "release_task_lease",
+    monkeypatch.setattr(stop_lease, "release_task_lease",
                         lambda **kw: {"released": True})
     settled = runner.stop("analysis-crash", execute=True)
     assert settled["phase"] == "settled", settled
@@ -956,7 +955,7 @@ def test_a_crash_between_the_ack_and_the_lease_result_never_settles_unreleased(s
     def still_held(**kwargs):
         raise RuntimeError("authority unavailable")
 
-    monkeypatch.setattr(delegation_module, "release_task_lease", still_held)
+    monkeypatch.setattr(stop_lease, "release_task_lease", still_held)
     receipt = runner.stop("analysis-crash-open", execute=True)
     assert receipt["phase"] == "acknowledged", receipt
     assert receipt["stop"]["reason"] == "required_lease_release_unproven"

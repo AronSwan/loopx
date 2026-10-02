@@ -14,6 +14,7 @@ from datetime import datetime
 import pytest
 
 from test_local_delegation import HOST, brief, service  # noqa: F401
+from loopx.control_plane.collaboration import delegation_stop_lease as stop_lease
 from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
@@ -203,7 +204,7 @@ def test_real_stop_survives_loss_after_its_acknowledgement(service, monkeypatch)
         raise RuntimeError("fixture lost the process before release")
 
     with monkeypatch.context() as loss:
-        loss.setattr(delegation, "release_task_lease", lost)
+        loss.setattr(stop_lease, "release_task_lease", lost)
         receipt = runner.stop("lease-ack-loss", execute=True)
     assert receipt["phase"] == "acknowledged", receipt
     assert receipt["stop"]["reason"] == "required_lease_release_unproven"

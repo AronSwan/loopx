@@ -11,6 +11,7 @@ import pytest
 
 from test_local_delegation import brief, demo, service as service
 from loopx import collaboration_mcp as delegation
+from loopx.control_plane.collaboration import delegation_stop_lease as stop_lease
 from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.collaboration.peers import returns
 from loopx.file_lock import exclusive_file_lock, lock_holder_host_label
@@ -161,10 +162,10 @@ def canonical_lease_at_the_native_edge(service, monkeypatch, operation_id, *,
         "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
                 "source": "requester", "observed_status": "stopped", "turn_key": None},
     })
-    monkeypatch.setattr(delegation, "local_authority_is_promoted", lambda **kwargs: True)
-    monkeypatch.setattr(delegation, "show_goal_handoff_mode",
+    monkeypatch.setattr(stop_lease, "local_authority_is_promoted", lambda **kwargs: True)
+    monkeypatch.setattr(stop_lease, "show_goal_handoff_mode",
                         lambda **kwargs: {"handoff_mode": "hard_lease"})
-    monkeypatch.setattr(delegation, "inspect_task_lease", lambda **kwargs: {
+    monkeypatch.setattr(stop_lease, "inspect_task_lease", lambda **kwargs: {
         "ok": True, "action": "inspect", "active": active, "legacy_fallback_used": False,
         "lease": {"owner": owner, "idempotency_key": lease_key + key_suffix,
                   "status": "active", "version": version},
@@ -191,7 +192,7 @@ def test_a_lease_the_record_never_annotated_still_blocks_settlement(service, mon
     def unavailable(**kwargs):
         raise RuntimeError("authority unavailable")
 
-    monkeypatch.setattr(delegation, "release_task_lease", unavailable)
+    monkeypatch.setattr(stop_lease, "release_task_lease", unavailable)
     receipt = runner.stop("analysis-lease-window", execute=True)
     assert receipt["phase"] == "acknowledged", receipt
     assert receipt["stop"]["reason"] == "required_lease_release_unproven"
@@ -210,7 +211,7 @@ def test_a_recovered_lease_obligation_settles_only_after_its_exact_release(servi
     root, runner, lease_key = canonical_lease_at_the_native_edge(
         service, monkeypatch, "analysis-lease-recover")
     releases = []
-    monkeypatch.setattr(delegation, "release_task_lease",
+    monkeypatch.setattr(stop_lease, "release_task_lease",
                         lambda **kwargs: releases.append(kwargs) or {"released": True})
 
     receipt = runner.stop("analysis-lease-recover", execute=True)
@@ -236,7 +237,7 @@ def test_a_foreign_lease_generation_is_not_this_stops_obligation(service, monkey
     root, runner, lease_key = canonical_lease_at_the_native_edge(
         service, monkeypatch, "analysis-lease-foreign", key_suffix="-older")
     releases = []
-    monkeypatch.setattr(delegation, "release_task_lease",
+    monkeypatch.setattr(stop_lease, "release_task_lease",
                         lambda **kwargs: releases.append(kwargs) or {"released": True})
 
     receipt = runner.stop("analysis-lease-foreign", execute=True)
@@ -258,9 +259,9 @@ def test_an_unreadable_lease_obligation_keeps_the_stop_open(service, monkeypatch
     def unreadable(**kwargs):
         raise RuntimeError("native authority store unavailable")
 
-    monkeypatch.setattr(delegation, "inspect_task_lease", unreadable)
+    monkeypatch.setattr(stop_lease, "inspect_task_lease", unreadable)
     releases = []
-    monkeypatch.setattr(delegation, "release_task_lease",
+    monkeypatch.setattr(stop_lease, "release_task_lease",
                         lambda **kwargs: releases.append(kwargs) or {"released": True})
 
     receipt = runner.stop("analysis-lease-unreadable", execute=True)

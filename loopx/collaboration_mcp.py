@@ -50,7 +50,6 @@ from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
     turn_lane_liveness, turn_lane_target,
 )
-from .control_plane.work_items.task_lease import inspect_task_lease, release_task_lease
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.delegation_inventory import (
     DELEGATION_HOST_PROCESS_SUFFIX, DELEGATION_STOP_RECEIPT_SUFFIX,
@@ -62,7 +61,7 @@ from .control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
-from .control_plane.collaboration import delegation_results, delegation_validation
+from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
 from .control_plane.collaboration.peers import (
     _goal,
     consume_return,
@@ -1190,115 +1189,11 @@ class Delegations:
             self._clear_delegation_bootstrap(row, binding)
         except (OSError, ValueError):
             pass  # the bootstrap is host input; its state never blocks the receipt
-        lease = self._release_delegation_lease(row, binding)
+        lease = delegation_stop_lease.release(self, row, binding)
         with exclusive_file_lock(self._dispatch_lock(path)):
             stop = self._read_stop(path) or stop
             stop["lease"] = lease
             _write(self._stop_path(path), stop)
-
-    def _release_delegation_lease(self, row: dict, binding: dict) -> dict:
-        try:
-            owed = self._lease_obligation(row)
-        except (OSError, RuntimeError, ValueError, EffectRuntimeRemoteError) as exc:
-            return {"required": True, "released": False,
-                    "error": ("lease obligation unreadable: " + str(exc))[:180]}
-        if owed is None:
-            return {"required": False, "released": None}
-        return self._release_owned_task_lease(owed, binding)
-
-    def _lease_obligation(self, row: dict) -> dict | None:
-        """The hard lease this operation may hold, named by its own execution identity.
-
-        `_acquire_delegation_lease` only accepts a lease whose key is
-        `_turn_instance_id(row)`, and that key survives in the operation record,
-        so the identity never depends on the annotation's shape or on the
-        in-memory row that acquired it. A native claim commits before the
-        annotation is saved, so a missing annotation is an absent fact, not
-        proof that nothing is owed: under a promoted hard-lease authority the
-        obligation stands until the canonical lease shows this execution no
-        longer holds it. The recorded epoch, when there is one, fences the
-        release against another generation under the same key.
-        """
-
-        recorded = row.get("task_lease")
-        if isinstance(recorded, dict) and recorded.get("required") is not True:
-            return None
-        if not (isinstance(recorded, dict) and recorded.get("required") is True):
-            if not local_authority_is_promoted(runtime_root=self.root, goal_id=self.goal_id):
-                return None
-            if show_goal_handoff_mode(
-                registry_path=self.registry, runtime_root_arg=str(self.root), goal_id=self.goal_id,
-            )["handoff_mode"] != "hard_lease":
-                return None
-            recorded = {}
-        acquired = recorded.get("lease") if isinstance(recorded.get("lease"), dict) else {}
-        return {"idempotency_key": self._turn_instance_id(row),
-                "lease_epoch": acquired.get("lease_epoch")}
-
-    def _release_owned_task_lease(self, owed: dict, binding: dict) -> dict:
-        """Release the lease only while this execution still holds it, at its current version.
-
-        Renewal advances the version, so the acquisition's version is no CAS for
-        a later release. The canonical lease is read first: the exact owner, key
-        and (when recorded) epoch must match before its current version is
-        released. A lease another execution holds, or none at all, is not this
-        stop's to release and blocks nothing on its behalf.
-        """
-
-        key = owed["idempotency_key"]
-        try:
-            inspection = inspect_task_lease(
-                registry_path=self.registry, runtime_root=self.root,
-                goal_id=self.goal_id, todo_id=binding["todo_id"],
-            )
-            if inspection.get("ok") is not True:
-                raise RuntimeError(str(inspection.get("error") or "lease inspection unavailable"))
-        except (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError) as exc:
-            return {"required": True, "released": False, "idempotency_key": key,
-                    "error": ("lease obligation unreadable: " + str(exc))[:180]}
-        held = inspection.get("lease")
-        if (not isinstance(held, dict)
-                or held.get("owner") != binding["agent_id"]
-                or held.get("idempotency_key") != key
-                or (owed.get("lease_epoch") is not None
-                    and held.get("lease_epoch") != owed["lease_epoch"])):
-            return {"required": True, "released": None, "held": False, "idempotency_key": key}
-        if held.get("status") == "released":
-            return {"required": True, "released": True, "idempotency_key": key,
-                    "version": held.get("version")}
-        try:
-            result = release_task_lease(
-                runtime_root=self.root, goal_id=self.goal_id, todo_id=binding["todo_id"],
-                owner=binding["agent_id"], idempotency_key=key,
-                expected_version=held.get("version"), registry_path=self.registry,
-            )
-        except (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError) as exc:
-            return {"required": True, "released": False, "idempotency_key": key,
-                    "error": str(exc)[:180]}
-        return {"required": True, "released": result.get("released") is True,
-                "idempotency_key": key, "version": held.get("version"),
-                "missing": result.get("missing") is True}
-
-    def _settle_lease_obligation(self, path: Path, row: dict, binding: dict, stop: dict) -> bool | None:
-        """Try the required release once and record what it proved.
-
-        Returns the `lease_released` fact, or `None` when the operation owed no
-        required lease at all — `None` keeps the typed planner's `undefined`
-        meaning instead of claiming a release that was never owed, and also
-        when this execution no longer holds the lease it acquired. A release
-        already proven on the receipt is not attempted again.
-        """
-
-        recorded = stop.get("lease") if isinstance(stop.get("lease"), dict) else {}
-        if recorded.get("released") is True:
-            return True
-        released = self._release_delegation_lease(row, binding)
-        if released != stop.get("lease"):
-            stop["lease"] = released
-            _write(self._stop_path(path), stop)
-        if released.get("required") is not True or released.get("held") is False:
-            return None
-        return released.get("released") is True
 
     def _settle_stop(self, path: Path) -> dict:
         with exclusive_file_lock(self._dispatch_lock(path)):
@@ -1336,7 +1231,7 @@ class Delegations:
             # moves the version after it. A release is retried here, under the
             # same lock that guards the record: every later read is another
             # attempt rather than one failure becoming permanent.
-            lease_released = self._settle_lease_obligation(path, row, binding, stop)
+            lease_released = delegation_stop_lease.settle(self, path, row, binding, stop)
             if lease_released is not None:
                 facts["lease_released"] = lease_released
             decision = effect_runtime_result("collaboration.delegation.stop", {
