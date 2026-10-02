@@ -5,10 +5,11 @@
 
 ## 一句话结论
 
-**“底座没有质量判断”是错的。** 底座有 27 个质量机制族，我们只用了零头；
-控制器的正确叙事是——**在底座质量原语之上，补文档域机械门禁 + 把官方手动修复 playbook 自动化**。
+**“底座没有质量判断”是错的。** 底座质量机制族厚实（甲席逐文件计 27 族，下文实列两席共识的
+18 族核心，其余为同族子件与变体）；控制器的正确叙事是——**在底座质量原语之上，补文档域
+机械门禁 + 把官方手动修复 playbook 自动化**。
 
-## 底座质量能力（27 机制族，两席共识）
+## 底座质量能力（两席共识 18 族核心，甲席全量口径 27 族）
 
 turn 后验三态 / `--validation-command-json` argv 级验证器 / goal 验收 pin（TOCTOU 双读）/
 change_quality（oracle 发现 + scope 指纹 + receipt stale 语义）/ 评审批组装（typed verdict 契约，
@@ -29,8 +30,9 @@ change_quality（oracle 发现 + scope 指纹 + receipt stale 语义）/ 评审�
 - 盲评 oracle 模式（verify.py 独立验证器）的精神沿用
 
 ### B. 底座有 typed 等价物，形态不同（知晓即可，不强行迁移）——6 处
-- 裁决收尾正则 ↔ 底座 typed verdict_values（goal_achieved/…，强制 minimum_repair 字段）：
-  底座管 JSON 裁决，我们管 markdown 自由文本——两条路线
+- 裁决收尾正则 ↔ 底座 typed verdict_values（verdict_values 323-329 + 强制
+  minimum_repair 346-348 + validation_commands 384-404，
+  `pr_review_queue/review_contract.py`）：底座管 JSON 裁决，我们管 markdown 自由文本——两条路线
 - 三段式诊断 ↔ not_yet_proven 的 trigger/observed_evidence/minimum_repair typed 三段
 - 终稿引用双评审 ↔ manager_context 文档化契约（“incorporates or rejects the findings”）
 - 盲评隔离机械检查 ↔ 官方 demo 的**结构性隔离**（独立 worktree+独立 home+串行两轮，
@@ -51,7 +53,7 @@ change_quality（oracle 发现 + scope 指纹 + receipt stale 语义）/ 评审�
    ——底座对自由文本成品文档没有任何机械门禁。
 2. **修复环自动化编排**：`_failing_phases`（失败项→负责 phase 路由）+ `ensure_phase` /
    `gate_with_repair`（反馈→重跑→重验闭环）。底座只给原语和手动 playbook
-   （`managed_step.py:1-18` 明说“caller decides”——**底座故意不做闭环**），闭环是我们写的。
+   （`managed_step.py:1-21` 明说“caller decides”——**底座故意不做闭环**），闭环是我们写的。
 
 ### E. 学底座（本次已落地）——1 处
 - **change_quality 的 scope_fingerprint + receipt stale 语义**
@@ -59,8 +61,10 @@ change_quality（oracle 发现 + scope 指纹 + receipt stale 语义）/ 评审�
   质量判定只对其被计算时的精确内容有效。
   → 已落地为 `repair-receipt.json`（repair_receipt_v0）：每修复轮记被修工件前后 sha256
   （证明“修复真动了工件”；没变却过验=审计疑点）+ 下游陈旧信号
-  （LoopsBench obligation retention：上游变了下游未修——full re-gate 本就会重验全部工件，
-  此字段是信号非拦截）。无修复轮=底座 no_changes 语义，不落回执。
+  （前向 stale：上游变了下游未修——full re-gate 本就会重验全部工件，
+  此字段是信号非拦截。名分注：LoopsBench 的 obligation retention 实为**反向保持**
+  （已过闸测试此后每层持续强制作回归），与本信号不同构；与该词同构的是
+  full re-gate。9938270d3 勘误）。无修复轮=底座 no_changes 语义，不落回执。
 
 ## 对“核心竞争力”判断的修正
 
