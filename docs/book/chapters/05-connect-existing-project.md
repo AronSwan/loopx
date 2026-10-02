@@ -25,6 +25,14 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 | 环境就绪 | 当前入口及所需依赖通过了对应检查 | 项目已经选对 Goal，Host 已经持续运行 |
 | 接入可验收 | Goal、Agent、项目边界与下一入口明确，写入结果已读回 | T1 已实现，CI 已通过，发布已获准 |
 | 一项工作交付 | 当前产物和对应验证可复核，生命周期记录完整 | 所有 Todo、所有审批和整个 Goal 均已完成 |
+- `loopx doctor` 报告安装可用；
+- 项目存在 `.loopx/registry.json`；
+- 项目存在 `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`；
+- `loopx status` 能显示 active state 和当前 frontier；首连不会生成 onboarding todo，
+  第一个交付 todo 由 Agent 与你确认后写入；
+- `.loopx/` 与 `.loopx/goals/` 不会进入 Git；
+- 再次连接会按精确 `goal_id` 复用已有 Goal，而不是覆盖目标；
+- 新接入的执行者使用 fresh `agent_id`，除非用户明确授权 takeover。
 
 因此，本章不是把所有命令连成一段可以盲目粘贴的脚本。读取、预览和执行分段进行，
 每次只在前一步给出足够依据后继续。出现拒绝时先理解所保护的条件，不为让教程跑通而绕过检查。
@@ -32,26 +40,124 @@ T1、M1、C1 等代号不是 CLI id，也不能当作 API payload。
 ## 一、准备：确认项目，保护已有状态 {#prepare-project}
 
 从你准备管理的 Git 项目根目录开始，不是从 LoopX 的源码目录开始。先读取：
+在目标仓库根目录打开你正在使用的 Agent 开发工具，把下面提示词中的目标和 Host 改成自己的
+情况后直接发送：
+
+```text
+请把当前 Git 项目安全接入 LoopX。
+
+目标：
+- 为这个项目建立一条可恢复、可验证的发布流程。
+- 当前 Host 是 Codex App。如果当前环境不是这个 Host，先告诉我，不要猜测。
+
+执行合同：
+1. 先只读检查项目根目录、当前分支、git status、.gitignore，以及是否已有
+   .loopx/registry.json、.loopx/goals/ 或其他 LoopX 状态。不要覆盖、reset 或清理现有内容。
+2. 运行 loopx --version、loopx doctor，并读取本次实际需要的 --help。不要依赖记忆中的旧参数。
+   如果 LoopX 尚未安装，先报告缺失和官方 installer 将写入的位置，得到我授权后再安装；不要把
+   “找到安装命令”写成“安装已完成”。
+3. 如果已有 LoopX 状态，先读 loopx registry、loopx status 和相关 history。优先复用精确
+   goal_id；不要 force reconnect，不要按目标文字相似度选择 Goal。
+4. 确保 .loopx/、.loopx/goals/ 和 .local/ 被 Git 忽略。如果这些目录已有项目用途或已被跟踪，
+   停下来报告冲突，不要擅自删除或 untrack。
+5. 对尚未连接的项目，先运行 loopx connect --dry-run，展示将创建或修改的状态；确认没有冲突后
+   再执行 loopx connect。已有 registry 时不要为了“重新开始”重复 bootstrap。
+6. 如果有多个可选 Goal，停在只读 goal_selection_gate，把 choices 和推荐依据交给我选择；
+   在选择前不要写 Todo、注册 Agent 或激活 Host loop。
+7. 这是新的执行者时，选择一个新的 public-safe agent_id，先 preview，再用当前 CLI 支持的
+   register-agent 命令执行并 read back。只有我明确要求 takeover 时才复用已有 agent_id。
+8. 使用 loopx start-goal --guided --project . 和明确的 goal text 生成 transaction packet。
+   Host 已知时显式传入正确的 --host-surface；只执行 packet 中与当前权限相符的步骤。
+9. 任何用户审批、外部写操作、凭据、权限扩大、Host 选择或 destructive Git 操作都必须停在
+   Gate，不能替我决定。
+10. 完成后验证 loopx status、todo list、history、quota should-run、git status，以及
+   git ls-files .loopx .loopx/goals .local。
+11. 不要提交或推送。最后给我一份“接入回报”，列出 goal_id、agent_id、Host、创建或修改的文件、
+    当前 Todo/Gate、执行过的 mutation、验证结果、未解决问题和下一步。只完成 preview 时必须
+    明确写“尚未接入完成”。
+```
+
+这份提示词不是把控制权交给 Agent。它把可执行工作委托给 Agent，同时把以下决定留给你：
+
+- 多个 Goal 中选择哪一个；
+- 是否 takeover 已有 Agent identity；
+- 使用哪个 Host surface；
+- 是否允许外部写操作、凭据或更大 write scope；
+- 是否提交或推送仓库改动。
+
+### 接入回报应该长什么样
+
+一个可验收的接入回报至少包含：
+
+```yaml
+onboarding:
+  status: complete | blocked | preview_only
+  project_root: <repository root>
+  goal_id: <exact goal id>
+  agent_id: <fresh id or explicitly approved takeover id>
+  host_surface: <exact host or unresolved>
+changes:
+  - <changed path and why>
+gates:
+  - <decision still owned by the user>
+verification:
+  doctor: pass | fail
+  status_readback: pass | fail
+  local_state_ignored: pass | fail
+  tracked_private_state: []
+next_action: <one concrete next step>
+```
+
+不要接受“命令运行成功”作为唯一结论。Agent 应同时给出状态 readback 和 Git 隔离证据。
+
+### 示例：首次接入一个项目
+
+```text
+请按本章的 Agent 接入合同，把当前项目接入 LoopX。
+目标是“为每个发布候选建立构建、审批和 Pages 部署的可恢复流程”。
+当前 Host 是 Codex CLI visible TUI。使用新的 public-safe agent_id。
+不要提交、推送或触发发布；遇到 Goal 选择、权限和外部写操作时停下来让我决定。
+```
+
+### 示例：安全续接已有状态
+
+```text
+请先只读检查当前项目已有的 LoopX registry、Goal、Todo、Gate 和 history，再帮助我续接。
+优先复用精确 goal_id，但不要自动 takeover 任何已有 agent_id。
+如果存在多个 Goal、活动 lease、未完成 mutation 或 workspace 路由不一致，只给诊断和选择，
+不要写状态。不要提交或推送。
+```
+
+## 2. 安装并检查 LoopX
+
+要求：
+
+- Python 3.11 或更高版本；
+- Node.js 22.22.3 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
+- macOS/Linux shell，或 Windows PowerShell 7；
+- 一个已有 Git 项目。
+
+安装 PyPI release 及其 LoopX workflow skills：
 
 ```bash
 git rev-parse --show-toplevel
 git branch --show-current
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 仓库根目录、当前分支和现有改动是三项不同事实。已有改动不应被 reset 或删除；
 如果当前目录是 linked worktree，还要确认实际交付会发生在哪一棵树。看错工作树时，
 一个目录的“没有改动”不能证明另一个目录没有产生工作。
 
-项目可能已经包含 `.loopx/registry.json` 或 `.codex/goals/`。先识别已有 Goal、在途工作和状态位置，
+项目可能已经包含 `.loopx/registry.json` 或 `.loopx/goals/`。先识别已有 Goal、在途工作和状态位置，
 不要复制其他项目的 registry，也不要为了得到一个空白起点覆盖旧状态。
 下面是常见布局示意，不是所有 authority、租约和日志的完整物理位置：
 
 ```text
 your-project/
   .loopx/registry.json
-  .codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md
+  .loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md
 
 configured runtime root/
   provider-owned state, execution records and receipts
@@ -66,7 +172,7 @@ Markdown 在 legacy 路径可能是源，在已选择的 authority 路径可能�
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 
@@ -75,9 +181,10 @@ Markdown 在 legacy 路径可能是源，在已选择的 authority 路径可能�
 
 ```bash
 git check-ignore -v .loopx/registry.json
-git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 git check-ignore -v --no-index .loopx/registry.json
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 ```
 
 `check-ignore` 解释匹配规则；要看规则本身，`!` 否定规则不表示已经忽略。
@@ -212,7 +319,7 @@ loopx status
 loopx todo list --goal-id <goal-id>
 loopx history --goal-id <goal-id>
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 它们不请求完成 Todo 或扣减交付配额，但“读取”不承诺整个进程完全无 IO：

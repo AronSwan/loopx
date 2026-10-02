@@ -138,6 +138,168 @@ Recovery depends on readable original records, available provider readback and c
 
 Evidence collection costs time and resources and should match the risk. Too little checking misses changes; excessive repetition can consume the delivery budget. Retain minimally sufficient evidence, not every thought forever.
 
-Private registries, active state, leases, session handles, credentials and raw transcripts do not belong in public examples. Handoff carries necessary bounded references, freshness and legal retrieval routes, not all private material. Establish Git boundaries for `.loopx/`, `.codex/goals/` and `.local/` according to actual use; ignore rules do not replace credential scans or inspection of already committed history.
+Private registries, active state, leases, session handles, credentials and raw transcripts do not belong in public examples. Handoff carries necessary bounded references, freshness and legal retrieval routes, not all private material. Establish Git boundaries for `.loopx/`, `.loopx/goals/` and `.local/` according to actual use; ignore rules do not replace credential scans or inspection of already committed history.
 
 You should now be able to classify an interruption, identify preserved identity and freshly observed conditions, and name the recovery entrypoint and stopping condition. When the result remains unknown, return explicit recovery responsibility rather than “run it again and see.”
+
+A writeback may mark the vision unchanged only when all of the following hold:
+
+- a comparable baseline exists (the vision written in the previous round);
+- this round's delivery did not genuinely change any vision premise;
+- the writeback explicitly references the baseline revision and the "unchanged" reason.
+
+If the baseline is missing but the agent still claims unchanged, quota will produce a
+`vision_checkpoint_missing` gap. This is not a punishment, but a guard against the agent accumulating
+wrong assumptions on a never-checked state. For the full failure replay, see
+[Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
+
+## Terminal closure
+
+Every current Todo being done proves only that the list ended. A terminal audit also checks:
+
+```text
+open todos = 0
+due monitors = 0
+unresolved blocking gates = 0
+pending successors = 0
+replan obligations = 0
+acceptance gaps = 0
+retryable postconditions = 0
+required external readbacks are fresh
+```
+
+If acceptance is satisfied and no follow-up is needed, record structured no-follow-up. If work remains,
+create a successor. If an external result is still pending, preserve a monitor or blocker. Do not delete
+open state to make the Goal look complete.
+
+## Four runtime responsibilities
+
+Long-running Agent systems often call every component a "tool" or "plugin." LoopX uses four runtime
+responsibilities:
+
+| Responsibility | Contract |
+| --- | --- |
+| Agent / Executor | Plans and executes one allowed bounded action in a Host |
+| Provider | Calls an external system and returns an observation, effect result, or readback |
+| Capability | Defines a caller outcome, normalizes Provider output, and applies domain policy |
+| LoopX Kernel | Accepts or rejects a proposal and owns generic Goal, Todo, Gate, quota, and recovery state |
+
+The normal flow is not "the Agent called a tool, therefore the Todo is done":
+
+```text
+Agent -> Capability -> Provider -> external system
+Provider readback -> Capability validation/proposal -> LoopX transition
+```
+
+A Capability is the outcome contract a caller can depend on. A Provider implements or accesses an external
+system. The Kernel owns cross-domain lifecycle. Domain results such as Issue-Fix or Explore can own their
+Domain State, but they must not own generic quota, Gates, or permission in reverse.
+
+## Extension is a delivery and lifecycle boundary
+
+An **Extension** has independent:
+
+- packaging;
+- installation;
+- enable and disable;
+- upgrade and rollback;
+- compatibility;
+- provider ownership.
+
+It is not a fifth runtime responsibility and does not automatically gain domain authority:
+
+```text
+Extension package
+└── delivers Provider
+      └── participates in Agent -> Capability -> Provider -> Kernel flow
+```
+
+For a deterministic, zero-permission standalone Extension, LoopX can call a bounded request/response
+command through the managed runtime. As soon as an operation needs read, write, send, publish, or manage
+authority, it must enter a Capability or domain command that can enforce permission, decision scope, and
+domain policy.
+
+"Installed," "doctor-ready," and "authorized for this effect" are three different states.
+
+## Who owns each fact
+
+### LoopX canonical state
+
+LoopX owns work-lifecycle facts:
+
+- Goal, Todo, and Gate;
+- claim, lease, dependency, and successor;
+- quota, monitor, and scheduler hint;
+- accepted evidence pointer and receipt;
+- event lineage, Vision checkpoint, and projection inputs.
+
+### External systems
+
+External systems remain authoritative for their facts:
+
+- Git owns commits and branches;
+- GitHub owns current PR, Issue, and check state;
+- CI owns job results;
+- a cloud service owns actual resource state;
+- the Host owns its session and actual wake-up effect.
+
+LoopX may retain bounded observations, readbacks, and evidence pointers. A stale copy must not replace the
+external authority.
+
+### Host and Agent
+
+The Host owns sessions, model turns, tool surfaces, and actual wake-up mechanisms. The Agent owns current
+reasoning and a temporary plan. Neither can be the sole owner of project Goal state.
+
+The Host follows the current `interaction_contract` and `scheduler_hint`. It must not preserve
+project-specific control logic indefinitely in a heartbeat prompt. The Agent cannot infer current
+authority merely because a similar action was legal in a previous turn.
+
+## Public/private boundary
+
+Project control state commonly contains material that must not be committed publicly:
+
+- local registry and active Goal state;
+- task leases and Host session handles;
+- raw transcripts, trajectories, and verifier tails;
+- credentials and private Provider configuration;
+- machine paths, internal links, and private organizational narrative;
+- unredacted external evidence.
+
+The project-onboarding chapter requires these directories to stay outside Git:
+
+```text
+.loopx/
+.loopx/goals/
+.local/
+```
+
+Ignore rules are only one defense. Before publication, still scan for credentials, absolute paths, raw
+logs, private links, and runtime artifacts. Durable public conclusions should first become public-safe
+behavior, schema, fixtures, or evidence pointers.
+
+A handoff must not copy private material into a public packet. It transfers stable ids, bounded references,
+freshness, omission notes, and legal routes for reacquiring material.
+
+## What LoopX does not replace
+
+LoopX does not replace:
+
+- Agent runtime: the model still performs reasoning;
+- Host scheduler: the Host still performs actual wake-up;
+- Git: code history and branches are still managed by Git;
+- CI: test execution and check state are still managed by CI;
+- external service authentication: TurnEnvelope and receipt are not security tokens;
+- domain system: LoopX does not fabricate external resource facts;
+- independent validator: an Executor's own completion claim is not sufficient proof.
+
+These boundaries support two later practice paths:
+
+1. **Project onboarding**: reuse these protocols without modifying LoopX source.
+2. **Developer contributions**: locate the owning boundary from the caller outcome and protocol, and
+   deliver Control Plane, Capability/Domain State, Provider, Host/Runner,
+   Projection/Dashboard, Docs/fixtures, or Extension.
+
+Extension is an independent packaging/lifecycle path within developer contributions, not the unified
+abstraction for all contributions. The two paths share the same control-plane model and do not require one
+another. The next part starts with the most common job: project onboarding.

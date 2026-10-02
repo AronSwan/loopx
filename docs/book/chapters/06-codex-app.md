@@ -65,7 +65,7 @@ App 的 workspace 应该是你要接入的那个 Git 根目录。Host 不应扫�
 ```text
 检查当前项目的 LoopX 连接状态。先运行 loopx doctor、loopx registry 和
 loopx status。复用已有 active state，不要覆盖现有目标。确认 .loopx/、
-.codex/goals/ 和 .local/ 已被 Git 忽略。
+.loopx/goals/ 和 .local/ 已被 Git 忽略。
 ```
 
 如果 LoopX command facade 已安装，可以在 Codex surface 中选择 `LoopX` skill，或使用：

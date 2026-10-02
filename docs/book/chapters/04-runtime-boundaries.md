@@ -138,6 +138,162 @@ Goal 被 owner 停止、quota 暂停或 Host 退出，不能反证目标已完�
 
 证据采集消耗时间与资源，应与风险匹配；检查太少会漏掉变化，过度重复又可能吞噬交付。正文讨论的是如何保存最小充分证据，不要求把每段思考永久记录下来。
 
-私有 registry、active state、lease、session handle、凭据和 raw transcript 不进入公开例子。Handoff 传递必要的 bounded refs、freshness 和合法获取入口，不复制全部私有材料。项目的 `.loopx/`、`.codex/goals/`、`.local/` 需要按实际用途建立 Git 边界；忽略规则不是凭据扫描或已提交历史检查的替代品。
+私有 registry、active state、lease、session handle、凭据和 raw transcript 不进入公开例子。Handoff 传递必要的 bounded refs、freshness 和合法获取入口，不复制全部私有材料。项目的 `.loopx/`、`.loopx/goals/`、`.local/` 需要按实际用途建立 Git 边界；忽略规则不是凭据扫描或已提交历史检查的替代品。
 
 读完后应能给一次中断归类、指出要保留的原身份、要重新观察的条件、负责恢复的入口及其停止条件。无法确认结果时，可以明确交还恢复责任；不应只说“再跑一次看看”。
+
+只有同时满足下列条件，一次 writeback 才可以把 vision 标记为 unchanged：
+
+- 存在可比较的 baseline（上一轮已写入的 vision）；
+- 本轮 delivery 确实没有改变任何 vision 前提；
+- 写回时明确引用 baseline revision 和“不变”理由。
+
+如果 baseline 缺失但 agent 仍声称 unchanged，quota 会产生 `vision_checkpoint_missing` gap。这不是
+为了惩罚，而是为了防止 agent 在 never-checked 状态上积累错误假设。完整失败回放见
+[Control-Plane Course 第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
+
+## Terminal Closure
+
+Todo 全部 done 只说明当前列表结束，不自动证明 Goal 完成。Terminal audit 至少检查：
+
+```text
+open todos = 0
+due monitors = 0
+unresolved blocking gates = 0
+pending successors = 0
+replan obligations = 0
+acceptance gaps = 0
+retryable postconditions = 0
+required external readbacks are fresh
+```
+
+如果 acceptance 已满足且没有 follow-up，记录结构化 no-follow-up；如果仍有工作，创建 successor；
+如果外部结果尚未确定，保持 monitor 或 blocker。不要为了让 Goal “看起来完成”而删除未闭合状态。
+
+## 四种运行责任
+
+长期 Agent 系统容易把所有组件都称为“工具”或“插件”。LoopX 使用四种运行责任：
+
+| 责任 | 合同 |
+| --- | --- |
+| Agent / Executor | 在 Host 中规划并执行一个被允许的 bounded action |
+| Provider | 调用外部系统，返回 observation、effect result 或 readback |
+| Capability | 定义 caller outcome，规范 Provider 输出，应用 domain policy |
+| LoopX Kernel | 接受或拒绝 proposal，拥有通用 Goal/Todo/Gate/Quota/Recovery state |
+
+正常流向不是“Agent 调工具后直接写完成”：
+
+```text
+Agent -> Capability -> Provider -> external system
+Provider readback -> Capability validation/proposal -> LoopX transition
+```
+
+Capability 描述调用者可依赖的 outcome contract；Provider 实现或访问外部系统；Kernel 保持跨领域
+生命周期。Issue-Fix、Explore 等领域结果可以拥有自己的 Domain State，但不能反向拥有通用 quota、
+Gate 或 permission。
+
+## Extension 是交付与生命周期边界
+
+**Extension**拥有独立的：
+
+- packaging；
+- installation；
+- enable / disable；
+- upgrade / rollback；
+- compatibility；
+- provider ownership。
+
+它不是第五种运行责任，也不自动获得 domain authority：
+
+```text
+Extension package
+└── delivers Provider
+      └── participates in Agent -> Capability -> Provider -> Kernel flow
+```
+
+对于零权限、确定性的 standalone Extension，LoopX 可以通过 managed runtime 调用 bounded
+request/response command。一旦操作需要 read、write、send、publish 或 manage authority，就必须
+进入能检查 permission、decision scope 与 domain policy 的 Capability 或领域命令。
+
+“安装成功”“doctor ready”和“有权执行某次 effect”是三个不同状态。
+
+## 谁拥有事实
+
+### LoopX canonical state
+
+LoopX 拥有工作生命周期事实：
+
+- Goal、Todo、Gate；
+- claim、lease、dependency 与 successor；
+- quota、monitor、scheduler hint；
+- accepted evidence pointer 与 receipt；
+- event lineage、Vision checkpoint 和 projection inputs。
+
+### 外部系统
+
+外部系统继续拥有自己的事实：
+
+- Git 拥有 commit 与 branch；
+- GitHub 拥有 PR、Issue 与 check 当前状态；
+- CI 拥有 job 结果；
+- cloud service 拥有资源实际状态；
+- Host 拥有 session 与真实唤醒效果。
+
+LoopX 可以保存 bounded observation、readback 和 evidence pointer，但不能让一份过期复制品替代
+外部权威。
+
+### Host 与 Agent
+
+Host 拥有 session、模型 Turn、工具表面和实际唤醒机制。Agent 拥有当前推理与临时计划。两者都
+不能成为项目 Goal state 的唯一持有者。
+
+Host 应服从 current `interaction_contract` 与 `scheduler_hint`，不能把项目专属控制逻辑永久复制
+进 heartbeat prompt。Agent 也不能因为“上一轮做过类似动作”而推断本轮仍有 authority。
+
+## Public 与 Private Boundary
+
+项目状态常包含不能公开提交的内容：
+
+- 本地 registry 与 active goal state；
+- task lease、Host session handle；
+- raw transcript、trajectory 与 verifier tail；
+- credentials 与 provider private config；
+- 本机路径、内部链接和私有组织叙事；
+- 未脱敏的外部 evidence。
+
+项目接入章要求将以下目录排除在 Git 外：
+
+```text
+.loopx/
+.loopx/goals/
+.local/
+```
+
+忽略规则只是第一层保护。公开提交前仍要扫描 credentials、absolute paths、raw logs、private links
+和 runtime artifacts。需要长期公开保存的结论应先压缩成 public-safe behavior、schema、fixture
+或 evidence pointer。
+
+Handoff 也不能把 private material 复制到另一个公开 packet。它只传 stable ids、bounded refs、
+freshness、omission note 与重新获取材料所需的合法路由。
+
+## LoopX 不替代什么
+
+LoopX 不替代：
+
+- Agent runtime：模型仍负责推理；
+- Host scheduler：Host 仍负责实际唤醒；
+- Git：代码历史和 branch 仍由 Git 管理；
+- CI：测试执行和 check 状态仍由 CI 管理；
+- 外部服务认证：TurnEnvelope 和 receipt 都不是 security token；
+- domain system：LoopX 不伪造外部资源事实；
+- independent validator：Executor 自述不能单独证明 completion。
+
+这个边界会支撑后续两条实践主线：
+
+1. **接入现有项目**：复用这些协议，不修改 LoopX 源码；
+2. **开发者贡献**：从调用者结果和协议选择 owning boundary，可交付 Control Plane、
+   Capability/Domain State、Provider、Host/Runner、Projection/Dashboard、Docs/fixtures 或
+   Extension。
+
+Extension 是开发者贡献中的独立 packaging/lifecycle 路径，不是所有贡献的统一抽象。两条主线共享
+同一控制面模型，但不互相要求。下一部分先从最常见的项目接入开始。

@@ -29,6 +29,14 @@ approval outstanding.
 | Environment ready | The current entrypoint and required dependencies passed their corresponding checks | The right project Goal is selected and a Host is running continuously |
 | Connection accepted | Goal, Agent, project boundary, and next entrypoint are explicit; writes have been read back | T1 is implemented, CI passed, and publication is authorized |
 | A piece of work delivered | Current artifacts and validation are reviewable, with complete lifecycle records | Every Todo, approval, and the entire Goal are complete |
+- `loopx doctor` reports a usable installation;
+- `.loopx/registry.json` exists in the project;
+- `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exists;
+- `loopx status` can show the active state and the current frontier; a first connection creates no
+  onboarding Todo, so the Agent writes the first delivery Todo after you confirm it;
+- `.loopx/` and `.loopx/goals/` do not enter Git;
+- reconnecting reuses the exact existing `goal_id` instead of overwriting the Goal;
+- a new executor receives a fresh `agent_id` unless the user explicitly authorizes a takeover.
 
 The chapter therefore does not join every command into one script to paste blindly. Separate reads,
 previews, and execution, continuing when the preceding step provides enough basis. When a command refuses,
@@ -37,19 +45,124 @@ identify the condition it protects rather than bypassing the check to make the t
 ## 1. Prepare the project and protect existing state {#prepare-project}
 
 Start at the root of the Git project you intend to manage, not the LoopX source repository. Read:
+Open your Agent development tool from the repository root. Adapt the goal and Host in this prompt, then
+send it as one onboarding contract:
+
+```text
+Safely connect the current Git project to LoopX.
+
+Goal:
+- Establish a recoverable, verifiable release workflow for this project.
+- The current Host is Codex App. If the environment is not that Host, tell me first; do not guess.
+
+Execution contract:
+1. Begin with a read-only inspection of the project root, current branch, git status, .gitignore, and any
+   existing .loopx/registry.json, .loopx/goals/, or other LoopX state. Do not overwrite, reset, or clean
+   existing material.
+2. Run loopx --version and loopx doctor, then read the current --help for every command you need. Do not
+   rely on remembered arguments from an older version. If LoopX is not installed, report what is missing
+   and where the official installer writes before asking for installation authority. Do not describe a
+   discovered install command as a completed installation.
+3. If LoopX state exists, read loopx registry, loopx status, and relevant history first. Prefer the exact
+   existing goal_id. Do not force a reconnect or select a Goal from objective similarity.
+4. Ensure .loopx/, .loopx/goals/, and .local/ are ignored by Git. If those paths already serve another
+   project purpose or are tracked, stop and report the conflict. Do not delete or untrack them yourself.
+5. For a project that is not connected, run loopx connect --dry-run first and show the state it would
+   create or change. Run loopx connect only after confirming there is no conflict. Do not bootstrap again
+   merely to “start over” when a registry already exists.
+6. If several Goals are possible, stop at the read-only goal_selection_gate and show me the choices and
+   your recommendation. Before I choose, do not write Todos, register an Agent, or activate a Host loop.
+7. For a new executor, choose a fresh public-safe agent_id. Preview registration, then use the command
+   supported by the current CLI and read it back. Reuse an existing agent_id only when I explicitly
+   authorize takeover.
+8. Generate the transaction packet with loopx start-goal --guided --project . and the exact goal text.
+   Pass the correct --host-surface when the Host is known. Execute only packet steps allowed by the
+   current authority.
+9. Stop at a Gate for user approval, external writes, credentials, wider permissions, Host selection, or
+   destructive Git operations. Do not decide those for me.
+10. Verify loopx status, todo list, history, quota should-run, git status, and
+   git ls-files .loopx .loopx/goals .local.
+11. Do not commit or push. Finish with an "onboarding report" that names goal_id, agent_id, Host, changed
+    files, current Todos and Gates, executed mutations, verification, unresolved issues, and the next
+    action. If you completed only a preview, explicitly say that onboarding is not complete.
+```
+
+This prompt delegates execution, not authority. You still decide:
+
+- which Goal to select when several exist;
+- whether to take over an existing Agent identity;
+- which Host surface owns activation;
+- whether external writes, credentials, or a wider write scope are allowed;
+- whether repository changes are committed or pushed.
+
+### The onboarding report
+
+An auditable onboarding report includes:
+
+```yaml
+onboarding:
+  status: complete | blocked | preview_only
+  project_root: <repository root>
+  goal_id: <exact goal id>
+  agent_id: <fresh id or explicitly approved takeover id>
+  host_surface: <exact host or unresolved>
+changes:
+  - <changed path and why>
+gates:
+  - <decision still owned by the user>
+verification:
+  doctor: pass | fail
+  status_readback: pass | fail
+  local_state_ignored: pass | fail
+  tracked_private_state: []
+next_action: <one concrete next step>
+```
+
+Do not accept “the command succeeded” as sufficient evidence. Require state readback and Git-isolation
+proof.
+
+### Example: first onboarding
+
+```text
+Use the Agent onboarding contract in this chapter to connect the current project to LoopX.
+The goal is "Create a recoverable build, approval, and Pages deployment flow for every release candidate."
+The current Host is the visible Codex CLI TUI. Use a fresh public-safe agent_id.
+Do not commit, push, or trigger a deployment. Stop for my decision on Goal selection, authority, or any
+external write.
+```
+
+### Example: continue existing state safely
+
+```text
+First inspect the current LoopX registry, Goals, Todos, Gates, and history read-only, then help me continue
+the project. Prefer an exact existing goal_id, but do not automatically take over an existing agent_id.
+If you find multiple Goals, an active lease, an unfinished mutation, or a workspace-route mismatch, return
+diagnosis and choices only. Do not write state, commit, or push.
+```
+
+## 2. Install and inspect LoopX
+
+Prerequisites:
+
+- Python 3.11 or later;
+- Node.js 22.22.3 or later for the LoopX-managed TypeScript Effect runtime;
+- a macOS or Linux shell, or Windows PowerShell 7;
+- an existing Git project.
+
+Install the PyPI release and its LoopX workflow skills:
 
 ```bash
 git rev-parse --show-toplevel
 git branch --show-current
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 Repository root, current branch, and existing changes are separate facts. Do not reset or delete valuable
 changes. In a linked worktree, identify the tree where delivery will actually happen. A clean status in
 one directory does not establish that no work happened in another.
 
-A project may already contain `.loopx/registry.json` or `.codex/goals/`. Identify existing Goals, in-flight
+A project may already contain `.loopx/registry.json` or `.loopx/goals/`. Identify existing Goals, in-flight
 work, and state locations first. Do not copy another project's registry or overwrite useful state to
 obtain a blank starting point. This is a common layout, not a complete physical map of every authority,
 lease, or log:
@@ -57,7 +170,7 @@ lease, or log:
 ```text
 your-project/
   .loopx/registry.json
-  .codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md
+  .loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md
 
 configured runtime root/
   provider-owned state, execution records and receipts
@@ -73,7 +186,7 @@ state directories actually used. Common entries are:
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 
@@ -82,9 +195,10 @@ on a custom runtime location. Ask Git about the actual paths:
 
 ```bash
 git check-ignore -v .loopx/registry.json
-git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 git check-ignore -v --no-index .loopx/registry.json
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 ```
 
 `check-ignore` explains the matching rule; inspect the rule itself, because a negated `!` pattern does not
@@ -228,7 +342,7 @@ loopx status
 loopx todo list --goal-id <goal-id>
 loopx history --goal-id <goal-id>
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 These do not request Todo completion or delivery-quota debit, but reading does not promise a process
