@@ -22,6 +22,9 @@ from ...history import load_registry
 from ...registry import registry_goals
 from .goal_channel_contracts import (
     assert_public_packet,
+    blocked_notice_auto_notify_enabled,
+    blocked_notice_auto_notify_marker_enabled,
+    blocked_notice_auto_notify_marker_path,
     default_goal_channel_binding_path,
     human_gate_auto_notify_enabled,
     human_gate_auto_notify_marker_enabled,
@@ -53,6 +56,7 @@ def _unconfigured_goal_row(goal_id: str) -> dict[str, Any]:
         "configured": False,
         "enabled": False,
         "human_gate_auto_notify_enabled": False,
+        "blocked_notice_auto_notify_enabled": False,
         "receipt_count": 0,
     }
 
@@ -90,6 +94,12 @@ def _goal_notification_row(
             human_gate_auto_notify_enabled(binding)
             or _auto_notify_marker_state(binding_path, goal_id)
         ),
+        "blocked_notice_auto_notify_enabled": bool(
+            blocked_notice_auto_notify_enabled(binding)
+            or blocked_notice_auto_notify_marker_enabled(
+                blocked_notice_auto_notify_marker_path(binding_path, goal_id)
+            )
+        ),
     }
     target_ref = _public_text(binding.get("target_ref"))
     if target_ref:
@@ -97,6 +107,22 @@ def _goal_notification_row(
     receipts = binding.get("receipts")
     receipts = receipts if isinstance(receipts, Mapping) else {}
     row["receipt_count"] = len(receipts)
+    blocked_receipts = [
+        r
+        for r in receipts.values()
+        if isinstance(r, Mapping) and r.get("kind") == "blocked_notice"
+    ]
+    row["blocked_notice_delivery"] = {
+        "delivered_count": sum(
+            r.get("readback_verified") is True for r in blocked_receipts
+        ),
+        "unverified_count": sum(
+            r.get("readback_verified") is False for r in blocked_receipts
+        ),
+        "resolved_count": sum(
+            r.get("state") in {"resolved", "superseded"} for r in blocked_receipts
+        ),
+    }
     verified: list[tuple[Any, str]] = []
     for receipt in receipts.values():
         if not isinstance(receipt, Mapping):
