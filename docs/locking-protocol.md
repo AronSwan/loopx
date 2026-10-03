@@ -1,91 +1,71 @@
-# 首试率确认性检验·锁定协议（pre-registration v2）
+# 首试率确认性检验·锁定协议（pre-registration v3.1）
 
-> **锁定即承诺**：本文件 commit 锚工件（lock-anchor.json，含协议锚 hash+推送 sha+push 事件
-> 时间，推送远端时人工落盘）之后的第一次模型调用起，确认性窗口开启。
-> 依据：SAVI 席（arXiv 2210.01948 §6.4）——历史问题不是 optional stopping，是 e-hacking。
-> **v2 变更**（合规组四处死角清偿）：①锚工件钉死+远端祖先校验（原动态取锚漂移无校验）；
-> ②第三方锚机器绑定（lock-anchor.json 落 push 事件时间，原 lock.at 本地时钟+自报布尔）；
-> ③灾难场排除程序（死于 gate 前的场有独立排除路径，原四要件只在 gate-report 里结构性缺席）；
-> ④≥10min 证据产出于同根重开累积（原单次跑 3.5min 产不出）+e 值台账落盘位置。
+> **锁定即承诺**：本文件 commit 锚工件（lock-anchor.json：protocol_hash+pushed_sha+push_event_at，**推送时人工落盘到将要开场的运行根内**——外层 .local 副本仅为母本，新根须拷入，甲席/乙席锚位置陷阱注记）之后的第一次模型调用起，确认性窗口开启。
+> **v3.1 变更**（v3 草案经审计两席对抗审核后修正）：v3 的数学骨架（e-过程/anytime/族链/银行化）经甲席独立推导成立；修正四处——①"总 FWER"措辞偷换（跨族 1−0.95^K 不受控）；②crash×禁重开×同根重发矛盾（禁重开仅限终态）；③克隆乘子农场（台账防克隆）；④机器化承诺按**现货/计划分栏**（乙席 grep 实证：新承诺 8 项原为零行，v3.1 已补 3 件便宜现货，其余明标计划）。
 
-## 1. 历史定性（不可追溯更改）
+## 1. 历史定性与账本
 
-**r1-r13 永久标记 exploratory**：两重根因修复的验收样本与效果宣称样本同源。
-不做追溯 e-value（事后补正是 §6.4 明示的 e-hacking 实例）。
+- **r1-r13 永久 exploratory**；不做追溯 e-value。
+- **确认性台账**（`.local/confirmatory-e-ledger.jsonl`，已存在）：第一条=r14（¬clean，e=0.597，族=dsh-0.2.0rc2×loopx-v1.2.3，window=v2-window-A）。
+- **追溯处置原则（成文，甲 V6）**：本协议对 v2 窗口数据的追溯处置（r14 计入族链）**仅因全部效果统计保守而合法**（e₀=0.597<1 更难拒绝/¬clean 压低链）——**今后任何协议版本对既有数据的追溯处置仅限保守方向**（使拒绝更难的方向），反保守追溯（如把排除场改判 clean）=违约。
+- **哈希约定（乙席追加发现，先于机器化）**：台账条目指纹 = sha256 of `json.dumps(entry_without_entry_sha256, ensure_ascii=False, sort_keys=True)`；r14 原条目的 entry_sha256 按此约定重算入档（原值作废，注明重算）。
 
 ## 2. 锁定的假设与主张
 
-- **检验命题（按场级数据）**：当前系统的场级 clean 概率 θ_clean 高于基线 **θ₀ = 0.33**。
-- **θ₀ = 0.33 的出处（明示）**：修复前历史（r2-r9）场级 clean 率 = 0/8，其 Wilson95 上界 =
-  z²/(n+z²) = 3.8416/11.8416 ≈ 0.3244，取 0.33 以真正落在历史 CI 之外。
-- 检验形式：e-process——单场 clean 乘子 θ/θ₀ = 0.6/0.33 ≈ **1.818**，¬clean 乘子
-  (1-θ)/(1-θ₀) = 0.4/0.67 ≈ **0.597**，跨场连乘（ALL-IN，§6.1）合法。
+- **检验命题**：场级 clean 概率 θ_clean > **θ₀=0.33**（谱系：出自旧底座混合 r2-r9 的 0/8 Wilson95 上界 0.3244——新底座下是**预设 margin 参考点**；禁止以升级后观测重推）。
+- **主张措辞（降级+甲 V3 精化）**：e≥20 宣称"**控制器谱系（含链内演化）+当前底座**的整体 clean 率>0.33"——不得归因"我们的修复有效"（新底座可能自带改善）。
+- 乘子：clean ×**1.818**，¬clean ×**0.597**（θ=0.6/θ₀=0.33 锁死）。
+- **可达性+power 披露（甲 V3，诚实条款）**：自 e=0.597，p=1 约 5.9 场、p=0.75 约 10 场达 e≥20；**p<0.55 时 10 场内功效<12%（p=0.5 仅 6.5%）——检验几乎必然"未确认"，且"未确认"≠"θ≤0.33"（不是阴性结论），只是证据不足**。本协议是系统级 Go/No-Go 门槛认证，不是归因研究，功率剖面如上知情。
 
-## 3. 锁定的度量（以 5fb66ec1d 实现为准）
+## 3. 族链规则（核心）
 
-- **权威源**：turn journal（`runtime/goals/<goal>/turns/*.json`）；home 计数仅作对账，
-  `attempts_drift` 落 gate-report。
-- **主终点（推断用）**：**场级 clean**——一场=一个运行根的最终结算；同根多次发射=同一场
-  （journal 累计如实计入，死亡轮不 reset）。clean := 场内全部活棒 attempts==1。
-  棒级不独立（SAVI 聚类警告），不作推断用。
-- **次终点（描述用）**：棒级首试率+Wilson95（gate-report `passk_wilson95`）——只描述。
-- **e 值台账（v2 落盘）**：每场收场记录到 `.local/confirmatory-e-ledger.jsonl`（跨场追加，
-  不被单场 gate-report 覆写），每条含 {run_root, gate-report digests 指纹, clean, e_before,
-  e_after, computed_by}。e_t = e_{t-1} × [1.818·1{clean} + 0.597·1{¬clean}]。
-- **判读规则（两处，无第三种说法）**：①e ≥ 20 → **以 anytime-α=0.05 拒绝 θ₀=0.33 基线**
-  （仍不是"证明 θ≥0.6"）；②满 10 场未达 → "未确认"。可达性：p=1 约 5 场、p=0.75 约 9-10 场。
+**族 = 底座身份**（dsh runtime 版本 × loopx 版本——**以 sdk 包版本字串为准**（代码可读 importlib.metadata），runtime_bin 与 sdk 版本号同源；族键须落 settled.json/gate-report，见 §5 计划栏）。
 
-## 4. 锁定的排除规则（预写死；判据须机器可判+留证）
+1. **族链跨窗累计，永不 reset**：同族内关窗/重开/同根重发/中途修 controller bug 全部 append 同一条族链（族内演化合法：复合零假设 p_t≤0.33 下乘子期望≤1，甲席独立推导验证）。
+2. **换族=新链+新锚+新窗**；旧族链按当时 e **定格**（已过 e≥20 则判定已银行化）；新族链 e₀=1。
+3. **重回旧族→旧族链续算**。
+4. v2 §6"旧窗口数据降级"条款**废除**——降级不重置任何链。
+5. **α 记账（甲 V1 修正措辞）**：**每族主张各自 anytime-α≤0.05**（Ville 界覆盖任意停时策略）；**跨族联合错误率=1−0.95^K 不受控制**（K 族各持 0.05；换族=新 estimand 新主张，**禁止做跨族析取式联合主张**）；链有效性以**场的纳入/排除与结果独立**为前提（§6 裁判纪律）。
+6. **台账防篡改+防克隆（甲 V7c 新增）**：每条含 prev_entry_sha256 链式指纹；**gate_report_sha256 全局唯一**（同指纹的场不得二次入账——堵克隆乘子农场：复制已结算 clean 根+删 settled+幂等跳过零模型调用刷 e 的攻击）；**新模型调用证据**（journal attempts 较上一条目严格递增）；每场结算后台账 digest 落 git 跟踪路径（计划，见 §5）。
 
-| 类别 | 判据（须留证） | 处置 |
-|---|---|---|
-| 外部网络事故 | **probe-log 实证**：`probe-log.jsonl` 显示连续不可达≥10min。**≥10min 产出于同根重开累积**（单次 auto 仅 3.5min 即 SystemExit——同根重开属§3"同根=同场"，append 累积合法） | excluded-external，不进分母，透明报告保留 |
-| 底座崩溃（非我方代码） | journal `host_failure`（机器可读）+ `controller-start.snapshot.json`（场 start 的 git HEAD+dirty，5fb66ec1d 实装）证明运行期零改动 | 同上 |
-| 操作纪律失误 | 违反一场一管（`.pipeline-lock` pid/ts 实证）或宿主并发污染（裁判认定） | excluded-operator，不进分母，**点名记过** |
+## 4. 窗口三态与中止程序
 
-**援引排除的四要件（v2 修正灾难场死角）**：①probe-log 实证（同根重开累积≥10min）
-②**锁锚一致**（gate-report 有 lock_hash 时比对其与锚工件；**死于 gate 前的场**改为比对
-根内 lock.json 与锚工件——lock.json 在首个模型调用前已写，灾难场必在场）③journal_order_ok
-（有 journal 时）；**无 journal 的场**以 lock.json 的 at 与锚工件 push 时间比对代替
-④裁判署名（probe-log `exclusion_referee`）+ audit 复核书面记录（落 `exclusion-record.json`）。
-排除只能引用上表三类；**事后发明新排除类=协议违约**，该场强制计入。
-裁判：当场 controller 落盘判定+audit 组复核，判定人写 `exclusion-record.json`。
+判读三处，无第四种：①e≥20 拒绝基线（措辞见 §2）；②满 10 场未达→"未确认"（**计数口径：族链累计场数**，r14 计入）；③**中止**（外因关闭）→"中止（N 场，无确认性结论）"——链上数据定格保留。
 
-## 5. 锁定锚与排序核验（v2 机器绑定）
+**中止程序**：原因分类+证据指纹+**人工落盘 settled.json（status=settled+裁判署名+台账条目引用）**+根冻结。（v3 曾写"settle 机器落盘"——乙席判半空头：settle 子命令是计划（§5），当前为人工程序，措辞如实。）
 
-- **锁锚工件（lock-anchor.json，人工落盘）**：推送远端时创建，含 {protocol_hash（协议文件
-  锚 commit）, pushed_sha（推送的分支 HEAD）, push_event_at（GitHub push 事件时间=第三方锚）}。
-  **它才是锁**，不是任何本地时间戳。
-- **锚效力的诚实边界（乙席强调，推送前必写）**：
-  锚防的是——协议事后编辑 + 本地时间篡改。
-  锚防不了——有写权限者（=我们）force-push 改史 + "先跑完再登记"（锚钉"协议文本在 T 时刻
-  的内容"，不钉"实验发生在 T 之后"）。
-  **锁的证明力 = 第三方事件日志（GitHub Events API 90 天内 / GH Archive 永久）的独立可
-  复查性，非工件自身**——工件是自转录文本，证明力全在审计者独立复查。
-- **锚校验（fail-closed）**：`auto()` 写 lock.json 前，校验 lock-anchor.json 的 protocol_hash
-  是 `origin/local-harness` 的祖先（`git merge-base --is-ancestor`）——漂移（协议推送后又
-  本地改）则拒绝开窗，不静默锚到未推送 commit。
-- **场内写锁（K3 已实装）**：`lock.json`（{hash, at, pushed}），hash=锚工件 protocol_hash，
-  at 仅作参考（真锚=锚工件的 push_event_at）。
-- **排序核验（K4 已实装）**：`gate()` 读最早 journal 时间（真锚=turns/*.lock.holder 的
-  `acquired_at`，fallback=journal mtime）与 lock.at 比对——`journal_order_ok=false` 则该场
-  不算窗口数据。
+## 5. 场的结算——现货/计划分栏（乙席框架，v3.1 落实）
 
-## 6. 禁改条款
+**[现货✅]（本轮已实装+测试）**：
+- 禁重开 fail-closed **仅限终态 {settled, completed}**——crashed+pending 凭裁判复核可同根重开（甲 V7a：v3"在场即拒"使 r14 式复活机械不可达，已修，auto() 读 status）。
+- **auto() 正常完成→settled.json status=completed**（shakeout 件 4 缺口已补）。
+- **CLI 失败 append 式留证**：cli-failures.jsonl（时间戳+returncode+args+输出尾 200 字符，覆盖并发）——v3 的"probe-log 风格"现货化；旧 last-cli-failure.log 兼容保留。
+- crash-settle 钩子（main() catch-all）/urllib 探针+probe-log+裁判署名/gate-report 锁四字段/排序核验（shakeout 实测过）。
+- **场纳入口径（甲 V2b）**：同 lock_hash 下发生过模型调用的根，**须进台账或由裁判书面分类为非确认性场**（exploratory 判据=lock.pushed=false 或裁判注记）。首例裁决：shakeout-run（lock 780ec867 但 pushed=false，exploratory 器械验证场）分类为非确认性场，不进族链——本条即裁决记录。
 
-确认性窗口开启后，以下改动对该窗口无效且记违约：假设数值/主终点定义/排除类别/判读阈值。
-需要变更=立 v3 协议+新锚工件+开新窗口，旧窗口数据降级 exploratory。
-**窗口开启后，协议文件的任何编辑性改动（typo/行号）也须在新窗口生效**——本窗口锚冻结于
-开窗 commit（合规组 G2 灰色清偿）。"修完跑、跑完修"合法，非法的只是对本窗口既改协议又引用结论。
+**[计划📋]（锚定前逐项实现或持续人工，禁止陈述语气冒充现货）**：
+- gate() 终局后自动 append e 台账（e 值计算+9 字段 schema+幂等去重，~100 行）——实现前 e 值人工计算，verdict_source=manual+裁判署名。
+- settle CLI 子命令（~50 行）——实现前按 §4 人工程序。
+- 升版 pre-flight 扫描（有 lock.json 且无 settled.json 的根存在→禁升版）——实现前人工检查（须区分确认性/exploratory 根：lock.pushed 字段）。
+- 台账 digest 落 git 跟踪路径。
+- window_id 机器生成/族键落盘（gate-report+settled 加 family 字段）。
 
-## 7. 防作弊自检（每场收场清单追加）
+**升版 pre-flight 人工清单（计划期间执行）**：①扫 `.local/*-run` 的 lock.json/settled.json；②确认性根（pushed=true）全部终态；③裁判对 exploratory 根留分类注记。
 
-- [ ] lock-anchor.json 在场且 protocol_hash 通过祖先校验？
-- [ ] gate-report 的 attempts_source=turn_journal？attempts_drift 空？lock_hash==锚工件 protocol_hash？
-- [ ] journal_order_ok=true？journal_earliest > lock.at？
-- [ ] 排除引用是否限于第 4 节三类且四要件齐（含 exclusion-record.json 裁判署名+audit 复核）？
-- [ ] e 值台账 `.local/confirmatory-e-ledger.jsonl` 追加一条且可用 §3 公式独立复算？
+## 6. 排除规则（三类不变，补墓碑）
+
+- 三类排除+四要件不变（外部网络≥10min **cli-failures.jsonl/probe-log 时间戳序列实证**/底座崩溃 host_failure+controller-start 快照/操作纪律失误）。
+- **排除改判墓碑机制（甲 V2a 新增）**：机器 append（计划）与裁判事后改判冲突的解法——改判不删条目，追加 **voided 条目**（乘子 ×1、status=voided、原条目指纹+裁判署名）；人工台账时代改判同此。
+- §4 证据通道补 CLI 阶段：**已现货**（cli-failures.jsonl 覆盖 cli() 全部调用点含 stage_route；timeout/JSON 解析两路在计划栏——当前这两路崩溃走 crash-settle 留痕）。
+
+## 7. 防作弊自检（每场收场）
+
+- [ ] settled.json 在场且 status 与结局相符（completed/crashed→重开时裁判留痕/settled）？
+- [ ] gate-report：attempts_source=turn_journal？attempts_drift 如实？锁四字段？journal_order_ok=true？
+- [ ] e 台账：人工计算则 verdict_source=manual+裁判署名+prev_entry_sha256 链式连续（哈希约定 §1）？
+- [ ] 排除援引三类+证据在（cli-failures 时间戳序列）？改判走墓碑？
+- [ ] 场纳入：同 lock 有模型调用的根全部入账或裁判分类？
+- [ ] （每 N 场）台账链式指纹人工复算（约定 §1）？
 
 ---
-*v2 锁定于锚工件（lock-anchor.json，推送时人工落盘，含 GitHub push 事件第三方时间锚）。
-签署=协调会话；监督=审计组。*
+*v3.1 锁定于锚工件（推送时人工落盘到运行根）。签署=用户；监督=审计组。法源：终审 G2/G3+门三+shakeout 件 4+审计甲乙两席 v3 对抗审核（2026-10-03）。v2 窗口"中止（1 场，r14 ¬clean，e=0.597 定格）"关闭，族链继承。*

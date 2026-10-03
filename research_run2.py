@@ -510,12 +510,24 @@ def cli(root, *args, cwd=None):
         capture_output=True, text=True, check=False, cwd=cwd, env=env,
         timeout=1500)  # 内核--timeout-seconds 1200是传参不是子进程超时(乙席#16);1500=1200+余量
     if result.returncode:
+        # v3.1(审计甲V5/乙C2e): CLI失败记录升级——append式jsonl(时间戳+returncode,
+        # 覆盖并发/排除≥10min判据),旧last-cli-failure.log保留(兼容旧工具)
+        try:
+            with (root / "cli-failures.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "args": list(args), "returncode": result.returncode,
+                    "stdout_tail": (result.stdout or "")[-200:],
+                    "stderr_tail": (result.stderr or "")[-200:]},
+                    ensure_ascii=False) + "\n")
+        except OSError:
+            pass  # 记录失败不掩盖原错误
         # 并发失败互覆只剩最后一份(乙席#11):让每份日志自述命令+有效环境(脱敏)
         (root / "last-cli-failure.log").write_text(
             f"args: {args}\n--- effective env (redacted) ---\n"
             f"{_redacted_env_snapshot(env)}\n--- stdout ---\n{result.stdout}\n"
             f"--- stderr ---\n{result.stderr}", encoding="utf-8")
-        raise SystemExit("CLI failed; inspect last-cli-failure.log")
+        raise SystemExit("CLI failed; inspect cli-failures.jsonl / last-cli-failure.log")
     return json.loads(result.stdout)
 
 
@@ -1390,11 +1402,20 @@ def _pipeline_lock(root):
 
 
 def auto(root):
-    # 终审G3④: 已结算场禁重开(fail-closed)——settled.json在场即拒,新场须新根新锚
+    # 终审G3④+审计甲V7a(v3.1): 禁重开仅限终态{settled,completed}——
+    # crashed+pending-referee凭裁判可同根重开(r14式复活的合法路径);
+    # 原版"在场即拒"把首次崩溃变永久封根,与§3.1同根重发条款自相矛盾
     _settled = root / "settled.json"
     if _settled.exists():
-        raise SystemExit(f"该场已结算({json.loads(_settled.read_text(encoding='utf-8')).get('note', '')})"
-                         f")——证据封存禁重开;确认性新场须新运行根(见settled.json)")
+        _st = json.loads(_settled.read_text(encoding="utf-8"))
+        _status = _st.get("status", "")
+        if _status in ("settled", "completed"):
+            raise SystemExit(f"该场已终态结算({_status}: {_st.get('note', '')})"
+                             f")——证据封存禁重开;确认性新场须新运行根")
+        if _status == "crashed":
+            print(f">>> 上次崩溃(classification={_st.get('classification', '?')})"
+                  f")——crashed非终态,同根重开合法(裁判复核留痕)", flush=True)
+            _settled.unlink()  # 重开即清除crashed标记(重开动作本身留journal痕迹)
     # 并发防撞闸v2(r9事故机械牙; r10三连假阳性后从进程扫描改为锁文件——
     # 进程扫描在Windows分不清自己的祖先链,锁文件只在跨管线时才互斥)
     lock_path, live_pid = _pipeline_lock(root)
@@ -1584,6 +1605,11 @@ def auto(root):
         print(f">>> token采集跳过({type(e).__name__})——不影响交付", flush=True)
 
     write(root / "stage-timing.json", timing)
+    # v3.1(审计乙C2b/shakeout件4缺口): 正常完成也落settled——终态封根
+    write(root / "settled.json", {
+        "status": "completed", "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "duration_s": round(time.time() - t_all, 1),
+        "note": "v3.1正常场结算:全链完成,终态禁重开"})
     print(json.dumps({"一路绿灯": True, "总耗时秒": round(time.time() - t_all, 1),
                       "N": plan["N"], "timing": timing}, ensure_ascii=False))
 
