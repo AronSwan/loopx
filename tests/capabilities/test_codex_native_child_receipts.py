@@ -240,3 +240,39 @@ def test_restart_replay_uses_the_original_invocation_binding(tmp_path):
     _observe(tmp_path, [followup])
     _observe(tmp_path, [followup])
     assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL))) == 2
+
+
+@pytest.mark.parametrize('with_spawn', [False, True])
+@pytest.mark.parametrize('terminal_status,expected', [('completed', 'completed'), ('errored', 'failed')])
+def test_real_cli_resumed_followup_owns_its_result(tmp_path, monkeypatch, with_spawn, terminal_status, expected):
+    _admit(tmp_path)
+    spawn, wait = _turn()['items']
+    followup = {**spawn, 'id': 'item_0', 'tool': 'sendInput', 'agentsStates': {}}
+    terminal = {**wait, 'agentsStates': {'child-1': {'status': terminal_status}}}
+    batches = ([[spawn, wait]] if with_spawn else []) + [[followup], [terminal, terminal], [terminal]]
+    activity = _real_cli_calls(tmp_path, monkeypatch, batches)
+    followups = [row for row in activity['operations'] if row['operation'] == 'followup']
+    assert len(followups) == 1 and followups[0]['result'] == expected
+    assert activity['operation_count'] == 1 + int(with_spawn)
+    assert activity['launched_count'] == int(with_spawn)
+    assert activity['quota_spend_slots'] == 0
+    if with_spawn:
+        original = next(row for row in activity['operations'] if row['operation'] == 'spawn')
+        assert original['result'] == 'completed'
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(event['event_kind'] == 'native_child_result' for event in events) == 1 + int(with_spawn)
+    assert 'child-1' not in json.dumps(events) and 'private child' not in json.dumps(events)
+
+
+def test_real_cli_consecutive_followups_restore_the_latest_owned_operation(tmp_path, monkeypatch):
+    _admit(tmp_path)
+    spawn, wait = _turn()['items']
+    followup = {**spawn, 'id': 'item_0', 'tool': 'sendInput', 'agentsStates': {}}
+    failed = {**wait, 'agentsStates': {'child-1': {'status': 'errored'}}}
+    activity = _real_cli_calls(tmp_path, monkeypatch,
+        [[spawn, wait], [followup], [wait], [followup], [failed, failed], [failed]])
+    followups = [row for row in activity['operations'] if row['operation'] == 'followup']
+    assert len(followups) == 2
+    assert {row['result'] for row in followups} == {'completed', 'failed'}
+    assert activity['operation_count'] == 3 and activity['launched_count'] == 1
+    assert activity['quota_spend_slots'] == 0
