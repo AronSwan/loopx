@@ -166,6 +166,15 @@ instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
 
+A Todo-bound path replan can be qualified during execution even when the
+initial guard selected no replan obligation. Its exact durable writeback must
+carry a recorded `autonomous_replan_ack_v0` with an accepted semantic delta or
+a qualified repair delta. After the matching spend receipt commits, both
+same-Turn replay and later-Turn recovery recognize the Turn as settled. Missing
+receipts or unqualified acknowledgements cannot close the binding. This does
+not complete the Todo, waive its completion validator, or release a dependency
+wait; a new Turn selects work from the current eligible frontier.
+
 When a quota spend remains owed after verified writeback,
 `settlement_owed.command` carries the original Goal, Agent, Todo or replan
 obligation, Turn, registry/runtime route and spend source. Execute it unchanged.
@@ -408,8 +417,14 @@ wait state: quota uses the typed `future_monitor_wait` rule, returns
 synthetic replan. A due monitor remains executable through
 `due_monitor_execution`. Missing or invalid schedules, no-change streaks,
 vision/succession gaps, user gates, and real blockers still enter their
-higher-priority repair or replan rules. Projected ACKs from a different agent
-lane remain diagnostic only and cannot clear a current-lane obligation.
+higher-priority repair or replan rules. If an autonomous replan is selected
+while only a future-due monitor and an unrelated scoped user gate remain,
+`effective_action=autonomous_replan_required` keeps the agent's execution
+obligation active even when the user-gate notification is also shown. The
+quiet monitor lane cannot turn that replan into a no-op; the scheduler keeps
+`run_now` until the replan produces a typed outcome. Projected ACKs from a
+different agent lane remain diagnostic only and cannot clear a current-lane
+obligation.
 
 Executable todos can also declare explicit write-scope requirements through
 todo metadata, for example `required_write_scopes=runner%2F%2A%2A` or the CLI

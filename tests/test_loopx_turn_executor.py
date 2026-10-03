@@ -2011,27 +2011,28 @@ def test_source_provider_cannot_change_admitted_effect_ref(
         planned_goal_ref=plan["goal_ref"],
     )
 
-    with pytest.raises(RuntimeError, match="provider effect ref changed"):
-        run_loopx_turn_once(
-            plan,
-            host_runner=lambda _request: _host_result(plan),
-            project=tmp_path,
-            runtime_root=runtime_root,
-            goal_id="fixture-goal",
-            timeout_seconds=5,
-            execute=True,
-            task_validator=_passing_validator,
-            writeback=lambda _result, _effect_ref: {
-                "ok": True,
-                "appended": True,
-                "effect_ref": "different-effect",
-            },
-            spend=lambda: pytest.fail("quota must not run after identity drift"),
-            scheduler=lambda _spend: pytest.fail(
-                "scheduler must not run after identity drift"
-            ),
-            goal_admission=admission,
-        )
+    failed = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=runtime_root,
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=lambda _result, _effect_ref: {
+            "ok": True,
+            "appended": True,
+            "effect_ref": "different-effect",
+        },
+        spend=lambda: pytest.fail("quota must not run after identity drift"),
+        scheduler=lambda _spend: pytest.fail(
+            "scheduler must not run after identity drift"
+        ),
+        goal_admission=admission,
+    )
+    assert failed["status"] == "failed"
+    assert failed["settlement_result"]["failure"]["kind"] == "identity_mismatch"
 
     blocked = recreate_goal_instance(
         RecreateGoalRequest(

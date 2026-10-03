@@ -30,6 +30,8 @@ import {
 } from "./personal-workspace-browser/fixture.mjs";
 import { navigationSortingScenario } from "./personal-workspace-browser/navigation-sorting.mjs";
 import { capabilityScopeScenario } from "./personal-workspace-browser/capability-scope.mjs";
+import { performanceDiagnosisScenario } from "./personal-workspace-browser/performance-diagnosis.mjs";
+import { blockedNoticeSettingsScenario } from "./personal-workspace-browser/blocked-notice-settings.mjs";
 import { automationCadenceScenario } from "./personal-workspace-browser/automation-cadence.mjs";
 import { turnStepsScenario } from "./personal-workspace-browser/turn-steps.mjs";
 import { monitorReadbackScenario } from "./personal-workspace-browser/monitor-readback.mjs";
@@ -40,6 +42,7 @@ import { progressiveLoadingScenario } from "./personal-workspace-browser/progres
 import { stewardJourneyScenario } from "./personal-workspace-browser/steward-journey.mjs";
 import { teamPlanScenario } from "./personal-workspace-browser/team-plan.mjs";
 import { typedActionsScenario } from "./personal-workspace-browser/typed-actions.mjs";
+import { goalDeletionScenario } from "./personal-workspace-browser/goal-deletion.mjs";
 import { confirmedOperationsScenario } from "./personal-workspace-browser/confirmed-operations.mjs";
 import { stewardModelSettingsScenario } from "./personal-workspace-browser/steward-model-settings.mjs";
 import { workspaceLocaleScenario } from "./personal-workspace-browser/workspace-locale.mjs";
@@ -61,11 +64,14 @@ import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
 scenarioCatalog.push(confirmedOperationsScenario);
+scenarioCatalog.push(goalDeletionScenario);
 scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
+scenarioCatalog.push(performanceDiagnosisScenario);
+scenarioCatalog.push(blockedNoticeSettingsScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

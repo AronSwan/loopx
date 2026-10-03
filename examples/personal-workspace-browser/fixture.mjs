@@ -301,7 +301,7 @@ server.serve_forever()
       server.stderr.on("data", (chunk) => { diagnostic = (diagnostic + chunk).slice(-8000); });
       server.stdout.on("data", (chunk) => {
         output += chunk;
-        if (output.includes("loopx-packaged-smoke-ready\n")) {
+        if (/loopx-packaged-smoke-ready\r?\n/u.test(output)) {
           clearTimeout(timer);
           resolveReady();
         }
@@ -391,7 +391,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
+export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -424,6 +424,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   const actionKinds = new Map(Array.from(actionProposals.values(), (proposal) => [proposal.proposal_id, proposal.action_kind]));
   const state = {
     nextLifecycleProposalPatch: null,
+    deletedGoalIds: new Set(),
     nextLifecycleApplyOutcome: null,
     loseNextTeamPlanResponse: false,
     actionApplies: [],
@@ -506,6 +507,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     }
     if (progressiveWorkspace && requestedGoalId) state.goalStatusRequests.push(requestedGoalId);
     const fixture = structuredClone(require(resolve(repoRoot, "examples/status.example.json")));
+    if (notificationProjection) fixture.goal_channel_notification_projection = structuredClone(notificationProjection);
     const defaultSubagentConfiguration = { mode: "default", spawn_allowed: false, max_children: 0, allowed_domains: [] };
     const projectedSubagentConfiguration = (goalId, fallback) => state.freezeGoalSubagentStatusProjection
       ? fallback ?? defaultSubagentConfiguration
@@ -517,6 +519,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       periodic_report_detail_url: "/periodic-report-workspace-projection",
     };
     for (const directoryGoal of directoryGoalFixtures) {
+      if (state.deletedGoalIds.has(directoryGoal.id)) continue;
       const activation_state = statusGeneration.get(directoryGoal.id) ?? "active";
       const existingGoal = fixture.run_history.goals.find((goal) => goal.id === directoryGoal.id);
       if (existingGoal) {
@@ -725,6 +728,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const goal = fixture.run_history.goals.find((item) => item.id === goalId);
       if (goal) goal.host_thread_activity = activity;
     }
+    fixture.run_history.goals = fixture.run_history.goals.filter(goal => !state.deletedGoalIds.has(goal.id));
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";
     const activeGoalCount = fixture.run_history.goals.filter((goal) => goal.activation_state !== "stopped").length;
@@ -897,7 +901,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const offset = Number(url.searchParams.get("cursor") || 0);
       const items = Array.from({ length: Math.min(40, total - offset) }, (_, position) => {
         const index = offset + position;
-        return { todo_id: `todo_history_${index}`, text: index < 3 ? `Completed ${String.fromCharCode(65 + index)}` : `Completed historical Task ${index + 1}`, claimed_by: "example-agent", evidence: null, priority: null, task_class: "advancement_task" };
+        return { todo_id: `todo_history_${index}`, text: index < 3 ? `Completed ${String.fromCharCode(65 + index)}` : `Completed historical Task ${index + 1}`, claimed_by: "example-agent", evidence: index === 0 ? "Verified retained **completion evidence**." : null, priority: null, task_class: "advancement_task", done: true, status: "done",
+          completed_at: "2026-08-01T00:00:00Z", resume_when: index === 0 ? "todo_done:todo_history_1" : null, resume_ready: index === 0 ? true : null,
+          resume_condition: index === 0 ? { resume_receipt: { receipt_id: "receipt-completed-history" } } : null,
+          completion_validation_sha256: index === 0 ? "a".repeat(64) : null,
+          completion_validation_revision: index === 0 ? 3 : null,
+          completion_validation_revision_history: index === 0 ? [{ revision: 3, previous_declaration_sha256: "b".repeat(64), declaration_sha256: "a".repeat(64), actor_agent_id: "example-reviewer", revised_at: "2026-08-01T00:00:00Z" }] : [],
+        };
       });
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
@@ -1806,6 +1816,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         validation_evidence: ["fixture validation"], available_transitions: ["apply", "cancel"],
         status: "preview_ready", receipt: null, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z",
       };
+      if (body.action_kind === "goal.lifecycle") {
+        // Match the production service boundary: omitting this basis hid the
+        // decoder regression before the owner could reach confirmation.
+        proposal.canonical_update_basis = body.normalized_parameters.operation === "delete"
+          ? { schema_version: "loopx_goal_deletion_source_basis_v1", source_identity: "a".repeat(64), source_content_sha256: "b".repeat(64), route_mode: "source_to_global" }
+          : { schema_version: "loopx_goal_lifecycle_source_basis_v1", source_identity: "a".repeat(64) };
+      }
       if (body.action_kind === "goal.lifecycle" && state.nextLifecycleProposalPatch) {
         Object.assign(proposal, state.nextLifecycleProposalPatch);
         state.nextLifecycleProposalPatch = null;
@@ -1881,10 +1898,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         messages.set(sessionId, sessionMessages);
       }
       if (actionKind === "goal.lifecycle" && preview) {
-        state.goalActivationStates.set(
-          preview.normalized_parameters.goal_id,
-          preview.normalized_parameters.operation === "stop" ? "stopped" : "active",
-        );
+        const goalId = preview.normalized_parameters.goal_id;
+        if (preview.normalized_parameters.operation === "delete") {
+          state.deletedGoalIds.add(goalId);
+          state.goalActivationStates.delete(goalId);
+        } else {
+          state.goalActivationStates.set(goalId, preview.normalized_parameters.operation === "stop" ? "stopped" : "active");
+        }
       }
       const resourceKey = `${actionKind}:${apply[1]}`;
       const replay = state.durableResources.has(resourceKey);
@@ -1907,6 +1927,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? actionProposals.get(apply[1])?.normalized_parameters ?? {}, context: preview?.context ?? actionProposals.get(apply[1])?.context ?? {}, expected_state_fingerprint: "fixture-r1",
         permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
         status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        ...(actionProposals.get(apply[1])?.canonical_update_basis
+          ? { canonical_update_basis: actionProposals.get(apply[1]).canonical_update_basis } : {}),
       };
       actionProposals.set(apply[1], proposal);
       if (actionKind === "team.plan" && state.loseNextTeamPlanResponse) {

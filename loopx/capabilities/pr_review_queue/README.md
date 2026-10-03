@@ -94,6 +94,27 @@ not establish recovery. These are reviewer-executed counterfactuals, not semanti
 facts inferred by the checker.
 
 Save the exact final Markdown in the result's `review_body` before `--check-result`.
+Policy revision 16 also makes reviewer attribution observable. For actionable
+live packets invoked inside a bound Codex session, `reviewer_execution` reads
+only that exact thread in its selected `CODEX_HOME`, using read-only SQLite
+discovery and bounded host-record metadata. It never searches sibling homes or
+uses mutable model preferences as execution evidence. The result template
+preserves the recorded model, public provider, effort and opaque observation id.
+The published `Reviewer:` line names the model/provider plus `runtime_reported`
+and the effort; missing effort is `effort_unavailable`. No session id, transcript,
+path, endpoint or account enters this public attribution.
+
+`loopx pr-review --check-result RESULT --packet PACKET` rereads the invoking
+session: stale model/effort declarations, an altered snapshot or a different
+recorded Turn cannot qualify for publication. An unavailable host record remains
+an explicit gap; use an honest family declaration marked `self_reported`, not a
+configured preference or an invented exact build. This is a reviewer publication
+error, not a PR-author finding. Inventory-only and fixture scans do not read host
+metadata. Offline saved-packet checking proves consistency only. The bounded
+reader may retain recorded identity with `active_turn_verified=false` when the
+opening event is outside its window; neither metadata nor this marker proves
+backend weights, review independence, host delivery, liveness or merge authority.
+
 The same body validator is used for published review readback and merge readiness.
 For behavior-bearing changes, the five sections require respectively 40, 80,
 180, 120 and 60 explanatory letters/numbers; reviews without executable or
@@ -442,6 +463,30 @@ them. Queue selection, scheduler and runtime permissions are unchanged. The
 five public sections retain the bounded prose floors documented above; reuse
 evidence and do not pad. Invoking review uses the installed capability policy.
 
+### Reviewer provenance and specification basis
+
+Policy revision 14 makes two publication requirements mandatory for every new
+result; neither changes queue selection, merge authority or how already
+published GitHub reviews are recognized (`check_review_body` is unchanged).
+
+- `result.reviewer` (`reviewer_declaration`) names `actor_kind`
+  (`model_agent` or `human_operator`) and `declaration_source`
+  (`runtime_reported` or `self_reported`); an agent adds `declared_model` and
+  `declared_provider` in product-family wording. The body repeats them on
+  exactly one visible `Reviewer:` line, each value as a whole token. This is
+  provenance, not a credential: it authenticates nothing and adds no weight.
+- `problem_context.spec_basis` (`spec_basis_assessment`) is `mapped`,
+  `no_spec` or `not_yet_proven`. `mapped` gives text `spec_ref`,
+  `spec_revision` (a full commit id for `accepted_rfc` and
+  `accepted_contract_doc`) and one criterion row per material acceptance
+  criterion; `not_met` and `not_yet_proven` block approval. The reference,
+  revision and every `criterion_id` must appear as whole tokens in the
+  visible body, because another operator reads only the published review.
+
+`--check-result` reports a missing or inconsistent declaration or unpublished
+reference as an error, and a spec-basis gap as an approval blocker. Regenerate
+results made under revision 13 rather than adding these fields to them.
+
 ### Semantic alignment and CI constraint recovery
 
 The semantic triage introduced in policy revision 5 replaces universal detailed
@@ -561,6 +606,26 @@ negative path, and validation, plus one concise English machine verdict
 Chinese review carries the depth and evidence; the English verdict carries the
 machine-readable state and validation summary. A findings-only or blocker-only
 body is not a complete PR review.
+
+The opening `动机` must stand alone for a reader unfamiliar with the repository:
+who encounters the problem, one triggering task and concrete before/after
+example, the old failure's practical cost, the proposed improvement, and this
+PR's scope. Define necessary terms when they first appear. Keep symbols,
+specification criteria, test counts and the detailed verdict in the later
+sections; they support the explanation rather than replace it.
+
+Reuse `problem_context.affected_caller_or_operator`, `before_after_scenario`,
+`observable_outcome` and `non_goals` as concise public-safe sentences and publish
+their wording in `动机`. For `justified_increment`, also publish `remaining_gap`.
+For example: a maintainer retries an interrupted export; previously a lost
+response caused duplicate rows and manual cleanup; the proposed change returns
+the saved result; automatic scheduling remains outside the command repair.
+Separate intended behavior from reviewer-verified behavior and remaining
+defects. `--check-result` rejects explanations confined to structured evidence,
+HTML comments, code fences or later sections, while allowing ordinary Markdown
+emphasis and line wrapping. Read the remote body back into the same result and
+rerun the check. Matching proves visibility and consistency; the reviewer still
+judges whether the scenario is supported and the explanation understandable.
 
 Each complete PR review must also include whole-PR interpretation depth:
 per-file responsibility mapping, 2-5 key symbol explanations with exact-head
