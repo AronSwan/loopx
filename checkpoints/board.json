@@ -1,7 +1,11 @@
 {
  "board": "EVENTS.jsonl@ZCodeProject",
- "algo_version": 2,
- "taken_at": "2026-10-03T15:40:07.265+08:00",
+ "algo_version": 3,
+ "ruleset": {
+  "path": "C:/Users/Administrator/LoopX考场/监考包/出题与阅卷守则v2.2-草案.md",
+  "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
+ },
+ "taken_at": "2026-10-03T15:55:49.288+08:00",
  "lines": 115,
  "file_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
  "prefix_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
