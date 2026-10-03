@@ -2,18 +2,18 @@
  "board": "EVENTS.jsonl@ZCodeProject",
  "algo_version": 3,
  "ruleset": {
-  "path": "C:/Users/Administrator/LoopX考场/监考包/出题与阅卷守则v2.2-草案.md",
+  "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.2-草案.md",
   "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
  },
- "taken_at": "2026-10-03T17:08:56.168+08:00",
- "lines": 121,
- "file_sha256": "b053d90c2338f696be0638d4370f97d5697b0654802aee80105ecb95b58da0b6",
- "prefix_sha256": "b053d90c2338f696be0638d4370f97d5697b0654802aee80105ecb95b58da0b6",
+ "taken_at": "2026-10-03T18:05:38.876+08:00",
+ "lines": 123,
+ "file_sha256": "e873f9e71d127da1142082de14e37d2ab7e15efb39475e3082fd0de7475e2b8f",
+ "prefix_sha256": "e873f9e71d127da1142082de14e37d2ab7e15efb39475e3082fd0de7475e2b8f",
  "head_event": {
-  "actor": "[v2.3复核签通过→呈批]",
-  "ts": "2026-10-03T17:08:52.979+08:00",
-  "prev_chain": "648a64e9ea0b5232d864ceb5f077e70a56ab5543937a15bda9ddbdba026910cb",
-  "head_sha256": "17fee44177bd2e882700b909ef780d084817f9e75798e75b66928af9910cada2"
+  "actor": "[审计组三席:属实/需小修/带轻伤→清偿完毕+三稿]",
+  "ts": "2026-10-03T18:05:37.466+08:00",
+  "prev_chain": "dc78bf595d86e0ccd4918d55c33070b68e9bddf2135480b230b7df1738cf6a73",
+  "head_sha256": "9f90be4ae34b03970f9f8d2e8b6e6223c73b9a798b97fd7f54df69c09d8decf6"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
