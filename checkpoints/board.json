@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/LoopX考场/监考包/出题与阅卷守则v2.2-草案.md",
   "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
  },
- "taken_at": "2026-10-03T16:31:25.047+08:00",
- "lines": 117,
- "file_sha256": "cac666dc5170fd0937321eec0478a10bb58da3b3a88be13ca7dbd4addca80e5a",
- "prefix_sha256": "cac666dc5170fd0937321eec0478a10bb58da3b3a88be13ca7dbd4addca80e5a",
+ "taken_at": "2026-10-03T17:08:56.168+08:00",
+ "lines": 121,
+ "file_sha256": "b053d90c2338f696be0638d4370f97d5697b0654802aee80105ecb95b58da0b6",
+ "prefix_sha256": "b053d90c2338f696be0638d4370f97d5697b0654802aee80105ecb95b58da0b6",
  "head_event": {
-  "actor": "[用户追认令落地:v2.2.1生效链闭合]",
-  "ts": "2026-10-03T16:14:43.574+08:00",
-  "prev_chain": "d7cf2d232e9bdb7d68c874102fd494c24131404c422077bde65bf829fdddeb2b",
-  "head_sha256": "ca379805d33adbcdf4242a4993f8f1dcf3006bb639b26206abb1c75bd2520f83"
+  "actor": "[v2.3复核签通过→呈批]",
+  "ts": "2026-10-03T17:08:52.979+08:00",
+  "prev_chain": "648a64e9ea0b5232d864ceb5f077e70a56ab5543937a15bda9ddbdba026910cb",
+  "head_sha256": "17fee44177bd2e882700b909ef780d084817f9e75798e75b66928af9910cada2"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
