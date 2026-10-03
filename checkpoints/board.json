@@ -3,17 +3,17 @@
  "algo_version": 3,
  "ruleset": {
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.4.md",
-  "sha256_lf": "4f27eb9d40e94cb8ee68587dfbcb82bff173601b96b4bd567f9626b1654a9505"
+  "sha256_lf": "e1a0e34b63763b4792f6cbbcfdf4c9001776f61e2ea714c7cf06738779ea05df"
  },
- "taken_at": "2026-10-04T02:21:23.355+08:00",
- "lines": 199,
- "file_sha256": "0c11c009c6950dafadfb6049b6e2792d337e315eb7b4cbfc90038a750fd558ef",
- "prefix_sha256": "0c11c009c6950dafadfb6049b6e2792d337e315eb7b4cbfc90038a750fd558ef",
+ "taken_at": "2026-10-04T03:11:12.923+08:00",
+ "lines": 217,
+ "file_sha256": "c9b8f02da78ce72ad9eb0f6ed470ec02d80ce057cacc19f15f20ede98bef4e55",
+ "prefix_sha256": "c9b8f02da78ce72ad9eb0f6ed470ec02d80ce057cacc19f15f20ede98bef4e55",
  "head_event": {
-  "actor": "[P2两级抗辩审收官:八项无一原样批/无一驳]",
-  "ts": "2026-10-04T02:15:20.983+08:00",
-  "prev_chain": "d89e889e0faa158ad873531e02fc44672fda60dd84537993bdd61221cd010331",
-  "head_sha256": "ac1e11ac283c0a0bbe0ed0cf83500b77f60234e52effbe57981eed313a243343"
+  "actor": "[防橡皮图章五条审计收官:三照批+两改后批+一元修正]",
+  "ts": "2026-10-04T03:05:21.384+08:00",
+  "prev_chain": "fc9c8f8ea47855a781c436674c479b73a7bd70d2c23232dc6c923e119a8ad3d8",
+  "head_sha256": "4c3bb76050ca9e6fa59298109215216716271cbf126c61130c58eb07256b05a7"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
