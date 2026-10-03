@@ -426,14 +426,16 @@ operation cannot overwrite it. A worker on this machine receives `SIGTERM` for
 its whole process group, which ends its Turn child; the native host runs in
 its own process group, and its supervisor terminates that group once the Turn
 child is gone. The worker acknowledges from under its own lock, marks the
-record `stopped`. Lease release waits for resource readback to prove that
-the worker, Turn lane and every owned Host group have drained. In hard-lease
-mode, the leased CLI supervisor and the actual nested Host have separate
-records and process groups; neither one proves the other has exited. The
-private CLI forwards a separate record address to the Turn transport, which
-consumes it before launching user Host code. Old hard-lease records that only
-cover the outer CLI cannot prove drain and remain `acknowledged`; reconcile
-that original execution rather than deleting its evidence or reusing its key.
+record `stopped`. The hard lease is resolved only once readback proves that
+the worker, Turn lane and everything the Turn launched have exited. The Host
+transport reads that from the one record the operation names: in hard-lease
+mode the leased CLI's supervisor records its own group beside it and the
+actual nested Host writes it, and neither exit proves the other. Each record
+says which group it supervises; the private CLI forwards the record address to
+the Turn transport, which consumes it before launching user Host code. A record
+that does not say what it supervises, such as an older outer-only hard-lease
+record, cannot prove drain and leaves the stop `acknowledged`; reconcile that
+original execution rather than deleting its evidence or reusing its key.
 When nobody holds the operation, the requester
 acknowledges itself. A worker on another machine is never signalled; it finds
 the request at its next checkpoint or at its next record write, which is
@@ -441,14 +443,19 @@ refused. The receipt `phase` is `settled` only when an acknowledgement exists,
 the operation lock is free, the member's Turn lane holder record shows it
 released by the stopped worker (the lane is read, never taken), the native
 host the Turn launched has exited together with every process in its group,
-and a required hard task lease was actually released. The obligation is read
-from the operation record, not from the stop sidecar: the acknowledgement is
-persisted before the lease is released, so a crash in between must not turn
-"not yet written" into "nothing was owed". A release that failed is
+and the hard task lease that execution may hold is resolved: released, or
+proven not owed. Canonical authority decides, for the operation's own
+execution identity (owner, execution key, any recorded epoch and the current
+version). The operation's `task_lease` annotation is only a hint: a missing,
+empty, stale `required: false` or malformed annotation never proves that
+nothing was owed, and a lease another execution holds is never released. The
+receipt's `lease.state` is `released`, `not_owed`, `release_unproven` or
+`obligation_unproven`. A release that failed is
 retried under the stop's own lock on the next explicit `stop`, so it never becomes a
 `settled` receipt that leaves the member's Todo blocked until the lease TTL;
 while it is unproven the stop stays `acknowledged` with
-`required_lease_release_unproven`. If that host cannot be attributed, or its
+`required_lease_release_unproven`, and an authority that cannot be read keeps
+it open with `lease_obligation_unproven`. If that host cannot be attributed, or its
 supervisor never finished cleaning up, the stop stays `acknowledged` and a
 later `stop` rereads it. On a platform without process groups the launched
 host cannot be proven drained at all, so `stop --execute` fails with an
@@ -457,7 +464,9 @@ acknowledging, signalling a worker, or releasing a lease. Repeating a refused
 request preserves the operation and any existing stop receipt unchanged. An
 active or unattributable worker is also refused before its Host record appears;
 a not-yet-started operation with no holder can still be cancelled. `unknown`
-means the holder vanished before acknowledging, and `noop` means the
+means the holder vanished before acknowledging; its lease is resolved the same
+way once its Host is proven gone, and is left to its TTL rather than handed on
+when that Host cannot be attributed. `noop` means the
 work was already accepted, rejected or stopped. `requested` or `acknowledged`
 means it is still winding down: call `stop` again. A grace timeout never turns
 into a receipt. Stopped work is not resumed; `resume` refuses it and a new
@@ -477,25 +486,32 @@ before completion starts; a lock-acquisition timeout requires retrying `stop`.
 因此仍持有该 operation 的 worker 无法覆盖它。本机 worker 会收到整个进程组的
 `SIGTERM`，其 Turn 子进程随之结束；原生 host 在自己的进程组中运行，Turn 子进程
 退出后由其 supervisor 终止整个 host 进程组。worker 在自己的锁下确认，把记录标为
-`stopped`。只有读回证明 worker、Turn lane 及所有归属的 Host 进程组都已退出，
-才会释放硬任务租约。硬租约模式的外层 CLI 与内层真实 Host 分别记录、分别检查，
-外层退出不能证明内层退出。私有 CLI 只把独立记录地址交给 Turn transport，
-由它在启动用户 Host 前消费，用户 Host 不继承该标记。旧硬租约记录若只覆盖外层
-CLI，则无法证明排空，保持 `acknowledged`；应核对原执行，不能删除证据或复用其 key。
+`stopped`。只有读回证明 worker、Turn lane 及该 Turn 启动的全部进程都已退出，
+才会处理硬任务租约。Host transport 从 operation 指定的唯一记录读回这一事实：
+硬租约模式下，外层 CLI 的 supervisor 把自己的进程组记录在旁边，内层真实 Host
+写入该记录，外层退出不能证明内层退出，反之亦然。每份记录都写明自己监管哪个进程组；
+私有 CLI 只把记录地址交给 Turn transport，由它在启动用户 Host 前消费，用户 Host
+不继承该标记。未写明监管对象的记录（例如只覆盖外层 CLI 的旧硬租约记录）无法证明
+排空，停止保持 `acknowledged`；应核对原执行，不能删除证据或复用其 key。
 没有持有者时由请求方自行确认。另一台机器上的
 worker 不会被发信号，它在下一个检查点或下一次写记录时发现请求，写入被拒绝。
 只有存在确认、operation 锁已释放、成员 Turn lane 的持有者记录显示已被停止的
 worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
-都已退出，且必需的硬任务租约确实释放成功时，`phase` 才是 `settled`。该义务取自
-操作记录而非 stop sidecar：确认会先于释放落盘，因此两者之间发生崩溃时，不能把
-「尚未写入」当成「本就不需要释放」。释放失败会在下一次显式调用 `stop` 时于其锁下重试，
+都已退出，且该执行可能持有的硬任务租约已经处理（已释放，或被证明无需释放）时，
+`phase` 才是 `settled`。是否需要释放由 canonical 权威按该 operation 自己的执行身份
+（owner、执行 key、已记录的 epoch 与当前版本）判定；operation 的 `task_lease`
+注解只是线索，缺失、为空、过期的 `required: false` 或畸形注解都不能证明无需释放，
+其他执行持有的租约也绝不会被释放。回执的 `lease.state` 为 `released`、`not_owed`、
+`release_unproven` 或 `obligation_unproven`。释放失败会在下一次显式调用 `stop` 时于其锁下重试，
 因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
-`required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
+`required_lease_release_unproven`；权威无法读取时同样保持打开，原因为
+`lease_obligation_unproven`。host 无法归属或其 supervisor 未完成清理时，
 停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
 启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的
 可操作错误在写入停止意图、确认、发送信号或释放租约之前失败，重复拒绝不修改原记录。
 Host 记录尚未出现但 worker 仍活跃或无法归属时也拒绝；没有持有者且尚未启动的
-operation 仍可安全取消。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
+operation 仍可安全取消。`unknown` 表示持有者在确认前消失；其 Host 被证明已退出后，
+租约按同样方式处理，Host 无法归属时则留待 TTL，不会在 Host 可能仍运行时交出；`noop` 表示工作已 accepted、
 rejected 或 stopped；`requested`/`acknowledged` 表示仍在收尾，再次调用 `stop`。
 宽限期超时永远不会变成回执。已停止的工作不能 `resume`，新范围需要新的
 operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会被改写成完成；
@@ -936,7 +952,8 @@ unchanged and cannot launch workers. With it, the Agent can:
    This cannot retarget the work or silently create a replacement Turn.
 5. Call `stop_delegation(operation_id)` to end one member. Read its `phase`:
    `settled` is the only receipt that the worker acknowledged and released its
-   locks and that the native host and its process group exited; `unknown` means the holder vanished first; `noop` means the work had
+   locks, that the native host and its process group exited, and that its hard
+   lease was released or proven not owed; `unknown` means the holder vanished first; `noop` means the work had
    already ended. Stopped work cannot be resumed; use a new operation id.
 
 Configure the member's host to expose its own identity-bound collaboration
@@ -998,7 +1015,7 @@ whose proof is unavailable does not.
 | Requesting MCP conversation closes | The detached bounded worker continues; another connection reads the original operation. |
 | Duplicate start/resume while work runs | Operation identity, task lock and Turn journal prevent another concurrent execution. |
 | Worker process or machine stops | Reconnect with the same operator configuration and credentials, then resume the original Turn. |
-| Member stopped on request | The worker acknowledges under its lock, its Turn child is ended and the host supervisor terminates the host group, its lease is released; `settled` needs that acknowledgement, free locks and an exited host group, `unknown` means the holder vanished first. The record is `stopped`; resume refuses it. |
+| Member stopped on request | The worker acknowledges under its lock, its Turn child is ended and the host supervisor terminates the host group; only then is its hard lease resolved against canonical authority. `settled` needs that acknowledgement, free locks, an exited host group and the lease released or proven not owed, `unknown` means the holder vanished first. The record is `stopped`; resume refuses it. |
 | Ark is computing without local tools | The already-started cloud turn can continue. It is not dependent on the local conversation. |
 | Ark requests a local tool while the host is absent | It waits for the local tool result. Recovery observes the original input/session and executes only previously unstarted tool calls. |
 | Tool execution or send acknowledgement is uncertain | Do not repeat the effect. Preserve the receipt/session for explicit reconciliation. |
