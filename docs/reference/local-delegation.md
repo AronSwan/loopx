@@ -255,8 +255,9 @@ while it is unproven the stop stays `acknowledged` with
 supervisor never finished cleaning up, the stop stays `acknowledged` and a
 later `stop` rereads it. On a platform without process groups the launched
 host cannot be proven drained at all, so `stop --execute` fails with an
-actionable error naming that boundary rather than leaving a receipt no read
-can settle. `unknown`
+actionable error naming that boundary before writing a cancellation intent,
+acknowledging, signalling a worker, or releasing a lease. Repeating a refused
+request preserves the operation and any existing stop receipt unchanged. `unknown`
 means the holder vanished before acknowledging, and `noop` means the
 work was already accepted, rejected or stopped. `requested` or `acknowledged`
 means it is still winding down: call `stop` again. A grace timeout never turns
