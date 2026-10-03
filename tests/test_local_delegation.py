@@ -5,12 +5,14 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from threading import Event, get_ident
 
 import pytest
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -60,8 +62,7 @@ print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'cla
 
 @pytest.fixture(params=["file", "sqlite"])
 def service(tmp_path, request, monkeypatch):
-    for name in ("TMPDIR", "TEMP", "TMP"):
-        monkeypatch.setenv(name, str(tmp_path))
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     root = tmp_path / "team"
     demo.prepare(root, provider=request.param)
     fixture(root)
@@ -82,6 +83,27 @@ def brief():
             "context": "Use the initial filing and preserve the period distinction.",
             "constraints": ["No external actions"], "inputs": [], "acceptance": ["Pinned task validation"],
             "return_requirement": "Return the independently checked artifact"}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, monkeypatch, provider):
+    """A warmed parent must use the same private Effect server as its CLI."""
+    from types import SimpleNamespace
+
+    from loopx.control_plane.effect_runtime import _runtime_dir
+
+    cached, isolated = tmp_path / "cached", tmp_path / "isolated"
+    cached.mkdir()
+    isolated.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(cached))
+    service.__wrapped__(isolated, SimpleNamespace(param=provider), monkeypatch)
+
+    assert _runtime_dir().parent == isolated
+    child = subprocess.check_output([
+        sys.executable, "-c",
+        "from loopx.control_plane.effect_runtime import _runtime_dir; print(_runtime_dir())",
+    ], text=True).strip()
+    assert Path(child) == _runtime_dir()
 
 
 @pytest.mark.parametrize("operation", ["--help", "x y", "x\ny", "x;echo", "x/../y"])
