@@ -756,6 +756,20 @@ concurrent executions still use the same kernel lock and original Turn journal.
 
 ## Disconnect and recovery
 
+A managed delegation error retains the first typed lease failure as
+`lease:<boundary>/<reason>`: for example, `initial_proof/lease_inactive`,
+`renewal/renewal_rejected`, or `deadline/proved_deadline_elapsed`. A `cancelled`
+Host outcome alone does not mean a user requested stop or the lease was released.
+Inspect the original execution and canonical lease before recovery. These
+observations do not extend deadlines, grant authority, or change stop settlement.
+Successful and ordinary unleased Host results retain their existing shape.
+
+受管委派错误通过 `lease:<boundary>/<reason>` 保留首个类型化租约失败原因，
+区分启动前证明失败、续期拒绝和已证明期限到达。仅有 Host 的 `cancelled`
+结果不代表用户请求停止，也不证明租约已释放；恢复前需读回原执行与 canonical
+租约。这些诊断不延长期限、不授予权限，也不改变停止结算条件；成功执行与普通
+无租约 Host 的结果结构保持不变。
+
 | Interruption | Behavior and recovery |
 | --- | --- |
 | Requesting MCP conversation closes | The detached bounded worker continues; another connection reads the original operation. |
