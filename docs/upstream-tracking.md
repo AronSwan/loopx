@@ -33,10 +33,10 @@
 - **实战检验**：（未为它付过实战代价——**会用不算懂，半懂**）
 
 ### Q4. 为什么 change_quality 要带 scope_fingerprint+receipt stale？
-- **答案锚**：scope.py:168、receipt.py:46-48；controller-vs-base.md §E（含 9938270d3 名分勘误）。
-- **真懂信号**：能讲清"判定只对被计算时的精确内容有效；反向保持 vs 前向 stale 的同构边界"。
-- **假懂答案**："过了就过了"——假绿灯。
-- **实战检验**：**假懂现形**——我把 LoopsBench obligation retention 读反了（63dfcd3cb/0519162c6 监考定谳）。**资格吊销，回炉**。
+- **答案锚**：scope.py:105-177、receipt.py:126-135/319-353/474-485（学员四精化行号）；controller-vs-base.md §E（含 9938270d3 名分勘误）。
+- **真懂信号**：能讲清"判定只对被计算时的精确内容有效；反向保持 vs 前向 stale 的同构边界"＋**学员四回炉题：能数出我们 repair_receipt_v0 相对原创丢掉的五样语义（指纹寻址回执库+重算验证/防篡改重推导/类型化独立阻断/单轮safe-fix上界/strict执法钩子）与 stale 方向反转的架构原因（我们门禁廉价全量重跑 vs 原创缓存模型判断才需失效传播）**。
+- **假懂答案**："过了就过了"——假绿灯；"我们的repair-receipt等价于change_quality"——丢了五样语义不是等价。
+- **实战检验**：**假懂现形**——我把 LoopsBench obligation retention 读反了（63dfcd3cb/0519162c6 监考定谳）。**资格吊销→学员四回炉中**（全闭环实操+对照已完成，待独立答辩确认恢复）。
 
 ### Q5. 为什么 15s 死线维持而不是上报/硬改？
 - **答案锚**：effect_runtime.py:46-47；优缺点账缺点#3+设计立场"fail-fast 真兜底=重试（r9 实证）"；台账 12-2-4 翻案条件。
@@ -71,6 +71,7 @@
 
 | 观察项 | 来源 | 状态 |
 |---|---|---|
+| usage-ping 默认开且写 ~/.codex/loopx（学员六实测；沙箱须 LOOPX_USAGE_PING=0） | 学员六自动化层 | **即刻纪律**（已disable；所有沙箱作业前置export） |
 | 底座 API 三契约（append_message/drain/latest_session) | #5462 | 已报，待上游响应 |
 | 底座 benchmark RFC 补 BB-EDGE 统计纪律（**原理可移植：α 花费序列+estimand 变更纪律；机制不同构：epoch reset 是 benchmark 版本更新机制，底座升级=被测系统变更走 C.2 语义——门二 M3/复核席 R4① 证伪回写，原'epoch reset'标签作废**） | 延伸读 SAVI 应用席→复核席证伪→门二回写 | 候选——上游 RFC 先开门才递 |
 | Cordis vs AOS 设计立场文 | 延伸读 Cordis 同源席 | 候选——须落到上游可用形态（issue/RFC 评论）才算，先落自家 docs |
