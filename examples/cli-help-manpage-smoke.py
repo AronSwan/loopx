@@ -249,8 +249,8 @@ def assert_installer_manpage_surface() -> None:
         assert "Codex App automation" in man_text, man_text
         assert "loopx commands" in man_text, man_text
         assert "loopx extension" in man_text, man_text
-        assert r"loopx evidence\-log \-\-goal\-id" in man_text, man_text
-        assert "before replan or handoff" in compact_man_text, man_text
+        assert r"loopx evidence\-log" not in man_text, man_text
+        assert r"host\-projected replan context" in compact_man_text, man_text
         assert r"loopx COMMAND \-\-help" in man_text, man_text
 
         profile_text = profile.read_text(encoding="utf-8")
