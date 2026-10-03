@@ -131,6 +131,14 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument(
+        "--next-action-basis",
+        help=(
+            "Next Action read basis from status attention_queue.items[].next_action_basis. "
+            "Required for shared multi-agent writes; optional for sole-peer writes "
+            "to reject an older planning snapshot."
+        ),
+    )
+    refresh_state_parser.add_argument(
         "--delivery-batch-scale",
         choices=DELIVERY_BATCH_SCALE_INPUT_CHOICES,
         help=(
@@ -330,8 +338,9 @@ def register_refresh_state_command(
         "--progress-scope",
         choices=PROGRESS_SCOPE_CHOICES,
         help=(
-            "Refresh scope. In multi-agent goals, use agent_lane for per-agent runnable "
-            "status, or goal with any registered peer for durable goal-level status/Next Action."
+            "Progress report scope; --agent-id defaults to agent_lane. A confirmed "
+            "sole peer may update Next Action without changing that scope. Shared "
+            "multi-agent prose updates require goal scope and --next-action-basis."
         ),
     )
     refresh_state_parser.add_argument(
@@ -507,6 +516,7 @@ def handle_refresh_state_command(
             classification=args.classification,
             recommended_action=args.recommended_action,
             next_action=args.next_action,
+            next_action_basis=getattr(args, "next_action_basis", None),
             delivery_batch_scale=args.delivery_batch_scale,
             delivery_outcome=args.delivery_outcome,
             delivery_boundary=getattr(args, "delivery_boundary", None),

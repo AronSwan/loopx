@@ -1084,6 +1084,13 @@ def append_attention_queue_item_header_markdown(
     active_state_action = markdown_scalar(item.get("active_state_next_action") or "")
     if active_state_action:
         lines.append(f"  - active_state_next_action: {active_state_action}")
+    routes = item.get("agent_next_actions")
+    for route in routes if isinstance(routes, list) else []:
+        if isinstance(route, dict):
+            lines.append(
+                f"  - agent_next_action: {markdown_scalar(route.get('agent_id') or '')} "
+                f"{markdown_scalar(route.get('todo_id') or '')} {markdown_scalar(route.get('text') or '')}"
+            )
     latest_run_action = markdown_scalar(item.get("latest_run_recommended_action") or "")
     if latest_run_action:
         lines.append(f"  - latest_run_recommended_action: {latest_run_action}")

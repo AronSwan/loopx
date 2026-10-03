@@ -11,6 +11,10 @@ from ..coordination.local_authority import (
 )
 
 from .succession_warning import public_todo_summary
+from ...agent_registry import registered_agent_ids_for_goal
+from ..work_items.next_action_writeback_io import (
+    load_next_action_source_goal, next_action_writeback_context, project_agent_next_actions,
+)
 
 def _redacted_status_todo_fields(fields: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(fields)
@@ -50,7 +54,9 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    registry_path: Path | None = None,
     todo_snapshot: CanonicalTodoSnapshot | None = None,
+    include_agent_next_actions: bool = False,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
     resolve_goal_local_path: Callable[..., Path | None],
     active_state_next_action_entries: Callable[..., list[str]],
@@ -67,6 +73,19 @@ def active_state_todo_fields(
 ) -> dict[str, Any]:
     todo_field_redactor = redacted_status_todo_fields or _redacted_status_todo_fields
     goal_id = str(goal.get("id") or "").strip()
+    source_registry = None
+    admission_goal: dict[str, Any] | None = goal
+    if registry_path is not None and goal_id:
+        try:
+            source_registry, source_goal = load_next_action_source_goal(registry_path, goal_id)
+        except (OSError, ValueError):
+            # Status remains a read model when its source is unavailable. It
+            # must not mint a write basis from a stale shared roster.
+            admission_goal = None
+        else:
+            admission_goal = source_goal
+            if source_goal is not None:
+                goal = {**goal, **source_goal}
     # Inspect authority before the display file. A missing/stale projection is
     # not an empty Todo collection, and an unavailable provider must fail closed.
     canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
@@ -80,8 +99,10 @@ def active_state_todo_fields(
         require_no_legacy_todo_events(goal, state_path=state_path)
     if canonical is None and (state_path is None or not state_path.exists()):
         return {}
+    state_readable = False
     try:
         state_text = state_path.read_text(encoding="utf-8") if state_path is not None else ""
+        state_readable = state_path is not None
     except OSError:
         if canonical is None:
             return {}
@@ -130,6 +151,17 @@ def active_state_todo_fields(
     if next_action_entries:
         fields["active_state_next_action"] = next_action_entries[0]
         fields["active_state_next_action_entries"] = next_action_entries
+    if goal_id and state_readable and admission_goal is not None:
+        fields["next_action_basis"] = next_action_writeback_context(admission_goal, state_text, source_registry=source_registry)["basis"]
+    # This is a read projection, not a rewrite of shared compatibility prose.
+    # Select from the complete task source, never a bounded status page.
+    if include_agent_next_actions and len(registered_agent_ids_for_goal(admission_goal)) > 1:
+        route_fields = fields if canonical is not None else parse_active_state_todos(
+            state_text, goal=goal, state_path=state_path, rollout_events=events, item_limit=None,
+        )
+        routes = project_agent_next_actions(goal, route_fields)
+        if routes:
+            fields["agent_next_actions"] = routes
     warning = backlog_hygiene_warning(
         state_text,
         agent_todos=fields.get("agent_todos") if isinstance(fields.get("agent_todos"), dict) else None,

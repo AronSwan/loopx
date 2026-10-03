@@ -711,12 +711,16 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    registry_path: Path | None = None,
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
+    include_agent_next_actions: bool = False,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return _active_state_todo_fields_read_model(
         goal,
         runtime_root=runtime_root,
+        registry_path=registry_path,
+        include_agent_next_actions=include_agent_next_actions,
         rollout_events=rollout_events,
         **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         resolve_goal_local_path=resolve_goal_local_path,
@@ -1110,6 +1114,8 @@ def build_attention_queue(
         return active_state_todo_fields(
             goal,
             runtime_root=runtime_root,
+            include_agent_next_actions=include_task_graph,
+            registry_path=registry_path,
             rollout_events=supplied_events,
             **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         )

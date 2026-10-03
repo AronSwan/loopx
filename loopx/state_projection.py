@@ -196,8 +196,8 @@ def next_action_projection_warning(
             "explicitly preserving the active-state Next Action"
         )
         warning["recommended_action"] = (
-            "run the agent-lane action without mutating active-state Next Action; "
-            "only the primary/goal route should write a new durable Next Action"
+            "continue the agent's Todo route; update shared Next Action through "
+            "refresh-state with confirmed sole-peer admission or goal scope and a current read basis"
         )
     else:
         warning["reason"] = (

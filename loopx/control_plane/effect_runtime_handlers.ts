@@ -235,6 +235,7 @@ import {
   projectTodoPlanningInventoryDetail,
 } from "./work_items/planning_inventory.ts";
 import { resolveRefreshRecommendation } from "./work_items/refresh_recommendation.ts";
+import {resolveNextActionWriteback} from "./work_items/next_action_writeback.ts";
 import {
   validateInteractionProjectionHookInvocation,
   validateInteractionProjectionHookRegistration,
@@ -561,6 +562,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],
+    ["work_item.next_action_writeback.resolve", resolveNextActionWriteback],
     ["work_item.delivery_history.project", projectDeliveryHistory],
     ["work_item.delivery_response.project", projectDeliveryResponse],
     ["work_item.delivery_claim.validate", validateDeliveryClaim],

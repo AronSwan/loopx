@@ -76,12 +76,16 @@ from .control_plane.runtime.shared_runtime_refresh_projection import (
     build_shared_runtime_projection,
     write_shared_runtime_projection,
 )
+from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.work_items.next_action_writeback_io import (
+    load_next_action_source_goal, next_action_source_guard, next_action_writeback_context,
+)
 from .control_plane.runtime.runtime_projection_route import (
     compact_runtime_projection_route,
     resolve_runtime_projection_route,
 )
 from .feedback import validate_local_control_text, validate_public_safe_text
-from .file_lock import exclusive_file_lock, exclusive_cross_runtime_file_lock
+from .file_lock import exclusive_file_lock
 from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
 from .control_plane.todos.active_state_editing import atomic_write_state_text
 from .global_registry import sync_project_registry_to_global
@@ -108,7 +112,6 @@ from .state_projection import (
     state_projection_gap_warning,
 )
 from .control_plane.todos.contract import (
-    normalize_todo_claimed_by,
     normalize_todo_replan_obligation_id,
 )
 from .control_plane.todos.completion_validation_accountability import (
@@ -194,20 +197,7 @@ def normalize_next_action_text(value: str) -> str:
 
 
 def registered_agents_for_goal(registry_goal: dict[str, Any] | None) -> list[str]:
-    coordination = (
-        registry_goal.get("coordination")
-        if registry_goal and isinstance(registry_goal.get("coordination"), dict)
-        else {}
-    )
-    registered_raw = coordination.get("registered_agents") if isinstance(coordination, dict) else []
-    registered_values = registered_raw if isinstance(registered_raw, list) else []
-    registered_agents: list[str] = []
-    for value in registered_values:
-        candidate = value.get("id") if isinstance(value, dict) else value
-        normalized = normalize_todo_claimed_by(candidate)
-        if normalized:
-            registered_agents.append(normalized)
-    return registered_agents
+    return registered_agent_ids_for_goal(registry_goal)
 
 
 def normalize_progress_scope(value: str | None) -> str:
@@ -801,6 +791,7 @@ def refresh_state_run(
     classification: str,
     recommended_action: str | None,
     next_action: str | None = None,
+    next_action_basis: str | None = None,
     delivery_batch_scale: str | None = None,
     delivery_outcome: str | None = None,
     delivery_boundary: str | None = None,
@@ -830,6 +821,8 @@ def refresh_state_run(
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)
+    if next_action_basis and not next_action:
+        raise ValueError("--next-action-basis requires --next-action")
     if checkpoint_read_context_id and not turn_instance_id:
         raise ValueError("--checkpoint-read-context requires the original Turn identity")
     validate_public_safe_text("classification", classification)
@@ -946,6 +939,7 @@ def refresh_state_run(
                     "workspace_requested": delivery_workspace_path is not None,
                     "mutation": {
                         "next_action": next_action,
+                        **({"next_action_basis": next_action_basis} if next_action_basis else {}),
                         "autonomous_replan_recorded": autonomous_replan_recorded,
                         "repair_delta_kinds": repair_delta_kinds,
                         "usage_measurement": usage_measurement,
@@ -1009,8 +1003,13 @@ def refresh_state_run(
             if sync_global and route_status in {"resolved", "single_runtime"}
             else None
         )
+        next_action_source_registry = registry_path.resolve()
+        state_registry = registry
+        if next_action:
+            next_action_source_registry, source_goal = load_next_action_source_goal(registry_path, safe_goal_id)
+            state_registry = {**registry, "goals": [source_goal] if source_goal is not None else []}
         registry_goal, resolved_project, resolved_state_file = resolve_goal_state(
-            registry=registry,
+            registry=state_registry,
             goal_id=safe_goal_id,
             project_override=project,
             state_file_override=state_file,
@@ -1023,6 +1022,8 @@ def refresh_state_run(
         )
         expected_write_state_text = state_text
         normalized_next_action = normalize_next_action_text(next_action) if next_action else None
+        if normalized_next_action and registry_goal is None:
+            raise ValueError("--next-action requires a registry Goal; register its state route first")
         registered_agents = registered_agents_for_goal(registry_goal)
         known_agents = {agent for agent in registered_agents if agent}
         multi_agent_goal = len(known_agents) > 1
@@ -1053,11 +1054,6 @@ def refresh_state_run(
         if normalized_progress_scope == AGENT_LANE_PROGRESS_SCOPE:
             if not normalized_agent_id:
                 raise ValueError("--progress-scope agent_lane requires --agent-id")
-            if normalized_next_action:
-                raise ValueError(
-                    "agent-lane refresh-state cannot update the durable active-state Next Action; "
-                    "rerun without --next-action or use --progress-scope goal from a registered peer"
-                )
         if normalized_progress_scope == GOAL_PROGRESS_SCOPE:
             if normalized_agent_lane:
                 raise ValueError("--agent-lane requires --progress-scope agent_lane")
@@ -1099,8 +1095,14 @@ def refresh_state_run(
         generated_at = now_local()
         active_state_next_action_update: dict[str, Any] | None = None
         if normalized_next_action:
-            with exclusive_cross_runtime_file_lock(resolved_state_file):
-                locked_state_text = resolved_state_file.read_text(encoding="utf-8")
+            source_basis = next_action_writeback_context(registry_goal, state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry)["basis"]
+            with next_action_source_guard(registry_path, resolved_state_file, safe_goal_id, source_registry=next_action_source_registry) as (current_goal, locked_state_text):
+                admission = next_action_writeback_context(current_goal, locked_state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry, write={
+                    "agent_id": normalized_agent_id or None,
+                    "progress_scope": normalized_progress_scope,
+                    "expected_basis": next_action_basis,
+                    "source_basis": source_basis,
+                })
                 expected_write_state_text = locked_state_text
                 updated_state_text, state_updated = replace_next_action_section(
                     locked_state_text,
@@ -1115,6 +1117,8 @@ def refresh_state_run(
                     "would_update": bool(state_updated),
                     "dry_run": bool(dry_run),
                     "updated_at": generated_at if state_updated else None,
+                    "read_basis": admission["basis"],
+                    "agent_id": normalized_agent_id or None,
                 }
                 state_text = updated_state_text if state_updated else locked_state_text
 
@@ -1315,19 +1319,22 @@ def refresh_state_run(
             and active_state_next_action_update.get("would_update")
             and not dry_run
         ):
-            with exclusive_cross_runtime_file_lock(resolved_state_file):
-                current_state_text = resolved_state_file.read_text(encoding="utf-8")
-                if current_state_text != expected_write_state_text:
-                    raise ValueError(
-                        "active goal state changed while refresh-state was qualifying "
-                        "its semantic writeback; retry from the current state"
-                    )
+            with next_action_source_guard(registry_path, resolved_state_file, safe_goal_id, source_registry=next_action_source_registry) as (current_goal, current_state_text):
+                # Recheck complete membership and the snapshot captured before
+                # semantic qualification, even for a sole actor with no flag.
+                next_action_writeback_context(current_goal, current_state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry, write={
+                    "agent_id": normalized_agent_id or None,
+                    "progress_scope": normalized_progress_scope,
+                    "expected_basis": active_state_next_action_update["read_basis"],
+                })
                 require_prose_state_write_allowed(
                     registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, state_path=resolved_state_file,
                     original_text=current_state_text, planned_text=state_text,
                 )
+                applied_basis = next_action_writeback_context(current_goal, state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry)["basis"]
                 atomic_write_state_text(resolved_state_file, state_text)
+                active_state_next_action_update["applied_basis"] = applied_basis
         record = build_state_refresh_record(
             goal_id=safe_goal_id,
             state_file=resolved_state_file,
