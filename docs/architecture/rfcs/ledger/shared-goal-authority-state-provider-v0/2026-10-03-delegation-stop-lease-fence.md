@@ -1,4 +1,4 @@
-# Delegated operation stop: the canonical lease is the only fence
+# Proposed delegated operation stop: canonical lease revocation
 
 - Baseline: `e55489c77`, measured October 3, 2026.
 - Outcome: overall roadmap S4 ("restart/cancel/drain/stop retain work and
@@ -7,27 +7,40 @@
   [September 27 host-supervision plan](2026-09-27-host-supervision.md)
   ("cancellation on expiry/reclaim/revocation"). No provider, capability,
   configuration surface or lease vocabulary is introduced.
-- This entry is the specification a follow-up implementation PR is built
-  against. It records a design decision and the measurements behind it; it
-  does not claim the stop surface has shipped.
+- Status: proposed alternative, pending an explicit maintainer decision.
+  This entry neither replaces the stop contract under review in #5308 nor
+  claims that the stop surface has shipped. Its implementation qualification
+  applies only if this alternative is selected.
 - [中文](2026-10-03-delegation-stop-lease-fence.zh-CN.md).
 
 ## What was measured
 
-The closed [#5308](https://github.com/loopx-project/loopx/pull/5308) tried to
-ship the same user outcome and received sixteen maintainer reviews in four
-days, fifteen of them `REQUEST_CHANGES`. Nine of its blocking findings were
-instances of one structural property: the receipt's terminal `settled` was a
-read-side conjunction of facts written by six independent writers (stop
-sidecar acknowledgement, operation lock probe, Turn lane holder record, inner
-Host process-group record, outer CLI process-group record, canonical lease),
-and each pair of writers has an interleaving window. Each repair added another
-fact or another lock; each review found another pair. The branch merged
-`main` fifteen times while the same lease owner changed twelve times on
-`main`. Its final head passed 147 selected real-process tests and was closed
-under an unresolvable historical-attribution hold.
+[#5308](https://github.com/loopx-project/loopx/pull/5308) is open again. Its
+[October 3 review](https://github.com/loopx-project/loopx/pull/5308#pullrequestreview-5401677786)
+requires canonical lease-obligation readback (R1), complete execution drain
+observation in the existing Host boundary (R2), and a typed separation between
+next actions and final receipts (R3). That review explicitly removes historical
+failure-by-failure attribution as a merge prerequisite. Earlier failures remain
+historical evidence, not proof that its current design cannot be repaired.
 
-`main` already carries the fence that PR was emulating with file locks:
+The two proposals address the same caller outcome with different guarantees:
+
+| Boundary | #5308 under review | This proposed alternative |
+| --- | --- | --- |
+| Ordering | Prove the original execution drained before releasing its lease | Revoke the lease first; observe drain separately |
+| Completion feedback | `settled` requires ACK, released holders, Host drain and resolved lease obligation | `revoked` proves loss of commit authority; only `drained` reports execution exit |
+| Authority modes | Includes existing unleased routes with the dispatch fence | Requires canonical `hard_lease`; refuses unleased routes |
+
+These are alternative public contracts, not interchangeable phase names. Do
+not implement both under the same `delegation stop` / `stop_delegation` entry
+points. The current #5308 repair follows R1–R3. Selecting this alternative would
+require an explicit supersession decision, the CLI/MCP/readback/docs companions,
+and the implementation evidence below; merging a design note alone does not
+change the runtime contract. Neither approach establishes whole-team or Goal
+completion, and neither makes revocation proof of physical drain.
+
+At the measured baseline, `main` already provides reusable lease fencing and
+supervision:
 
 - `Delegations._complete_delegated_todo` refuses to commit without the
   execution's acquired lease and completes through the canonical lease CAS
@@ -53,7 +66,7 @@ can reach the authority again. The acquire receipt identity is deterministic
 in `(goal_id, todo_id, owner, idempotency_key)`, and replay requires current
 proof, so a released lease retires its key permanently without a new status.
 
-## Contract
+## Proposed contract
 
 1. **Scope.** One authorized, bound delegated operation on the local host
    authority. Not a team or Goal stop, not coordinator pause, not cross-host
@@ -125,15 +138,17 @@ proof, so a released lease retires its key permanently without a new status.
    receipt and the `stopped` observation. The dashboard shows a recorded
    stop, not a claim that execution resources were released.
 
-## Decisions taken here
+## Decisions proposed here
 
-- **D1, hard-lease only.** The alternative is a second linearization
-  mechanism for unleased routes, which is the design that failed above.
+- **D1, hard-lease only.** This reduces the stop guarantee to the canonical
+  lease fence, at the cost of refusing existing unleased routes. #5308 instead
+  retains their dispatch-fence path; that tradeoff needs a maintainer decision.
 - **D2, release instead of a new `revoked` lease status.** A new status would
   extend a vocabulary consumed by lifecycle, proof, retirement, migration and
   recovery owners; release already retires the key, as measured.
-- **D3, drain reported, not required.** Requiring it recreated every
-  process-attribution window in #5308.
+- **D3, drain reported, not required for revocation.** This makes authority
+  loss observable while processes may still be running. It does not satisfy
+  #5308's `settled` promise or qualify immediate resource handoff.
 
 ## Qualification the implementation owes
 

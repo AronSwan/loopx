@@ -1,4 +1,4 @@
-# 停止委派操作：canonical lease 是唯一的 fence
+# 委派停止替代提案：canonical lease 撤销
 
 - 基线：`e55489c77`，2026 年 10 月 3 日测量。
 - 结果：总体 roadmap S4（"restart/cancel/drain/stop 保留工作并 fence 旧执行者"）
@@ -6,22 +6,34 @@
   [9 月 27 日 host-supervision 计划](2026-09-27-host-supervision.zh-CN.md)
   中交付 2 的撤销部分（"到期/回收/撤销时取消"）。不引入 provider、
   capability、配置面或 lease 词表。
-- 本条目是后续实现 PR 所依据的规格。它记录一个设计决定及其背后的测量，
-  不声称停止能力已经交付。
+- 状态：替代提案，待维护者明确决定。本条目不替换 #5308 正在评审的停止契约，
+  也不声称停止能力已交付。只有选定本替代方案后，下述实现验收才适用。
 - [English](2026-10-03-delegation-stop-lease-fence.md)。
 
 ## 测量到什么
 
-已关闭的 [#5308](https://github.com/loopx-project/loopx/pull/5308) 试图交付同一
-用户结果，四天内收到十六份维护者评审，其中十五份为 `REQUEST_CHANGES`。
-它的九个阻塞发现属于同一个结构性性质：回执的终态 `settled` 是对六个独立写者
-（stop sidecar 的 ACK、operation lock 探测、Turn lane holder 记录、内层 Host
-进程组记录、外层 CLI 进程组记录、canonical lease）所写事实的读侧合取，而任意
-两个写者之间都存在交错窗口。每次修复再加一个事实或一把锁，每轮评审再找到一对。
-该分支合并了十五次 `main`，同期 `main` 上同一 lease owner 改动了十二次。最终
-head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"历史归因"hold 下关闭。
+[#5308](https://github.com/loopx-project/loopx/pull/5308) 已重新打开。
+[10 月 3 日最新评审](https://github.com/loopx-project/loopx/pull/5308#pullrequestreview-5401677786)
+要求从 canonical authority 读回租约义务（R1）、由既有 Host 边界提供完整执行的
+退出观察（R2），以及在类型化 owner 中区分下一步动作和最终回执（R3）。该评审
+已明确取消逐次追查历史失败原因这一合入前置条件。旧失败仍是历史证据，不能据此
+断言当前设计无法修复。
 
-`main` 上已经存在那个 PR 用文件锁模拟的 fence：
+两份方案服务于同一调用者结果，但保证不同：
+
+| 边界 | #5308 正在评审的实现 | 本替代提案 |
+| --- | --- | --- |
+| 顺序 | 先证明原执行退出，再释放其租约 | 先撤销租约，单独观察进程退出 |
+| 完成反馈 | `settled` 要求 ACK、holder 释放、Host 退出和租约义务已解析 | `revoked` 证明提交权限失效；只有 `drained` 报告执行退出 |
+| authority 模式 | 通过 dispatch fence 保留既有无租约路径 | 要求 canonical `hard_lease`，拒绝无租约路径 |
+
+这是两份替代的公共契约，不是可以互换的 phase 名称，不能同时实现在同一个
+`delegation stop` / `stop_delegation` 入口下。当前 #5308 的修复遵循 R1–R3。
+选择本替代方案需要明确的替代决定、CLI/MCP/读回/文档的配套修改，以及下述实现
+验收；仅合入设计文档不会改变运行时契约。两者均不代表团队或 Goal 已完成，
+也不能用撤销权限证明物理进程已退出。
+
+在测量基线上，`main` 已提供可复用的租约 fence 和 supervision：
 
 - `Delegations._complete_delegated_todo` 没有本次执行已取得的 lease 就拒绝提交，
   并通过 canonical lease CAS 完成
@@ -42,7 +54,7 @@ head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"
 回执身份由 `(goal_id, todo_id, owner, idempotency_key)` 确定性生成，而重放要求
 当前证明，因此 lease 一旦 released，其 key 就永久退役，不需要新状态。
 
-## 契约
+## 提议的契约
 
 1. **范围。** 本机 authority 上一个经授权、有 binding 的委派操作。不是团队或
    Goal 停止，不是协调者暂停，不是跨宿主信号，前端只有一个记录状态标签。
@@ -93,14 +105,15 @@ head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"
    `Delegations.stop`；`read`、`wait` 与 inventory 暴露回执与 `stopped` 观察。
    dashboard 展示"停止已登记"，不声称执行资源已释放。
 
-## 此处作出的决定
+## 本条目提议的决定
 
-- **D1，仅限 hard lease。** 替代方案是为无 lease 路由再建一套线性化机制，
-  正是上面失败的设计。
+- **D1，仅限 hard lease。** 把停止保证限定在 canonical lease fence，代价是
+  拒绝既有无租约路径。#5308 保留这些路径的 dispatch fence，取舍需由维护者决定。
 - **D2，用 release 而非新增 `revoked` lease 状态。** 新状态会扩展被
   lifecycle、proof、retirement、migration 与 recovery 多个 owner 消费的词表；
   如测量所示，release 已经使 key 退役。
-- **D3，drain 只报告，不要求。** 要求它会重现 #5308 中的每一个进程归属窗口。
+- **D3，drain 单独报告，不作为撤销的条件。** 允许在进程仍运行时报告提交权限
+  已失效；这不满足 #5308 的 `settled` 承诺，也不证明可以立即交接执行资源。
 
 ## 实现 PR 必须给出的验收
 
