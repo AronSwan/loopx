@@ -32,7 +32,7 @@ def _assert_checkpoint_instructions(rendered: str) -> None:
     assert "same Goal, Agent, Todo/obligation, Turn, and delivery fields" in rendered
     assert "Remove previously executed state-mutation options" in rendered
     for option in (
-        "--next-action", "--autonomous-replan-recorded", "--repair-delta-kind",
+        "--next-action", "--next-action-basis", "--autonomous-replan-recorded", "--repair-delta-kind",
         "--usage-json", "--usage-codex-session",
     ):
         assert option in rendered

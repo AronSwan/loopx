@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import loopx.state_refresh as state_refresh
 from loopx.history import collect_history
 from loopx.status import collect_status
+from loopx.agent_registry import load_goal_from_registry
+from loopx.control_plane.work_items.next_action_writeback_io import next_action_writeback_context
 
 
 GOAL_ID = "refresh-state-agent-lane-goal"
@@ -222,7 +224,7 @@ def main() -> None:
             )
 
             expect_value_error(
-                "agent-lane refresh-state cannot update the durable active-state Next Action",
+                "agent-lane refresh-state cannot update shared Next Action",
                 lambda: state_refresh.refresh_state_run(
                     registry_path=registry_path,
                     runtime_root_override=str(runtime),
@@ -380,7 +382,7 @@ def main() -> None:
             )
 
             expect_value_error(
-                "agent-lane refresh-state cannot update the durable active-state Next Action",
+                "agent-lane refresh-state cannot update shared Next Action",
                 lambda: state_refresh.refresh_state_run(
                     registry_path=registry_path,
                     runtime_root_override=str(runtime),
@@ -409,6 +411,10 @@ def main() -> None:
                 recommended_action=PRIMARY_AGENT_LANE_ACTION,
                 next_action=PRIMARY_AGENT_LANE_ACTION,
                 delivery_batch_scale="single_surface",
+                next_action_basis=next_action_writeback_context(
+                    load_goal_from_registry(registry_path, GOAL_ID), state_path.read_text(encoding="utf-8"),
+                    source_registry=registry_path,
+                )["basis"],
                 delivery_outcome="outcome_progress",
                 agent_id="codex-main-control",
                 progress_scope="goal",

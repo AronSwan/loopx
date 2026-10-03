@@ -297,6 +297,7 @@ def main() -> None:
                 classification="state_refreshed",
                 recommended_action=UPDATED_RUN_RECOMMENDATION,
                 next_action=UPDATED_NEXT_ACTION,
+                next_action_basis=first_item["next_action_basis"],
                 agent_id="codex-main-control",
                 progress_scope="goal",
                 dry_run=False,
@@ -340,7 +341,7 @@ def main() -> None:
             ), second_decision
             assert (
                 warning["recommended_action"]
-                == "run the agent-lane action without mutating active-state Next Action; only the primary/goal route should write a new durable Next Action"
+                == "continue the agent's Todo route; update shared Next Action through refresh-state with confirmed sole-peer admission or goal scope and a current read basis"
             ), second_decision
             assert (
                 warning["agent_lane_next_action"] == lane["text"]
