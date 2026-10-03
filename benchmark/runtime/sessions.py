@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
+
+from .codex import Execution
 
 from loopx.control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
@@ -26,7 +29,9 @@ class BenchmarkSessionWake:
     timeout; neither missing history nor a failed resume permits a fresh fork.
     """
 
-    def __init__(self, env, execution, receipt):
+    def __init__(
+        self, env: dict[str, str], execution: Execution, receipt: dict[str, Any],
+    ) -> None:
         self.root = Path(env["LOOPX_RUNTIME_ROOT"])
         self.lineage = {
             "goal_id": env["LOOPX_GOAL_ID"],
