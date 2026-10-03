@@ -77,8 +77,8 @@ from .control_plane.runtime.shared_runtime_refresh_projection import (
     write_shared_runtime_projection,
 )
 from .agent_registry import registered_agent_ids_for_goal
-from .control_plane.work_items.next_action_writeback_io import (
-    load_next_action_source_goal, next_action_source_guard, next_action_writeback_context,
+from .control_plane.work_items.recommendation_source_io import (
+    load_recommendation_source_goal, recommendation_source_guard, recommendation_source_context,
 )
 from .control_plane.runtime.runtime_projection_route import (
     compact_runtime_projection_route,
@@ -86,8 +86,6 @@ from .control_plane.runtime.runtime_projection_route import (
 )
 from .feedback import validate_local_control_text, validate_public_safe_text
 from .file_lock import exclusive_file_lock
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
-from .control_plane.todos.active_state_editing import atomic_write_state_text
 from .global_registry import sync_project_registry_to_global
 from .history import (
     load_index,
@@ -127,7 +125,6 @@ AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 PROGRESS_SCOPE_CHOICES = (GOAL_PROGRESS_SCOPE, AGENT_LANE_PROGRESS_SCOPE)
 BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
 CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
-ACTIVE_STATE_NEXT_ACTION_UPDATE_SCHEMA_VERSION = "active_state_next_action_update_v0"
 REPAIR_NOOP_SCHEMA_VERSION = "repair_noop_v0"
 
 
@@ -210,56 +207,6 @@ def normalize_progress_scope(value: str | None) -> str:
             "--progress-scope must be one of: " + ", ".join(PROGRESS_SCOPE_CHOICES)
         )
     return normalized
-
-
-def next_action_section_bounds(lines: list[str]) -> tuple[int, int] | None:
-    for index, line in enumerate(lines):
-        if line.strip() != "## Next Action":
-            continue
-        end = len(lines)
-        for next_index in range(index + 1, len(lines)):
-            if lines[next_index].startswith("## "):
-                end = next_index
-                break
-        return index, end
-    return None
-
-
-def next_action_insert_anchor(lines: list[str]) -> int:
-    preferred = {
-        "## Recent User Feedback",
-        "## Progress Ledger",
-        "## Operating Lessons",
-        "## Completed Work Archive",
-    }
-    for index, line in enumerate(lines):
-        if line.strip() in preferred:
-            return index
-    return len(lines)
-
-
-def replace_next_action_section(
-    state_text: str,
-    *,
-    next_action: str,
-    updated_at: str,
-) -> tuple[str, bool]:
-    lines = state_text.splitlines()
-    section = ["## Next Action", "", f"- {next_action}", ""]
-    bounds = next_action_section_bounds(lines)
-    if bounds:
-        start, end = bounds
-        updated_lines = [*lines[:start], *section, *lines[end:]]
-    else:
-        anchor = next_action_insert_anchor(lines)
-        insert = list(section)
-        if anchor > 0 and lines[anchor - 1].strip():
-            insert.insert(0, "")
-        updated_lines = [*lines[:anchor], *insert, *lines[anchor:]]
-    section_text = "\n".join(updated_lines).rstrip() + "\n"
-    if section_text.rstrip("\n") == state_text.rstrip("\n"):
-        return state_text, False
-    return replace_updated_at(section_text, updated_at), True
 
 
 def clean_action_line(line: str) -> str:
@@ -566,7 +513,7 @@ def _build_state_refresh_output_projections(
         field: record.get(field)
         for field in (
             "agent_vision", "vision_checkpoint", "recommended_action",
-            "recommended_action_source", "active_state_next_action_update",
+            "recommended_action_source",
             "generated_at", "health_check",
         )
     })
@@ -1006,7 +953,7 @@ def refresh_state_run(
         next_action_source_registry = registry_path.resolve()
         state_registry = registry
         if next_action:
-            next_action_source_registry, source_goal = load_next_action_source_goal(registry_path, safe_goal_id)
+            next_action_source_registry, source_goal = load_recommendation_source_goal(registry_path, safe_goal_id)
             state_registry = {**registry, "goals": [source_goal] if source_goal is not None else []}
         registry_goal, resolved_project, resolved_state_file = resolve_goal_state(
             registry=state_registry,
@@ -1015,7 +962,7 @@ def refresh_state_run(
             state_file_override=state_file,
         )
         planning_source = load_refresh_planning_source(
-            runtime_root, safe_goal_id, resolved_state_file, require_display=bool(next_action)
+            runtime_root, safe_goal_id, resolved_state_file, require_display=False
         )
         state_text, planning_events, todo_fields = (
             planning_source.state_text, planning_source.events, planning_source.todo_fields,
@@ -1093,39 +1040,17 @@ def refresh_state_run(
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
             )
         generated_at = now_local()
-        active_state_next_action_update: dict[str, Any] | None = None
-        if normalized_next_action:
-            source_basis = next_action_writeback_context(registry_goal, state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry)["basis"]
-            with next_action_source_guard(registry_path, resolved_state_file, safe_goal_id, source_registry=next_action_source_registry) as (current_goal, locked_state_text):
-                admission = next_action_writeback_context(current_goal, locked_state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry, write={
-                    "agent_id": normalized_agent_id or None,
-                    "progress_scope": normalized_progress_scope,
-                    "expected_basis": next_action_basis,
-                    "source_basis": source_basis,
-                })
-                expected_write_state_text = locked_state_text
-                updated_state_text, state_updated = replace_next_action_section(
-                    locked_state_text,
-                    next_action=normalized_next_action,
-                    updated_at=generated_at,
-                )
-                active_state_next_action_update = {
-                    "schema_version": ACTIVE_STATE_NEXT_ACTION_UPDATE_SCHEMA_VERSION,
-                    "source": "refresh_state",
-                    "next_action": normalized_next_action,
-                    "updated": bool(state_updated and not dry_run),
-                    "would_update": bool(state_updated),
-                    "dry_run": bool(dry_run),
-                    "updated_at": generated_at if state_updated else None,
-                    "read_basis": admission["basis"],
-                    "agent_id": normalized_agent_id or None,
-                }
-                state_text = updated_state_text if state_updated else locked_state_text
-
+        # Next Action is now an actor/Todo-bound recommendation in the existing
+        # run journal. It never rewrites narrative or a Todo projection.
+        recommendation_context = recommendation_source_context(
+            registry_goal, state_text, source_registry=next_action_source_registry, todo_fields=todo_fields
+        ) if registry_goal is not None else None
         recommendation_resolution = resolve_refresh_recommendation(
             state_text,
             todo_fields=todo_fields,
             explicit_action=recommended_action,
+            next_step=normalized_next_action, next_step_basis=next_action_basis,
+            source_context=recommendation_context, runs=newest_first_runs,
             agent_id=normalized_agent_id or None,
             settlement_identity=(
                 settlement_identity.as_dict() if settlement_identity is not None else None
@@ -1151,7 +1076,7 @@ def refresh_state_run(
             todo_fields=todo_fields,
             autonomous_replan_recorded=autonomous_replan_recorded,
             requested_delta_kinds=normalized_repair_delta_kinds,
-            active_state_next_action_update=active_state_next_action_update,
+            active_state_next_action_update=None,
             agent_vision=agent_vision,
             existing_agent_vision=existing_agent_vision,
             agent_id=normalized_agent_id,
@@ -1245,7 +1170,7 @@ def refresh_state_run(
             existing_agent_vision=existing_agent_vision,
             vision_unchanged_reason=vision_unchanged_reason,
             delivery_outcome=normalized_delivery_outcome,
-            active_state_next_action_update=active_state_next_action_update,
+            active_state_next_action_update=None,
             delivery_boundary=normalized_delivery_boundary,
             todo_id=(settlement_identity.todo_id if settlement_identity else None),
             completion_todo_id=completion_todo_id,
@@ -1314,27 +1239,6 @@ def refresh_state_run(
                 "progress_observation"
             )
             classification = prior_writeback_run["classification"]
-        if (
-            active_state_next_action_update
-            and active_state_next_action_update.get("would_update")
-            and not dry_run
-        ):
-            with next_action_source_guard(registry_path, resolved_state_file, safe_goal_id, source_registry=next_action_source_registry) as (current_goal, current_state_text):
-                # Recheck complete membership and the snapshot captured before
-                # semantic qualification, even for a sole actor with no flag.
-                next_action_writeback_context(current_goal, current_state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry, write={
-                    "agent_id": normalized_agent_id or None,
-                    "progress_scope": normalized_progress_scope,
-                    "expected_basis": active_state_next_action_update["read_basis"],
-                })
-                require_prose_state_write_allowed(
-                    registry_path=registry_path, runtime_root=runtime_root,
-                    goal_id=safe_goal_id, state_path=resolved_state_file,
-                    original_text=current_state_text, planned_text=state_text,
-                )
-                applied_basis = next_action_writeback_context(current_goal, state_text, goal_id=safe_goal_id, source_registry=next_action_source_registry)["basis"]
-                atomic_write_state_text(resolved_state_file, state_text)
-                active_state_next_action_update["applied_basis"] = applied_basis
         record = build_state_refresh_record(
             goal_id=safe_goal_id,
             state_file=resolved_state_file,
@@ -1403,8 +1307,6 @@ def refresh_state_run(
             record["autonomous_replan_ack"]["semantic_delta"] = (
                 replan_semantic_delta
             )
-        if active_state_next_action_update:
-            record["active_state_next_action_update"] = active_state_next_action_update
         compact_route = compact_runtime_projection_route(runtime_projection_route)
         compact_route["projection_enabled"] = bool(sync_global)
         compact_route["projection_marker_field"] = "shared_runtime_projection"
@@ -1433,6 +1335,23 @@ def refresh_state_run(
         # spans ledger-basis read + row append so concurrent refreshes cannot fund
         # two deltas from one stale basis; the appended row advances the basis.
         with ExitStack() as usage_booking_guard:
+            if normalized_next_action:
+                current_goal, current_text = usage_booking_guard.enter_context(
+                    recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
+                        source_registry=next_action_source_registry))
+                if current_goal is None:
+                    raise ValueError("Next Action source Goal disappeared; reread status")
+                current_planning = load_refresh_planning_source(
+                    runtime_root, safe_goal_id, resolved_state_file, require_display=False)
+                resolve_refresh_recommendation(current_text,
+                    todo_fields=current_planning.todo_fields, agent_id=normalized_agent_id or None,
+                    settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
+                    registry_goal=current_goal, state_path=resolved_state_file,
+                    rollout_events=current_planning.events, next_step=normalized_next_action,
+                    next_step_basis=recommendation_resolution["read_basis"],
+                    source_context=recommendation_source_context(current_goal, current_text,
+                        source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
+                    runs=newest_first_runs)
             if checkpoint_supplement:
                 assert settlement_identity is not None
                 context = usage_booking_guard.enter_context(checkpoint_commit_guard(
@@ -1466,18 +1385,11 @@ def refresh_state_run(
                 payload["usage"] = dict(record["usage"])
             if dry_run:
                 expected_write_scopes = ["runtime_history"]
-                if active_state_next_action_update and active_state_next_action_update.get("would_update"):
-                    expected_write_scopes.insert(0, "active_state")
                 if sync_global and route_status in {"resolved", "single_runtime"}:
                     expected_write_scopes.append("global_registry")
                 if shared_runtime_root:
                     expected_write_scopes.append("shared_runtime_projection")
                 patch_parts = [f"append refresh-state run classification={classification}"]
-                if active_state_next_action_update:
-                    if active_state_next_action_update.get("would_update"):
-                        patch_parts.append("preview active-state Next Action update")
-                    else:
-                        patch_parts.append("preserve active-state Next Action")
                 if sync_global and route_status in {"resolved", "single_runtime"}:
                     patch_parts.append("sync public-safe registry projection")
                 elif sync_global:

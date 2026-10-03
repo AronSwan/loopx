@@ -125,17 +125,17 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument(
         "--next-action",
         help=(
-            "Explicitly update the active state's durable ## Next Action before "
-            "appending the refresh run. Without this flag, --recommended-action "
-            "only describes the run record."
+            "Record a next step bound to this agent's selected advancement Todo in "
+            "the existing recommendation receipt. Does not overwrite Markdown "
+            "Next Action, select another task, or grant execution authority."
         ),
     )
     refresh_state_parser.add_argument(
         "--next-action-basis",
         help=(
-            "Next Action read basis from status attention_queue.items[].next_action_basis. "
-            "Required for shared multi-agent writes; optional for sole-peer writes "
-            "to reject an older planning snapshot."
+            "Current agent's Next Action basis from status --agent-id or the quota "
+            "agent_lane_next_action. Rejects a stale task or same-agent step. "
+            "Without it, the command uses a fresh invocation read."
         ),
     )
     refresh_state_parser.add_argument(
@@ -339,8 +339,8 @@ def register_refresh_state_command(
         choices=PROGRESS_SCOPE_CHOICES,
         help=(
             "Progress report scope; --agent-id defaults to agent_lane. A confirmed "
-            "sole peer may update Next Action without changing that scope. Shared "
-            "multi-agent prose updates require goal scope and --next-action-basis."
+            "registered peer may update its selected task step without changing "
+            "that scope; report scope does not grant shared task authority."
         ),
     )
     refresh_state_parser.add_argument(

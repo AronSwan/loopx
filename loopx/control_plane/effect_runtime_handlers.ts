@@ -118,7 +118,7 @@ import {
   selectTodoCompletionContinuation,
 } from "./todos/completion_state.ts";
 import { reduceTodoCompletionTransaction } from "./todos/completion_transaction.ts";
-import { transitionTodoNextAction } from "./todos/next_action.ts";
+import { transitionTodoNextAction, projectNextActionBinding } from "./todos/next_action.ts";
 import { planTodoFieldUpdate } from "./todos/field_update.ts";
 import { planPublicTodoUpdate } from "./todos/public_update.ts";
 import { planMonitorMetadata } from "./todos/monitor_metadata.ts";
@@ -234,8 +234,8 @@ import {
   projectTodoPlanningInventory,
   projectTodoPlanningInventoryDetail,
 } from "./work_items/planning_inventory.ts";
-import { resolveRefreshRecommendation } from "./work_items/refresh_recommendation.ts";
-import {resolveNextActionWriteback} from "./work_items/next_action_writeback.ts";
+import { resolveRefreshRecommendation, resolveLaneRecommendation } from "./work_items/refresh_recommendation.ts";
+
 import {
   validateInteractionProjectionHookInvocation,
   validateInteractionProjectionHookRegistration,
@@ -533,6 +533,7 @@ export function createEffectRuntimeHandlers(
     ["todo.successor.derive", evaluateCoordinationTodoSuccessorDerivation],
     ["todo.completion.reduce", reduceTodoCompletionTransaction],
     ["todo.next_action.transition", transitionTodoNextAction],
+    ["todo.next_action.binding", projectNextActionBinding],
     ["todo.resume_condition.normalize", normalizeTodoResumeWhen],
     ["todo.resume_condition.evaluate", evaluateTodoResumeConditions],
     ["todo.resume_planning.project", projectTodoResumePlanning],
@@ -562,7 +563,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],
-    ["work_item.next_action_writeback.resolve", resolveNextActionWriteback],
+    ["work_item.refresh_recommendation.lane", resolveLaneRecommendation],
     ["work_item.delivery_history.project", projectDeliveryHistory],
     ["work_item.delivery_response.project", projectDeliveryResponse],
     ["work_item.delivery_claim.validate", validateDeliveryClaim],
