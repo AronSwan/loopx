@@ -2,18 +2,18 @@
  "board": "EVENTS.jsonl@ZCodeProject",
  "algo_version": 3,
  "ruleset": {
-  "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.2.1.md",
-  "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
+  "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.3.md",
+  "sha256_lf": "8f1a50fe2111e7a4ce79240b258fa60aba57c7ceda01ce95eae65d4ea2cbe77b"
  },
- "taken_at": "2026-10-03T19:27:37.016+08:00",
- "lines": 126,
- "file_sha256": "2d63bce5a89d3bc460483b941bd544b839ea09fe22e07c70901ef8533f81360e",
- "prefix_sha256": "2d63bce5a89d3bc460483b941bd544b839ea09fe22e07c70901ef8533f81360e",
+ "taken_at": "2026-10-03T19:39:43.480+08:00",
+ "lines": 127,
+ "file_sha256": "a1d72e0f488295d6573e0f045eb5aede11b09eb165435aab49fec81f4e03767f",
+ "prefix_sha256": "a1d72e0f488295d6573e0f045eb5aede11b09eb165435aab49fec81f4e03767f",
  "head_event": {
-  "actor": "[酷刑审收官:v2.3五稿快签通过·呈批]",
-  "ts": "2026-10-03T19:27:35.349+08:00",
-  "prev_chain": "a053b58f28a22674212e8bcdb234d8cf934f727bc92bbf974145f76784790339",
-  "head_sha256": "8467d5cced32a1a04908821310b3e51345cd46cce231d3adc2777557f94f4e98"
+  "actor": "[用户批准令:v2.3生效]",
+  "ts": "2026-10-03T19:39:25.249+08:00",
+  "prev_chain": "8467d5cced32a1a04908821310b3e51345cd46cce231d3adc2777557f94f4e98",
+  "head_sha256": "6c77bbd3b71b7c8775c3b1d2556e093a3ccaac69e05398834dc615cc0c56e68b"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
