@@ -257,7 +257,9 @@ later `stop` rereads it. On a platform without process groups the launched
 host cannot be proven drained at all, so `stop --execute` fails with an
 actionable error naming that boundary before writing a cancellation intent,
 acknowledging, signalling a worker, or releasing a lease. Repeating a refused
-request preserves the operation and any existing stop receipt unchanged. `unknown`
+request preserves the operation and any existing stop receipt unchanged. An
+active or unattributable worker is also refused before its Host record appears;
+a not-yet-started operation with no holder can still be cancelled. `unknown`
 means the holder vanished before acknowledging, and `noop` means the
 work was already accepted, rejected or stopped. `requested` or `acknowledged`
 means it is still winding down: call `stop` again. A grace timeout never turns
@@ -294,7 +296,9 @@ worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host �
 `required_lease_release_unproven`。host 无法归属或其 supervisor 未完成清理时，
 停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
 启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的
-可操作错误失败，而不是留下一份任何读取都无法结算的回执。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
+可操作错误在写入停止意图、确认、发送信号或释放租约之前失败，重复拒绝不修改原记录。
+Host 记录尚未出现但 worker 仍活跃或无法归属时也拒绝；没有持有者且尚未启动的
+operation 仍可安全取消。`unknown` 表示持有者在确认前消失；`noop` 表示工作已 accepted、
 rejected 或 stopped；`requested`/`acknowledged` 表示仍在收尾，再次调用 `stop`。
 宽限期超时永远不会变成回执。已停止的工作不能 `resume`，新范围需要新的
 operation id。Turn journal 保留 `in_progress` 条目供检查，记录不会被改写成完成；
