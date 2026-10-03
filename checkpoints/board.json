@@ -1,12 +1,15 @@
 {
  "board": "EVENTS.jsonl@ZCodeProject",
- "taken_at": "2026-10-03T13:28:13.853+08:00",
- "lines": 110,
- "file_sha256": "1229f9d116a9d6f1876be7037301d0ebe177da97e7fdfbfa2cf4b9a8dfeb7ed7",
+ "algo_version": 2,
+ "taken_at": "2026-10-03T13:58:22.423+08:00",
+ "lines": 112,
+ "file_sha256": "3325a5a545e2350369d787d8dd1cfb589b883e6a261bbf227c94206445b5a25c",
+ "prefix_sha256": "3325a5a545e2350369d787d8dd1cfb589b883e6a261bbf227c94206445b5a25c",
  "head_event": {
-  "actor": "[协调-监考:v2.2.1补正第一批]",
-  "ts": "2026-10-03T13:25:19.518+08:00",
-  "prev_chain": "702f981758ba702037297655cb364d6c7d68edc34f6087e168cd6d5f59bd0f34"
+  "actor": "[六修补复核席:5落实+1部分→通过(附更正已执行)]",
+  "ts": "2026-10-03T13:38:43.678+08:00",
+  "prev_chain": "630daea2620f409f75e46df787c8c2477dd41a04a04a9b598c898e8248157cf2",
+  "head_sha256": "482c8eb675118c1c0461c414cea818df25f209f96f5da1dd2dee539c5476d7ae"
  },
- "note": "时戳锚最小版: 证人在GitHub服务端(push时刻+commit对象哈希), 非协同签名; 重写本地板=与外锚失配可检出"
+ "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
