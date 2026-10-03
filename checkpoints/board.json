@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/LoopX考场/监考包/出题与阅卷守则v2.2-草案.md",
   "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
  },
- "taken_at": "2026-10-03T15:55:49.288+08:00",
- "lines": 115,
- "file_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
- "prefix_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
+ "taken_at": "2026-10-03T15:58:42.690+08:00",
+ "lines": 116,
+ "file_sha256": "e0441c03ba03eaafd4a9e613f741843b41ab532a6770d211c10c831538358fa4",
+ "prefix_sha256": "e0441c03ba03eaafd4a9e613f741843b41ab532a6770d211c10c831538358fa4",
  "head_event": {
-  "actor": "[协调-监考:开反过拟合+实践组合作审核]",
-  "ts": "2026-10-03T15:35:36.177+08:00",
-  "prev_chain": "edd34e96653ff4b8f538f6d0cbc5b93bdc46bb730a05f528f9534a2c6c65a95a",
-  "head_sha256": "405228256642890a0a1957b381fb9c3cb7791ba1844c0b93ff66fe1100ff4e38"
+  "actor": "[合作审核收官:主体健康/增量带病/执行面缺电]",
+  "ts": "2026-10-03T15:58:39.665+08:00",
+  "prev_chain": "405228256642890a0a1957b381fb9c3cb7791ba1844c0b93ff66fe1100ff4e38",
+  "head_sha256": "d7cf2d232e9bdb7d68c874102fd494c24131404c422077bde65bf829fdddeb2b"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
