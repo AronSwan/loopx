@@ -96,6 +96,7 @@
 | 2026-09-30 | PR | #5356 Windows sentinel 修复 | **当周合并** | +存 |
 | 2026-10-01 | issue | #5397 lock holder sidecar 崩溃 | **次日修复（42e843ac)** | +存 |
 | 2026-10-02 | issue | #5462 三静默契约 ergonomics（+自纠评论 5951699007) | 待响应 | 观察中 |
+| 2026-10-03 | issue | **#5511 peers.py O_NONBLOCK Windows 崩 read 主线路径**（C2，终审批准本月名额；发前最后核验纠了终审转述的先例路径——实为两处 collaboration_mcp.py:867+todos/completion_result.py:32 非三处） | 待响应 | 观察中 |
 
 > 规则：连续两笔被沉默/要求大改→**冷却期**（禁新发对外动作，只许通道D复现确认）。
 > 体裁纪律：照 `.local/upstream/issue-ergonomics-draft.md`——承认内部自洽/给最小 repro/Ask any one/happy to PR/坦白可能误判。
