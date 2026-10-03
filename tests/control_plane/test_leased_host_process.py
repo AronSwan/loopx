@@ -88,9 +88,13 @@ else: marker.touch()
     if fault == "lost_reply":
         assert observed["outcome"] == "exited" and observed["output_complete"] is True
         assert current["lease"]["version"] > context["lease"]["version"]
+        assert "lease_failure" not in observed
     else:
         assert observed["outcome"] == "cancelled" and observed["output_complete"] is False
         assert current["lease"]["version"] == context["lease"]["version"]
+        assert observed["lease_failure"] == (
+            {"reason": "renewal_rejected", "boundary": "renewal"} if fault == "rejected" else
+            {"reason": "proved_deadline_elapsed", "boundary": "deadline"})
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
@@ -109,3 +113,17 @@ def test_control_pipe_loss_waits_for_leased_forced_cleanup(canonical_execution, 
     before = marker.read_bytes()
     time.sleep(0.2)
     assert marker.read_bytes() == before, "control pipe loss must finish forced cleanup before returning"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
+def test_released_initial_proof_explains_refusal_before_host_launch(canonical_execution, tmp_path):
+    context, command, selected = canonical_execution
+    command("task-lease", "release", *selected, "--owner", "worker",
+            "--idempotency-key", "original-execution", "--expected-version", "1")
+    marker = tmp_path / "must-not-launch"
+    observed = run_host_process([sys.executable, "-c",
+        "from pathlib import Path; import sys; Path(sys.argv[1]).touch()", str(marker)],
+        project=tmp_path, input_text="", timeout_seconds=10, delegated_lease=context)
+    assert observed["outcome"] == "cancelled" and observed["output_complete"] is False
+    assert not marker.exists()
+    assert observed["lease_failure"] == {"reason": "lease_inactive", "boundary": "initial_proof"}

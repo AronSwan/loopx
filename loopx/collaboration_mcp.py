@@ -1294,7 +1294,11 @@ class Delegations:
             except RuntimeError as exc:
                 raise ValueError("delegation managed CLI supervision unavailable; reconcile the original Turn") from exc
             if observation["outcome"] != "exited" or not observation["output_complete"]:
-                raise ValueError(f"delegation lease supervision stopped ({observation['outcome']}); reconcile the original Turn")
+                detail = observation["outcome"]
+                failure = observation.get("lease_failure")
+                if failure is not None:
+                    detail += f"; lease:{failure['boundary']}/{failure['reason']}"
+                raise ValueError(f"delegation lease supervision stopped ({detail}); reconcile the original Turn")
             stdout, returncode = "".join(chunks), observation["returncode"]
         try:
             value = json.loads(stdout)
