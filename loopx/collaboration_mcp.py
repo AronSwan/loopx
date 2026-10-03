@@ -52,6 +52,9 @@ from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
     turn_lane_liveness, turn_lane_target,
 )
+from .control_plane.collaboration.delegation_stop_signal import (
+    DelegationFenced, DelegationStopRequested, WorkerStopSignal, install_worker_stop_signal,
+)
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.delegation_inventory import (
     DELEGATION_HOST_PROCESS_SUFFIX, DELEGATION_STOP_RECEIPT_SUFFIX,
@@ -359,74 +362,6 @@ DELEGATION_STOP_GRACE_SECONDS = 10.0
 DELEGATION_STOPPED_MESSAGE = "delegation operation was stopped; start a new operation id"
 
 
-class DelegationStopRequested(BaseException):
-    """A stop reached the worker that owns this operation; it must acknowledge, not finish.
-
-    A ``BaseException`` like ``KeyboardInterrupt``: a termination request must
-    not be swallowed by an ``except Exception`` and turned into further work.
-    """
-
-    def __init__(self, source: str) -> None:
-        super().__init__(source)
-        self.source = source
-
-
-class DelegationFenced(DelegationStopRequested):
-    """A stop this process never acknowledged fences its execution-record write.
-
-    The write is refused before it happens: a late-returning or other-host
-    worker records no Turn result, completes no Todo and publishes nothing.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("fenced")
-
-
-class _WorkerStopSignal:
-    """Turn SIGTERM into a stop request only when a stop was written for this operation.
-
-    Without a stop receipt the signal keeps its default meaning, so a shutdown
-    still leaves the operation recoverable by ``resume`` instead of stopping it.
-    Later signals are absorbed while the acknowledgement is written.
-    """
-
-    def __init__(self, stop_path: Path) -> None:
-        self.stop_path = stop_path
-        self.armed = True
-
-    def __call__(self, signum: int, frame: object) -> None:
-        if not self.armed:
-            return
-        try:
-            requested = self.stop_path.exists()
-        except OSError:
-            requested = False
-        if not requested:
-            signal.signal(signum, signal.SIG_DFL)
-            os.kill(os.getpid(), signum)
-            return
-        self.armed = False
-        raise DelegationStopRequested("SIGTERM")
-
-    def disarm(self) -> None:
-        self.armed = False
-
-
-def install_worker_stop_signal(stop_path: Path) -> _WorkerStopSignal | None:
-    """Install the detached worker's SIGTERM handler; ``None`` where signals are unsupported."""
-
-    if not hasattr(signal, "SIGTERM"):
-        return None
-    handler = _WorkerStopSignal(stop_path)
-    try:
-        signal.signal(signal.SIGTERM, handler)
-    except (ValueError, OSError):
-        # Not the main thread, or a platform without handler support: the
-        # worker still honours stop files at every checkpoint and fenced write.
-        return None
-    return handler
-
-
 def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: str) -> Path:
     """The requester-scoped durable operation record; readable without a service."""
     return _root(root) / "executions" / _hash([goal_id, agent_id]) / (_hash(operation_id) + ".json")
@@ -471,7 +406,7 @@ class Delegations:
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
         self._goal_ref_lock = Lock()
-        self._stop_signal: _WorkerStopSignal | None = None
+        self._stop_signal: WorkerStopSignal | None = None
         try:
             self.goal_ref = capture_collaboration_goal_ref(
                 self.registry,

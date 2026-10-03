@@ -18,7 +18,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "manag
 import research_team as demo  # noqa: E402
 from test_managed_research_scenario import fixture  # noqa: E402
 from loopx.control_plane.collaboration import delegation_stop_lease as stop_lease  # noqa: E402
-from loopx.collaboration_mcp import DelegationFenced, DelegationStopRequested, Delegations  # noqa: E402
+from loopx.collaboration_mcp import Delegations  # noqa: E402
+from loopx.control_plane.collaboration.delegation_stop_signal import (  # noqa: E402
+    DelegationFenced, DelegationStopRequested,
+)
 from loopx.control_plane.collaboration.peers import returns  # noqa: E402
 from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_liveness, turn_lane_singleflight  # noqa: E402
