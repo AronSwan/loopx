@@ -9,11 +9,11 @@ nothing else may mutate `.loopx/deepresearch/` state.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import exclusive_file_lock
 
 COMMAND = "/loopx-deepresearch"
@@ -253,7 +253,7 @@ def add_source(
         if external_evidence is not None:
             fields = {"plan_id", "admission_id", "receipt_digest", "content_digest"}
             if set(external_evidence) != fields or any(
-                not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+                not isinstance(value, str) or not ENVELOPED_SHA256_PATTERN.fullmatch(value)
                 for value in external_evidence.values()
             ):
                 raise ValueError("external evidence lineage requires exact content-addressed identities")
