@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.3.md",
   "sha256_lf": "8f1a50fe2111e7a4ce79240b258fa60aba57c7ceda01ce95eae65d4ea2cbe77b"
  },
- "taken_at": "2026-10-03T19:54:33.209+08:00",
- "lines": 129,
- "file_sha256": "b3ae4bd4149af62730e8e388ec8731b54ed3bee5ceff5610de9259d0513c0985",
- "prefix_sha256": "b3ae4bd4149af62730e8e388ec8731b54ed3bee5ceff5610de9259d0513c0985",
+ "taken_at": "2026-10-04T01:03:48.808+08:00",
+ "lines": 133,
+ "file_sha256": "6b45883da856ae8ff58b3f405a56733fb3d67a8a8f479d8be947895367c7f453",
+ "prefix_sha256": "6b45883da856ae8ff58b3f405a56733fb3d67a8a8f479d8be947895367c7f453",
  "head_event": {
-  "actor": "[分支保护落地:board-checkpoints禁强推/禁删/含管理员]",
-  "ts": "2026-10-03T19:54:07.996+08:00",
-  "prev_chain": "d4d0648c1f5a0bc6256d9c530fe4dc4826baf454063aa4c4f865b16e00a3da95",
-  "head_sha256": "46889aface57913d24585efeb3fdd7d76abbd611120dc153d86b6726f66728ce"
+  "actor": "[第七场收官:全绿·首例无事件场]",
+  "ts": "2026-10-04T01:03:47.667+08:00",
+  "prev_chain": "6bdb70aea9aaf37c91f68dc4fab33406a66467878b620ad81f4e604096a45de3",
+  "head_sha256": "4e57252b13111ebb66294130d44f4e0f187d672e135862bed349ae90d087d37f"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
