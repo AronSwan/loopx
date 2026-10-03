@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...capabilities.multi_subagent.native_child_receipts import (
+from ..capabilities.multi_subagent.native_child_receipts import (
     _load_native_child_events, record_native_child,
 )
 

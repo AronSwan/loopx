@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.control_plane.turn_driver.codex_native_child import (
+from loopx.extensions.codex_native_child import (
     configured_native_child_limit, CodexNativeChildObserver, native_child_observer,
 )
 from loopx.capabilities.multi_subagent.native_child_receipts import load_native_child_activity, record_native_child

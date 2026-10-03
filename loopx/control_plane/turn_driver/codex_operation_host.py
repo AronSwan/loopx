@@ -37,7 +37,7 @@ from .codex_sessions import (
     _store_codex_cli_session,
     load_codex_cli_session,
 )
-from .codex_native_child import native_child_observer
+from ...extensions.codex_native_child import native_child_observer
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 

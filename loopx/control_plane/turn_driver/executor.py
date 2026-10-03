@@ -161,7 +161,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(reward_memory_recall, Mapping):
         request["reward_memory_recall"] = dict(reward_memory_recall)
     request.update(subagent.subagent_host_request_projection(plan))
-    from .codex_native_child import configured_native_child_limit
+    from ...extensions.codex_native_child import configured_native_child_limit
 
     if configured_native_child_limit(request) is not None:
         request["turn_instance_id"] = transaction.get("turn_instance_id") or turn_key
@@ -801,7 +801,7 @@ def _host_result_stage(
     if "typed_result" not in completed_phases:
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
-        from .codex_native_child import configured_native_child_limit
+        from ...extensions.codex_native_child import configured_native_child_limit
         if configured_native_child_limit(request) is not None:
             # Reuse the journal's durable attempt identity; replay never creates
             # another identity, and a real host retry always advances it.
