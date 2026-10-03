@@ -877,13 +877,39 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
         "bridge_pid": os.getpid(), "process_group": os.getpid(),
     }))
 
-    # The launched Host is real, but this platform cannot prove it drained.
+    # A persisted finished Host record still needs platform drain capability.
     assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_DRAINED
     monkeypatch.delattr(host_process_transport.os, "killpg", raising=False)
     assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_UNSUPPORTED_PLATFORM
 
-    with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
-        runner.stop("analysis-platform", execute=True)
+    operation_before = path.read_bytes()
+    stop_path = runner._stop_path(path)
+    assert not stop_path.exists()
+
+    def unexpected_effect(*args, **kwargs):
+        pytest.fail("unsupported stop must not acknowledge, signal, or release its lease")
+
+    monkeypatch.setattr(runner, "_acknowledge_stop", unexpected_effect)
+    monkeypatch.setattr(runner, "_signal_worker", unexpected_effect)
+    from loopx.control_plane.collaboration import delegation_stop_lease
+    monkeypatch.setattr(delegation_stop_lease, "settle", unexpected_effect)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
+            runner.stop("analysis-platform", execute=True)
+        assert path.read_bytes() == operation_before
+        assert not stop_path.exists()
+
+    # An existing request remains recoverable evidence, never a fabricated ACK.
+    stop = runner._new_stop_record(
+        json.loads(operation_before), requested_by=runner.agent_id, worker=None,
+    )
+    stop_path.write_text(json.dumps(stop))
+    stop_before = stop_path.read_bytes()
+    for _ in range(2):
+        with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
+            runner.stop("analysis-platform", execute=True)
+        assert path.read_bytes() == operation_before
+        assert stop_path.read_bytes() == stop_before
 
 
 def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(service, monkeypatch):

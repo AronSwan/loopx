@@ -1075,9 +1075,12 @@ class Delegations:
             if stop is None:
                 if row["status"] in DELEGATION_TERMINAL_STATUSES:
                     return self._stop_receipt(row, binding, None)
+                self._require_host_drain_support(path)
                 stop = self._new_stop_record(row, requested_by=self.agent_id,
                                              worker=self._lock_holder_worker(path, row))
                 _write(self._stop_path(path), stop)
+            elif stop["phase"] in DELEGATION_STOP_OPEN_PHASES:
+                self._require_host_drain_support(path)
         if stop["phase"] in DELEGATION_STOP_OPEN_PHASES and stop.get("ack") is None:
             if stop.get("worker") is None:
                 # No worker was named when the request was written, so whoever owns
@@ -1221,6 +1224,19 @@ class Delegations:
         except (OSError, ValueError):
             pass  # the bootstrap is host input; its state never blocks the receipt
 
+    def _require_host_drain_support(self, path: Path) -> None:
+        """Reject under the dispatch fence before cancellation writes or signals.
+
+        Keep the same guard during settlement for an existing cancellation
+        intent restored on a platform that cannot prove Host drain.
+        """
+        if self._delegation_host_drain(path) == HOST_PROCESS_UNSUPPORTED_PLATFORM:
+            raise ValueError(
+                "delegation stop cannot prove the launched Host drained on this platform: "
+                "process groups are unavailable, so the Host supervisor is best-effort. "
+                "Stop the member's Host through its own supervisor and re-read the receipt."
+            )
+
     def _settle_stop(self, path: Path) -> dict:
         with exclusive_file_lock(self._dispatch_lock(path)):
             row = _read(path)
@@ -1230,16 +1246,7 @@ class Delegations:
                 return self._stop_receipt(row, binding, None)
             if stop["phase"] not in DELEGATION_STOP_OPEN_PHASES:
                 return self._stop_receipt(row, binding, stop)
-            # A launched Host on a platform that cannot prove its group exited
-            # has no converging stop: say so plainly rather than leaving the
-            # caller with an acknowledged receipt it can never settle.
-            unsupported = self._delegation_host_drain(path) == HOST_PROCESS_UNSUPPORTED_PLATFORM
-            if unsupported:
-                raise ValueError(
-                    "delegation stop cannot prove the launched Host drained on this platform: "
-                    "process groups are unavailable, so the Host supervisor is best-effort. "
-                    "Stop the member's Host through its own supervisor and re-read the receipt."
-                )
+            self._require_host_drain_support(path)
             facts = {"operation_lock_free": self._operation_lock_free(path)}
             facts["worker_lane_released"], lane_state = self._worker_lane_released(row, stop, binding)
             # Read last: a Host seen drained after its worker and lane let go stays drained.
