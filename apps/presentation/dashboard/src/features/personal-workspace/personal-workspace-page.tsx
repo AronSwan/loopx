@@ -1,5 +1,6 @@
 import { goalCreateRequest } from "./goal-create-request";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
+import { useConversationInputState } from "./use-conversation-input-state";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
@@ -843,15 +844,9 @@ export function PersonalWorkspacePage({
       return {};
     }
   });
-  const [sending, setSending] = useState(false);
-  const [steering, setSteering] = useState(false);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
-  const [loopxMessageReceipt, setLoopxMessageReceipt] = useState("");
-  const [imageAttachments, setImageAttachments] = useState<WorkspaceImageAttachment[]>([]);
-  const [imageAttachmentError, setImageAttachmentError] = useState<string | null>(null);
-  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
@@ -882,10 +877,10 @@ export function PersonalWorkspacePage({
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const composerDraftKey = `${selectedGoalId ?? "manager"}:${selectedAgentId}`;
   const composer = drafts[composerDraftKey] ?? "";
-  useEffect(() => {
-    setImageAttachments([]);
-    setImageAttachmentError(null);
-  }, [composerDraftKey]);
+  const { sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
+    imageAttachments, setImageAttachments, imageAttachmentError, setImageAttachmentError,
+    loopxMessageReceipt, setLoopxMessageReceipt, isCurrentConversation,
+  } = useConversationInputState(composerDraftKey);
   useEffect(() => {
     const input = composerRef.current;
     if (!input) return;
@@ -894,7 +889,7 @@ export function PersonalWorkspacePage({
   }, [composer, selectedGoalId, managerChatOpen]);
   function setComposerDraft(key: string, value: string, expectedValue?: string) {
     setDrafts((current) => {
-      if (expectedValue !== undefined && current[key] !== expectedValue) return current;
+      if (expectedValue !== undefined && (current[key] ?? "") !== expectedValue) return current;
       const next = { ...current };
       if (value) {
         next[key] = value;
@@ -1274,7 +1269,7 @@ export function PersonalWorkspacePage({
     }
     rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
-    if (options.select !== false) setSelection({ item: local, kind: "proposal" });
+    if (options.select !== false && isCurrentConversation()) setSelection({ item: local, kind: "proposal" });
     return local;
   }
 
@@ -1733,7 +1728,7 @@ export function PersonalWorkspacePage({
       setSending(true);
       try {
         const receipt = await sendLoopXMessage(conversationSessionId, message, loopxDelivery);
-        if (!messageOverride) setComposer("");
+        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
         setLoopxMessageReceipt(locale === "zh-CN" ? `${loopxDelivery === "queue" ? "已排队，等待后续回合" : loopxDelivery === "inbox" ? "已进入收件箱" : "已提交纠偏"} · ${receipt.status}` : `${loopxDelivery}: ${receipt.status}`);
       } catch (error) {setImageAttachmentError(error instanceof Error ? error.message : String(error));}
       finally {setSending(false);}
@@ -1758,7 +1753,7 @@ export function PersonalWorkspacePage({
       if (previews?.decision) await createPreview(previews.decision);
     } catch (error) {
       if (!messageOverride) {
-        setComposer(message);
+        setComposerDraft(composerDraftKey, message, "");
         setImageAttachments(pendingImages);
       }
       const errorMessage = error instanceof Error ? error.message : t("feedback.sendGenericError");
