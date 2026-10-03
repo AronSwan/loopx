@@ -296,6 +296,7 @@ def _record_native_child(
     source_admission: Mapping[str, Any] | None = None,
     _host_observed: bool = False,
     _host_child_refs: Sequence[str] | None = None,
+    _host_wait_ref: str | None = None,
 ) -> dict[str, Any]:
     """Preview or append a typed report; never launch a child or spend quota."""
     goal_id = _id(goal_id, field="goal_id")
@@ -320,6 +321,10 @@ def _record_native_child(
         # cannot collide with the decision fields or be text-truncated.
         fields.update({"host_child_ref_" + _id(ref, field="host_child_ref"): True
                        for ref in sorted(set(_host_child_refs))})
+    if _host_wait_ref is not None:
+        if not _host_observed or stage != "result":
+            raise ValueError("wait correlation requires a host-observed result")
+        fields["host_wait_ref"] = _id(_host_wait_ref, field="host_wait_ref")
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
     prior = _events_for_turn(
@@ -331,9 +336,34 @@ def _record_native_child(
     )
     existing = next((event for event in prior
                      if event.get("case_id") == operation_id
-                     and event.get("event_kind") == EVENT_KINDS[stage]), None)
+                     and event.get("event_kind") == EVENT_KINDS[stage]
+                     and (stage != "result" or _host_wait_ref is None
+                          or _details(event).get("host_wait_ref") == _host_wait_ref)), None)
+    if stage == "result" and _host_wait_ref is None and existing is not None:
+        # A later decision snapshot can confirm the same typed result without
+        # replacing the causal wait binding already stored on that result.
+        wait_ref = _details(existing).get("host_wait_ref")
+        if wait_ref is not None:
+            fields["host_wait_ref"] = wait_ref
     if existing is not None and _details(existing) != fields:
         raise ValueError("operation identity already has a conflicting native child report")
+
+    def validate_result_identity(current: Sequence[Mapping[str, Any]]) -> None:
+        if stage != "result":
+            return
+        for result in current:
+            if result.get("event_kind") != EVENT_KINDS["result"]:
+                continue
+            details = _details(result)
+            if (_host_wait_ref is not None and details.get("host_wait_ref") == _host_wait_ref
+                    and result.get("case_id") != operation_id):
+                raise ValueError("wait identity already has a conflicting native child binding")
+            if (result.get("case_id") == operation_id
+                    and any(details.get(key) != fields.get(key)
+                            for key in ("outcome", "observation_source"))):
+                raise ValueError("operation identity already has a conflicting native child report")
+
+    validate_result_identity(prior)
 
     def report_admission() -> Mapping[str, Any]:
         readback = read_heartbeat_settlement(
@@ -361,6 +391,7 @@ def _record_native_child(
         current = _events_for_turn(observed, goal_id=goal_id, agent_id=agent_id,
                                    turn_instance_id=turn_instance_id,
                                    goal_ref=goal_ref)
+        validate_result_identity(current)
         decisions = {str(item.get("case_id")): item for item in current
                      if item.get("event_kind") == EVENT_KINDS["decision"]}
         if stage == "decision":
@@ -407,6 +438,7 @@ def _record_native_child(
                 "run_id",
                 "case_id",
                 *(("goal_ref",) if goal_ref is not None else ()),
+                *(("details",) if _host_wait_ref is not None else ()),
             ),
             precondition=lambda: validate_transition(load_rollout_events(log_path)),
         )
@@ -442,6 +474,7 @@ def record_native_child(
     goal_ref: Mapping[str, Any] | None = None,
     _host_observed: bool = False,
     _host_child_refs: Sequence[str] | None = None,
+    _host_wait_ref: str | None = None,
 ) -> dict[str, Any]:
     """Preview or append one report under its exact quota owner."""
 
@@ -473,4 +506,5 @@ def record_native_child(
             source_admission=source_admission,
             _host_observed=_host_observed,
             _host_child_refs=_host_child_refs,
+            _host_wait_ref=_host_wait_ref,
         )

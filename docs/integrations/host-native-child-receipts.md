@@ -133,7 +133,14 @@ spawn or followup in the
 same admitted Goal instance, coordinator and LoopX Turn, including receipts
 outside the bounded status window. A spawn/followup item's terminal snapshot
 belongs to its own stable decision and receivers; replaying an old spawn never
-completes a later followup. Only a new wait uses the latest child association.
+completes a later followup. A terminal wait first resolves the immutable binding
+of its session, invocation, native item and child identity. Only its first
+observation uses the latest child association. Each distinct wait retains a
+hashed scalar reference on the existing result event; exact replay preserves
+that original operation across restart, and changed outcomes or reassignment
+are rejected. Multiple waits observing one result do not add operations,
+launches, parent acceptance or quota. No raw host identifiers or content enter
+the public activity projection.
 It does not adopt coordinator reports or scan external host history. Spawn IDs
 retain their existing child binding.
 CLI followup and failed-call IDs use the Turn journal's durable `host_attempt`
@@ -148,7 +155,11 @@ No prompt or raw result is added to a receipt.
 恢复 CLI 时可能只收到新的 `wait` 完成事件。适配器从同一已准入 Goal 实例、
 主 Agent、LoopX Turn 的最近一次已启动宿主 spawn 或 followup 回执恢复关联，
 覆盖状态窗口外的操作。spawn/followup 的完成快照只归属自身稳定决策和接收者；
-重放旧启动事件不会完成后来的跟进任务，只有新的 wait 使用最近关联。
+重放旧启动事件不会完成后来的跟进任务。wait 首先恢复其会话、调用、原生项和
+接收子 Agent 身份对应的首次结果关联；只有首次观察才使用最近操作。哈希关联
+作为标量留在现有结果事件中，重启重放仍归原操作，结果冲突或重新归属会被拒绝。
+多个 wait 观察同一结果不会增加操作、启动、主 Agent 验收或配额；公开活动投影
+不暴露原始宿主标识或内容。
 不采纳主 Agent 上报或扫描外部宿主历史。启动保留既有子代理绑定；CLI 跟进和
 失败调用复用 Turn 日志持久化的 `host_attempt`、父会话和原生工具 ID，
 app-server 使用其原生 Turn ID。真实重试在启动前递增尝试次数；同一绑定与

@@ -61,7 +61,7 @@ class CodexNativeChildObserver:
             registry_path=self.registry_path, **record,
         )
 
-    def _restore_operation(self, child: str) -> str | None:
+    def _restore_operation(self, child: str, *, wait_ref: str) -> str | None:
         # Restore the latest successful host decision for this opaque child,
         # including followups and rows outside the presentation window. The
         # existing log supplies order and exact Goal/agent/Turn ownership.
@@ -72,6 +72,15 @@ class CodexNativeChildObserver:
             turn_instance_id=self.turn_instance_id, goal_ref=self.goal_ref,
             registry_path=self.registry_path,
         )
+        # The first terminal observation owns this wait identity permanently.
+        # Replayed waits must never reinterpret a later child association.
+        for event in events:
+            details = event.get("details")
+            if (event.get("event_kind") == "native_child_result"
+                    and isinstance(details, Mapping)
+                    and details.get("observation_source") == "host_observed"
+                    and details.get("host_wait_ref") == wait_ref):
+                return str(event["case_id"])
         for event in reversed(events):
             details = event.get("details")
             if not isinstance(details, Mapping):
@@ -128,16 +137,23 @@ class CodexNativeChildObserver:
             if not isinstance(child, str) or not child or not isinstance(state, Mapping):
                 continue
             # A spawn/followup snapshot belongs to that stable decision, even
-            # when replayed after later work. Only a new wait needs to recover
-            # the latest operation from the durable child association.
+            # when replayed after later work. A wait first restores its own
+            # consumed binding, then falls back to the latest child operation.
             if tool != "wait" and (not isinstance(receivers, list) or child not in receivers):
                 continue
-            operation_id = self._restore_operation(child) if tool == "wait" else decision_id
-            if operation_id is None:
-                continue
             outcome = {"completed": "completed", "errored": "failed", "shutdown": "cancelled"}.get(state.get("status"))
-            if outcome:
-                self._record(stage="result", operation_id=operation_id, outcome=outcome)
+            if outcome is None:
+                continue
+            wait_ref = None
+            if tool == "wait":
+                if not invocation_id:
+                    raise ValueError("native child wait requires its owned host invocation")
+                identity = json.dumps([session_id, invocation_id, native_id, child], separators=(",", ":"))
+                wait_ref = "codex-wait-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+            operation_id = self._restore_operation(child, wait_ref=wait_ref) if wait_ref else decision_id
+            if operation_id is not None:
+                self._record(stage="result", operation_id=operation_id, outcome=outcome,
+                             _host_wait_ref=wait_ref)
 
 
 def native_child_observer(request: Mapping[str, Any], *, runtime_root: Path,

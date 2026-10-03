@@ -140,7 +140,7 @@ def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path:
     assert activity["operations"][0]["result"] == "completed"
 
 
-def _real_cli_calls(tmp_path, monkeypatch, batches):
+def _real_cli_calls(tmp_path, monkeypatch, batches, *, host_attempts=None):
     import sys
     from loopx.control_plane.turn_driver import codex_cli
     from tests.test_loopx_turn_codex_cli import _request
@@ -168,7 +168,7 @@ Path(sys.argv[2]).write_text(json.dumps({"parent_work": "preserved"}), encoding=
     for attempt, items in enumerate(batches, 1):
         request = _request(session_action="start_new" if attempt == 1 else "resume")
         request["turn_instance_id"] = TURN
-        request["host_attempt"] = attempt
+        request["host_attempt"] = host_attempts[attempt - 1] if host_attempts else attempt
         request["turn_envelope"].update(goal_id=GOAL, agent_id=AGENT, agent_context={
             "contributions": [{"capability_id": "multi_subagent", "facts": {"max_children": 3}}]})
         request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_native_1"
@@ -250,7 +250,8 @@ def test_real_cli_resumed_followup_owns_its_result(tmp_path, monkeypatch, with_s
     followup = {**spawn, 'id': 'item_0', 'tool': 'sendInput', 'agentsStates': {}}
     terminal = {**wait, 'agentsStates': {'child-1': {'status': terminal_status}}}
     batches = ([[spawn, wait]] if with_spawn else []) + [[followup], [terminal, terminal], [terminal]]
-    activity = _real_cli_calls(tmp_path, monkeypatch, batches)
+    activity = _real_cli_calls(tmp_path, monkeypatch, batches,
+        host_attempts=[*range(1, len(batches)), len(batches) - 1])
     followups = [row for row in activity['operations'] if row['operation'] == 'followup']
     assert len(followups) == 1 and followups[0]['result'] == expected
     assert activity['operation_count'] == 1 + int(with_spawn)
@@ -336,3 +337,95 @@ def test_nonwait_terminal_snapshot_ignores_unrelated_receivers(tmp_path, tool):
         turn_instance_id=TURN, configured_limit=3)
     assert activity["operation_count"] == 2
     assert all(row.get("result") is None for row in activity["operations"])
+
+
+@pytest.mark.parametrize("snake", [False, True])
+@pytest.mark.parametrize("restart", [False, True])
+def test_real_cli_consumed_wait_replay_cannot_complete_a_later_followup(
+    tmp_path, monkeypatch, snake, restart,
+):
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    followup = {**spawn, "id": "followup-1", "tool": "sendInput",
+                "agentsStates": {"child-1": {"status": "running"}}}
+    if snake:
+        def exec_item(item):
+            return {"type": "collab_tool_call", "id": item["id"],
+                    "sender_thread_id": item["senderThreadId"],
+                    "tool": {"spawnAgent": "spawn_agent", "sendInput": "send_input", "wait": "wait"}[item["tool"]],
+                    "status": item["status"], "receiver_thread_ids": item.get("receiverThreadIds", []),
+                    "agents_states": item["agentsStates"]}
+        spawn, followup, wait = map(exec_item, (spawn, followup, wait))
+    # Distinct native IDs within one invocation exclude counter reuse. Restart
+    # must preserve the original attempt for an exact replay of the old wait.
+    batches = [[spawn, wait], [followup], [wait]] if restart else [[spawn, wait, followup, wait]]
+    activity = _real_cli_calls(tmp_path, monkeypatch, batches,
+                               host_attempts=[1, 2, 1] if restart else [1])
+    original = next(row for row in activity["operations"] if row["operation"] == "spawn")
+    later = next(row for row in activity["operations"] if row["operation"] == "followup")
+    assert original["result"] == "completed"
+    assert later.get("result") is None
+    assert activity["launched_count"] == 1 and activity["operation_count"] == 2
+    assert activity["parent_accepted_count"] == 0 and activity["quota_spend_slots"] == 0
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(event["event_kind"] == "native_child_result" for event in events) == 1
+    assert '"child-1"' not in json.dumps(events) and "private child" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("spawn_completed", [False, True])
+def test_distinct_waits_keep_their_first_binding_and_reject_changed_outcomes(tmp_path, spawn_completed):
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    if spawn_completed:
+        spawn = {**spawn, "agentsStates": {"child-1": {"status": "completed"}}}
+    followup = {**spawn, "id": "followup-1", "tool": "sendInput", "agentsStates": {}}
+    fresh_wait = {**wait, "id": "wait-2"}
+    snapshot = {**spawn, "agentsStates": {"child-1": {"status": "completed"}}}
+    _observe(tmp_path, [spawn, wait, followup, snapshot, wait])
+    pending = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    later = next(row for row in pending["operations"] if row["operation"] == "followup")
+    assert later.get("result") is None
+    _observe(tmp_path, [fresh_wait, fresh_wait])
+    completed = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    assert all(row["result"] == "completed" for row in completed["operations"])
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    with pytest.raises(ValueError, match="conflicting"):
+        _observe(tmp_path, [{**wait, "agentsStates": {"child-1": {"status": "errored"}}}])
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+    assert completed["parent_accepted_count"] == 0 and completed["quota_spend_slots"] == 0
+
+
+def test_wait_binding_is_per_child_and_cannot_be_reassigned(tmp_path):
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    other = {**spawn, "id": "spawn-2", "receiverThreadIds": ["child-2"], "agentsStates": {}}
+    both = {**wait, "agentsStates": {"child-1": {"status": "completed"},
+                                    "child-2": {"status": "shutdown"}}}
+    followup = {**spawn, "id": "followup-1", "tool": "sendInput", "agentsStates": {}}
+    _observe(tmp_path, [spawn, other, both, followup, both])
+    activity = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    assert [row.get("result") for row in activity["operations"] if row["operation"] == "followup"] == [None]
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    result = next(row for row in events if row["event_kind"] == "native_child_result")
+    later = next(row for row in activity["operations"] if row["operation"] == "followup")
+    with pytest.raises(ValueError, match="conflicting native child binding"):
+        record_native_child(runtime_root=tmp_path, goal_id=GOAL, agent_id=AGENT,
+            turn_instance_id=TURN, configured_limit=3, operation_id=later["operation_id"],
+            stage="result", outcome="completed", execute=True, _host_observed=True,
+            _host_wait_ref=result["details"]["host_wait_ref"])
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+
+@pytest.mark.parametrize("host_observed,stage", [(False, "result"), (True, "decision")])
+def test_wait_correlation_requires_an_observed_result(tmp_path, host_observed, stage):
+    _admit(tmp_path)
+    with pytest.raises(ValueError, match="wait correlation requires"):
+        record_native_child(runtime_root=tmp_path, goal_id=GOAL, agent_id=AGENT,
+            turn_instance_id=TURN, configured_limit=3, operation_id="op-1", stage=stage,
+            outcome="completed" if stage == "result" else "started",
+            operation="spawn" if stage == "decision" else None,
+            entrypoint_id="codex_native_tools" if stage == "decision" else None,
+            execute=True, _host_observed=host_observed, _host_wait_ref="codex-wait-known")
