@@ -50,9 +50,8 @@ class CodexNativeChildObserver:
         self.configured_limit = configured_limit
         self.goal_ref = goal_ref
         self.registry_path = registry_path
-        self.children: dict[str, str] = {}
 
-    def _record(self, *, stage: str, **record: str) -> None:
+    def _record(self, *, stage: str, **record: Any) -> None:
         record_native_child(
             runtime_root=self.runtime_root, goal_id=self.lineage["goal_id"],
             agent_id=self.lineage["agent_id"], turn_instance_id=self.turn_instance_id,
@@ -62,27 +61,31 @@ class CodexNativeChildObserver:
             registry_path=self.registry_path, **record,
         )
 
-    def _restore_spawn(self, child: str) -> None:
-        # Spawn IDs already bind the opaque child identity. Restore only an
-        # admitted, host-observed spawn from this exact Goal/agent/Turn owner,
-        # including operations outside the bounded presentation window.
-        operation_id = "codex-" + hashlib.sha256(child.encode()).hexdigest()[:32]
+    def _restore_operation(self, child: str) -> str | None:
+        # Restore the latest successful host decision for this opaque child,
+        # including followups and rows outside the presentation window. The
+        # existing log supplies order and exact Goal/agent/Turn ownership.
+        child_ref = "codex-child-" + hashlib.sha256(child.encode()).hexdigest()[:32]
+        legacy_spawn = "codex-" + hashlib.sha256(child.encode()).hexdigest()[:32]
         events = _load_native_child_events(
             self.runtime_root, goal_id=self.lineage["goal_id"], agent_id=self.lineage["agent_id"],
             turn_instance_id=self.turn_instance_id, goal_ref=self.goal_ref,
             registry_path=self.registry_path,
         )
-        for event in events:
+        for event in reversed(events):
             details = event.get("details")
             if not isinstance(details, Mapping):
                 continue
             if (event.get("event_kind") == "native_child_decision"
-                    and event.get("case_id") == operation_id
-                    and details.get("operation") == "spawn" and details.get("outcome") == "started"
+                    and details.get("operation") in {"spawn", "followup"}
+                    and details.get("outcome") == "started"
                     and details.get("observation_source") == "host_observed"
                     and details.get("entrypoint_id") == "codex_native_tools"):
-                self.children[child] = operation_id
-                return
+                if (details.get("host_child_ref_" + child_ref) is True
+                        or (details.get("operation") == "spawn"
+                            and event.get("case_id") == legacy_spawn)):
+                    return str(event["case_id"])
+        return None
 
     def observe(self, item: Mapping[str, Any], *, session_id: str, invocation_id: str) -> None:
         item_type = item.get("type")
@@ -112,23 +115,21 @@ class CodexNativeChildObserver:
             operation_id = "codex-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
             self._record(stage="decision", operation_id=operation_id, operation=tool,
                          outcome="started" if started else "host_failed",
-                         **({"reason_code": "host_failed"} if not started else {}))
-            if started:
-                for child in receivers:
-                    self.children[child] = operation_id
+                         **({"reason_code": "host_failed"} if not started else {
+                             "_host_child_refs": sorted({"codex-child-" + hashlib.sha256(child.encode()).hexdigest()[:32]
+                                                         for child in receivers})}))
         states = item.get("agents_states" if snake else "agentsStates")
         if not isinstance(states, Mapping):
             return
         for child, state in states.items():
             if not isinstance(child, str) or not child or not isinstance(state, Mapping):
                 continue
-            if child not in self.children:
-                self._restore_spawn(child)
-            if child not in self.children:
+            operation_id = self._restore_operation(child)
+            if operation_id is None:
                 continue
             outcome = {"completed": "completed", "errored": "failed", "shutdown": "cancelled"}.get(state.get("status"))
             if outcome:
-                self._record(stage="result", operation_id=self.children[child], outcome=outcome)
+                self._record(stage="result", operation_id=operation_id, outcome=outcome)
 
 
 def native_child_observer(request: Mapping[str, Any], *, runtime_root: Path,

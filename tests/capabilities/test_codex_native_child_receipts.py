@@ -261,7 +261,7 @@ def test_real_cli_resumed_followup_owns_its_result(tmp_path, monkeypatch, with_s
         assert original['result'] == 'completed'
     events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
     assert sum(event['event_kind'] == 'native_child_result' for event in events) == 1 + int(with_spawn)
-    assert 'child-1' not in json.dumps(events) and 'private child' not in json.dumps(events)
+    assert '"child-1"' not in json.dumps(events) and 'private child' not in json.dumps(events)
 
 
 def test_real_cli_consecutive_followups_restore_the_latest_owned_operation(tmp_path, monkeypatch):
@@ -276,3 +276,26 @@ def test_real_cli_consecutive_followups_restore_the_latest_owned_operation(tmp_p
     assert {row['result'] for row in followups} == {'completed', 'failed'}
     assert activity['operation_count'] == 3 and activity['launched_count'] == 1
     assert activity['quota_spend_slots'] == 0
+
+
+@pytest.mark.parametrize('host_observed,stage,outcome', [(False, 'decision', 'started'), (True, 'result', 'completed')])
+def test_child_correlation_cannot_attest_a_report_or_result(tmp_path, host_observed, stage, outcome):
+    _admit(tmp_path)
+    with pytest.raises(ValueError, match='child correlation requires'):
+        record_native_child(runtime_root=tmp_path, goal_id=GOAL, agent_id=AGENT,
+            turn_instance_id=TURN, configured_limit=3, operation_id='correlation-1',
+            stage=stage, outcome=outcome, operation='followup' if stage == 'decision' else None,
+            entrypoint_id='codex_native_tools' if stage == 'decision' else None,
+            execute=True, _host_observed=host_observed, _host_child_refs=['codex-child-opaque'])
+    assert not any(event['event_kind'] == 'native_child_decision'
+                   for event in load_rollout_events(rollout_event_log_path(tmp_path, GOAL)))
+
+
+
+def test_real_cli_old_spawn_replay_does_not_replace_a_later_followup(tmp_path, monkeypatch):
+    _admit(tmp_path)
+    spawn, wait = _turn()['items']
+    followup = {**spawn, 'id': 'item_0', 'tool': 'sendInput', 'agentsStates': {}}
+    activity = _real_cli_calls(tmp_path, monkeypatch, [[spawn, wait], [followup], [spawn, wait]])
+    assert activity['operation_count'] == 2 and activity['launched_count'] == 1
+    assert all(row['result'] == 'completed' for row in activity['operations'])

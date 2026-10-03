@@ -295,6 +295,7 @@ def _record_native_child(
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
     _host_observed: bool = False,
+    _host_child_refs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Preview or append a typed report; never launch a child or spend quota."""
     goal_id = _id(goal_id, field="goal_id")
@@ -303,7 +304,7 @@ def _record_native_child(
     operation_id = _id(operation_id, field="operation_id")
     if isinstance(configured_limit, bool) or not isinstance(configured_limit, int) or configured_limit < 1:
         raise ValueError("enabled multi_subagent configured_limit must be positive")
-    fields = _normalized_fields(
+    fields: dict[str, Any] = _normalized_fields(
         stage=stage, operation=operation, outcome=outcome, entrypoint_id=entrypoint_id,
         reason_code=reason_code, evidence_ref=evidence_ref, validation_ref=validation_ref,
     )
@@ -311,6 +312,14 @@ def _record_native_child(
         if stage == "review" or operation == "skip":
             raise ValueError("host observation cannot attest a parent review or skip")
         fields["observation_source"] = "host_observed"
+    if _host_child_refs is not None:
+        if (not _host_observed or stage != "decision" or outcome != "started"
+                or isinstance(_host_child_refs, (str, bytes)) or not _host_child_refs):
+            raise ValueError("child correlation requires a started host-observed decision")
+        # Rollout details are scalar; each opaque binding remains exact and
+        # cannot collide with the decision fields or be text-truncated.
+        fields.update({"host_child_ref_" + _id(ref, field="host_child_ref"): True
+                       for ref in sorted(set(_host_child_refs))})
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
     prior = _events_for_turn(
@@ -432,6 +441,7 @@ def record_native_child(
     execute: bool = False, registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
     _host_observed: bool = False,
+    _host_child_refs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Preview or append one report under its exact quota owner."""
 
@@ -462,4 +472,5 @@ def record_native_child(
             goal_ref=goal_ref,
             source_admission=source_admission,
             _host_observed=_host_observed,
+            _host_child_refs=_host_child_refs,
         )
