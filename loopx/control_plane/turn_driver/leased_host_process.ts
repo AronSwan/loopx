@@ -135,7 +135,7 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
     // The CLI's TERM adapter unwinds the nested Host transport (bounded at
     // five seconds). Allow that acknowledgement before a forced group kill.
     // This is private supervisor behavior, not a model-controlled timeout.
-    const result = await runHostProcess(request, output, controller.signal, 6000, spawned);
+    const result = await runHostProcess(request, output, controller.signal, 6000, {spawned});
     // Keep the proved expiry armed while a renewal reply is in flight. A
     // returned model result cannot make a hung lease transport authoritative.
     finished = true;

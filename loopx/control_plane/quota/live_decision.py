@@ -72,9 +72,16 @@ def _apply_retained_action_selection_reentry(
     )
     payload["retained_action_selection"] = verdict
     disposition = verdict.get("disposition")
+    consumed_fields = verdict.get("clear_fields", [])
+    if not isinstance(consumed_fields, list) or not all(
+        isinstance(field, str) for field in consumed_fields
+    ):
+        raise RuntimeError("TypeScript retained action-selection fields are malformed")
+    for field in consumed_fields:
+        payload.pop(field, None)
     if disposition == "preserve_retained_todo":
-        return
-    if disposition == "bind_autonomous_replan":
+        pass
+    elif disposition == "bind_autonomous_replan":
         payload.pop("selected_todo", None)
         payload.pop("todo_id", None)
         payload.pop("agent_lane_next_action", None)
@@ -492,6 +499,7 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
@@ -567,7 +575,7 @@ def build_live_quota_should_run_decision(
         # must not fall back to the earlier compact status projection and lose
         # the obligation that caused the deferral.
         # Keep the complete snapshot internal; presentation is bounded later.
-        from ...todos import list_goal_todos
+        from ..todos.list_readback import list_goal_todos
 
         source = list_goal_todos(
             registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
@@ -613,6 +621,7 @@ def build_live_quota_should_run_decision(
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        workspace_path=workspace_path,
         goal_ref=goal_ref,
     )
     _apply_retained_action_selection_reentry(

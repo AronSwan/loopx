@@ -50,10 +50,16 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
+/** Optional caller hooks: record the spawned group, or keep stdin open for framed input. */
+export type HostProcessHooks = {
+  spawned?: (item: HostProcessSpawned) => Promise<void>;
+  openInput?: (write: (text: string) => Promise<void>) => void;
+};
+
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  spawned?: (item: HostProcessSpawned) => Promise<void>): Promise<HostProcessResult> {
+  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -134,7 +140,19 @@ export async function runHostProcess(request: HostProcessRequest,
       process_group: process.platform === "win32" ? null : child.pid}); }
     catch { complete = false; stop("cancelled"); }
   }
-  child.stdin.end(request.input);
+  if (openInput) {
+    // The private preflight transport retains stdin between read-only requests.
+    // It owns framing/backpressure, not child lifetime or process-group cleanup.
+    // One-shot managed Hosts retain their original EOF behavior.
+    const write = async (text: string) => {
+      if (child.stdin.destroyed || outcome !== "exited") throw new Error("Host input closed");
+      await new Promise<void>((resolve, reject) => {
+        child.stdin.write(text, error => error ? reject(error) : resolve());
+      });
+    };
+    try { openInput(write); }
+    catch { complete = false; stop("cancelled"); }
+  } else child.stdin.end(request.input);
   try {
     await exited;
     await reads;

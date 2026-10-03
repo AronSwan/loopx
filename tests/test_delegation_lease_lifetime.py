@@ -20,7 +20,7 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
-def prepare_lease(root, runner, monkeypatch, *, ttl=20, operation_id="lease-lifetime", renew=True):
+def prepare_lease(root, runner, monkeypatch, *, ttl=20, operation_id="lease-lifetime"):
     monkeypatch.setattr(runner, "_spawn", lambda _: None)
     runner.start("analysis", operation_id, brief())
     row = _read(runner.path(operation_id))
@@ -42,14 +42,32 @@ if(committed.status!=="applied") throw new Error(JSON.stringify(committed));
     assert prepared.returncode == 0, prepared.stderr
     binding = runner.binding("analysis")
     runner._acquire_delegation_lease(runner.path(operation_id), row, binding)
-    lease = row["task_lease"]["lease"]
-    if not renew or ttl is None:
+    lease = dict(row["task_lease"]["lease"])
+    if ttl is None:
         return lease
-    renewed = runner._cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
-        "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
-        "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]),
-        "--ttl-seconds", str(ttl))
-    return renewed["lease"]
+    # Start the short lifetime at managed execution, not before acceptance
+    # preparation. Cold setup may outlast 20s without exercising Host renewal.
+    cli = runner._cli
+    shortened = False
+
+    def at_launch(binding, *args, **kwargs):
+        nonlocal shortened
+        if args[:2] == ("turn", "run-once") and not shortened:
+            context = kwargs["delegated_lease"]
+            renewed = cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
+                "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
+                "--idempotency-key", lease["idempotency_key"],
+                "--expected-version", str(context["lease"]["version"]), "--ttl-seconds", str(ttl))
+            proof = renewed["lease"]
+            assert (proof["owner"], proof["idempotency_key"], proof["lease_epoch"]) == (
+                lease["owner"], lease["idempotency_key"], lease["lease_epoch"])
+            lease.update(proof)
+            kwargs["delegated_lease"] = {**context, "lease": proof}
+            shortened = True
+        return cli(binding, *args, **kwargs)
+
+    monkeypatch.setattr(runner, "_cli", at_launch)
+    return lease
 
 
 def inspect(runner):
@@ -172,21 +190,12 @@ def test_completion_renews_before_validation_and_replays_each_intent(completion_
 @pytest.mark.parametrize("authority_loss", ["expiry", "replacement"])
 def test_completion_renewal_receipt_cannot_revive_lost_execution(service, monkeypatch, authority_loss):
     root, runner = service
-    # Setup and Host execution are not the completion-recovery deadline.
-    # The 20s lease begins at completion, and the later 1s expiry/new epoch
-    # still proves a historical renewal receipt cannot revive the execution.
+    # Lose authority explicitly after the completion-renewal reply below.
+    # A short Host startup lease could stop execution before that boundary.
     prepare_lease(root, runner, monkeypatch, ttl=None)
-    cli, complete = runner._cli, runner._complete_delegated_todo
+    cli = runner._cli
     dropped = False
-    shortened = False
     completions = []
-
-    def enter_completion(row, binding):
-        nonlocal shortened
-        if not shortened:
-            renew_current_lease(runner, cli, 20)
-            shortened = True
-        return complete(row, binding)
 
     def lose_renewal_reply(binding, *args, **kwargs):
         nonlocal dropped
@@ -198,7 +207,6 @@ def test_completion_renewal_receipt_cannot_revive_lost_execution(service, monkey
             raise ValueError("fixture lost renewal response before terminal intent")
         return result
 
-    monkeypatch.setattr(runner, "_complete_delegated_todo", enter_completion)
     monkeypatch.setattr(runner, "_cli", lose_renewal_reply)
     runner.execute("lease-lifetime")
     row = _read(runner.path("lease-lifetime"))
@@ -360,14 +368,14 @@ def test_real_stop_releases_the_lease_its_execution_acquired(service, monkeypatc
     settle; a retry is the same receipt.
     """
     root, runner = service
-    original = prepare_lease(root, runner, monkeypatch, operation_id="lease-stop",
-                             renew=window == "renewed")
+    original = prepare_lease(root, runner, monkeypatch, ttl=None, operation_id="lease-stop")
     path = runner.path("lease-stop")
     if window == "unannotated":
         row = _read(path)
         del row["task_lease"]
         runner._fenced_write(path, row)
     if window == "renewed":
+        renew_current_lease(runner, runner._cli, 60)
         assert inspect(runner)["lease"]["version"] > _read(path)["task_lease"]["lease"]["version"]
     receipt = settled_stop(runner, "lease-stop")
     assert receipt["stop"]["lease"]["released"] is True
@@ -385,7 +393,7 @@ def test_real_stop_survives_loss_after_its_acknowledgement(service, monkeypatch)
     from loopx import collaboration_mcp as delegation
 
     root, runner = service
-    prepare_lease(root, runner, monkeypatch, operation_id="lease-ack-loss")
+    prepare_lease(root, runner, monkeypatch, ttl=None, operation_id="lease-ack-loss")
 
     def lost(**kwargs):
         raise RuntimeError("fixture lost the process before release")
@@ -404,7 +412,7 @@ def test_real_stop_survives_loss_after_its_acknowledgement(service, monkeypatch)
 def test_real_stop_leaves_a_newer_generation_alone(service, monkeypatch):
     """Another execution's lease on the same Todo is not this stop's to release."""
     root, runner = service
-    original = prepare_lease(root, runner, monkeypatch, operation_id="lease-foreign")
+    original = prepare_lease(root, runner, monkeypatch, ttl=None, operation_id="lease-foreign")
     binding = runner.binding("analysis")
     current = inspect(runner)["lease"]
     runner._cli(binding, "task-lease", "release", "--goal-id", runner.goal_id,

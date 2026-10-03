@@ -155,7 +155,7 @@ test("the spawned Host group is reported once before input, and an unrecorded gr
   const seen: unknown[] = [];
   let stdout = "";
   const result = await runHostProcess(request(`process.stdout.write(String(process.pid)+' '+String(require('child_process').execSync('ps -o pgid= -p '+process.pid)).trim())`),
-    async item => { stdout += item.text; }, undefined, undefined, async item => { seen.push(item); });
+    async item => { stdout += item.text; }, undefined, undefined, {spawned: async item => { seen.push(item); }});
   const [pid, pgid] = stdout.split(" ").map(Number);
   assert.equal(result.outcome, "exited");
   assert.deepEqual(seen, [{kind: "spawned", pid, process_group: pid}]); assert.equal(pgid, pid);
@@ -164,10 +164,10 @@ test("the spawned Host group is reported once before input, and an unrecorded gr
   const script = (marker: string) => `require('fs').writeFileSync(${JSON.stringify(marker)},'')
     process.stdin.on('data',()=>{});setInterval(()=>{},1000)`;
   const recorded = join(root, "recorded");
-  const refused = await runHostProcess(request(script(recorded)), async () => {}, undefined, undefined, async () => {
+  const refused = await runHostProcess(request(script(recorded)), async () => {}, undefined, undefined, {spawned: async () => {
     const until = Date.now() + 2000;
     while (!existsSync(recorded) && Date.now() < until) await delay(5);
     assert.ok(existsSync(recorded), "the Host never started");
-    throw new Error("record unavailable"); });
+    throw new Error("record unavailable"); }});
   assert.equal(refused.outcome, "cancelled"); assert.equal(refused.output_complete, false);
 });

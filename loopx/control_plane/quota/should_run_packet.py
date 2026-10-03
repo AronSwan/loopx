@@ -15,6 +15,7 @@ from ...state_projection import (
 from .. import compact_control_plane_policy
 from ..agents.agent_lane_recommendation import (
     build_agent_lane_next_action,
+    build_explicit_advancement_next_action,
     selected_action_with_agent_lane,
     selected_recommended_action_from_work_lane,
 )
@@ -555,7 +556,21 @@ def _resolve_agent_lane_delivery_route(
 
     continuity_todo = prepared.delivery_continuity_todo
     delivery_anchor = prepared.delivery_continuity_anchor
-    if not isinstance(delivery_anchor, dict) and fallback is None:
+    replan_candidate = build_explicit_advancement_next_action(
+        agent_identity=prepared.agent_identity,
+        agent_todo_items=prepared.agent_todo_planning_source_items,
+        available_capabilities=prepared.effective_available_capabilities,
+        todo_id=(
+            ((prepared.latest_replan_ack or {}).get("semantic_delta") or {})
+            .get("successor_todo_id")
+        ),
+        selection_binding="",
+    )
+    if (
+        not isinstance(delivery_anchor, dict)
+        and fallback is None
+        and replan_candidate is None
+    ):
         return None
     delivery_route = evaluate_delivery_route(
         agent_id=delivery_agent_id,
@@ -594,6 +609,19 @@ def _resolve_agent_lane_delivery_route(
             )
         ),
         preemptions=delivery_preemptions,
+        replan_todo=replan_candidate,
+        latest_replan_ack=prepared.latest_replan_ack,
+        replan_actionable=bool(
+            isinstance(replan_candidate, dict)
+            and projection_todo_item_is_actionable_open(replan_candidate)
+        ),
+        replan_capability_ready=bool(
+            isinstance(replan_candidate, dict)
+            and not missing_required_capabilities(
+                replan_candidate,
+                available_capabilities=prepared.effective_available_capabilities,
+            )
+        ),
     )
 
     selection = delivery_route["selection"]
@@ -625,6 +653,11 @@ def _resolve_agent_lane_delivery_route(
                 "TypeScript selected delivery continuity without a "
                 "projectable Todo candidate"
             )
+    elif selection == "replan":
+        if replan_candidate is None:
+            raise RuntimeError("TypeScript selected replan without an eligible successor")
+        selected_action = replan_candidate
+        selected_action.pop("selection_binding", None)
     elif selection == "fallback":
         selected_action = fallback
     else:
@@ -688,6 +721,7 @@ def _planning_projections(
     route: _QuotaDecisionRoute,
     *,
     include_detail: bool,
+    turn_instance_id: str | None,
 ) -> dict[str, Any]:
     selection_available = route.normal_delivery_allowed or bool(
         route.workspace_repair_allowed
@@ -718,6 +752,18 @@ def _planning_projections(
         capability_gate=prepared.capability_gate,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
+        replan_selection_context=(
+            {
+                "has_turn_identity": bool(turn_instance_id),
+                "should_run": route.should_run,
+                "receipt_bound": bool(
+                    prepared.receipt_bound_todo_id or route.receipt_bound_replan_decision
+                ),
+                "selection_requested": prepared.requested_action_todo_id is not None,
+                "monitor_only": prepared.agent_monitor_only,
+            }
+            if route.replan_decision_allowed else None
+        ),
     )
 
 
@@ -1199,6 +1245,7 @@ def _build_active_quota_payload(
     route: _QuotaDecisionRoute,
     *,
     include_agent_todo_detail: bool = False,
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     execution_obligation = _execution_obligation(
@@ -1321,6 +1368,7 @@ def _build_active_quota_payload(
             prepared,
             route,
             include_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
     )
     _attach_truthy_fields(
@@ -1483,6 +1531,7 @@ def _build_quota_should_run_payload(
     else:
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)

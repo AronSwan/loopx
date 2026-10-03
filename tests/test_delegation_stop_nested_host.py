@@ -21,7 +21,7 @@ def test_stop_waits_for_actual_nested_host_before_releasing_lease(service, monke
     root, runner = service
     operation = "nested-stop"
     with monkeypatch.context() as setup:
-        original = prepare_lease(root, runner, setup, operation_id=operation, renew=False)
+        original = prepare_lease(root, runner, setup, ttl=None, operation_id=operation)
     # Identify the actual supervisor from its child, independently of the
     # implementation's recorded process attribution.
     host = HOST.replace("counter = workspace / 'host-invocations'", """
@@ -92,7 +92,7 @@ def test_missing_or_unreadable_nested_attribution_cannot_release_a_lease(service
 
     root, runner = service
     operation = "unproven-nested-stop"
-    prepare_lease(root, runner, monkeypatch, operation_id=operation, renew=False)
+    prepare_lease(root, runner, monkeypatch, ttl=None, operation_id=operation)
     dead = subprocess.Popen(["true"])
     dead.wait(timeout=5)
     record = runner._host_process_record(runner.path(operation))
