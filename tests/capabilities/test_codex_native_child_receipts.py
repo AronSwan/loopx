@@ -292,10 +292,47 @@ def test_child_correlation_cannot_attest_a_report_or_result(tmp_path, host_obser
 
 
 
-def test_real_cli_old_spawn_replay_does_not_replace_a_later_followup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("snake", [False, True])
+@pytest.mark.parametrize("new_wait", [False, True])
+def test_real_cli_old_spawn_snapshot_cannot_complete_a_later_followup(
+    tmp_path, monkeypatch, snake, new_wait,
+):
     _admit(tmp_path)
-    spawn, wait = _turn()['items']
-    followup = {**spawn, 'id': 'item_0', 'tool': 'sendInput', 'agentsStates': {}}
-    activity = _real_cli_calls(tmp_path, monkeypatch, [[spawn, wait], [followup], [spawn, wait]])
-    assert activity['operation_count'] == 2 and activity['launched_count'] == 1
-    assert all(row['result'] == 'completed' for row in activity['operations'])
+    spawn, wait = _turn()["items"]
+    spawn = {**spawn, "agentsStates": {"child-1": {"status": "completed"}}}
+    followup = {**spawn, "id": "item_0", "tool": "sendInput",
+                "agentsStates": {"child-1": {"status": "running"}}}
+    if snake:
+        def exec_item(item):
+            return {"type": "collab_tool_call", "id": item["id"],
+                    "sender_thread_id": item["senderThreadId"],
+                    "tool": {"spawnAgent": "spawn_agent", "sendInput": "send_input", "wait": "wait"}[item["tool"]],
+                    "status": item["status"], "receiver_thread_ids": item.get("receiverThreadIds", []),
+                    "agents_states": item["agentsStates"]}
+        spawn, followup, wait = map(exec_item, (spawn, followup, wait))
+    # The third invocation replays only the old spawn's terminal snapshot. It
+    # contains no new wait or followup result and cannot prove future work done.
+    batches = [[spawn], [followup], [spawn]] + ([[wait, wait]] if new_wait else [])
+    activity = _real_cli_calls(tmp_path, monkeypatch, batches)
+    assert activity["operation_count"] == 2 and activity["launched_count"] == 1
+    original = next(row for row in activity["operations"] if row["operation"] == "spawn")
+    later = next(row for row in activity["operations"] if row["operation"] == "followup")
+    assert original["result"] == "completed"
+    assert later.get("result") == ("completed" if new_wait else None)
+    assert activity["parent_accepted_count"] == 0 and activity["quota_spend_slots"] == 0
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(row["event_kind"] == "native_child_result" for row in events) == 1 + int(new_wait)
+
+
+@pytest.mark.parametrize("tool", ["spawnAgent", "sendInput"])
+def test_nonwait_terminal_snapshot_ignores_unrelated_receivers(tmp_path, tool):
+    _admit(tmp_path)
+    spawn = _turn()["items"][0]
+    other = {**spawn, "receiverThreadIds": ["child-2"], "agentsStates": {}}
+    unrelated_snapshot = {**spawn, "tool": tool,
+                          "agentsStates": {"child-2": {"status": "completed"}}}
+    _observe(tmp_path, [other, unrelated_snapshot])
+    activity = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    assert activity["operation_count"] == 2
+    assert all(row.get("result") is None for row in activity["operations"])

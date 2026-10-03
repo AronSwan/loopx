@@ -102,6 +102,7 @@ class CodexNativeChildObserver:
         if tool is None:
             return
         receivers = item.get("receiver_thread_ids" if snake else "receiverThreadIds")
+        decision_id: str | None = None
         if tool != "wait":
             started = status == "completed" and isinstance(receivers, list) and bool(receivers)
             if started and any(not isinstance(child, str) or not child for child in receivers):
@@ -118,13 +119,20 @@ class CodexNativeChildObserver:
                          **({"reason_code": "host_failed"} if not started else {
                              "_host_child_refs": sorted({"codex-child-" + hashlib.sha256(child.encode()).hexdigest()[:32]
                                                          for child in receivers})}))
+            if started:
+                decision_id = operation_id
         states = item.get("agents_states" if snake else "agentsStates")
         if not isinstance(states, Mapping):
             return
         for child, state in states.items():
             if not isinstance(child, str) or not child or not isinstance(state, Mapping):
                 continue
-            operation_id = self._restore_operation(child)
+            # A spawn/followup snapshot belongs to that stable decision, even
+            # when replayed after later work. Only a new wait needs to recover
+            # the latest operation from the durable child association.
+            if tool != "wait" and (not isinstance(receivers, list) or child not in receivers):
+                continue
+            operation_id = self._restore_operation(child) if tool == "wait" else decision_id
             if operation_id is None:
                 continue
             outcome = {"completed": "completed", "errored": "failed", "shutdown": "cancelled"}.get(state.get("status"))
