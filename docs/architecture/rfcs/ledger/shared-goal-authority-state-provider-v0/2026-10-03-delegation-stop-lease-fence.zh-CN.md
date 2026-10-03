@@ -27,8 +27,12 @@ head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"
   并通过 canonical lease CAS 完成
   （[#5466](https://github.com/loopx-project/loopx/pull/5466)）。
 - `runLeasedHostProcess` 以 `min(30 s, remaining/2)` 的节奏重新证明原
-  owner/key/epoch，证明丢失时取消委派 CLI 及其嵌套 Host；强制进程组终止前有
-  六秒 grace（[#5436](https://github.com/loopx-project/loopx/pull/5436)）。
+  owner/key/epoch，在续期被拒绝、当前证明丢失或最后已证明的 `expires_at` 到达时
+  取消委派 CLI 及其嵌套 Host；强制进程组终止前有六秒 grace
+  （[#5436](https://github.com/loopx-project/loopx/pull/5436)）。每个 lease 命令
+  最长运行 60 秒，回复丢失时以同一意图重试一次，而已证明的到期计时始终有效：
+  `tests/control_plane/test_leased_host_process.py::test_real_renewal_faults_keep_original_deadline_and_identity`
+  在真实 File 与 SQLite authority 上证明，续期挂起不会让 Host 运行到该到期之后。
 - `tests/test_delegation_lease_lifetime.py::test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
   在真实 File 与 SQLite authority 上证明：释放该 lease 后，嵌套 Host 及其子进程
   在 worker 返回前停止，Todo 保持未完成，重试该操作既不会重新取得旧执行也不会
@@ -73,9 +77,18 @@ head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"
    `stop --execute` 在任何写入前被拒绝，原因中写明模式。提升 Goal 是启用步骤。
 7. **生命周期。** 已停止的操作拒绝 `resume`；继续需要新操作，它会取得新的
    lease epoch。stop 永不完成 Todo、不结算 Goal、不改变已验收结果。
-8. **Drain 延迟。** 由 supervisor 的续期节奏加 grace 界定：在既有 supervisor
-   下，释放提交后最多约三十六秒。本切片不增加信号加速路径。强制进程组终止后
-   的嵌套 Host 清理仍是 #5436 的既有 supervisor 边界，此处不重新证明。
+8. **Drain 延迟。** 撤销与 drain 走不同的时钟。release 提交的那一刻 fence 即
+   生效；物理 drain 发生在既有 supervisor 取消委派 CLI 时，取以下最早者：续期被
+   拒绝、续期命令两次失败、当前证明读取失败或不再证明该执行、最后已证明的
+   `expires_at` 到达。只有这个到期时刻能无条件地界定 drain：release 之后不会再有
+   续期，所以它最多在 release 提交后一个 lease TTL 到达，随后是六秒 grace 与强制
+   进程组终止。约三十六秒（不超过 30 秒的续期间隔加 grace，再加一次 lease 命令）
+   只是名义路径：release 提交时没有正在进行的续期，且 authority 及时响应。已在
+   进行的续期按自己的时钟结束，因此 authority 响应慢或丢失时，drain 会推向到期
+   上界。所以 `revoked` 从不意味着 drain；只有 `drained` 才能视为执行资源已释放。
+   本切片不增加从 release 到 drain 的期限，也不增加信号加速路径；更紧的无条件
+   上界需要由 supervisor 自己拥有的取消期限及其真实进程验收。强制进程组终止后的
+   嵌套 Host 清理仍是 #5436 的既有 supervisor 边界，此处不重新证明。
 9. **入口。** CLI `delegation stop --execute` 与 MCP `stop_delegation` 共用
    `Delegations.stop`；`read`、`wait` 与 inventory 暴露回执与 `stopped` 观察。
    dashboard 展示"停止已登记"，不声称执行资源已释放。
@@ -88,6 +101,22 @@ head 通过了 147 项选定的真实进程测试，并在一个无法闭合的"
   lifecycle、proof、retirement、migration 与 recovery 多个 owner 消费的词表；
   如测量所示，release 已经使 key 退役。
 - **D3，drain 只报告，不要求。** 要求它会重现 #5308 中的每一个进程归属窗口。
+
+## 实现 PR 必须给出的验收
+
+实现 PR 需在 File 与 SQLite authority 上以真实进程逐项证明以下各点，记录观测到的
+release 到 drain 耗时，且从不断言名义上的三十六秒：
+
+- **健康撤销，作为正向对照。**
+  `test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
+  继续通过：释放 lease 后，嵌套 Host 及其子进程在 worker 返回前停止，Todo 保持
+  未完成。
+- **续期进行中时 release。** 使用长 TTL（例如 180 秒），在一次续期已开始、且其
+  authority 回复被延迟时提交 stop 的 release。release 提交后回执即为 `revoked`，
+  嵌套 Host 仍在运行时不报告 `drained`。旧执行的续期、Todo 完成与验收都不能提交；
+  drain 在延迟的拒绝到达后发生，且不晚于最后已证明的到期加 grace。
+- **authority 回复丢失。** 续期命令两次失败或在超时内始终无回复时，回执与 fence
+  的性质不变，supervisor 不晚于最后已证明的到期加 grace 取消执行。
 
 ## 本条目不建立什么
 

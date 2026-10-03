@@ -34,8 +34,14 @@ under an unresolvable historical-attribution hold.
   ([#5466](https://github.com/loopx-project/loopx/pull/5466)).
 - `runLeasedHostProcess` re-proves the original owner/key/epoch at
   `min(30 s, remaining/2)` and cancels the delegated CLI, including its nested
-  Host, when current proof is lost; the forced group termination follows a
-  six-second grace ([#5436](https://github.com/loopx-project/loopx/pull/5436)).
+  Host, when a renewal is rejected, current proof is lost or the last proven
+  `expires_at` passes; the forced group termination follows a six-second
+  grace ([#5436](https://github.com/loopx-project/loopx/pull/5436)). Each
+  lease command may run for 60 seconds and a lost reply is retried once with
+  the same intent, while the proven expiry stays armed throughout:
+  `tests/control_plane/test_leased_host_process.py::test_real_renewal_faults_keep_original_deadline_and_identity`
+  shows on real File and SQLite authority that a hung renewal does not keep
+  the Host running past that expiry.
 - `tests/test_delegation_lease_lifetime.py::test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
   proves on real File and SQLite authority that releasing that lease stops the
   nested Host and its descendants before the worker returns, leaves the Todo
@@ -95,11 +101,25 @@ proof, so a released lease retires its key permanently without a new status.
 7. **Lifecycle.** A stopped operation refuses `resume`; continuing requires a
    new operation, which acquires a new lease epoch. Stop never completes the
    Todo, settles the Goal or changes an accepted result.
-8. **Drain latency.** Bounded by the supervisor's renewal cadence plus its
-   grace: at most about thirty-six seconds after the release commits, under
-   the existing supervisor. No signal accelerator is added in this slice.
-   Nested Host cleanup after a forced group kill remains the existing
-   supervisor boundary from #5436 and is not re-proven here.
+8. **Drain latency.** Revocation and drain run on different clocks. The
+   fence holds from the moment the release commits. Physical drain follows
+   when the existing supervisor cancels the delegated CLI, on the first of a
+   rejected renewal, a renewal whose command fails twice, a current-proof
+   read that fails or no longer proves the execution, or the last proven
+   `expires_at`. Only that expiry bounds drain unconditionally: it is at most
+   one lease TTL after the release commits, because nothing renews after the
+   release, and the six-second grace and forced group kill follow it. About
+   thirty-six seconds (a renewal interval of at most 30 seconds plus the
+   grace, plus one lease command) is the nominal path only: no renewal is in
+   flight when the release commits and the authority answers promptly. A
+   renewal already in flight finishes on its own clock, so slow or lost
+   authority replies move drain toward the expiry bound. `revoked` therefore
+   never implies drain; treat execution resources as released only on
+   `drained`. This slice adds no release-to-drain deadline and no signal
+   accelerator; a tighter unconditional bound would need a supervisor-owned
+   cancellation deadline with its own real-process qualification. Nested
+   Host cleanup after a forced group kill remains the existing supervisor
+   boundary from #5436 and is not re-proven here.
 9. **Surfaces.** CLI `delegation stop --execute` and MCP `stop_delegation`
    share `Delegations.stop`; `read`, `wait` and the inventory expose the
    receipt and the `stopped` observation. The dashboard shows a recorded
@@ -114,6 +134,28 @@ proof, so a released lease retires its key permanently without a new status.
   recovery owners; release already retires the key, as measured.
 - **D3, drain reported, not required.** Requiring it recreated every
   process-attribution window in #5308.
+
+## Qualification the implementation owes
+
+The implementation PR shows each of these on real processes against File and
+SQLite authority, records the observed release-to-drain durations, and never
+asserts the nominal thirty-six seconds:
+
+- **Healthy revocation, the positive control.**
+  `test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
+  keeps passing: releasing the lease stops the nested Host and its
+  descendants before the worker returns, and the Todo stays open.
+- **Release while a renewal is in flight.** With a long TTL (for example 180
+  seconds), the stop's release commits after a renewal has started and while
+  that renewal's authority reply is delayed. The receipt is `revoked` once
+  the release commits and does not report `drained` while the nested Host is
+  still running. No renewal, Todo completion or acceptance from the old
+  execution commits, and drain arrives after the delayed rejection, no later
+  than the last proven expiry plus the grace.
+- **Lost authority replies.** When the renewal command fails twice or never
+  answers within its timeout, the same receipt and fence properties hold,
+  and the supervisor cancels no later than the last proven expiry plus the
+  grace.
 
 ## What this entry does not establish
 
