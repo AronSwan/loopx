@@ -1,15 +1,15 @@
 {
  "board": "EVENTS.jsonl@ZCodeProject",
  "algo_version": 2,
- "taken_at": "2026-10-03T14:24:01.868+08:00",
- "lines": 114,
- "file_sha256": "9b31e2e9aef665bff43e9977e89da22b16c1ca24bd10060590acb30890e4105e",
- "prefix_sha256": "9b31e2e9aef665bff43e9977e89da22b16c1ca24bd10060590acb30890e4105e",
+ "taken_at": "2026-10-03T15:40:07.265+08:00",
+ "lines": 115,
+ "file_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
+ "prefix_sha256": "3d82548b5368b1aa9afe99196c8b7299bfa05bb2134088f1e03390c0e8b67370",
  "head_event": {
-  "actor": "[反诈组四席:边界章4/10+E1陷阱实证+循环加长未断+自动网1/8]",
-  "ts": "2026-10-03T14:23:59.350+08:00",
-  "prev_chain": "4c8cfc29e941b4c85095d6b0ba062e80aece951dd2a7b847831be9d6f8c23246",
-  "head_sha256": "edd34e96653ff4b8f538f6d0cbc5b93bdc46bb730a05f528f9534a2c6c65a95a"
+  "actor": "[协调-监考:开反过拟合+实践组合作审核]",
+  "ts": "2026-10-03T15:35:36.177+08:00",
+  "prev_chain": "edd34e96653ff4b8f538f6d0cbc5b93bdc46bb730a05f528f9534a2c6c65a95a",
+  "head_sha256": "405228256642890a0a1957b381fb9c3cb7791ba1844c0b93ff66fe1100ff4e38"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
