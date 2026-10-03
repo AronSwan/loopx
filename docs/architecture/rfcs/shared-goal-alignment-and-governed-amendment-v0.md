@@ -567,6 +567,14 @@ provider-neutral aggregate requires a separate reviewed transaction boundary.
 `Next Action` remains compatibility prose and a read projection. It is never a
 claim, lease, Goal amendment, replan settlement, or authority decision.
 
+Compatibility-prose checkpoint: `refresh-state` admits a confirmed sole
+registered peer's Next Action write independently of its personal report scope.
+Multi-peer reads compose the existing Todo routes; explicit shared-prose writes
+require Goal report scope and an exact read basis, rechecked with membership at
+commit. See the [writeback contract](../../quota-allocation.md). This does not
+advance Stage 3 amendment commit: canonical task mutations, lease/claim checks,
+protected intent and acceptance remain with their existing owners.
+
 ### 9.1 Semantic handoff and execution-route integration
 
 Use the existing alignment projection to supply a receiver's actual work

@@ -553,6 +553,12 @@ The default scoped refresh is an agent-lane run: it is useful for keeping the
 same turn's writeback/accounting identity intact, but it does not replace the
 goal-level status route.
 
+A confirmed sole registered peer may still update durable compatibility prose
+with `--next-action` in that personal report. Multi-peer shared-prose updates
+require Goal scope and a current `--next-action-basis`; the read projection
+preserves each peer's Todo route. See [Next Action writeback](quota-allocation.md)
+for attribution, snapshot conflicts and the unchanged authority boundaries.
+
 ## Lifecycle Contract
 
 Agents should not patch active-state checkboxes directly to move work forward.

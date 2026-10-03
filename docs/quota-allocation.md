@@ -1121,10 +1121,34 @@ lane-local quiet or wait decisions. Its `autonomous_replan_decision` says that a
 required replan must be selected independently of `monitor_quiet_skip` or
 `agent_scope_wait`; the policy lives in `loopx.control_plane.goals.goal_frontier`, while
 quota only wires the selected mode into `interaction_contract`.
-If the active-state and latest-run actions differ,
-`next_action_projection_warning` asks the executor to explicitly write back the
-intended durable route with a primary goal-scope `refresh-state --next-action`
-or keep treating the signals as distinct.
+If the active-state and latest-run actions differ, `next_action_projection_warning`
+keeps the agent's Todo route distinct from shared compatibility prose. A confirmed
+sole registered peer can use `refresh-state --agent-id PEER --next-action TEXT`
+without promoting its personal report: `progress_scope` remains `agent_lane`.
+Confirmation uses the complete registered roster, including offline peers and
+legacy roster sources, rather than presence. Shared registry reads resolve to
+the project source registry; a stale mirror cannot grant sole-peer authority.
+An unavailable source cannot supply a write basis. Attribution, Vision checkpoints,
+settlement, workspace and prose-writer checks still apply.
+
+For multiple peers, `status --include-task-graph` projects `agent_next_actions` from each peer's existing
+Todo selector; changing one route does not replace the others or rewrite the
+durable prose. Ordinary Todo and Vision edits keep their existing owners.
+An explicit shared prose replacement requires a registered actor,
+`--progress-scope goal` and `--next-action-basis BASIS`, where `BASIS` is
+`attention_queue.items[].next_action_basis` from `loopx --format json status --goal-id GOAL`.
+The same flag is available to a sole peer to reject a plan made against an older
+read. Without the flag, sole-peer writes capture their basis at invocation time;
+they cannot detect an older planning read outside that invocation.
+
+The basis binds the complete active-state bytes and registry Goal identity,
+membership, lifecycle, instance and routing facts. A stale write
+returns `next_action_basis_conflict`, the current basis and a bounded Next Action
+readback; reread and rejudge rather than repeating task work or quota spend.
+The writer rechecks admission under registry/state locks immediately before
+the prose write. This is a compatibility-prose fence, not a canonical Todo
+transaction or a governed Goal amendment. Unscoped legacy Goal reports and
+refreshes without `--next-action` retain their previous behavior.
 `refresh-state` records `recommended_action_source` so hosts can tell whether a
 run recommendation came from an explicit argument, durable `## Next Action`, an
 Agent Todo compatibility fallback, or the generic default. Dispatch still comes

@@ -489,6 +489,12 @@ projection 与 proposal contract 交付；把 commit 映射进 provider-neutral 
 `Next Action` 继续是 compatibility prose 与 read projection。它永远不是 claim、
 lease、Goal amendment、replan settlement 或 authority decision。
 
+兼容文本写回 checkpoint：`refresh-state` 确认完整注册名单只有当前 peer 时，
+允许其在个人进展 scope 中更新 Next Action，保留 agent 归因。多 peer 路线由现有
+Todo selector 汇总；显式共享文本更新仍需 Goal scope 和当前读取依据，并在提交时
+重新检查成员与版本。详见[写回合同](../../quota-allocation.md)。这不推进 Stage 3
+amendment commit；任务修改、claim/lease、受保护意图和验收仍由原 owner 负责。
+
 ### 9.1 语义交接与执行路线衔接
 
 用既有 alignment 投影给接收方提供真实工作基线。意图内的路线重规划仍走接收方
