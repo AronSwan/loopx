@@ -128,7 +128,8 @@ request/result contract. Ordinary CLI and Lark status use the same shared
 projection as the dashboard; Lark has no native child configuration to change.
 
 A resumed CLI invocation can receive only a new `wait` completion. The adapter
-resolves its opaque child ID against the original host-observed spawn in the
+resolves its hashed child reference against the latest started host-observed
+spawn or followup in the
 same admitted Goal instance, coordinator and LoopX Turn, including receipts
 outside the bounded status window. It does not adopt coordinator reports or
 scan external host history. Spawn IDs retain their existing child binding.
@@ -137,15 +138,19 @@ plus the owned parent session and native item ID; app-server calls use their
 native Turn ID. A real retry advances the journal attempt before launch;
 replaying the same binding and item remains idempotent. Direct enabled CLI
 adapter calls require that attempt; feature-off calls retain their original
-request. No prompt or raw result is added to a receipt.
+request. Only compact hashed child references are retained for correlation;
+they do not enter public activity rows or replace independent parent review.
+No prompt or raw result is added to a receipt.
 
 恢复 CLI 时可能只收到新的 `wait` 完成事件。适配器从同一已准入 Goal 实例、
-主 Agent、LoopX Turn 的原始宿主启动回执恢复关联，覆盖状态窗口外的操作，
+主 Agent、LoopX Turn 的最近一次已启动宿主 spawn 或 followup 回执恢复关联，
+覆盖状态窗口外的操作，
 不采纳主 Agent 上报或扫描外部宿主历史。启动保留既有子代理绑定；CLI 跟进和
 失败调用复用 Turn 日志持久化的 `host_attempt`、父会话和原生工具 ID，
 app-server 使用其原生 Turn ID。真实重试在启动前递增尝试次数；同一绑定与
 事件的重放仍幂等。直接调用已启用的 CLI 适配器须提供该尝试次数，关闭能力
-时请求不变。回执不增加原始提示或结果内容。
+时请求不变。关联只保留紧凑的子代理哈希引用，不进入公开活动行，
+也不替代独立父任务验收。回执不增加原始提示或结果内容。
 
 A live isolated Codex 0.142.5 test observed one successful spawn, a second failed
 spawn at `agents.max_threads=1`, child completion and independent parent
