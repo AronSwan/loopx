@@ -100,21 +100,26 @@ def test_existing_earlier_core_review_is_not_postponed():
     ("trigger_price", "96", "protection_plan_or_basis_mismatch"),
 ])
 def test_loss_stop_cannot_be_replaced_by_tp(field, value, reason):
-    r = example(); receipt(r, "orders")["data"]["orders"][0][field] = value
+    r = example()
+    receipt(r, "orders")["data"]["orders"][0][field] = value
     out = evaluate(r)
     assert out["state"] == "attention_required" and out["urgent"]
     assert reason in out["reasons"]
 
 
 def test_split_alternatives_are_not_added_without_tranche_proof():
-    r = example(); orders = receipt(r, "orders")["data"]["orders"]
+    r = example()
+    orders = receipt(r, "orders")["data"]["orders"]
     orders[0]["remaining_quantity"] = "5"
-    other = deepcopy(orders[0]); other["order_id"] = "another-alternative"; orders.append(other)
+    other = deepcopy(orders[0])
+    other["order_id"] = "another-alternative"
+    orders.append(other)
     assert "stop_loss_undercovered" in evaluate(r)["reasons"]
 
 
 def test_partial_exit_rechecks_remaining_quantity_and_costs():
-    r = example(); receipt(r, "position")["data"]["quantity"] = "4"
+    r = example()
+    receipt(r, "position")["data"]["quantity"] = "4"
     receipt(r, "fills")["data"]["fills"].append(
         {"fill_id": "exit-1", "role": "exit", "quantity": "6", "price": "102", "fee_cash": "1", "filled_at": NOW}
     )
@@ -127,7 +132,8 @@ def test_partial_exit_rechecks_remaining_quantity_and_costs():
 @pytest.mark.parametrize("kind", guard.KINDS)
 def test_stale_or_future_reads_cannot_claim_protected(kind):
     for timestamp in ["2026-01-03T11:50:00Z", "2026-01-03T12:00:01Z"]:
-        r = example(); receipt(r, kind)["observed_at"] = timestamp
+        r = example()
+        receipt(r, kind)["observed_at"] = timestamp
         out = evaluate(r)
         assert out["state"] == "attention_required"
         assert "receipt_stale_or_future" in out["reasons"]
@@ -135,18 +141,22 @@ def test_stale_or_future_reads_cannot_claim_protected(kind):
 
 
 def test_digest_identity_and_episode_fences():
-    r = example(); receipt(r, "position")["data"]["quantity"] = "8"
+    r = example()
+    receipt(r, "position")["data"]["quantity"] = "8"
     with pytest.raises(ValueError, match="digest binding"):
         guard.evaluate_finance_position_guard(r)
     for field, value in [("asset", "OTHER"), ("trade_id", "episode-reopened"), ("account_scope_digest", "sha256:" + "b"*64)]:
-        r = example(); receipt(r, "orders")[field] = value
+        r = example()
+        receipt(r, "orders")[field] = value
         assert "receipt_identity_mismatch" in evaluate(r)["reasons"]
-    r = example(); r["input"]["trade"]["opening_fill_ids"] = ["old-episode-fill"]
+    r = example()
+    r["input"]["trade"]["opening_fill_ids"] = ["old-episode-fill"]
     assert "opening_fill_identity_mismatch" in evaluate(r)["reasons"]
 
 
 def test_expiry_never_hides_open_exposure_or_waives_time_exit():
-    r = example(); r["input"]["trade"]["max_hold_until"] = NOW
+    r = example()
+    r["input"]["trade"]["max_hold_until"] = NOW
     receipt(r, "monitor")["data"]["next_due_at"] = NOW
     out = evaluate(r)
     assert out["state"] == "exit_review_required" and out["urgent"]
@@ -160,18 +170,22 @@ def test_expiry_never_hides_open_exposure_or_waives_time_exit():
 
 
 def test_monitor_after_deadline_and_wrong_owner_target_are_not_ready():
-    r = example(); receipt(r, "monitor")["data"]["next_due_at"] = "2026-01-05T11:00:00Z"
+    r = example()
+    receipt(r, "monitor")["data"]["next_due_at"] = "2026-01-05T11:00:00Z"
     assert "monitor_misses_hold_deadline" in evaluate(r)["reasons"]
-    r = example(); receipt(r, "monitor")["data"]["target_key"] = "another-episode"
+    r = example()
+    receipt(r, "monitor")["data"]["target_key"] = "another-episode"
     assert "monitor_binding_unverified" in evaluate(r)["reasons"]
 
 
 def test_flat_requires_complete_fills_and_no_residual_orders():
-    r = example(); receipt(r, "position")["data"]["quantity"] = "0"
+    r = example()
+    receipt(r, "position")["data"]["quantity"] = "0"
     out = evaluate(r)
     assert out["state"] == "closure_unverified"
     assert out["monitor_projection"]["keep_monitor_open"]
-    r = example(); close(r)
+    r = example()
+    close(r)
     out = evaluate(r)
     assert out["state"] == "closed_verified"
     assert not out["monitor_projection"]["keep_monitor_open"]
@@ -182,19 +196,24 @@ def test_flat_requires_complete_fills_and_no_residual_orders():
 
 
 def test_close_requires_post_position_fills_and_orders():
-    r = example(); close(r); receipt(r, "orders")["observed_at"] = "2026-01-03T11:59:59Z"
+    r = example()
+    close(r)
+    receipt(r, "orders")["observed_at"] = "2026-01-03T11:59:59Z"
     assert "closure_readback_order_unverified" in evaluate(r)["reasons"]
 
 
 def test_duplicate_fill_is_one_fee_but_conflict_is_unverified():
-    r = example(); fills = receipt(r, "fills")["data"]["fills"]
-    fills.append(deepcopy(fills[0])); assert evaluate(r)["risk_estimate"]["estimated_stop_loss_cash"] == "58"
+    r = example()
+    fills = receipt(r, "fills")["data"]["fills"]
+    fills.append(deepcopy(fills[0]))
+    assert evaluate(r)["risk_estimate"]["estimated_stop_loss_cash"] == "58"
     fills[-1]["fee_cash"] = "2"
     assert "conflicting_fill_identity" in evaluate(r)["reasons"]
 
 
 def test_cost_budget_and_unknown_costs():
-    r = example(); r["input"]["trade"]["max_loss_cash"] = "50"
+    r = example()
+    r["input"]["trade"]["max_loss_cash"] = "50"
     assert evaluate(r)["state"] == "exit_review_required"
     receipt(r, "fills")["data"]["costs_complete"] = False
     out = evaluate(r)
@@ -202,37 +221,49 @@ def test_cost_budget_and_unknown_costs():
 
 
 def test_short_uses_buy_protection():
-    r = example(); t=r["input"]["trade"]; t.update(side="short", stop_price="105", take_profit_price="90")
-    receipt(r,"position")["data"]["side"]="short"
-    for o in receipt(r,"orders")["data"]["orders"]:
-        o.update(side="buy",trigger_price="105" if o["kind"]=="stop_loss" else "90")
+    r = example()
+    t = r["input"]["trade"]
+    t.update(side="short", stop_price="105", take_profit_price="90")
+    receipt(r, "position")["data"]["side"] = "short"
+    for o in receipt(r, "orders")["data"]["orders"]:
+        o.update(side="buy", trigger_price="105" if o["kind"] == "stop_loss" else "90")
     assert evaluate(r)["state"] == "protected_open"
 
 
 def test_runtime_clock_and_decimal_admission_do_not_echo_private_values():
-    r = example(); r["input"]["decision_at"] = "2026-01-03T11:00:00Z"
-    with pytest.raises(ValueError, match="clock"): evaluate(r)
-    r = example(); r["input"]["trade"]["entry_price"] = "NaN-private"
-    with pytest.raises(ValueError, match="schema admission") as error: evaluate(r)
+    r = example()
+    r["input"]["decision_at"] = "2026-01-03T11:00:00Z"
+    with pytest.raises(ValueError, match="clock"):
+        evaluate(r)
+    r = example()
+    r["input"]["trade"]["entry_price"] = "NaN-private"
+    with pytest.raises(ValueError, match="schema admission") as error:
+        evaluate(r)
     assert "NaN-private" not in str(error.value)
 
 
 def test_cli_and_managed_operation_use_same_private_result(monkeypatch, capsys):
-    r = example(); monkeypatch.setattr(sys,"stdin",io.StringIO(json.dumps(r)))
-    assert run(["evaluate-position","--input-json","-"]) == 0
+    r = example()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
+    assert run(["evaluate-position", "--input-json", "-"]) == 0
     direct = json.loads(capsys.readouterr().out)
-    monkeypatch.setattr(sys,"stdin",io.StringIO(json.dumps(r)))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(r)))
     assert run([]) == 0
     assert json.loads(capsys.readouterr().out) == direct
 
 
 def test_incompatible_payoff_and_currency_cannot_receive_risk_estimate():
     for field, value in [("payoff_model", "inverse"), ("unit_multiplier", "100"), ("price_currency", "USDC")]:
-        r = example(); r["input"]["trade"][field] = value
-        with pytest.raises(ValueError): evaluate(r)
+        r = example()
+        r["input"]["trade"][field] = value
+        with pytest.raises(ValueError):
+            evaluate(r)
 
 
 def test_profitable_partial_exit_never_returns_empty_zero_cash():
-    r = example(); receipt(r,"position")["data"]["quantity"] = "1"
-    receipt(r,"fills")["data"]["fills"].append({"fill_id":"profitable-exit","role":"exit","quantity":"9","price":"120","fee_cash":"1","filled_at":NOW})
+    r = example()
+    receipt(r, "position")["data"]["quantity"] = "1"
+    receipt(r, "fills")["data"]["fills"].append(
+        {"fill_id": "profitable-exit", "role": "exit", "quantity": "9", "price": "120", "fee_cash": "1", "filled_at": NOW}
+    )
     assert evaluate(r)["risk_estimate"]["estimated_stop_loss_cash"] == "0"
