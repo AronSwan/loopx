@@ -215,7 +215,9 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
     state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     original_state = state_path.read_bytes()
     if mutation:
-        assert mutation[1] in original_state.decode("utf-8")
+        assert mutation[1] not in original_state.decode("utf-8")
+        assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
+        assert first["recommended_action_resolution"]["recommended_action"] == mutation[1]
     supplement = (
         (
             "--vision-unchanged-reason",
