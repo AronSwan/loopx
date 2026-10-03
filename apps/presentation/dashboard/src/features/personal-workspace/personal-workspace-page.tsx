@@ -833,17 +833,6 @@ export function PersonalWorkspacePage({
   }
   const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
   const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
-    try {
-      const raw = window.sessionStorage.getItem("loopx-pw-composer-drafts");
-      const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? parsed as Record<string, string>
-        : {};
-    } catch {
-      return {};
-    }
-  });
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -876,8 +865,8 @@ export function PersonalWorkspacePage({
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const composerDraftKey = `${selectedGoalId ?? "manager"}:${selectedAgentId}`;
-  const composer = drafts[composerDraftKey] ?? "";
-  const { sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
+  const { composer, setComposer, restoreFailedSubmission,
+    sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
     imageAttachments, setImageAttachments, imageAttachmentError, setImageAttachmentError,
     loopxMessageReceipt, setLoopxMessageReceipt, isCurrentConversation,
   } = useConversationInputState(composerDraftKey);
@@ -887,26 +876,6 @@ export function PersonalWorkspacePage({
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
   }, [composer, selectedGoalId, managerChatOpen]);
-  function setComposerDraft(key: string, value: string, expectedValue?: string) {
-    setDrafts((current) => {
-      if (expectedValue !== undefined && (current[key] ?? "") !== expectedValue) return current;
-      const next = { ...current };
-      if (value) {
-        next[key] = value;
-      } else {
-        delete next[key];
-      }
-      try {
-        window.sessionStorage.setItem("loopx-pw-composer-drafts", JSON.stringify(next));
-      } catch {
-        // Storage may be unavailable (private mode); drafts simply stay in memory.
-      }
-      return next;
-    });
-  }
-  function setComposer(value: string) {
-    setComposerDraft(composerDraftKey, value);
-  }
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
     if (!edit && !draft.question && draft.completion_criteria.trim()) {
@@ -1705,7 +1674,7 @@ export function PersonalWorkspacePage({
       try {
         await callbacks.onSteerConversationTurn(selectedGoalId ?? "manager", request.turnId, message, request.id);
         retireSteeringRequest(composerDraftKey, request.id);
-        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
+        if (!messageOverride) setComposer("", composer);
         setActionFeedback(locale === "zh-CN" ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn.");
       } catch (error) {
         // Unknown delivery retries the original Turn even after it completes.
@@ -1728,7 +1697,7 @@ export function PersonalWorkspacePage({
       setSending(true);
       try {
         const receipt = await sendLoopXMessage(conversationSessionId, message, loopxDelivery);
-        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
+        if (!messageOverride) setComposer("", composer);
         setLoopxMessageReceipt(locale === "zh-CN" ? `${loopxDelivery === "queue" ? "已排队，等待后续回合" : loopxDelivery === "inbox" ? "已进入收件箱" : "已提交纠偏"} · ${receipt.status}` : `${loopxDelivery}: ${receipt.status}`);
       } catch (error) {setImageAttachmentError(error instanceof Error ? error.message : String(error));}
       finally {setSending(false);}
@@ -1753,8 +1722,7 @@ export function PersonalWorkspacePage({
       if (previews?.decision) await createPreview(previews.decision);
     } catch (error) {
       if (!messageOverride) {
-        setComposerDraft(composerDraftKey, message, "");
-        setImageAttachments(pendingImages);
+        restoreFailedSubmission(message, pendingImages);
       }
       const errorMessage = error instanceof Error ? error.message : t("feedback.sendGenericError");
       setActionFeedback(t("feedback.sendFailed", { error: errorMessage }));

@@ -19,6 +19,15 @@ export const composerSessionAdmissionScenario = {
     const composerInput = page.getByLabel("向 LoopX 发送消息");
     const sendButton = page.getByRole("button", { name: "发送", exact: true });
     const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮回答进行中" });
+    const pasteDraftImage = async (name) => {
+      await composerInput.evaluate((target, filename) => {
+        const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN3sAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([png], filename, { type: "image/png" }));
+        target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+      }, name);
+      await page.locator(".personal-composer-images").getByRole("img", { name, exact: true }).waitFor();
+    };
     const openGoalChat = async () => {
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();
@@ -134,6 +143,8 @@ export const composerSessionAdmissionScenario = {
       if (!managerSubmission) throw new Error("The independent conversation did not submit its own request");
       const nextManagerDraft = "再列一下回滚步骤。";
       await composerInput.fill(nextManagerDraft);
+      await pasteDraftImage("pasted-during-send.png");
+      const newerImage = page.locator(".personal-composer-images").getByRole("img", { name: "pasted-during-send.png", exact: true });
       await delayedReceipt();
       await page.waitForTimeout(100);
       if (!await sendButton.isDisabled() || await composerInput.inputValue() !== nextManagerDraft
@@ -141,6 +152,7 @@ export const composerSessionAdmissionScenario = {
         throw new Error("A late instruction receipt changed the other conversation's pending state, draft or feedback");
       }
       await openGoalChat();
+      if (await newerImage.count()) throw new Error("A newer image moved to another conversation");
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       if (await composerInput.inputValue() !== "先写下另一条指令") throw new Error("Delivery erased the draft typed while it was sending");
       await managerSubmission.fulfill({ status: 400, json: { ok: false, error: "独立请求未被接收", delivery_state: "not_delivered", turn_replay_safe: true } });
@@ -152,10 +164,25 @@ export const composerSessionAdmissionScenario = {
       if (await composerInput.inputValue() !== nextManagerDraft || await sendButton.isDisabled()) {
         throw new Error("A rejected original request replaced the later draft or left its composer blocked");
       }
+      if (!await newerImage.count()) throw new Error("Failed delivery discarded a newer image pasted while the request was pending");
       await page.unroute(managerRoute);
-      const image = { name: "release-check.png", mimeType: "image/png",
-        buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN3sAAAAASUVORK5CYII=", "base64") };
-      await page.locator('input[type="file"]').setInputFiles(image);
+      let imageOnlySubmission;
+      await page.route(managerRoute, (route) => {
+        if (route.request().method() === "POST" && route.request().postDataJSON().message === nextManagerDraft) imageOnlySubmission = route;
+        else return route.fallback();
+      });
+      await sendButton.click();
+      for (let attempt = 0; attempt < 100 && !imageOnlySubmission; attempt += 1) await page.waitForTimeout(50);
+      if (!imageOnlySubmission) throw new Error("The image-bearing request did not reach admission");
+      await pasteDraftImage("later-image-only.png");
+      await imageOnlySubmission.fulfill({ status: 400, json: { ok: false, error: "图片请求未被接收", delivery_state: "not_delivered", turn_replay_safe: true } });
+      await page.locator(".personal-action-feedback", { hasText: "图片请求未被接收" }).waitFor();
+      if (await composerInput.inputValue() || await newerImage.count()
+        || !await page.locator(".personal-composer-images").getByRole("img", { name: "later-image-only.png", exact: true }).count()) {
+        throw new Error("Failure mixed the original text/images into a newer image-only draft");
+      }
+      await page.unroute(managerRoute);
+      await composerInput.fill(nextManagerDraft);
       await page.locator(".personal-composer-images img").waitFor();
       await openGoalChat();
       if (await page.locator(".personal-composer-images img").count()) throw new Error("Unsent images moved to another conversation");

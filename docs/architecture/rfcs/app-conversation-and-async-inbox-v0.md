@@ -172,6 +172,8 @@ receipt → observed work or actionable failure → readable answer in the same 
   conversation cannot lock Send in another. Returning retains that conversation's
   actual wait or receipt; a late completion cannot clear a peer's pending request,
   replace a newer draft or open an old proposal over the current conversation.
+  Failed delivery restores the submitted text and images together only while
+  that composer's draft is still empty; later text or pasted images take precedence.
   Navigation now retains unsent images in their original composer, rather than
   discarding them; nothing is automatically resent. Packaged browser regressions
   inject delayed receipts and a rejected independent request. This qualifies App
