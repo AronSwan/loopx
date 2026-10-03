@@ -496,7 +496,9 @@ def test_stop_without_a_holder_is_acknowledged_by_the_requester(service, monkeyp
     root, runner = service
     monkeypatch.setattr(runner, "_spawn", lambda _: None)
     runner.start("analysis", "analysis-idle", brief())
-    receipt = runner.stop("analysis-idle", execute=True)
+    with monkeypatch.context() as platform:
+        platform.delattr(os, "killpg", raising=False)
+        receipt = runner.stop("analysis-idle", execute=True)
     assert receipt["phase"] == "settled" and receipt["status"] == "stopped"
     assert receipt["stop"]["worker"] is None and receipt["stop"]["requested_status"] == "prepared"
     assert receipt["stop"]["ack"]["pid"] == os.getpid() and receipt["stop"]["ack"]["source"] == "requester"
@@ -911,6 +913,43 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
         assert path.read_bytes() == operation_before
         assert stop_path.read_bytes() == stop_before
 
+
+
+def test_unsupported_stop_during_host_launch_preserves_continuation(service, monkeypatch):
+    """No record yet does not prove an active worker cannot launch a Host."""
+    from loopx.control_plane.turn_driver import host_process_transport
+
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "platform-launch", brief())
+    path = runner.path("platform-launch")
+    entering, continue_launch = Event(), Event()
+    cli = runner._cli
+
+    def pause_launch(binding, *args, **kwargs):
+        if args[:2] == ("turn", "run-once") and kwargs.get("host_record"):
+            entering.set()
+            assert continue_launch.wait(20)
+        return cli(binding, *args, **kwargs)
+
+    monkeypatch.setattr(runner, "_cli", pause_launch)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        worker = pool.submit(runner.execute, "platform-launch")
+        try:
+            assert entering.wait(20)
+            assert not runner._host_process_record(path).exists()
+            before = path.read_bytes()
+            with monkeypatch.context() as platform:
+                platform.delattr(host_process_transport.os, "killpg", raising=False)
+                with pytest.raises(ValueError, match="cannot prove the launched Host drained"):
+                    runner.stop("platform-launch", execute=True)
+            assert path.read_bytes() == before
+            assert not runner._stop_path(path).exists()
+        finally:
+            continue_launch.set()
+            worker.result(timeout=60)
+    assert runner.read("platform-launch")["status"] == "accepted"
+    assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
 
 def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(service, monkeypatch):
     """The lease obligation survives process loss after the acknowledgement.

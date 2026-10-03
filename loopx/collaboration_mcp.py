@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from .file_lock import (
     exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
+    LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
     LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
 from .control_plane.effect_runtime import (
@@ -45,7 +46,7 @@ from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.turn_driver.host_process_transport import (
     HOST_PROCESS_DRAINED, HOST_PROCESS_DRAINING, HOST_PROCESS_NOT_LAUNCHED,
     HOST_PROCESS_RECORD_ENV, HOST_PROCESS_UNATTRIBUTABLE, HOST_PROCESS_UNSUPPORTED_PLATFORM,
-    host_process_drain,
+    host_process_drain, host_process_drain_supported,
 )
 from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
@@ -1230,7 +1231,18 @@ class Delegations:
         Keep the same guard during settlement for an existing cancellation
         intent restored on a platform that cannot prove Host drain.
         """
-        if self._delegation_host_drain(path) == HOST_PROCESS_UNSUPPORTED_PLATFORM:
+        drain = self._delegation_host_drain(path)
+        unsupported = drain == HOST_PROCESS_UNSUPPORTED_PLATFORM
+        if not host_process_drain_supported():
+            # An active worker can have passed its last checkpoint without yet
+            # creating the Host record. Reading absence alone races that launch.
+            # The dispatch fence prevents a new worker's fenced entry while we
+            # check the holder; do not probe/take its operation lock here.
+            holder, _ = lock_holder_liveness(path)
+            unsupported = drain != HOST_PROCESS_NOT_LAUNCHED or holder not in {
+                LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
+            }
+        if unsupported:
             raise ValueError(
                 "delegation stop cannot prove the launched Host drained on this platform: "
                 "process groups are unavailable, so the Host supervisor is best-effort. "
