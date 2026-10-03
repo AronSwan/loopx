@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.2.1.md",
   "sha256_lf": "11cbe459ca65f614f7393c9c51f166e8ba6742a6075f5f89a6195a01ac5bac53"
  },
- "taken_at": "2026-10-03T18:54:39.355+08:00",
- "lines": 124,
- "file_sha256": "4c22c8c533ef66a762e1e7e642a13a904a5984437013cd9391079f9d14aa49ae",
- "prefix_sha256": "4c22c8c533ef66a762e1e7e642a13a904a5984437013cd9391079f9d14aa49ae",
+ "taken_at": "2026-10-03T19:27:37.016+08:00",
+ "lines": 126,
+ "file_sha256": "2d63bce5a89d3bc460483b941bd544b839ea09fe22e07c70901ef8533f81360e",
+ "prefix_sha256": "2d63bce5a89d3bc460483b941bd544b839ea09fe22e07c70901ef8533f81360e",
  "head_event": {
-  "actor": "[执行批两级审查收官:v2.3四稿终签通过·呈批]",
-  "ts": "2026-10-03T18:54:37.008+08:00",
-  "prev_chain": "9f90be4ae34b03970f9f8d2e8b6e6223c73b9a798b97fd7f54df69c09d8decf6",
-  "head_sha256": "161c7c1818b4a621bebc5068f09a3c6fce33b8ad3ce4f2f644d23a96fd1f9c13"
+  "actor": "[酷刑审收官:v2.3五稿快签通过·呈批]",
+  "ts": "2026-10-03T19:27:35.349+08:00",
+  "prev_chain": "a053b58f28a22674212e8bcdb234d8cf934f727bc92bbf974145f76784790339",
+  "head_sha256": "8467d5cced32a1a04908821310b3e51345cd46cce231d3adc2777557f94f4e98"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
