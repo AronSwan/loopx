@@ -66,8 +66,9 @@ def service(tmp_path, request, monkeypatch):
     # Each case owns a private server. Do not accumulate five-minute idle
     # runtimes across the delegation suite, including failed setup/test cases.
     runtime_env = os.environ.copy()
+    run_cleanup = subprocess.run  # Tests may replace the shared subprocess module's run.
     def retire_runtime():
-        subprocess.run([
+        run_cleanup([
             sys.executable, "-c",
             "from pathlib import Path; import sys; "
             "from loopx.control_plane.effect_runtime import _runtime_dir, restart_effect_runtime; "

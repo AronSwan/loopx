@@ -282,7 +282,8 @@ def test_real_source_edit_reloads_python_module_and_environment(tmp_path):
 def test_concurrent_services_preserve_registry_runtime_and_workspace_partition(service, tmp_path, request, monkeypatch):
     root, first = service
     second_root, second = delegation_service.__wrapped__(
-        tmp_path / "second", SimpleNamespace(param=request.node.callspec.params["delegation_service"]), monkeypatch
+        tmp_path / "second", SimpleNamespace(param=request.node.callspec.params["delegation_service"],
+                                              addfinalizer=request.addfinalizer), monkeypatch
     )
     second = reusable_service(second)
     expected = [runner.inspect("analysis") for runner in (first, second)]
