@@ -529,7 +529,8 @@ def test_stop_while_executing_is_acknowledged_by_the_worker_and_settles(service,
     assert stop["settled"]["lane_state"] in {"dead", "released"}
     assert stop["settled"]["host_process"] == "drained"
     assert stop["settled"]["turn_journal_status"] == "in_progress"
-    assert stop["lease"] == {"required": False, "released": None}
+    # Canonical authority, not the record's annotation, proved no lease was owed.
+    assert stop["lease"]["state"] == stop["settled"]["lease"] == "not_owed"
     # The acknowledged record is final: nobody writes it again, the Todo stays open,
     # the worker exits and the member's Turn lane can be taken.
     frozen = path.read_bytes()
@@ -607,7 +608,10 @@ def test_worker_killed_before_acknowledging_is_unknown_not_settled(service, monk
     assert receipt["status"] == "running" and receipt["stop"]["ack"] is None, receipt
     assert receipt["stop"]["settled"]["operation_lock_free"] and receipt["stop"]["settled"]["worker_lane_released"]
     assert receipt["stop"]["settled"]["turn_journal_status"] == "in_progress"
-    assert receipt["stop"]["lease"] is None and len(killed) == 1
+    # The execution is proven gone, so its lease is resolved before the terminal
+    # receipt; canonical authority proves this operation held none.
+    assert receipt["stop"]["lease"]["state"] == receipt["stop"]["settled"]["lease"] == "not_owed"
+    assert len(killed) == 1
     assert until(lambda: process_gone(host_pid), timeout=20)
     assert runner.stop("analysis-stop", execute=True) == receipt
     with pytest.raises(ValueError, match="start a new operation id"):
@@ -883,8 +887,8 @@ def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service
         "phase": "acknowledged",
         "ack": {"pid": os.getpid(), "host": lock_holder_host_label(), "at": time.time(),
                 "source": "requester", "observed_status": "stopped", "turn_key": None},
-        # The acknowledgement could not release it, which is what the receipt records.
-        "lease": {"required": True, "released": False, "error": "authority unavailable"},
+        # An earlier settlement could not release it, which is what the receipt records.
+        "lease": {"state": "release_unproven", "error": "authority unavailable"},
     })
 
     attempts = []
@@ -904,14 +908,13 @@ def test_a_failed_required_lease_release_keeps_the_stop_open_and_retries(service
     assert attempts, "the stop never attempted the required release"
     assert receipt["phase"] == "acknowledged", receipt
     assert receipt["stop"]["reason"] == "required_lease_release_unproven"
-    assert receipt["stop"]["lease"]["released"] is not True
+    assert receipt["stop"]["lease"]["state"] == "release_unproven"
 
     # The next read retries the release and only then settles.
     settled = runner.stop("analysis-lease", execute=True)
     assert len(attempts) >= 2, "the failed release was never retried"
     assert settled["phase"] == "settled", settled
-    assert settled["stop"]["lease"]["released"] is True
-    assert settled["stop"]["settled"]["lease_released"] is True
+    assert settled["stop"]["lease"]["state"] == settled["stop"]["settled"]["lease"] == "released"
 
     # Once settled the receipt is stable, and a released lease is not re-attempted.
     before = len(attempts)
@@ -936,7 +939,7 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps({
         "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
-        "host": lock_holder_host_label(), "phase": "finished",
+        "host": lock_holder_host_label(), "supervises": "host", "phase": "finished",
         "bridge_pid": os.getpid(), "process_group": os.getpid(),
     }))
 
@@ -1015,11 +1018,12 @@ def test_unsupported_stop_during_host_launch_preserves_continuation(service, mon
 def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(service, monkeypatch):
     """The lease obligation survives process loss after the acknowledgement.
 
-    `_acknowledge_stop` writes the ACK before it releases the lease, so a crash
-    in between leaves the sidecar with no `lease` field. Reading that as "nothing
-    was owed" settles a stop whose member still holds an active hard lease, with
-    resume already refused and the Todo blocked until the TTL. The obligation
-    comes from the operation record, which the crash cannot lose.
+    The ACK is written long before the lease is resolved, so a crash in between
+    leaves the sidecar with no `lease` field. Reading that as "nothing was owed"
+    settles a stop whose member still holds an active hard lease, with resume
+    already refused and the Todo blocked until the TTL. The obligation comes
+    from canonical authority for the operation's own identity, which the crash
+    cannot lose.
     """
     from loopx.control_plane.collaboration.inbox import _write as write_inbox
 
@@ -1050,8 +1054,7 @@ def test_a_crash_between_the_ack_and_the_lease_result_keeps_the_stop_open(servic
                         lambda **kw: {"released": True})
     settled = runner.stop("analysis-crash", execute=True)
     assert settled["phase"] == "settled", settled
-    assert settled["stop"]["lease"]["released"] is True
-    assert settled["stop"]["settled"]["lease_released"] is True
+    assert settled["stop"]["lease"]["state"] == settled["stop"]["settled"]["lease"] == "released"
 
 
 def test_a_crash_between_the_ack_and_the_lease_result_never_settles_unreleased(service, monkeypatch):

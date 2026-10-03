@@ -244,7 +244,8 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
 
     def drain(**fields):
         path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
-                                    "host": lock_holder_host_label(), "owner_pid": 1, **fields}))
+                                    "host": lock_holder_host_label(), "owner_pid": 1,
+                                    "supervises": "host", **fields}))
         return host_process_drain(path)
 
     try:
@@ -262,7 +263,12 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
                        {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
                         "host": "another-machine"},
                        {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
-                        "schema_version": "other"}):
+                        "schema_version": "other"},
+                       # A record must say which group it supervises.
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervises": None},
+                       {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervises": "nested_host"}):
             assert drain(**fields) == "unattributable", fields
         path.write_text("{not json")
         assert host_process_drain(path) == "unattributable"
@@ -338,6 +344,65 @@ def test_hard_leased_cli_pins_the_release_and_the_record_through_the_transport(t
                 host_record=record, delegated_lease={"lease": {}, "ttl_seconds": None,
                                                      "renew_argv": [], "read_argv": []})
     assert handed["environment"]["PYTHONPATH"].split(os.pathsep)[0] == str(delegation_module._release_root())
-    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record.with_suffix(".cli.host.json"))
+    # One record names the execution; the transport places its leased supervisor's record.
+    assert handed["environment"][HOST_PROCESS_RECORD_ENV] == str(record)
     index = handed["argv"].index("--host-process-record")
     assert handed["argv"][index + 1] == str(record)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
+def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path) -> None:
+    """The Host transport alone reads one execution's records, whatever its topology.
+
+    A leased run's supervisor records the private CLI beside the owner's record
+    and the actual Host writes that record, so an outer exit proves nothing
+    about the nested Host. A record that does not say what it supervises, or
+    sits where the other kind belongs, attributes nothing.
+    """
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_SCHEMA_VERSION, execution_host_drain, host_process_supervisor_record,
+    )
+    from loopx.file_lock import lock_holder_host_label
+
+    record = tmp_path / "op.host.json"
+    supervisor = host_process_supervisor_record(record)
+    live = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    gone.wait(timeout=10)
+
+    def written(path, supervises, group):
+        path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                                    "host": lock_holder_host_label(), "owner_pid": 1, "supervises": supervises,
+                                    "phase": "finished", "bridge_pid": gone.pid, "process_group": group}))
+
+    cases = [
+        # (supervisor record, owner's record, observation)
+        (None, None, "not_launched"),
+        (None, ("host", gone.pid), "drained"),
+        (None, ("host", live.pid), "draining"),
+        (("nested_host", gone.pid), None, "drained"),
+        (("nested_host", gone.pid), ("host", gone.pid), "drained"),
+        # The leased CLI exited while its nested Host still runs.
+        (("nested_host", gone.pid), ("host", live.pid), "draining"),
+        (("nested_host", live.pid), ("host", gone.pid), "draining"),
+        # A group still seen running outranks a missing proof.
+        (("nested_host", live.pid), "corrupt", "draining"),
+        (("nested_host", gone.pid), "corrupt", "unattributable"),
+        # Records that do not say what they supervise, or say the wrong thing.
+        (None, (None, gone.pid), "unattributable"),
+        (None, ("nested_host", gone.pid), "unattributable"),
+        (("host", gone.pid), ("host", gone.pid), "unattributable"),
+        ((None, gone.pid), None, "unattributable"),
+    ]
+    try:
+        for outer, owned, expected in cases:
+            for path, fact in ((supervisor, outer), (record, owned)):
+                path.unlink(missing_ok=True)
+                if fact == "corrupt":
+                    path.write_text("{corrupt")
+                elif fact is not None:
+                    written(path, *fact)
+            assert execution_host_drain(record) == expected, (outer, owned)
+    finally:
+        live.kill()
+        live.wait(timeout=10)

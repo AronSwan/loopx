@@ -30,6 +30,14 @@ HOST_PROCESS_DRAINED = "drained"
 HOST_PROCESS_DRAINING = "draining"
 HOST_PROCESS_UNATTRIBUTABLE = "unattributable"
 HOST_PROCESS_UNSUPPORTED_PLATFORM = "unsupported_platform"
+# Each record says which group its supervisor owns: the actual Host, or a leased
+# CLI that supervises a nested Host recorded under the owner's record path.
+HOST_PROCESS_SUPERVISES_HOST = "host"
+HOST_PROCESS_SUPERVISES_NESTED_HOST = "nested_host"
+# When one execution's records disagree, the first fact present wins: a group
+# still seen running outranks a missing proof, which outranks a proven exit.
+_DRAIN_PRECEDENCE = (HOST_PROCESS_UNSUPPORTED_PLATFORM, HOST_PROCESS_DRAINING,
+                     HOST_PROCESS_UNATTRIBUTABLE, HOST_PROCESS_DRAINED, HOST_PROCESS_NOT_LAUNCHED)
 
 
 def host_process_drain_supported() -> bool:
@@ -65,14 +73,20 @@ def _process_group_present(pgid: int) -> bool:
     return True
 
 
-def host_process_drain(record_path: Path) -> str:
-    """Read whether the Host a record names, and its process group, have exited.
+def host_process_supervisor_record(record_path: Path) -> Path:
+    """Where a leased CLI's own supervisor records its group, beside the owner's record."""
+    return record_path.with_suffix(".cli.host.json")
+
+
+def host_process_drain(record_path: Path, *, supervises: str = HOST_PROCESS_SUPERVISES_HOST) -> str:
+    """Read whether the group one record names, and its supervisor, have exited.
 
     Read-only: nothing is signalled, and the TS-owned supervisor keeps cleanup.
-    No record means no Host was launched under it. ``draining`` while the
-    supervising bridge or the Host's group still has a member. A record from
-    another machine, one without a reported group whose supervisor is gone,
-    or a platform without process groups proves nothing: ``unattributable``.
+    No record means nothing was launched under it. ``draining`` while the
+    supervising bridge or the owned group still has a member. A record from
+    another machine, one that does not say it supervises ``supervises``, or
+    one without a reported group whose supervisor is gone proves nothing:
+    ``unattributable``. A platform without process groups never proves a drain.
     """
 
     try:
@@ -82,7 +96,7 @@ def host_process_drain(record_path: Path) -> str:
     except (OSError, ValueError):
         return HOST_PROCESS_UNATTRIBUTABLE
     if (not isinstance(record, dict) or record.get("schema_version") != HOST_PROCESS_RECORD_SCHEMA_VERSION
-            or record.get("host") != lock_holder_host_label()):
+            or record.get("host") != lock_holder_host_label() or record.get("supervises") != supervises):
         return HOST_PROCESS_UNATTRIBUTABLE
     if not hasattr(os, "killpg"):
         # A launched Host on a platform without process groups is never proven
@@ -100,6 +114,40 @@ def host_process_drain(record_path: Path) -> str:
     if not isinstance(group, int) or group <= 1:
         return HOST_PROCESS_UNATTRIBUTABLE
     return HOST_PROCESS_DRAINING if _process_group_present(group) else HOST_PROCESS_DRAINED
+
+
+def execution_host_drain(record_path: Path, *, launch_possible: bool = False) -> str:
+    """Whether everything an owner launched under one record has exited.
+
+    The owner names one record. A plain run's supervisor writes it for the
+    actual Host. A leased run's supervisor owns the private leased CLI, which
+    exits on its own clock and supervises the actual Host in another session:
+    that supervisor records its group beside the owner's record, and the Host
+    the CLI starts writes the owner's record. Both must have exited; an outer
+    exit proves nothing about the nested Host. A record that does not say what
+    it supervises, such as one written before records carried that fact,
+    attributes nothing. The caller supplies whether its launch owner may still
+    start a Host; on unsupported platforms an absent record cannot close that
+    pre-record launch window.
+    """
+
+    supervisor = host_process_drain(host_process_supervisor_record(record_path),
+                                    supervises=HOST_PROCESS_SUPERVISES_NESTED_HOST)
+    host = host_process_drain(record_path)
+    drain = next(state for state in _DRAIN_PRECEDENCE if state in {supervisor, host})
+    if not host_process_drain_supported() and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED):
+        return HOST_PROCESS_UNSUPPORTED_PLATFORM
+    return drain
+
+
+def require_execution_host_drain_supported(drain: str) -> None:
+    """Reject cancellation when the Host boundary cannot prove execution drain."""
+    if drain == HOST_PROCESS_UNSUPPORTED_PLATFORM:
+        raise ValueError(
+            "cannot prove the launched Host drained on this platform: "
+            "process groups are unavailable, so the Host supervisor is best-effort. "
+            "Stop the Host through its own supervisor and re-read its execution state."
+        )
 
 
 class HostOutputLines:
@@ -174,6 +222,13 @@ def run_host_process(
     bridge_environment = os.environ.copy() if environment is None else dict(environment)
     record_value = bridge_environment.pop(HOST_PROCESS_RECORD_ENV, "")
     record_path = Path(record_value) if record_value else None
+    supervises = HOST_PROCESS_SUPERVISES_HOST
+    if record_path is not None and delegated_lease is not None:
+        # A leased run starts the private leased CLI, which records the actual
+        # Host it starts under the owner's record. This supervisor records its
+        # own group beside that record, so readback can prove both exited.
+        record_path = host_process_supervisor_record(record_path)
+        supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
     with subprocess.Popen(
         [
             _node_executable(),
@@ -199,7 +254,8 @@ def run_host_process(
                 # does not name; a record that cannot be written launches nothing.
                 record = {"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
                           "host": lock_holder_host_label(), "owner_pid": os.getpid(),
-                          "bridge_pid": proc.pid, "phase": "launching", "process_group": None}
+                          "supervises": supervises, "bridge_pid": proc.pid,
+                          "phase": "launching", "process_group": None}
                 _write_host_process_record(record_path, record)
             proc.stdin.write(
                 json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"

@@ -357,29 +357,37 @@ def settled_stop(runner, operation_id):
     return receipt
 
 
-@pytest.mark.parametrize("window", ["annotated", "renewed", "unannotated"])
+# The operation's annotation is a hint; canonical authority decides what is owed.
+STALE_ANNOTATIONS = {"empty": {}, "stale_not_required": {"required": False, "handoff_mode": "legacy"},
+                     "malformed": {"required": "yes", "lease": [1]}}
+
+
+@pytest.mark.parametrize("window", ["annotated", "renewed", "unannotated", *STALE_ANNOTATIONS])
 def test_real_stop_releases_the_lease_its_execution_acquired(service, monkeypatch, window):
     """Native acquire -> public stop -> independent inspect, on both providers.
 
     `annotated` is the ordinary record `_acquire_delegation_lease` writes,
     `renewed` moves the canonical version past the recorded one, and
     `unannotated` drops the annotation as if the process were lost between the
-    native claim and the record write. Each must release the exact lease and
-    settle; a retry is the same receipt.
+    native claim and the record write. An empty, stale `required: false` or
+    malformed annotation is no proof that nothing is owed either. Each must
+    release the exact lease and settle with a receipt that matches the
+    canonical lease; a retry is the same receipt.
     """
     root, runner = service
     original = prepare_lease(root, runner, monkeypatch, ttl=None, operation_id="lease-stop")
     path = runner.path("lease-stop")
-    if window == "unannotated":
+    if window == "unannotated" or window in STALE_ANNOTATIONS:
         row = _read(path)
         del row["task_lease"]
+        if window in STALE_ANNOTATIONS:
+            row["task_lease"] = STALE_ANNOTATIONS[window]
         runner._fenced_write(path, row)
     if window == "renewed":
         renew_current_lease(runner, runner._cli, 60)
         assert inspect(runner)["lease"]["version"] > _read(path)["task_lease"]["lease"]["version"]
     receipt = settled_stop(runner, "lease-stop")
-    assert receipt["stop"]["lease"]["released"] is True
-    assert receipt["stop"]["settled"]["lease_released"] is True
+    assert receipt["stop"]["lease"]["state"] == receipt["stop"]["settled"]["lease"] == "released"
     released = inspect(runner)["lease"]
     assert released["status"] == "released"
     assert released["idempotency_key"] == original["idempotency_key"]
@@ -423,6 +431,6 @@ def test_real_stop_leaves_a_newer_generation_alone(service, monkeypatch):
                            "--idempotency-key", "new-execution", "--expected-version", str(current["version"]))
     assert acquired["lease"]["lease_epoch"] > original["lease_epoch"]
     receipt = settled_stop(runner, "lease-foreign")
-    assert "lease_released" not in receipt["stop"]["settled"]
+    assert receipt["stop"]["settled"]["lease"] == "not_owed"
     held = inspect(runner)["lease"]
     assert held["status"] == "active" and held["idempotency_key"] == "new-execution"

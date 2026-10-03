@@ -163,8 +163,6 @@ def canonical_lease_at_the_native_edge(service, monkeypatch, operation_id, *,
                 "source": "requester", "observed_status": "stopped", "turn_key": None},
     })
     monkeypatch.setattr(stop_lease, "local_authority_is_promoted", lambda **kwargs: True)
-    monkeypatch.setattr(stop_lease, "show_goal_handoff_mode",
-                        lambda **kwargs: {"handoff_mode": "hard_lease"})
     monkeypatch.setattr(stop_lease, "inspect_task_lease", lambda **kwargs: {
         "ok": True, "action": "inspect", "active": active, "legacy_fallback_used": False,
         "lease": {"owner": owner, "idempotency_key": lease_key + key_suffix,
@@ -196,7 +194,7 @@ def test_a_lease_the_record_never_annotated_still_blocks_settlement(service, mon
     receipt = runner.stop("analysis-lease-window", execute=True)
     assert receipt["phase"] == "acknowledged", receipt
     assert receipt["stop"]["reason"] == "required_lease_release_unproven"
-    assert receipt["stop"]["lease"]["released"] is not True
+    assert receipt["stop"]["lease"]["state"] == "release_unproven"
     with pytest.raises(ValueError, match="start a new operation id"):
         runner.resume("analysis-lease-window")
 
@@ -216,8 +214,7 @@ def test_a_recovered_lease_obligation_settles_only_after_its_exact_release(servi
 
     receipt = runner.stop("analysis-lease-recover", execute=True)
     assert receipt["phase"] == "settled", receipt
-    assert receipt["stop"]["lease"]["released"] is True
-    assert receipt["stop"]["settled"]["lease_released"] is True
+    assert receipt["stop"]["lease"]["state"] == receipt["stop"]["settled"]["lease"] == "released"
     assert releases == [{"runtime_root": runner.root, "goal_id": runner.goal_id,
                          "todo_id": "todo_analyst-initial", "owner": "analyst",
                          "idempotency_key": lease_key,
@@ -243,7 +240,7 @@ def test_a_foreign_lease_generation_is_not_this_stops_obligation(service, monkey
     receipt = runner.stop("analysis-lease-foreign", execute=True)
     assert releases == [], "a foreign lease generation was released"
     assert receipt["phase"] == "settled", receipt
-    assert "lease_released" not in receipt["stop"]["settled"]
+    assert receipt["stop"]["settled"]["lease"] == "not_owed"
 
 
 def test_an_unreadable_lease_obligation_keeps_the_stop_open(service, monkeypatch):
@@ -266,7 +263,8 @@ def test_an_unreadable_lease_obligation_keeps_the_stop_open(service, monkeypatch
 
     receipt = runner.stop("analysis-lease-unreadable", execute=True)
     assert receipt["phase"] == "acknowledged", receipt
-    assert receipt["stop"]["reason"] == "required_lease_release_unproven"
+    assert receipt["stop"]["reason"] == "lease_obligation_unproven"
     assert releases == [], "an unnamed obligation must not be released"
     # The reason survives on the receipt instead of becoming a crash.
+    assert receipt["stop"]["lease"]["state"] == "obligation_unproven"
     assert "unreadable" in receipt["stop"]["lease"]["error"]

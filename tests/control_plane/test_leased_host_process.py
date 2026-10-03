@@ -17,7 +17,9 @@ from loopx.control_plane.coordination.coordination_state_contract import (
 )
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.turn_driver.host_process_transport import run_host_process
+from loopx.control_plane.turn_driver.host_process_transport import (
+    HOST_PROCESS_RECORD_ENV, execution_host_drain, host_process_supervisor_record, run_host_process,
+)
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
@@ -140,6 +142,24 @@ def test_control_pipe_loss_waits_for_leased_forced_cleanup(canonical_execution, 
     before = marker.read_bytes()
     time.sleep(0.2)
     assert marker.read_bytes() == before, "control pipe loss must finish forced cleanup before returning"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
+def test_leased_supervisor_records_its_own_group_beside_the_owners_record(canonical_execution, tmp_path, monkeypatch):
+    """The owner names one record; a leased supervisor leaves it to the nested Host."""
+    context, _, _ = canonical_execution
+    record = tmp_path / "op.host.json"
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record))
+    chunks = []
+    observed = run_host_process([sys.executable, "-c", "import os,sys;print(os.environ.get(sys.argv[1]))",
+                                 HOST_PROCESS_RECORD_ENV], project=tmp_path, input_text="",
+                                timeout_seconds=30, delegated_lease=context, on_stdout=chunks.append)
+    assert observed["outcome"] == "exited", observed
+    assert "".join(chunks).strip() == "None"  # the leased child never inherits the marker
+    assert not record.exists()
+    supervisor = json.loads(host_process_supervisor_record(record).read_text())
+    assert (supervisor["supervises"], supervisor["phase"]) == ("nested_host", "finished")
+    assert execution_host_drain(record) == "drained"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
