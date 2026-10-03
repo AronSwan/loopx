@@ -1,0 +1,12 @@
+{
+ "board": "EVENTS.jsonl@ZCodeProject",
+ "taken_at": "2026-10-03T13:28:13.853+08:00",
+ "lines": 110,
+ "file_sha256": "1229f9d116a9d6f1876be7037301d0ebe177da97e7fdfbfa2cf4b9a8dfeb7ed7",
+ "head_event": {
+  "actor": "[协调-监考:v2.2.1补正第一批]",
+  "ts": "2026-10-03T13:25:19.518+08:00",
+  "prev_chain": "702f981758ba702037297655cb364d6c7d68edc34f6087e168cd6d5f59bd0f34"
+ },
+ "note": "时戳锚最小版: 证人在GitHub服务端(push时刻+commit对象哈希), 非协同签名; 重写本地板=与外锚失配可检出"
+}
