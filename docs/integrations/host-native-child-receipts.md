@@ -131,8 +131,11 @@ A resumed CLI invocation can receive only a new `wait` completion. The adapter
 resolves its hashed child reference against the latest started host-observed
 spawn or followup in the
 same admitted Goal instance, coordinator and LoopX Turn, including receipts
-outside the bounded status window. It does not adopt coordinator reports or
-scan external host history. Spawn IDs retain their existing child binding.
+outside the bounded status window. A spawn/followup item's terminal snapshot
+belongs to its own stable decision and receivers; replaying an old spawn never
+completes a later followup. Only a new wait uses the latest child association.
+It does not adopt coordinator reports or scan external host history. Spawn IDs
+retain their existing child binding.
 CLI followup and failed-call IDs use the Turn journal's durable `host_attempt`
 plus the owned parent session and native item ID; app-server calls use their
 native Turn ID. A real retry advances the journal attempt before launch;
@@ -144,7 +147,8 @@ No prompt or raw result is added to a receipt.
 
 恢复 CLI 时可能只收到新的 `wait` 完成事件。适配器从同一已准入 Goal 实例、
 主 Agent、LoopX Turn 的最近一次已启动宿主 spawn 或 followup 回执恢复关联，
-覆盖状态窗口外的操作，
+覆盖状态窗口外的操作。spawn/followup 的完成快照只归属自身稳定决策和接收者；
+重放旧启动事件不会完成后来的跟进任务，只有新的 wait 使用最近关联。
 不采纳主 Agent 上报或扫描外部宿主历史。启动保留既有子代理绑定；CLI 跟进和
 失败调用复用 Turn 日志持久化的 `host_attempt`、父会话和原生工具 ID，
 app-server 使用其原生 Turn ID。真实重试在启动前递增尝试次数；同一绑定与
