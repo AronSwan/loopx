@@ -5,6 +5,8 @@ import sys
 import tarfile
 import threading
 import http.client
+from pathlib import Path
+import venv
 
 import pytest
 
@@ -147,3 +149,45 @@ def test_live_http_download_recovery_and_negative_digest(environment):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_browser_backup_rejects_selected_environment_without_loopx(tmp_path):
+    selected = tmp_path / "empty-environment"
+    venv.EnvBuilder(with_pip=False).create(selected)
+    python = selected / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    temporary = tmp_path / "servers"
+    temporary.mkdir()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", """
+import assert from 'node:assert/strict';
+import {configurationBackupScenario} from './examples/personal-workspace-browser/configuration-backup.mjs';
+await assert.rejects(configurationBackupScenario.run({
+  browser: {newPage() {throw new Error('unexpected UI: wrong interpreter started');}}, url: ''
+}), /No module named ['"]loopx['"]/);
+"""],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "LOOPX_TEST_PYTHON": str(python), "LOOPX_PYTHON_BIN": str(python),
+             "TMPDIR": str(temporary), "TMP": str(temporary), "TEMP": str(temporary)},
+        capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not list(temporary.glob("loopx-configuration-browser-*"))
+
+
+def test_browser_backup_reuses_selected_python_without_checkout_shadow(tmp_path):
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    (shadow / "loopx.py").write_text("raise RuntimeError('unexpected PYTHONPATH shadow')\n")
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", """
+import assert from 'node:assert/strict';
+import {configurationBackupScenario} from './examples/personal-workspace-browser/configuration-backup.mjs';
+await assert.rejects(configurationBackupScenario.run({
+  browser: {newPage() {throw new Error('selected backend reached UI');}}, url: ''
+}), /selected backend reached UI/);
+"""],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "LOOPX_TEST_PYTHON": sys.executable, "LOOPX_PYTHON_BIN": sys.executable,
+             "PYTHONPATH": str(shadow)}, capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
