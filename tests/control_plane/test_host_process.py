@@ -212,10 +212,12 @@ def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> Non
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
 def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path: Path, monkeypatch) -> None:
     from loopx.control_plane.turn_driver.host_process_transport import (
-        HOST_PROCESS_RECORD_ENV, execution_host_drain,
+        HOST_PROCESS_RECORD_ENV, execution_host_drain, prepare_host_process_record,
     )
 
     record_path = tmp_path / "op.host.json"
+    assert execution_host_drain(record_path) == "unattributable"
+    prepare_host_process_record(record_path)
     assert execution_host_drain(record_path) == "not_launched"
     monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record_path))
     host = ("import json,os,sys;print(json.dumps({'env': os.environ.get(%r), 'pid': os.getpid(),"
@@ -228,6 +230,9 @@ def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path
     assert record["phase"] == "finished"
     assert record["host_pid"] == result["value"]["pid"] == record["process_group"] == result["value"]["pgid"]
     assert execution_host_drain(record_path) == "drained"
+    observed = record_path.read_bytes()
+    prepare_host_process_record(record_path)
+    assert record_path.read_bytes() == observed, "initialization must not overwrite execution evidence"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
@@ -381,7 +386,7 @@ def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path)
 
     cases = [
         # (supervisor record, owner's record, observation)
-        (None, None, "not_launched"),
+        (None, None, "unattributable"),
         (None, ("host", gone.pid, "direct"), "drained"),
         (None, ("host", live.pid, "direct"), "draining"),
         (("nested_host", gone.pid, "leased"), None, "unattributable"),

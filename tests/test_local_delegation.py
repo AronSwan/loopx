@@ -1028,7 +1028,7 @@ def test_unsupported_stop_during_host_launch_preserves_continuation(service, mon
         worker = pool.submit(runner.execute, "platform-launch")
         try:
             assert entering.wait(20)
-            assert not runner._host_process_record(path).exists()
+            assert json.loads(runner._host_process_record(path).read_text())["phase"] == "not_launched"
             before = path.read_bytes()
             with monkeypatch.context() as platform:
                 platform.delattr(host_process_transport.os, "killpg", raising=False)

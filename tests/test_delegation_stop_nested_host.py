@@ -8,7 +8,7 @@ import signal
 
 import pytest
 
-from test_local_delegation import HOST, process_gone, service, until  # noqa: F401
+from test_local_delegation import HOST, brief, process_gone, service, until  # noqa: F401
 from test_delegation_lease_lifetime import inspect, prepare_lease
 from loopx.collaboration_mcp import Delegations
 from loopx.control_plane.collaboration.inbox import _read
@@ -132,7 +132,8 @@ def test_missing_or_unreadable_nested_attribution_cannot_release_a_lease(service
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned fixture")
-def test_missing_outer_record_does_not_settle_live_leased_cli(service, monkeypatch):
+@pytest.mark.parametrize("missing_records", ["outer", "both"])
+def test_missing_outer_record_does_not_settle_live_leased_cli(service, monkeypatch, missing_records):
     """The nested Host has not started, but its leased CLI is independently alive."""
     import json
     import sys
@@ -167,20 +168,30 @@ def test_missing_outer_record_does_not_settle_live_leased_cli(service, monkeypat
             outer = host_process_supervisor_record(record)
             assert until(lambda: json.loads(outer.read_text())["phase"] == "spawned")
             evidence = outer.read_bytes()
+            owned_evidence = record.read_bytes()
             outer.unlink()
+            if missing_records == "both":
+                record.unlink()
             receipt = runner.stop(operation, execute=True)
             actual = inspect(runner)
             assert not process_gone(pid)
             assert receipt["phase"] == "acknowledged", receipt
             assert receipt["reason"] == "host_process_drain_unproven"
             assert actual["active"] and actual["lease"]["idempotency_key"] == original["idempotency_key"]
+            # Replaying an existing operation cannot manufacture new proof.
+            replayed = runner.start("analysis", operation, brief())
+            assert replayed["stop"]["phase"] == "acknowledged"
+            if missing_records == "both":
+                assert not record.exists()
             outer.write_bytes(evidence)
+            record.write_bytes(owned_evidence)
             restored = runner.stop(operation, execute=True)
             assert restored["phase"] == "acknowledged"
             assert restored["stop"]["stop_id"] == receipt["stop"]["stop_id"]
         finally:
             if evidence is not None:
                 outer.write_bytes(evidence)
+                record.write_bytes(owned_evidence)
             finish.touch()
             running.result(timeout=30)
     settled = runner.stop(operation, execute=True)
