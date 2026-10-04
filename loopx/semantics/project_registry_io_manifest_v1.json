@@ -590,6 +590,14 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/cli_commands/configuration_backup.py::<module>.handle_configuration_backup::codec_read:load_registry#1",
+      "line": 39,
+      "column": 44,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/cli_commands/coordination_shadow.py::<module>.handle_coordination_shadow_command::codec_read:load_project_registry#1",
       "line": 219,
       "column": 20,
@@ -945,6 +953,22 @@
       "site": "loopx/cli_rollout.py::<module>.append_cli_rollout_event::codec_read:load_registry#1",
       "line": 52,
       "column": 24,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#1",
+      "line": 15,
+      "column": 16,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#2",
+      "line": 23,
+      "column": 52,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"
