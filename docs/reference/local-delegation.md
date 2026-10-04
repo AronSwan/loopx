@@ -455,7 +455,10 @@ execution identity (owner, execution key, any recorded epoch and the current
 version). The operation's `task_lease` annotation is only a hint: a missing,
 empty, stale `required: false` or malformed annotation never proves that
 nothing was owed, and a lease another execution holds is never released. The
-receipt's `lease.state` is `released`, `not_owed`, `release_unproven` or
+absence of the cutover marker also needs a provider-first read proving the
+canonical store absent. An existing or unreadable store keeps the obligation
+unproven until the original authority route is restored; stop never rebuilds it.
+The receipt's `lease.state` is `released`, `not_owed`, `release_unproven` or
 `obligation_unproven`. A release that failed is
 retried under the stop's own lock on the next explicit `stop`, so it never becomes a
 `settled` receipt that leaves the member's Todo blocked until the lease TTL;
@@ -511,7 +514,9 @@ worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host �
 `phase` 才是 `settled`。是否需要释放由 canonical 权威按该 operation 自己的执行身份
 （owner、执行 key、已记录的 epoch 与当前版本）判定；operation 的 `task_lease`
 注解只是线索，缺失、为空、过期的 `required: false` 或畸形注解都不能证明无需释放，
-其他执行持有的租约也绝不会被释放。回执的 `lease.state` 为 `released`、`not_owed`、
+其他执行持有的租约也绝不会被释放。切换标记缺失时，还必须由既有 provider-first
+读取证明 canonical store 不存在；已有或不可读的 store 使义务保持未证明，直到原
+authority 路径恢复，stop 不会重建它。回执的 `lease.state` 为 `released`、`not_owed`、
 `release_unproven` 或 `obligation_unproven`。释放失败会在下一次显式调用 `stop` 时于其锁下重试，
 因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
 `required_lease_release_unproven`；权威无法读取时同样保持打开，原因为
