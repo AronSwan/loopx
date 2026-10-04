@@ -17,6 +17,49 @@ from loopx.control_plane.collaboration.peers import returns
 from loopx.file_lock import exclusive_file_lock, lock_holder_host_label
 
 
+def test_missing_cutover_marker_does_not_erase_an_unannotated_lease(service, monkeypatch):
+    from test_delegation_lease_lifetime import inspect, prepare_lease
+    from loopx.control_plane.collaboration.inbox import _write
+    from loopx.control_plane.coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+
+    root, runner = service
+    operation = "authority-evidence-loss"
+    with monkeypatch.context() as setup:
+        original_lease = prepare_lease(root, runner, setup, ttl=None, operation_id=operation)
+    path = runner.path(operation)
+    row = _read(path)
+    row.pop("task_lease")  # Acquisition committed before its annotation survived.
+    _write(path, row)
+    fence = legacy_coordination_writer_fence_path(runtime_root=runner.root, goal_id=runner.goal_id)
+    original_fence = fence.read_bytes()
+    fence.unlink()
+    try:
+        receipt = runner.stop(operation, execute=True)
+        assert receipt["phase"] == "acknowledged", receipt
+        assert receipt["stop"]["lease"]["state"] == "obligation_unproven", receipt
+        assert not fence.exists(), "stop must not recreate authority evidence"
+    finally:
+        fence.write_bytes(original_fence)
+    held = inspect(runner)
+    assert held["active"] and held["lease"]["idempotency_key"] == original_lease["idempotency_key"]
+    recovered = runner.stop(operation, execute=True)
+    assert recovered["phase"] == "settled", recovered
+    assert recovered["stop"]["stop_id"] == receipt["stop"]["stop_id"]
+    assert recovered["stop"]["lease"]["state"] == "released"
+    assert inspect(runner)["lease"]["status"] == "released"
+
+
+def test_never_promoted_authority_needs_no_delegation_lease(service):
+    from types import SimpleNamespace
+
+    root, runner = service
+    unused_runtime = root / "never-promoted"
+    observer = SimpleNamespace(root=unused_runtime, goal_id=runner.goal_id)
+    row = {"identity": {"binding": {"todo_id": "todo_analyst-initial"}}}
+    assert stop_lease.obligation(observer, row) is None
+    assert not unused_runtime.exists(), "absence inspection must not create an authority"
+
+
 def recoverable_boundary(service, monkeypatch):
     root, runner = service
     # The Host adopts and supplies an artifact, but only delegation publishes
