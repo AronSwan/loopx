@@ -318,6 +318,9 @@ def test_operator_delivery_target_preview_grant_revoke_and_live_authority(fixtur
     )["changed"]
 
     # Older policy rows may carry metadata; recipient identity is still the pair.
+    assert configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True, execute=True
+    )["changed"]
     saved = json.loads(policy_path.read_text())
     saved["sources"][channel]["targets"] = [other, {**request, "note": "legacy"}, request]
     _write(policy_path, saved)
