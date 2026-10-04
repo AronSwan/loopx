@@ -690,6 +690,19 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     )
     failures.extend(projection_failures)
     review_signals.extend(projection_signals)
+    # A first task-step read fence costs 94 compact chars per occurrence. Peer
+    # detail also adds its task/actor row. Qualify only the initial 0->N change
+    # on these JSON views; keep absolute caps and later N->N growth unchanged.
+    before_basis = base.get("next_action_basis_count", 0)
+    after_basis = candidate.get("next_action_basis_count", 0)
+    basis_migration = (
+        output_format == "json"
+        and row_id.startswith(("surface/status/", "surface/quota_should_run/", "variant/status_task_graph_detail/"))
+        and type(before_basis) is int and before_basis == 0
+        and type(after_basis) is int and 0 < after_basis <= 4
+    )
+    if basis_migration:
+        review_signals.append("task-bound recommendation read fences added; bounded one-time JSON growth")
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -727,6 +740,11 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             ),
             _schema_migration_growth_allowance(migration, metric),
             projection_allowance.get(metric, 0),
+            after_basis * (
+                {"chars": 256, "utf8_bytes": 256, "lines": 8, "compact_payload_chars": 192}
+                if row_id.startswith("variant/status_task_graph_detail/") else
+                {"chars": 192, "utf8_bytes": 192, "lines": 6, "compact_payload_chars": 144}
+            )[metric] if basis_migration else 0,
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK

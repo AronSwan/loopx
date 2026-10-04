@@ -1158,8 +1158,20 @@ personal and Goal-scoped reports. Supplying `--recommended-action` alongside it
 requires the same text. It no longer performs a shared prose replacement.
 Existing Todo, claim/lease, settlement and Vision checks retain their owners;
 a within-task step alone is not a durable mainline change, replan ACK or Goal
-amendment. Refreshes without `--next-action` keep their existing recommendation
+amendment. Native Turn host results keep `recommended_action` and `next_action`
+as distinct durable follow-up guidance; they do not implicitly invoke this
+task-step editor or replace shared prose, including after completion or repair.
+Refreshes without `--next-action` keep their existing recommendation
 and report behavior. Historical prose-update receipts remain readable.
+
+CLI status omits the reducer's internal source context and duplicate basis;
+the selected route and explicit peer detail retain the editable read fence.
+The unchanged base/head fixture adds 100 pretty / 94 compact JSON characters
+to ordinary quota for that fence. Explicit task-graph detail adds 457 pretty /
+346 compact characters for two peer routes after compaction. The differential
+guard recognizes this bounded first 0-to-N fence transition only on the affected
+JSON views; absolute ceilings and later N-to-N growth budgets remain unchanged.
+This is a measured readback cost, not a claim of token or end-to-end time savings.
 
 Agent-scoped payloads may also include `goal_route_hint_v0`, a read-only
 synthesis of run, claim, wait or reassign advice. It is not a writer or a
