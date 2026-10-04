@@ -1153,6 +1153,41 @@ def test_json_escaped_paths_and_duplicate_arguments_are_counted_once() -> None:
     assert command_route_counts(json.dumps({"command": command})) == {"registry": 1, "runtime_root": 1}
 
 
+@pytest.mark.parametrize('row_id', [
+    'surface/status/small/json', 'surface/quota_should_run/small/json',
+    'variant/status_task_graph_detail/small/json',
+])
+def test_task_step_read_fence_growth_is_bounded_one_time_and_view_scoped(row_id):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base = _row(row_id=row_id, chars=1000, utf8_bytes=1000, lines=50,
+                compact_payload_chars=1000, next_action_basis_count=0)
+    candidate = {**base, 'chars': 1180, 'utf8_bytes': 1180, 'lines': 55,
+                 'compact_payload_chars': 1130, 'next_action_basis_count': 1}
+    observed = _compare_row(base, candidate)
+    assert not observed['failures']
+    assert any('read fences' in signal for signal in observed['review_signals'])
+    limit = 256 if row_id.startswith('variant/') else 192
+    assert _compare_row(base, {**candidate, 'chars': 1001 + limit})['failures']
+    assert _compare_row({**base, 'next_action_basis_count': 1}, candidate)['failures']
+    for invalid in (True, '1', -1, 5):
+        assert _compare_row(base, {**candidate, 'next_action_basis_count': invalid})['failures']
+    for other in ('surface/diagnose/small/json', 'surface/status/small/markdown'):
+        other_format = 'markdown' if other.endswith('/markdown') else 'json'
+        assert _compare_row({**base, 'row_id': other, 'format': other_format},
+            {**candidate, 'row_id': other, 'format': other_format})['failures']
+
+
+def test_read_fence_probe_counts_only_canonical_digest_shapes():
+    from loopx.control_plane.testing.cli_output_semantics import next_action_basis_count
+
+    valid = 'sha256:' + 'a' * 64
+    assert next_action_basis_count({'route': {'next_action_basis': valid},
+        'peers': [{'next_action_basis': valid}]}) == 2
+    for invalid in (None, True, 'a' * 64, valid + '\n', 'sha256:' + 'z' * 64):
+        assert next_action_basis_count({'next_action_basis': invalid}) == 0
+
+
 def test_dense_replan_growth_is_one_time_and_keeps_semantic_checks():
     paths = ['$.autonomous_replan_obligation.replan_context.' + key
              for key in ('core_goal', 'evidence', 'coverage_ledger')]

@@ -257,6 +257,12 @@ def handle_status_command(
         )
         if pending_composition_retries is not None:
             payload["pending_composition_retry_receipts"] = pending_composition_retries
+        # Source facts feed the typed recommendation reducer before display.
+        # They are not another operator-facing plan or a second copy of its basis.
+        for item in payload.get("attention_queue", {}).get("items", []):
+            item.pop("recommendation_context", None)
+            # The selected route (or explicit peer detail) already carries it.
+            item.pop("next_action_basis", None)
     except Exception as exc:
         payload = {
             "ok": False,
@@ -682,6 +688,8 @@ def attach_agent_lane_next_actions(
         except Exception:
             continue
         next_action = guard.get("agent_lane_next_action")
+        if isinstance(next_action, dict) and next_action.get("next_action_basis"):
+            item["next_action_basis"] = next_action["next_action_basis"]
         project_asset = item.get("project_asset")
         agent_member = _build_agent_member_projection(
             item,
