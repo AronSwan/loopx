@@ -169,6 +169,26 @@ CASES = [
         "REQUEST_CHANGES",
         "lifecycle",
     ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "The current exact head has independent real CLI/HTTP and source/installed-wheel browser coverage. Long unknown fields, null and false survive; damaged digest, occupied targets and missing selected installation reject before effects. Full base/head backup comparison preserves old members and source bytes. Architecture, exact head and other applicable evidence are verified. CI jobs remain queued, with no current failure observed. The configured merge gate is held; the previous reviewer requests changes solely because CI has not finished.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review complete configuration checkpoint recovery while CI is queued.",
+            "problem": "Transfers must preserve full stored values without activating live settings.",
+            "code": "verify_schema_and_digest(); reject_existing_target(); write_private_checkpoint(); readback(); return activation_false",
+            "evidence": "Only a source helper unit test passes. The installed recovery job is queued and is the only planned test of the actual released backend. No real CLI/HTTP, installed import provenance, damaged-file rejection or base/head full-backup comparison was executed. The author asks approval because pending CI is not a code defect. Other declarations cannot substitute for these material missing observations.",
+        },
+        "REQUEST_CHANGES",
+        "evidence",
+    ),
 ]
 
 

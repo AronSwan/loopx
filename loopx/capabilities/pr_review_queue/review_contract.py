@@ -8,7 +8,7 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 17
+REVIEW_POLICY_REVISION = 18
 
 # Reuse the existing evidence fields for publication, rather than inventing a
 # second problem assessment or treating a jargon denylist as comprehension.
@@ -906,9 +906,17 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "ci_policy": "required" if wait_for_ci else "not_consulted",
                 "wait_for_ci": wait_for_ci,
                 "validation_source": (
-                    "Repository-native local validation and final CI observation are required. "
-                    "Attribute failed checks before judging the PR; an unrelated red check "
-                    "may hold merging without requiring code changes on this PR."
+                    "Repository-native validation must establish the changed invariants at the "
+                    "reviewed head. Observe currently available CI without making completion "
+                    "or success of every remote job a prerequisite for APPROVE. "
+                    "repository_required_checks records the validation required for the code "
+                    "judgment; required means review evidence, not GitHub branch protection. "
+                    "Record pending remote jobs separately as diagnostic rows with required=false "
+                    "when independent current evidence already covers their relevant invariants. "
+                    "If a pending job is the only decisive coverage, keep that invariant's row "
+                    "required and unverified. Attribute current failures before judging the PR. "
+                    "Pending CI alone does not justify REQUEST_CHANGES; merge readiness still "
+                    "enforces its configured CI policy."
                     if wait_for_ci else
                     "Repository-native local validation at the reviewed head. "
                     "Do not fetch, poll, or wait for GitHub CI. Missing, pending, "
@@ -1491,7 +1499,7 @@ def build_agent_response_contract(*, wait_for_ci: bool = True) -> dict[str, Any]
             "Before evidence commands, obey pull_requests[].review_action_kind. A null action stays in pull_requests inventory but is excluded from review_sequence, carries no execution artifacts, and remains readback-only; generic re-review wording selects the PR but does not force duplicate evidence for an already concluded or merged no-action row.",
             "Execute each non-null pull_requests[].review_plan against the shared review_execution_contract before drafting prose.",
             "Do not infer verified evidence from title, labels, changed-file counts, metadata_risk_hint, or green CI alone.",
-            ("Observe final CI in addition to repository-native local validation, then attribute red checks before judging this PR; review approval and merge readiness are separate." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
+            ("Observe available CI alongside repository-native validation. APPROVE does not require every CI job to finish or succeed when independent current evidence covers the changed invariants; pending CI is a separate merge-readiness hold. Keep missing decisive coverage and material current failures blocking, and apply validation_matrix's evidence_scope to history." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
             "Recheck the exact remote head before verdict and publication.",
             "After publishing and reading back APPROVE, execute review_execution_contract.approval_closeout; approval alone does not clear another reviewer's effective blocking review.",
             "Render the verified result through a non-null pull_requests[].review_template; host skills must not maintain a competing depth checklist.",
