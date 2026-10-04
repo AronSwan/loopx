@@ -81,6 +81,7 @@ Agents by default, across Goals and later registrations, without recipient
 enrollment. Exercise direct delivery and a receiver's subsequent peer handoff
 through the same current source rule. Revoke one Agent and one Goal: the next
 attempt must be denied, and restoring the Goal must preserve the Agent exception.
+Exercise both revocation orders, including an Agent revoked while its Goal is disabled.
 An explicit selected scope retains enrollment; an unknown sender, stopped Goal
 or remote binding never gains authority from the local default. Delivery remains
 separate from evidence access, task acceptance and execution.

@@ -110,13 +110,15 @@ export function configureSourceRecipient(params: JsonObject): JsonObject {
     // Preserve individual exceptions when the Goal is restored later.
   } else {
     updatedTargets = targets.filter(row => !matches(target, row));
-    if ((scope === "all_registered" || updatedTargets.some(row => matches(row, target))) && !blocked.some(row => matches(row, target))) {
+    // Record the exact revocation even if a Goal block or missing enrollment
+    // already disables delivery. Restoring that broader scope must not erase it.
+    if (!blocked.some(row => row.goal_id === goal_id && row.agent_id === agent_id)) {
       updatedBlocked = [...blocked, target];
     }
   }
   const changed = JSON.stringify(updatedTargets) !== JSON.stringify(targets) ||
     JSON.stringify(updatedBlocked) !== JSON.stringify(blocked);
-  // Preserve provider metadata when the semantic recipient set is unchanged.
+  // Preserve provider metadata when the declared grants and exceptions are unchanged.
   const updatedSource: JsonObject = { ...source };
   if (changed) {
     updatedSource.targets = updatedTargets;

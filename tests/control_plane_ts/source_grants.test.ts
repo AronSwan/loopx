@@ -90,3 +90,21 @@ test("default local access keeps exact and Goal revocations across future regist
   const restoredAgent = configureSourceRecipient({ ...params, source: restoredGoal.source, grant: true });
   assert.deepEqual(resolveSourceRecipients({ sender_id: "owner", source: restoredAgent.source, available }), { targets: [other, peer, worker] });
 });
+
+test("an Agent revocation while its Goal is disabled survives Goal restoration", () => {
+  for (const policy of [{ sender_ids: ["owner"] }, source]) {
+    const params = { source: policy, goal_id: "research", agent_id: null, available,
+      active_goal_ids: ["research", "other"], grant: false };
+    const disabledGoal = configureSourceRecipient(params);
+    const disabledAgent = configureSourceRecipient({ ...params, source: disabledGoal.source, agent_id: "peer" });
+    assert.equal(disabledAgent.granted_before, false);
+    assert.equal(disabledAgent.would_change, true);
+    assert.equal(configureSourceRecipient({ ...params, source: disabledAgent.source, agent_id: "peer" }).would_change, false);
+    const restoredGoal = configureSourceRecipient({ ...params, source: disabledAgent.source, grant: true });
+    assert.deepEqual(resolveSourceRecipients({ sender_id: "owner", source: restoredGoal.source, available }),
+      { targets: policy === source ? [worker] : [other, worker] });
+    const restoredAgent = configureSourceRecipient({ ...params, source: restoredGoal.source, agent_id: "peer", grant: true });
+    assert.deepEqual(resolveSourceRecipients({ sender_id: "owner", source: restoredAgent.source, available }),
+      { targets: policy === source ? [peer, worker] : [other, peer, worker] });
+  }
+});

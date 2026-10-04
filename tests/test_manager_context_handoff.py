@@ -428,6 +428,34 @@ def test_goal_delivery_grant_inherits_agents_and_rechecks_specific_revocation(fi
     assert authority(root, registry, session, turn)["targets"] == []
 
 
+@pytest.mark.parametrize("local_scope", ["selected", "all_registered"])
+def test_agent_revoke_during_goal_revocation_still_denies_original_replay(fixture, local_scope):
+    root, registry, session, turn, request = fixture
+    channel = "manager.external." + "f" * 24
+    session["channel_id"] = channel
+    turn["origin"] = "lark"
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: {
+        "local_delivery_scope": local_scope, "sender_ids": ["owner"],
+        "targets": [{"goal_id": "research"}],
+    }}})
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+                     channel=channel, sender_id="owner", message=turn["message"], source_id="lark:original")
+    receipt = deliver(root, registry, session=session, turn=turn, request=request)
+    configure_delivery_target(root, registry, channel=channel, goal_id="research", grant=False, execute=True)
+    policy_before_preview = policy_path.read_bytes()
+    preview = configure_delivery_target(root, registry, channel=channel, **request, grant=False)
+    assert preview["would_change"] and not preview["granted_before"]
+    assert policy_path.read_bytes() == policy_before_preview
+    assert configure_delivery_target(root, registry, channel=channel, **request, grant=False, execute=True)["changed"]
+    configure_delivery_target(root, registry, channel=channel, goal_id="research", grant=True, execute=True)
+    assert request not in authority(root, registry, session, turn)["targets"]
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request=request)
+    configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+    assert deliver(root, registry, session=session, turn=turn, request=request)["request_id"] == receipt["request_id"]
+
+
 def test_same_goal_recipients_keep_inboxes_and_decisions_separate(fixture):
     root, registry, session, turn, request = fixture
     data = json.loads(registry.read_text())

@@ -36,8 +36,9 @@ loopx manager-inbox grant-delivery-target --channel-id manager.external.01234567
 Pass the manager connection's `--registry` and `--runtime-root`. Without
 `--execute`, no policy bytes change. `blocked_targets` retains exact Agent and
 whole-Goal revocations, including future members. Restoring a Goal preserves
-individual revocations; restore the Goal first, then an individual Agent when
-needed. Revocation still works after unregistration. In `selected` mode, granting
+individual revocations, including those recorded while the Goal is disabled;
+restore the Goal first, then an individual Agent when needed. Revocation still
+works after unregistration. In `selected` mode, granting
 a Goal enrolls its current/future Agents; exact grants enroll only that Agent.
 An explicit audience read scope still bounds enrollment in selected mode.
 
