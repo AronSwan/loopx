@@ -100,13 +100,44 @@ executor endpoint、原生 Session/active Turn 与已持久排队数量。管家
 不代表 Goal 验收，也不证明结果已经投递。
 
 Core request 在 provider 投递前保存带时间的观测。重复事件保留原快照，不切换到
-较新的 Session；执行证据缺失和未知状态明确显示不可判定。这两个命令不会打开
+较新的 Session。已选定注册 Agent 时固定观测其确切绑定 Session：即使该会话已
+失败或关闭也如实读取，不退回更新的会话；执行证据缺失和未知状态明确显示不可判定。这两个命令不会打开
 Session、调用模型或创建 Goal。`/help` 按角色列出命令、既有设置 → Lark 的工作区、
 执行器与解绑入口，以及目前仅支持文字的附件边界。
 
 回归使用生产原生文件 store、持久队列、bound request 与 provider 受理/投递路径，
 provider 和协议执行器为合成 fixture。它验证排队、停止、读回和重复投递，不证明
 本增量的真实 provider、手机或正式安装验收。注册 Agent 选择及更广协调仍开放。
+
+## 显式注册 Agent 选择：沿用原 attached 宿主
+
+设置 → Lark 可以为项目 App 授权确切的已有注册 Agent attached Session。
+共享类型化 binding owner 核验工作区、Goal、Agent、Session、执行器、Goal lifetime
+和确切宿主；App/本人独立核验，配置通过 revision fence 发布。每个 App 最多
+16 个明确目标授权；执行器名称不等于注册 Agent 身份。此操作不创建 Agent 或
+Goal，不导入宿主历史、旧绑定或 portfolio。
+
+私聊 `/agents` 只列当前可用授权；复制完整 `/agent <target-ref>` 选择后，后续
+文字进入原 canonical Session 持久队列，由已有宿主领取并写回。`/project`
+返回原普通项目会话。切换或崩溃后，已受理消息仍保持原目标与 App/source，结果
+返回原私聊；不启动或恢复另一 model adapter。原宿主须已接入
+[原生 attached broker](../../integrations/attached-agent-session-broker.md)。
+
+队列保存冻结受众与确切目标。宿主领取前在 grant/queue fences 内重新核验本地
+授权、注册、工作区、lifetime 与宿主；撤销拒绝尚未领取的消息和私聊结果回传，
+已被领取的执行仍归原宿主。Session 与宿主受众 stamp 阻止将同一持续对话分给
+另一 App，包括撤销后重新授权。入站与出站另行核验原 App 的本人/source。
+消息授权保留原宿主的执行策略与领取/完成 authority。
+
+`/status` 展示真实 Agent 接收者与持久队列。当前 attached broker 不支持 push
+interrupt 或新建原宿主会话：`/stop`、`/new` 明确回应不可用，保留原执行；
+请在原宿主处理，或 `/project` 回到普通聊天。设置可撤销目标或解绑 App；
+缺失工作区与失效授权保持不可用。候选空态不会自动建立角色或虚构 Goal。
+
+合成 provider/native-store 旅程覆盖选择、追问、原结果回传、重放/恢复、撤销后
+领取拒绝、确切注册和跨 App/宿主隔离；类型检查与 Settings 打包覆盖产品伴随面。
+真实 attached 宿主自动领取、手机验收、增量媒体/权限交互和更广的管家协调仍开放。
+本源码增量经维护者评审后才能进入正式安装。
 
 ## 决策：让 App 成为工作会话持续进行的地方
 
