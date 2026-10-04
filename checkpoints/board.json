@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.5-草案.md",
   "sha256_lf": "4786ee78c3c80a7afe3eac4a1fbeb413ad45327675fafcef1483f2aeef5d5f93"
  },
- "taken_at": "2026-10-04T14:31:12.535+08:00",
- "lines": 224,
- "file_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
- "prefix_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
+ "taken_at": "2026-10-05T01:27:42.088+08:00",
+ "lines": 303,
+ "file_sha256": "528ff9025713d9123ed278ab21cc865dad41a6a0677e14343aaa1b605acaa026",
+ "prefix_sha256": "528ff9025713d9123ed278ab21cc865dad41a6a0677e14343aaa1b605acaa026",
  "head_event": {
-  "actor": "[v2.5核签通过:§31谎报成本原则呈批]",
-  "ts": "2026-10-04T14:25:13.811+08:00",
-  "prev_chain": "ef831ccbd6f5216cf437f8fdb546bc1346e3b042551bb049e5c71fb4d1ae3b25",
-  "head_sha256": "d57ae771c4d346bd28c6b8b3c86b7cbddb0f41ed28a14c9d2eeacde6a5bc64f6"
+  "actor": "[验收标准v2冻结:合格线定死]",
+  "ts": "2026-10-05T01:27:40.532+08:00",
+  "prev_chain": "d46372285529c6e7e957808329768a6d234dcef6272facbdd6392a854cd78544",
+  "head_sha256": "b6913649d06c865a129bb2f5af9c3712a98abffef6cc4283d1e250bcbdc49a2d"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
