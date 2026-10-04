@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.5-草案.md",
   "sha256_lf": "4786ee78c3c80a7afe3eac4a1fbeb413ad45327675fafcef1483f2aeef5d5f93"
  },
- "taken_at": "2026-10-05T02:22:36.951+08:00",
- "lines": 304,
- "file_sha256": "0a548a553f359750c83c9e4b47b62e3d91da4c8f6899e64afff18d4330720b51",
- "prefix_sha256": "0a548a553f359750c83c9e4b47b62e3d91da4c8f6899e64afff18d4330720b51",
+ "taken_at": "2026-10-05T02:55:26.130+08:00",
+ "lines": 305,
+ "file_sha256": "96de9ae6c668b111c5d4dadfe1ffa407243c2d66810b7260fbe253416500ffce",
+ "prefix_sha256": "96de9ae6c668b111c5d4dadfe1ffa407243c2d66810b7260fbe253416500ffce",
  "head_event": {
-  "actor": "[refcheck第四查上线:Q5实测通过]",
-  "ts": "2026-10-05T02:22:34.154+08:00",
-  "prev_chain": "b6913649d06c865a129bb2f5af9c3712a98abffef6cc4283d1e250bcbdc49a2d",
-  "head_sha256": "2e0a8eff4e8a7c43503ac401e4f27f4f8eafbfbac80688fe1f5a3e5b20dc3563"
+  "actor": "[开机制审查组(用户令)]",
+  "ts": "2026-10-05T02:29:48.912+08:00",
+  "prev_chain": "2e0a8eff4e8a7c43503ac401e4f27f4f8eafbfbac80688fe1f5a3e5b20dc3563",
+  "head_sha256": "5b686daa5a51a1ade6757f6d74d4b288a43f5a24aab36f4115dffae781bf9f9e"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
