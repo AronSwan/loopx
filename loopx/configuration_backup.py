@@ -24,9 +24,13 @@ def capture_configuration_backup(
         if len(matches) != 1:
             raise ValueError("configuration backup requires exactly one source-owned Goal")
         snapshots.append({"goal_id": goal_id, "goal_configuration": matches[0]})
-    return effect_runtime_result("configuration.backup", {"action": "capture", "data": {
+    data = {
         "machine_configuration": read_stored_machine_configuration(runtime_root), "goals": snapshots,
-    }})
+    }
+    backup = effect_runtime_result("configuration.backup", {"action": "capture", "data": data})
+    if backup.get("data") != data:
+        raise ValueError("configuration transport cannot preserve the complete source values")
+    return backup
 
 
 def verify_configuration_backup(backup: dict[str, Any]) -> dict[str, Any]:

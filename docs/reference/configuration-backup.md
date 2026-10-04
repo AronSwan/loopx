@@ -7,6 +7,9 @@ capability overrides, storage intent, extension fields, nulls and disabled
 values. It resolves shared registry entries to their canonical project registry;
 an effective/public settings projection cannot replace the stored configuration.
 Unreadable or ambiguous source ownership aborts publication of the backup.
+Capture compares the complete transport result with its source values; an
+unrepresentable value (such as an integer rounded by JavaScript) aborts instead
+of publishing a lossy checkpoint or replacing an earlier backup.
 
 Use a configuration-only backup without copying databases, Host sessions,
 credential stores, skill directories or automation state:

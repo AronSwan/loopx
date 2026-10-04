@@ -99,6 +99,24 @@ def test_current_project_cli_uses_selected_project_not_invoked_registry(environm
     assert backup["data"]["goals"][0]["goal_configuration"]["extension"] == {"disabled": False}
 
 
+def test_lossy_source_values_abort_without_replacing_previous_backup(environment, tmp_path):
+    source, runtime, registry, goal = environment
+    goal["extension"] = {"large_integer": 9007199254740993}
+    source.write_text(json.dumps({"goals": [goal]}))
+    plan = build_state_backup_plan(project=source.parent.parent, runtime_root=runtime,
+        output_dir=tmp_path / "previous-backup", include_skills=False, include_automations=False)
+    from pathlib import Path
+    archive, manifest = Path(plan["archive_path"]), Path(plan["manifest_path"])
+    archive.parent.mkdir()
+    archive.write_bytes(b"previous verified archive")
+    manifest.write_bytes(b"previous verified manifest")
+    with pytest.raises(ValueError, match="complete source values"):
+        execute_state_backup_plan(plan)
+    assert archive.read_bytes() == b"previous verified archive"
+    assert manifest.read_bytes() == b"previous verified manifest"
+    assert len(list(archive.parent.iterdir())) == 2
+
+
 def test_live_http_download_recovery_and_negative_digest(environment):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     _, runtime, registry, _ = environment
