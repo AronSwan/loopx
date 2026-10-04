@@ -46,18 +46,19 @@ supervision:
   execution's acquired lease and completes through the canonical lease CAS
   ([#5466](https://github.com/loopx-project/loopx/pull/5466)).
 - `runLeasedHostProcess` re-proves the original owner/key/epoch at
-  `min(30 s, remaining/2)` and cancels the delegated CLI, including its nested
-  Host, when a renewal is rejected, current proof is lost or the last proven
-  `expires_at` passes; the forced group termination follows a six-second
+  `min(30 s, remaining/2)` and requests cancellation when a renewal is
+  rejected, current proof is lost or the last proven `expires_at` passes;
+  the forced group termination follows a six-second
   grace ([#5436](https://github.com/loopx-project/loopx/pull/5436)). Each
   lease command may run for 60 seconds and a lost reply is retried once with
   the same intent, while the proven expiry stays armed throughout:
   `tests/control_plane/test_leased_host_process.py::test_real_renewal_faults_keep_original_deadline_and_identity`
-  shows on real File and SQLite authority that a hung renewal does not keep
-  the Host running past that expiry.
+  shows on real File and SQLite authority that a hung renewal does not
+  disarm expiry-driven cancellation in the tested supervisor topology.
 - `tests/test_delegation_lease_lifetime.py::test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
-  proves on real File and SQLite authority that releasing that lease stops the
-  nested Host and its descendants before the worker returns, leaves the Todo
+  proves on real File and SQLite authority, with functioning nested
+  supervision, that releasing that lease stops the nested Host and its
+  descendants before the worker returns, leaves the Todo
   open, and that retrying the operation neither reacquires the old execution
   nor launches the Host again.
 
@@ -85,28 +86,33 @@ proof, so a released lease retires its key permanently without a new status.
    every renewal, completion CAS and acquire replay from that execution; late
    Todo completion and result acceptance are impossible by construction. No
    file lock, worker acknowledgement, lane probe or process-group record is
-   part of the guarantee.
+   part of this canonical-write guarantee. It does not undo shell commands,
+   network requests or other external effects already launched by the Host.
 4. **Receipt.** The typed TypeScript owner derives one phase from current
    facts on every read; no phase is persisted.
    - `requested`: intent persisted, the execution has not yet exposed a lease
      to release. Read again; the worker observes the intent before it
      launches a Host.
    - `revoked`: the release committed, or the execution is already fenced by
-     another epoch or by expiry. Safe to continue the Todo with a new
-     operation; the old execution cannot commit any canonical effect.
-   - `drained`: additionally, the operation recorded its `stopped`
-     observation with `host_supervision` of `returned` (the leased supervisor
-     returned after proof loss) or `not_launched` (no Host was launched).
+     another epoch or by expiry. The old execution cannot commit effects
+     guarded by canonical authority. This alone does not qualify overlapping
+     external work or a resource handoff.
+   - `drained`: additionally, the existing Host owner proves that the original
+     execution and every attributed process group have exited, or proves
+     that no Host was launched and no launch remains possible. A returned
+     leased supervisor, a `stopped` operation or elapsed grace is insufficient.
    - `noop`: the operation was `accepted` or `rejected` before the fence took
      effect. Its prior conclusion stands and nothing is written.
    Drain is an observation, never a settlement condition. A dead worker
-   leaves `revoked` with `host_supervision: unobserved`; later green reads do
-   not upgrade it.
+   leaves `revoked` with `host_supervision: unobserved`; only complete Host
+   evidence tied to the original execution can establish drain. An unavailable
+   or interrupted inner supervisor leaves drain unproven even after outer return.
 5. **Worker observation.** The worker checks the intent before acquiring a
    lease and again before launching a Host, releases its own lease on either
    checkpoint, and records `stopped` after any supervised execution returns
-   while the intent exists. Those checkpoints avoid wasted work; the fence,
-   not the checkpoint, is the guarantee.
+   while the intent exists. That observation says the worker handled stop; it
+   does not prove complete drain. Those checkpoints avoid wasted work; the
+   canonical-write guarantee comes from the lease fence.
 6. **Authority mode.** Stop requires the Goal's canonical `hard_lease` mode.
    On `legacy` or `soft_claim` authority there is no execution lease and
    therefore no fence; `stop --execute` is refused before any write with a
@@ -114,25 +120,19 @@ proof, so a released lease retires its key permanently without a new status.
 7. **Lifecycle.** A stopped operation refuses `resume`; continuing requires a
    new operation, which acquires a new lease epoch. Stop never completes the
    Todo, settles the Goal or changes an accepted result.
-8. **Drain latency.** Revocation and drain run on different clocks. The
-   fence holds from the moment the release commits. Physical drain follows
-   when the existing supervisor cancels the delegated CLI, on the first of a
-   rejected renewal, a renewal whose command fails twice, a current-proof
-   read that fails or no longer proves the execution, or the last proven
-   `expires_at`. Only that expiry bounds drain unconditionally: it is at most
-   one lease TTL after the release commits, because nothing renews after the
-   release, and the six-second grace and forced group kill follow it. About
-   thirty-six seconds (a renewal interval of at most 30 seconds plus the
-   grace, plus one lease command) is the nominal path only: no renewal is in
-   flight when the release commits and the authority answers promptly. A
-   renewal already in flight finishes on its own clock, so slow or lost
-   authority replies move drain toward the expiry bound. `revoked` therefore
-   never implies drain; treat execution resources as released only on
-   `drained`. This slice adds no release-to-drain deadline and no signal
-   accelerator; a tighter unconditional bound would need a supervisor-owned
-   cancellation deadline with its own real-process qualification. Nested
-   Host cleanup after a forced group kill remains the existing supervisor
-   boundary from #5436 and is not re-proven here.
+8. **Drain latency.** Revocation and resource exit are separate facts. The
+   fence holds once release commits. The existing leased supervisor requests
+   cancellation on rejected renewal, failed current proof or its last proven
+   expiry; that expiry remains armed while authority replies are in flight.
+   These are cancellation triggers, not an unconditional deadline for every
+   nested process to exit. Outer supervisor return and expiry plus six-second
+   grace do not prove inner drain if a nested supervisor is interrupted or its
+   cleanup cannot be observed. The roughly thirty-six-second healthy path is
+   nominal only, requiring promptly answered authority requests, no in-flight
+   renewal at release and functioning supervision. Slow/lost replies or failed
+   cleanup must remain visible as `revoked` with unproven drain. Report actual
+   Host evidence before `drained`; this proposal adds no hard drain deadline,
+   new cleanup service or second process-lifecycle owner.
 9. **Surfaces.** CLI `delegation stop --execute` and MCP `stop_delegation`
    share `Delegations.stop`; `read`, `wait` and the inventory expose the
    receipt and the `stopped` observation. The dashboard shows a recorded
@@ -165,12 +165,19 @@ asserts the nominal thirty-six seconds:
   that renewal's authority reply is delayed. The receipt is `revoked` once
   the release commits and does not report `drained` while the nested Host is
   still running. No renewal, Todo completion or acceptance from the old
-  execution commits, and drain arrives after the delayed rejection, no later
-  than the last proven expiry plus the grace.
+  execution commits. Observe the existing cancellation trigger separately
+  from complete Host exit; retain `revoked` whenever drain cannot be proved.
 - **Lost authority replies.** When the renewal command fails twice or never
   answers within its timeout, the same receipt and fence properties hold,
-  and the supervisor cancels no later than the last proven expiry plus the
-  grace.
+  and the last proven expiry remains armed for cancellation. A cancellation
+  observation is not complete nested-process drain.
+- **Interrupted nested supervisor.** Pause the inner supervisor after the
+  actual Host starts, release the original canonical lease, and wait for the
+  outer call to return. If an independently observed descendant still runs,
+  including after expiry plus grace, the receipt must remain `revoked` with
+  unproven drain. Only subsequent complete, original-execution Host evidence
+  may report `drained`. Retain the healthy-supervisor control and ensure the
+  fixture cleans its own groups even when the assertion fails.
 
 ## What this entry does not establish
 

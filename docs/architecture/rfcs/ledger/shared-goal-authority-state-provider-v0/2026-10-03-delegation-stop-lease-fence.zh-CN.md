@@ -40,13 +40,15 @@
   （[#5466](https://github.com/loopx-project/loopx/pull/5466)）。
 - `runLeasedHostProcess` 以 `min(30 s, remaining/2)` 的节奏重新证明原
   owner/key/epoch，在续期被拒绝、当前证明丢失或最后已证明的 `expires_at` 到达时
-  取消委派 CLI 及其嵌套 Host；强制进程组终止前有六秒 grace
+  请求取消；强制进程组终止前有六秒 grace
   （[#5436](https://github.com/loopx-project/loopx/pull/5436)）。每个 lease 命令
   最长运行 60 秒，回复丢失时以同一意图重试一次，而已证明的到期计时始终有效：
   `tests/control_plane/test_leased_host_process.py::test_real_renewal_faults_keep_original_deadline_and_identity`
-  在真实 File 与 SQLite authority 上证明，续期挂起不会让 Host 运行到该到期之后。
+  在真实 File 与 SQLite authority 上证明，在该测试的监督结构内，续期挂起不会
+  撤销由到期时刻触发的取消。
 - `tests/test_delegation_lease_lifetime.py::test_real_revocation_or_new_execution_stops_nested_host_without_acceptance`
-  在真实 File 与 SQLite authority 上证明：释放该 lease 后，嵌套 Host 及其子进程
+  在真实 File 与 SQLite authority 上证明：嵌套监督正常运行时，释放该 lease 后，
+  嵌套 Host 及其子进程
   在 worker 返回前停止，Todo 保持未完成，重试该操作既不会重新取得旧执行也不会
   再次启动 Host。
 
@@ -67,40 +69,40 @@
    代表成员 claim、renew、complete 时行使的是同一份信任。释放之后，authority
    拒绝该执行的一切续期、完成 CAS 与 acquire 重放；迟到的 Todo 完成与结果
    验收在构造上不可能。文件锁、worker ACK、lane 探测、进程组记录都不是保证的
-   一部分。
+   一部分。该保证只约束经过 canonical authority 校验的写入，不能撤回 Host 已经
+   发出的 shell 命令、网络请求或其他外部副作用。
 4. **回执。** 类型化的 TypeScript owner 在每次读取时由当前事实推导一个
    phase；不持久化 phase。
    - `requested`：意图已持久化，执行尚未暴露可释放的 lease。再次读取；worker
      会在启动 Host 前观察到该意图。
-   - `revoked`：释放已提交，或该执行已被另一个 epoch 或到期 fence。可以用新
-     操作安全继续该 Todo；旧执行无法提交任何 canonical 效果。
-   - `drained`：在此之上，操作记录了 `stopped` 观察，且 `host_supervision` 为
-     `returned`（leased supervisor 在证明丢失后返回）或 `not_launched`（未
-     启动 Host）。
+   - `revoked`：释放已提交，或该执行已被另一个 epoch 或到期 fence。旧执行不能
+     提交受 canonical authority 校验的效果；这本身不证明可以重叠执行外部工作
+     或交接资源。
+   - `drained`：在此之上，既有 Host owner 证明原执行及全部归属进程组已经退出，
+     或证明 Host 从未启动且已不存在继续启动的可能。leased supervisor 返回、
+     操作记录为 `stopped` 或 grace 已经过期，都不足以证明这一点。
    - `noop`：操作在 fence 生效前已经 `accepted` 或 `rejected`。原结论保留，
      不写任何内容。
    Drain 是观察，绝不是结算条件。worker 已死时停留在 `revoked` 且
-   `host_supervision: unobserved`；之后的绿色读取不会升级它。
+   `host_supervision: unobserved`；只有绑定原执行的完整 Host 证据才能建立 drain。
+   内层 supervisor 不可用或被中断时，即使外层已经返回，drain 仍未获证明。
 5. **Worker 观察。** worker 在取得 lease 前和启动 Host 前各检查一次意图，任一
    检查点命中时释放自己的 lease；在意图存在时任何被监督执行返回后记录
-   `stopped`。这些检查点避免浪费工作；保证来自 fence，不来自检查点。
+   `stopped`。这只说明 worker 处理过停止，不能证明完整 drain。检查点用于避免
+   浪费工作；canonical 写入保证来自 lease fence。
 6. **Authority 模式。** stop 要求 Goal 的 canonical `hard_lease` 模式。在
    `legacy` 或 `soft_claim` authority 上没有执行 lease，因此没有 fence；
    `stop --execute` 在任何写入前被拒绝，原因中写明模式。提升 Goal 是启用步骤。
 7. **生命周期。** 已停止的操作拒绝 `resume`；继续需要新操作，它会取得新的
    lease epoch。stop 永不完成 Todo、不结算 Goal、不改变已验收结果。
-8. **Drain 延迟。** 撤销与 drain 走不同的时钟。release 提交的那一刻 fence 即
-   生效；物理 drain 发生在既有 supervisor 取消委派 CLI 时，取以下最早者：续期被
-   拒绝、续期命令两次失败、当前证明读取失败或不再证明该执行、最后已证明的
-   `expires_at` 到达。只有这个到期时刻能无条件地界定 drain：release 之后不会再有
-   续期，所以它最多在 release 提交后一个 lease TTL 到达，随后是六秒 grace 与强制
-   进程组终止。约三十六秒（不超过 30 秒的续期间隔加 grace，再加一次 lease 命令）
-   只是名义路径：release 提交时没有正在进行的续期，且 authority 及时响应。已在
-   进行的续期按自己的时钟结束，因此 authority 响应慢或丢失时，drain 会推向到期
-   上界。所以 `revoked` 从不意味着 drain；只有 `drained` 才能视为执行资源已释放。
-   本切片不增加从 release 到 drain 的期限，也不增加信号加速路径；更紧的无条件
-   上界需要由 supervisor 自己拥有的取消期限及其真实进程验收。强制进程组终止后的
-   嵌套 Host 清理仍是 #5436 的既有 supervisor 边界，此处不重新证明。
+8. **Drain 延迟。** 撤销与资源退出是两个事实。release 提交后 fence 生效；既有
+   leased supervisor 在续期被拒绝、当前证明失败或最后已证明的到期时刻请求取消，
+   authority 回复在途时也保留这个到期计时器。这些是取消触发条件，不是所有嵌套
+   进程退出的无条件期限。内层 supervisor 被中断或无法观察其清理时，外层返回和
+   到期加六秒 grace 都不能证明内层 drain。约三十六秒的健康路径只是名义值，要求
+   authority 及时响应、release 时没有在途续期且监督正常运行。慢响应、回复丢失或
+   清理失败时，保留 `revoked` 与 drain 未证明的事实。只有真实完整的 Host 证据才
+   能得到 `drained`；本提案不新增 drain 硬期限、清理服务或第二个进程生命周期 owner。
 9. **入口。** CLI `delegation stop --execute` 与 MCP `stop_delegation` 共用
    `Delegations.stop`；`read`、`wait` 与 inventory 暴露回执与 `stopped` 观察。
    dashboard 展示"停止已登记"，不声称执行资源已释放。
@@ -127,9 +129,15 @@ release 到 drain 耗时，且从不断言名义上的三十六秒：
 - **续期进行中时 release。** 使用长 TTL（例如 180 秒），在一次续期已开始、且其
   authority 回复被延迟时提交 stop 的 release。release 提交后回执即为 `revoked`，
   嵌套 Host 仍在运行时不报告 `drained`。旧执行的续期、Todo 完成与验收都不能提交；
-  drain 在延迟的拒绝到达后发生，且不晚于最后已证明的到期加 grace。
+  分别观察既有取消触发和完整 Host 退出；不能证明 drain 时保留 `revoked`。
 - **authority 回复丢失。** 续期命令两次失败或在超时内始终无回复时，回执与 fence
-  的性质不变，supervisor 不晚于最后已证明的到期加 grace 取消执行。
+  的性质不变，最后已证明的到期计时器仍负责触发取消。取消观察不等于完整嵌套
+  进程 drain。
+- **内层 supervisor 中断。** 实际 Host 启动后暂停内层 supervisor，释放原 canonical
+  lease，等待外层调用返回。若独立观察到后代仍在运行，包括到期加 grace 之后，
+  回执必须保持 `revoked` 且 drain 未证明。只有后续绑定原执行的完整 Host 证据才能
+  报告 `drained`。保留 supervisor 正常运行的正控，并保证断言失败时 fixture 仍清理
+  自己的进程组。
 
 ## 本条目不建立什么
 
