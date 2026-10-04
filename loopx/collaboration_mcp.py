@@ -45,7 +45,7 @@ from .control_plane.turn_driver.journal_store import (
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.turn_driver.host_process_transport import (
     HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV,
-    execution_host_drain, require_execution_host_drain_supported,
+    execution_host_drain, prepare_host_process_record, require_execution_host_drain_supported,
 )
 from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
@@ -675,6 +675,7 @@ class Delegations:
             else:
                 origin = ({"session_id": str(conversation["session_id"]), "turn_id": str(conversation["turn_id"])}
                           if conversation else None)
+                prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
                               **({"conversation": origin} if origin else {})})
                 self._spawn(operation_id)

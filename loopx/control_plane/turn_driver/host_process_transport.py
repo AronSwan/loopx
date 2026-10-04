@@ -64,6 +64,20 @@ def _write_host_process_record(path: Path, record: dict[str, Any]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def prepare_host_process_record(record_path: Path) -> None:
+    """Record non-execution before a new operation can launch, never on replay.
+
+    The operation creator holds its dispatch lock. Retain any existing evidence;
+    initialization must not erase a prior launch, including interrupted setup.
+    """
+    if not record_path.exists():
+        _write_host_process_record(record_path, {
+            "schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+            "host": lock_holder_host_label(), "supervises": HOST_PROCESS_SUPERVISES_HOST,
+            "supervision": "direct", "phase": HOST_PROCESS_NOT_LAUNCHED, "process_group": None,
+        })
+
+
 def _process_group_present(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
@@ -101,10 +115,9 @@ def _host_process_drain(record: dict[str, Any] | None, *, supervises: str,
             or record.get("phase") not in {HOST_PROCESS_NOT_LAUNCHED, "launching", "spawned", "finished"}):
         return HOST_PROCESS_UNATTRIBUTABLE
     if record.get("phase") == HOST_PROCESS_NOT_LAUNCHED:
-        # Written before the leased CLI can start; the nested transport replaces
-        # it with a launching record before sending any Host request.
-        return (HOST_PROCESS_NOT_LAUNCHED if record["supervision"] == "leased"
-                and record.get("process_group") is None
+        # Written before execution can start; its transport replaces this with
+        # a launching record before sending any Host request.
+        return (HOST_PROCESS_NOT_LAUNCHED if record.get("process_group") is None
                 and "bridge_pid" not in record else HOST_PROCESS_UNATTRIBUTABLE)
     if not hasattr(os, "killpg"):
         # A launched Host on a platform without process groups is never proven
@@ -136,7 +149,8 @@ def execution_host_drain(record_path: Path, *, launch_possible: bool = False) ->
     it supervises, such as one written before records carried that fact,
     attributes nothing. The caller supplies whether its launch owner may still
     start a Host; on unsupported platforms an absent record cannot close that
-    pre-record launch window.
+    pre-record launch window. Absence of the primary record is never proof of
+    non-execution; the creator records that fact before its first launch.
     """
 
     # Each side identifies the same leased execution. Either surviving record
@@ -148,7 +162,7 @@ def execution_host_drain(record_path: Path, *, launch_possible: bool = False) ->
     supervisor = _host_process_drain(supervisor_record, supervises=HOST_PROCESS_SUPERVISES_NESTED_HOST,
                                      expected=leased)
     host = _host_process_drain(owned_record, supervises=HOST_PROCESS_SUPERVISES_HOST,
-                               expected=leased)
+                               expected=True)
     drain = next(state for state in _DRAIN_PRECEDENCE if state in {supervisor, host})
     if not host_process_drain_supported() and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED):
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
