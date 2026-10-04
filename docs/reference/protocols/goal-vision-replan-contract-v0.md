@@ -579,8 +579,9 @@ The audit also exposes a compact deterministic `vision_gap_judge_v0`
 instruction packet for the agent. It borrows the strict done-judge stance used
 by autonomous goal loops without calling an LLM: the agent is told to compare
 the active vision `acceptance_summary` with the host-projected coverage ledger,
-then permitted registry-declared material references. The agent-scoped
-`loopx evidence-log` remains an operator diagnostic, not a mandatory model ritual.
+then permitted registry-declared material references. `replan_context` supplies
+scoped readable evidence and exact history read actions; no separate evidence
+command or mandatory model read ritual remains.
 Bounded public web research is the next
 fallback when those sources are missing or stale and the gap depends on public
 facts. `done=true` is only valid
@@ -849,6 +850,14 @@ contradictory, the agent may use bounded public-safe search and write back
 source references with the typed observation.
 
 ## Write / Correction Mechanism
+
+For optional history drill-down, `history --goal-id ... --agent-id ... --limit N`
+filters the complete available compact index by Agent before applying `N`.
+Its run lists and latest status refer to that same scoped source; newer Peer
+records cannot hide the requested lane. Goal quota accounting remains Goal-wide.
+This query limit is independent of status/quota's bounded replan decision
+lookback. The generated omitted-evidence read action must recover older distinct
+observations without a context-access receipt or state mutation.
 
 After a material milestone, `vision_outcome_checkpoint_required` remains a
 completion guard. When the checkpoint is satisfied and current, the path outcome
