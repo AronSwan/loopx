@@ -966,14 +966,14 @@ def test_a_launched_host_on_a_platform_without_process_groups_fails_fast(service
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps({
         "schema_version": host_process_transport.HOST_PROCESS_RECORD_SCHEMA_VERSION,
-        "host": lock_holder_host_label(), "supervises": "host", "phase": "finished",
+        "host": lock_holder_host_label(), "supervises": "host", "supervision": "direct", "phase": "finished",
         "bridge_pid": os.getpid(), "process_group": os.getpid(),
     }))
 
     # A persisted finished Host record still needs platform drain capability.
-    assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_DRAINED
+    assert host_process_transport.execution_host_drain(record) == host_process_transport.HOST_PROCESS_DRAINED
     monkeypatch.delattr(host_process_transport.os, "killpg", raising=False)
-    assert host_process_transport.host_process_drain(record) == host_process_transport.HOST_PROCESS_UNSUPPORTED_PLATFORM
+    assert host_process_transport.execution_host_drain(record) == host_process_transport.HOST_PROCESS_UNSUPPORTED_PLATFORM
 
     operation_before = path.read_bytes()
     stop_path = runner._stop_path(path)

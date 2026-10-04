@@ -212,11 +212,11 @@ def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> Non
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
 def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path: Path, monkeypatch) -> None:
     from loopx.control_plane.turn_driver.host_process_transport import (
-        HOST_PROCESS_RECORD_ENV, host_process_drain,
+        HOST_PROCESS_RECORD_ENV, execution_host_drain,
     )
 
     record_path = tmp_path / "op.host.json"
-    assert host_process_drain(record_path) == "not_launched"
+    assert execution_host_drain(record_path) == "not_launched"
     monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record_path))
     host = ("import json,os,sys;print(json.dumps({'env': os.environ.get(%r), 'pid': os.getpid(),"
             " 'pgid': os.getpgid(0)}))" % HOST_PROCESS_RECORD_ENV)
@@ -227,13 +227,13 @@ def test_host_process_record_names_the_owned_group_and_is_not_inherited(tmp_path
     record = json.loads(record_path.read_text())
     assert record["phase"] == "finished"
     assert record["host_pid"] == result["value"]["pid"] == record["process_group"] == result["value"]["pgid"]
-    assert host_process_drain(record_path) == "drained"
+    assert execution_host_drain(record_path) == "drained"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")
 def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records(tmp_path: Path) -> None:
     from loopx.control_plane.turn_driver.host_process_transport import (
-        HOST_PROCESS_RECORD_SCHEMA_VERSION, host_process_drain,
+        HOST_PROCESS_RECORD_SCHEMA_VERSION, execution_host_drain,
     )
     from loopx.file_lock import lock_holder_host_label
 
@@ -245,8 +245,8 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
     def drain(**fields):
         path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
                                     "host": lock_holder_host_label(), "owner_pid": 1,
-                                    "supervises": "host", **fields}))
-        return host_process_drain(path)
+                                    "supervises": "host", "supervision": "direct", **fields}))
+        return execution_host_drain(path)
 
     try:
         # A live supervisor or a live Host group is still draining.
@@ -257,7 +257,10 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
         # A supervisor gone before it reported a group may have spawned one anyway.
         assert drain(phase="launching", bridge_pid=gone.pid, process_group=None) == "unattributable"
         assert drain(phase="finished", bridge_pid=gone.pid, process_group=None) == "drained"
-        for fields in ({"phase": "spawned", "bridge_pid": None, "process_group": gone.pid},
+        for fields in ({"phase": "invalid", "bridge_pid": gone.pid, "process_group": None},
+                       {"phase": "finished", "bridge_pid": gone.pid, "process_group": gone.pid,
+                        "supervision": None},
+                       {"phase": "spawned", "bridge_pid": None, "process_group": gone.pid},
                        {"phase": "spawned", "bridge_pid": gone.pid, "process_group": "1"},
                        {"phase": "spawned", "bridge_pid": gone.pid, "process_group": 1},
                        {"phase": "spawned", "bridge_pid": gone.pid, "process_group": gone.pid,
@@ -271,7 +274,7 @@ def test_host_process_drain_reads_live_groups_and_refuses_unattributable_records
                         "supervises": "nested_host"}):
             assert drain(**fields) == "unattributable", fields
         path.write_text("{not json")
-        assert host_process_drain(path) == "unattributable"
+        assert execution_host_drain(path) == "unattributable"
     finally:
         live.kill()
         live.wait(timeout=10)
@@ -288,7 +291,7 @@ def test_explicit_environment_reaches_the_host_and_stays_out_of_the_record(tmp_p
     nested run that must not overwrite its parent's record.
     """
     from loopx.control_plane.turn_driver.host_process_transport import (
-        HOST_PROCESS_RECORD_ENV, host_process_drain, run_host_process,
+        HOST_PROCESS_RECORD_ENV, execution_host_drain, run_host_process,
     )
 
     record_path = tmp_path / "op.host.json"
@@ -312,7 +315,7 @@ def test_explicit_environment_reaches_the_host_and_stays_out_of_the_record(tmp_p
     record = json.loads(record_path.read_text())
     assert record["phase"] == "finished"
     assert record["host_pid"] == value["pid"] == record["process_group"] == value["pgid"]
-    assert host_process_drain(record_path) == "drained"
+    assert execution_host_drain(record_path) == "drained"
     # The caller's mapping is the caller's.
     assert environment[HOST_PROCESS_RECORD_ENV] == str(record_path)
     assert environment[selected] == "caller-selected"
@@ -370,29 +373,35 @@ def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path)
     gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
     gone.wait(timeout=10)
 
-    def written(path, supervises, group):
+    def written(path, supervises, group, supervision):
         path.write_text(json.dumps({"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
                                     "host": lock_holder_host_label(), "owner_pid": 1, "supervises": supervises,
+                                    "supervision": supervision,
                                     "phase": "finished", "bridge_pid": gone.pid, "process_group": group}))
 
     cases = [
         # (supervisor record, owner's record, observation)
         (None, None, "not_launched"),
-        (None, ("host", gone.pid), "drained"),
-        (None, ("host", live.pid), "draining"),
-        (("nested_host", gone.pid), None, "unattributable"),
-        (("nested_host", gone.pid), ("host", gone.pid), "drained"),
+        (None, ("host", gone.pid, "direct"), "drained"),
+        (None, ("host", live.pid, "direct"), "draining"),
+        (("nested_host", gone.pid, "leased"), None, "unattributable"),
+        (("nested_host", gone.pid, "leased"), ("host", gone.pid, "leased"), "drained"),
+        # A later direct recovery Host still reads the earlier outer group.
+        (("nested_host", gone.pid, "leased"), ("host", gone.pid, "direct"), "drained"),
+        # Losing either leased record leaves the surviving peer insufficient.
+        (None, ("host", gone.pid, "leased"), "unattributable"),
+        (None, ("host", live.pid, "leased"), "draining"),
         # The leased CLI exited while its nested Host still runs.
-        (("nested_host", gone.pid), ("host", live.pid), "draining"),
-        (("nested_host", live.pid), ("host", gone.pid), "draining"),
+        (("nested_host", gone.pid, "leased"), ("host", live.pid, "leased"), "draining"),
+        (("nested_host", live.pid, "leased"), ("host", gone.pid, "leased"), "draining"),
         # A group still seen running outranks a missing proof.
-        (("nested_host", live.pid), "corrupt", "draining"),
-        (("nested_host", gone.pid), "corrupt", "unattributable"),
+        (("nested_host", live.pid, "leased"), "corrupt", "draining"),
+        (("nested_host", gone.pid, "leased"), "corrupt", "unattributable"),
         # Records that do not say what they supervise, or say the wrong thing.
-        (None, (None, gone.pid), "unattributable"),
-        (None, ("nested_host", gone.pid), "unattributable"),
-        (("host", gone.pid), ("host", gone.pid), "unattributable"),
-        ((None, gone.pid), None, "unattributable"),
+        (None, (None, gone.pid, "leased"), "unattributable"),
+        (None, ("nested_host", gone.pid, "leased"), "unattributable"),
+        (("host", gone.pid, "leased"), ("host", gone.pid, "leased"), "unattributable"),
+        ((None, gone.pid, "leased"), None, "unattributable"),
     ]
     try:
         for outer, owned, expected in cases:

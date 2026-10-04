@@ -27,6 +27,7 @@ def test_stop_waits_for_actual_nested_host_before_releasing_lease(service, monke
     host = HOST.replace("counter = workspace / 'host-invocations'", """
 (root / 'supervisor-pid').write_text(str(os.getppid()))
 (root / 'host-record-env').write_text(str(os.environ.get('LOOPX_HOST_PROCESS_RECORD')))
+(root / 'host-parent-env').write_text(str(os.environ.get('LOOPX_HOST_PROCESS_PARENT')))
 counter = workspace / 'host-invocations'""")
     (root / "fixture-host.py").write_text(host)
     (root / "hold").touch()
@@ -40,6 +41,7 @@ counter = workspace / 'host-invocations'""")
         supervisor = int((root / "supervisor-pid").read_text())
         assert not process_gone(host_pid) and not process_gone(child_pid)
         assert (root / "host-record-env").read_text() == "None"
+        assert (root / "host-parent-env").read_text() == "None"
         if interruption != "none":
             os.kill(supervisor, signal.SIGSTOP)
         receipt = runner.stop(operation, execute=True)
@@ -127,3 +129,61 @@ def test_missing_or_unreadable_nested_attribution_cannot_release_a_lease(service
     assert stopped["reason"] == "host_process_drain_unproven"
     assert inspect(runner)["active"]
     assert record.read_bytes() == evidence
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owned fixture")
+def test_missing_outer_record_does_not_settle_live_leased_cli(service, monkeypatch):
+    """The nested Host has not started, but its leased CLI is independently alive."""
+    import json
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+
+    from loopx.control_plane.turn_driver.host_process_transport import (
+        HOST_PROCESS_RECORD_ENV, host_process_supervisor_record, run_host_process,
+    )
+
+    root, runner = service
+    operation = "outer-record-loss"
+    original = prepare_lease(root, runner, monkeypatch, ttl=None, operation_id=operation)
+    path = runner.path(operation)
+    record = runner._host_process_record(path)
+    context = runner._delegated_lease_context(_read(path), runner.binding("analysis"))
+    marker, finish = root / "outer-live", root / "finish-outer"
+    source = ("import os,sys,time;from pathlib import Path;"
+              "Path(sys.argv[1]).write_text(str(os.getpid()));\n"
+              "while not Path(sys.argv[2]).exists():time.sleep(.02)")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        # The normal transport writes both records and runs under the real
+        # canonical lease. Model only recovery after the operation holder left;
+        # do not mock process liveness, drain, settlement or lease readback.
+        running = pool.submit(run_host_process, [sys.executable, "-c", source, str(marker), str(finish)],
+                              project=root, input_text="", timeout_seconds=30, delegated_lease=context,
+                              environment={**os.environ, HOST_PROCESS_RECORD_ENV: str(record)})
+        evidence = None
+        try:
+            assert until(marker.exists)
+            pid = int(marker.read_text())
+            assert not process_gone(pid)
+            outer = host_process_supervisor_record(record)
+            assert until(lambda: json.loads(outer.read_text())["phase"] == "spawned")
+            evidence = outer.read_bytes()
+            outer.unlink()
+            receipt = runner.stop(operation, execute=True)
+            actual = inspect(runner)
+            assert not process_gone(pid)
+            assert receipt["phase"] == "acknowledged", receipt
+            assert receipt["reason"] == "host_process_drain_unproven"
+            assert actual["active"] and actual["lease"]["idempotency_key"] == original["idempotency_key"]
+            outer.write_bytes(evidence)
+            restored = runner.stop(operation, execute=True)
+            assert restored["phase"] == "acknowledged"
+            assert restored["stop"]["stop_id"] == receipt["stop"]["stop_id"]
+        finally:
+            if evidence is not None:
+                outer.write_bytes(evidence)
+            finish.touch()
+            running.result(timeout=30)
+    settled = runner.stop(operation, execute=True)
+    assert settled["phase"] == "settled"
+    assert settled["stop"]["stop_id"] == receipt["stop"]["stop_id"]
+    assert inspect(runner)["lease"]["status"] == "released"
