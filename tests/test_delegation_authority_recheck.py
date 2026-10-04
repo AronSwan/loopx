@@ -13,7 +13,9 @@ from test_local_delegation import service as delegation_service
 @pytest.fixture
 def sqlite_service(tmp_path, request, monkeypatch):
     return delegation_service.__wrapped__(
-        tmp_path, SimpleNamespace(param="sqlite", addfinalizer=request.addfinalizer), monkeypatch
+        tmp_path,
+        SimpleNamespace(param="sqlite", addfinalizer=request.addfinalizer),
+        monkeypatch
     )
 
 

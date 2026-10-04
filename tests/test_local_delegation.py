@@ -66,7 +66,7 @@ def service(tmp_path, request, monkeypatch):
     # Each case owns a private server. Do not accumulate five-minute idle
     # runtimes across the delegation suite, including failed setup/test cases.
     runtime_env = os.environ.copy()
-    run_cleanup = subprocess.run  # Tests may replace the shared subprocess module's run.
+    run_cleanup = subprocess.run  # Tests may replace the shared module before teardown.
     def retire_runtime():
         run_cleanup([
             sys.executable, "-c",
@@ -132,12 +132,39 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
             isolate_sqlite_runtime(cached, neighbor)
             neighbor_pid = effect_runtime_result("runtime.ping", {})["pid"]
             try:
-                for finalize in reversed(finalizers):
-                    finalize()
+                with monkeypatch.context() as mocked_calls:
+                    mocked_calls.setattr(subprocess, "run", lambda *args, **kwargs:
+                                         pytest.fail("teardown must retain its original runner"))
+                    for finalize in reversed(finalizers):
+                        finalize()
                 assert effect_runtime_result("runtime.ping", {})["pid"] == neighbor_pid
             finally:
                 restart_effect_runtime()
         assert _serving_runtime_identity() is None, "fixture must retire its private runtime before the next case"
+    finally:
+        restart_effect_runtime()
+
+
+def test_delegation_fixture_retires_runtime_after_setup_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from loopx.control_plane.effect_runtime import (
+        _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
+    )
+
+    finalizers = []
+    def fail_after_runtime_start(*args, **kwargs):
+        effect_runtime_result("runtime.ping", {})
+        raise RuntimeError("fixture setup interrupted")
+
+    monkeypatch.setattr(demo, "prepare", fail_after_runtime_start)
+    try:
+        with pytest.raises(RuntimeError, match="fixture setup interrupted"):
+            service.__wrapped__(tmp_path, SimpleNamespace(param="file", addfinalizer=finalizers.append), monkeypatch)
+        assert _serving_runtime_identity() is not None
+        assert len(finalizers) == 1
+        for finalize in reversed(finalizers):
+            finalize()
+        assert _serving_runtime_identity() is None
     finally:
         restart_effect_runtime()
 
