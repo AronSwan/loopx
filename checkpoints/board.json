@@ -5,15 +5,15 @@
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.4.md",
   "sha256_lf": "e1a0e34b63763b4792f6cbbcfdf4c9001776f61e2ea714c7cf06738779ea05df"
  },
- "taken_at": "2026-10-04T08:43:05.017+08:00",
- "lines": 220,
- "file_sha256": "c456758e681381c8cfffe9ecfb4ee8b13715027aa8669e6fef24f5372767e981",
- "prefix_sha256": "c456758e681381c8cfffe9ecfb4ee8b13715027aa8669e6fef24f5372767e981",
+ "taken_at": "2026-10-04T14:25:15.807+08:00",
+ "lines": 224,
+ "file_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
+ "prefix_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
  "head_event": {
-  "actor": "[第八场收官:全绿·对抗席背书·#27机制半边自动生效]",
-  "ts": "2026-10-04T08:43:04.269+08:00",
-  "prev_chain": "66a01d613f34e21a07453438200a98f6fb76b0ecee0670d10e4bdfe200830adf",
-  "head_sha256": "6523e42e3fb59d2bdfb0170c992ce6023b65a4309f5aa0dfa93fe4a307fb3428"
+  "actor": "[v2.5核签通过:§31谎报成本原则呈批]",
+  "ts": "2026-10-04T14:25:13.811+08:00",
+  "prev_chain": "ef831ccbd6f5216cf437f8fdb546bc1346e3b042551bb049e5c71fb4d1ae3b25",
+  "head_sha256": "d57ae771c4d346bd28c6b8b3c86b7cbddb0f41ed28a14c9d2eeacde6a5bc64f6"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
