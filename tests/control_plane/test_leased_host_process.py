@@ -156,10 +156,13 @@ def test_leased_supervisor_records_its_own_group_beside_the_owners_record(canoni
                                 timeout_seconds=30, delegated_lease=context, on_stdout=chunks.append)
     assert observed["outcome"] == "exited", observed
     assert "".join(chunks).strip() == "None"  # the leased child never inherits the marker
-    assert not record.exists()
+    assert json.loads(record.read_text())["phase"] == "not_launched"
     supervisor = json.loads(host_process_supervisor_record(record).read_text())
     assert (supervisor["supervises"], supervisor["phase"]) == ("nested_host", "finished")
     assert execution_host_drain(record) == "drained"
+    # Losing the positive never-launched proof must not retain that conclusion.
+    record.unlink()
+    assert execution_host_drain(record) == "unattributable"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")

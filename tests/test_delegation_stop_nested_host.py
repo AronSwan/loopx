@@ -16,8 +16,8 @@ from loopx.control_plane.collaboration.peers import returns
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX nested supervisor interruption")
-@pytest.mark.parametrize("pause_supervisor", [False, True])
-def test_stop_waits_for_actual_nested_host_before_releasing_lease(service, monkeypatch, pause_supervisor):
+@pytest.mark.parametrize("interruption", ["none", "paused", "missing_record"])
+def test_stop_waits_for_actual_nested_host_before_releasing_lease(service, monkeypatch, interruption):
     root, runner = service
     operation = "nested-stop"
     with monkeypatch.context() as setup:
@@ -40,10 +40,10 @@ counter = workspace / 'host-invocations'""")
         supervisor = int((root / "supervisor-pid").read_text())
         assert not process_gone(host_pid) and not process_gone(child_pid)
         assert (root / "host-record-env").read_text() == "None"
-        if pause_supervisor:
+        if interruption != "none":
             os.kill(supervisor, signal.SIGSTOP)
         receipt = runner.stop(operation, execute=True)
-        if pause_supervisor:
+        if interruption != "none":
             assert receipt["phase"] == "acknowledged", receipt
             assert receipt["reason"] == "host_process_still_running", receipt
             assert not process_gone(host_pid) and not process_gone(child_pid)
@@ -56,6 +56,23 @@ counter = workspace / 'host-invocations'""")
             assert repeated["phase"] == "acknowledged"
             assert repeated["stop"]["stop_id"] == receipt["stop"]["stop_id"]
             assert inspect(runner)["active"]
+            if interruption == "missing_record":
+                record = runner._host_process_record(runner.path(operation))
+                evidence = record.read_bytes()
+                record.unlink()
+                try:
+                    missing = fresh.stop(operation, execute=True)
+                    assert missing["phase"] == "acknowledged", missing
+                    assert missing["reason"] == "host_process_drain_unproven", missing
+                    assert missing["stop"]["stop_id"] == receipt["stop"]["stop_id"]
+                    assert not process_gone(host_pid) and not process_gone(child_pid)
+                    lease = inspect(runner)
+                    assert lease["active"] and lease["lease"]["idempotency_key"] == original["idempotency_key"]
+                finally:
+                    record.write_bytes(evidence)
+                restored = fresh.stop(operation, execute=True)
+                assert restored["phase"] == "acknowledged"
+                assert restored["reason"] == "host_process_still_running"
             # Cleanup only the independently identified fixture group. The
             # product readback must observe this, never signal unrelated groups.
             os.killpg(host_pid, signal.SIGKILL)

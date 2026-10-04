@@ -380,7 +380,7 @@ def test_execution_drain_needs_every_group_a_leased_run_launched(tmp_path: Path)
         (None, None, "not_launched"),
         (None, ("host", gone.pid), "drained"),
         (None, ("host", live.pid), "draining"),
-        (("nested_host", gone.pid), None, "drained"),
+        (("nested_host", gone.pid), None, "unattributable"),
         (("nested_host", gone.pid), ("host", gone.pid), "drained"),
         # The leased CLI exited while its nested Host still runs.
         (("nested_host", gone.pid), ("host", live.pid), "draining"),
