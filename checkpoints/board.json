@@ -2,10 +2,10 @@
  "board": "EVENTS.jsonl@ZCodeProject",
  "algo_version": 3,
  "ruleset": {
-  "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.4.md",
-  "sha256_lf": "e1a0e34b63763b4792f6cbbcfdf4c9001776f61e2ea714c7cf06738779ea05df"
+  "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.5-草案.md",
+  "sha256_lf": "4786ee78c3c80a7afe3eac4a1fbeb413ad45327675fafcef1483f2aeef5d5f93"
  },
- "taken_at": "2026-10-04T14:25:15.807+08:00",
+ "taken_at": "2026-10-04T14:31:12.535+08:00",
  "lines": 224,
  "file_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
  "prefix_sha256": "f810333c36e5cacb32a7e525ae90b29f353788850c2dad608b71bb474dd8785e",
