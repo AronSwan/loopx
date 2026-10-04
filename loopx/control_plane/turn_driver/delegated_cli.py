@@ -9,7 +9,7 @@ import runpy
 import signal
 import sys
 
-from .host_process_transport import HOST_PROCESS_RECORD_ENV
+from .host_process_transport import HOST_PROCESS_PARENT_ENV, HOST_PROCESS_RECORD_ENV
 
 
 def _cancel(_signal, _frame):
@@ -21,6 +21,7 @@ if __name__ == "__main__":
     # leased supervisor. The actual Host transport consumes it before launch.
     if len(sys.argv) >= 3 and sys.argv[1] == "--host-process-record":
         os.environ[HOST_PROCESS_RECORD_ENV] = sys.argv[2]
+        os.environ[HOST_PROCESS_PARENT_ENV] = "leased"
         del sys.argv[1:3]
     signal.signal(signal.SIGTERM, _cancel)
     runpy.run_module("loopx.cli", run_name="__main__")

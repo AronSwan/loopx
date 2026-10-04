@@ -23,6 +23,7 @@ _WINDOWS_COMMAND_RELAY = "import subprocess,sys;sys.exit(subprocess.call(sys.arg
 # here. The transport consumes it: the Host never inherits it, so a nested
 # LoopX run inside the Host cannot overwrite its parent's record.
 HOST_PROCESS_RECORD_ENV = "LOOPX_HOST_PROCESS_RECORD"
+HOST_PROCESS_PARENT_ENV = "LOOPX_HOST_PROCESS_PARENT"
 HOST_PROCESS_RECORD_SCHEMA_VERSION = "loopx_host_process_record_v0"
 # Drain facts read back from a record; the caller's typed decision interprets them.
 HOST_PROCESS_NOT_LAUNCHED = "not_launched"
@@ -78,33 +79,32 @@ def host_process_supervisor_record(record_path: Path) -> Path:
     return record_path.with_suffix(".cli.host.json")
 
 
-def host_process_drain(record_path: Path, *, supervises: str = HOST_PROCESS_SUPERVISES_HOST,
-                       expected: bool = False) -> str:
-    """Read whether the group one record names, and its supervisor, have exited.
-
-    Read-only: nothing is signalled, and the TS-owned supervisor keeps cleanup.
-    A missing expected record proves nothing. An explicit pre-launch record
-    proves the nested Host has not started; its outer supervisor must also be
-    gone before the execution can settle. ``draining`` while the
-    supervising bridge or the owned group still has a member. A record from
-    another machine, one that does not say it supervises ``supervises``, or
-    one without a reported group whose supervisor is gone proves nothing:
-    ``unattributable``. A platform without process groups never proves a drain.
-    """
-
+def _read_host_process_record(path: Path) -> dict[str, Any] | None:
     try:
-        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return HOST_PROCESS_UNATTRIBUTABLE if expected else HOST_PROCESS_NOT_LAUNCHED
+        return None
     except (OSError, ValueError):
-        return HOST_PROCESS_UNATTRIBUTABLE
+        return {}  # Unreadable evidence is different from an absent record.
+    return record if isinstance(record, dict) else {}
+
+
+def _host_process_drain(record: dict[str, Any] | None, *, supervises: str,
+                        expected: bool) -> str:
+    """Read one owner's facts without interpreting missing expected evidence as exit."""
+    if record is None:
+        return HOST_PROCESS_UNATTRIBUTABLE if expected else HOST_PROCESS_NOT_LAUNCHED
     if (not isinstance(record, dict) or record.get("schema_version") != HOST_PROCESS_RECORD_SCHEMA_VERSION
-            or record.get("host") != lock_holder_host_label() or record.get("supervises") != supervises):
+            or record.get("host") != lock_holder_host_label() or record.get("supervises") != supervises
+            or record.get("supervision") not in {"direct", "leased"}
+            or (supervises == HOST_PROCESS_SUPERVISES_NESTED_HOST and record["supervision"] != "leased")
+            or record.get("phase") not in {HOST_PROCESS_NOT_LAUNCHED, "launching", "spawned", "finished"}):
         return HOST_PROCESS_UNATTRIBUTABLE
     if record.get("phase") == HOST_PROCESS_NOT_LAUNCHED:
         # Written before the leased CLI can start; the nested transport replaces
         # it with a launching record before sending any Host request.
-        return (HOST_PROCESS_NOT_LAUNCHED if record.get("process_group") is None
+        return (HOST_PROCESS_NOT_LAUNCHED if record["supervision"] == "leased"
+                and record.get("process_group") is None
                 and "bridge_pid" not in record else HOST_PROCESS_UNATTRIBUTABLE)
     if not hasattr(os, "killpg"):
         # A launched Host on a platform without process groups is never proven
@@ -139,9 +139,16 @@ def execution_host_drain(record_path: Path, *, launch_possible: bool = False) ->
     pre-record launch window.
     """
 
-    supervisor = host_process_drain(host_process_supervisor_record(record_path),
-                                    supervises=HOST_PROCESS_SUPERVISES_NESTED_HOST)
-    host = host_process_drain(record_path, expected=supervisor != HOST_PROCESS_NOT_LAUNCHED)
+    # Each side identifies the same leased execution. Either surviving record
+    # therefore requires its peer; loss of the outer record cannot erase an
+    # independently running CLI while the nested Host has not started or exited.
+    owned_record = _read_host_process_record(record_path)
+    supervisor_record = _read_host_process_record(host_process_supervisor_record(record_path))
+    leased = supervisor_record is not None or (owned_record or {}).get("supervision") == "leased"
+    supervisor = _host_process_drain(supervisor_record, supervises=HOST_PROCESS_SUPERVISES_NESTED_HOST,
+                                     expected=leased)
+    host = _host_process_drain(owned_record, supervises=HOST_PROCESS_SUPERVISES_HOST,
+                               expected=leased)
     drain = next(state for state in _DRAIN_PRECEDENCE if state in {supervisor, host})
     if not host_process_drain_supported() and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED):
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
@@ -229,6 +236,9 @@ def run_host_process(
     # record, and the caller's mapping is never mutated.
     bridge_environment = os.environ.copy() if environment is None else dict(environment)
     record_value = bridge_environment.pop(HOST_PROCESS_RECORD_ENV, "")
+    supervision = bridge_environment.pop(HOST_PROCESS_PARENT_ENV, "direct")
+    if supervision not in {"direct", "leased"}:
+        raise ValueError("invalid managed Host supervision scope")
     record_path = Path(record_value) if record_value else None
     supervises = HOST_PROCESS_SUPERVISES_HOST
     if record_path is not None and delegated_lease is not None:
@@ -237,6 +247,7 @@ def run_host_process(
         # own group beside that record, so readback can prove both exited.
         record_path = host_process_supervisor_record(record_path)
         supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
+        supervision = "leased"
     with subprocess.Popen(
         [
             _node_executable(),
@@ -262,7 +273,7 @@ def run_host_process(
                 # does not name; a record that cannot be written launches nothing.
                 record = {"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
                           "host": lock_holder_host_label(), "owner_pid": os.getpid(),
-                          "supervises": supervises, "bridge_pid": proc.pid,
+                          "supervises": supervises, "supervision": supervision, "bridge_pid": proc.pid,
                           "phase": "launching", "process_group": None}
                 if supervises == HOST_PROCESS_SUPERVISES_NESTED_HOST:
                     # Positive evidence for a CLI that exits before starting its
@@ -271,7 +282,7 @@ def run_host_process(
                     _write_host_process_record(Path(record_value), {
                         "schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
                         "host": lock_holder_host_label(), "owner_pid": os.getpid(),
-                        "supervises": HOST_PROCESS_SUPERVISES_HOST,
+                        "supervises": HOST_PROCESS_SUPERVISES_HOST, "supervision": "leased",
                         "phase": HOST_PROCESS_NOT_LAUNCHED, "process_group": None,
                     })
                 _write_host_process_record(record_path, record)
