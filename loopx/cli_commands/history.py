@@ -245,6 +245,7 @@ def handle_history_command(
             goal_id=args.goal_id,
             limit=max(0, args.limit),
             agent_lane_id=args.agent_id,
+            scoped_agent_id=args.agent_id,
         )
         if args.agent_id:
             # Scope every row-bearing history surface, including retained

@@ -711,7 +711,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.replan_settlement.project", lazyHandler(() => import("./work_items/replan_settlement.ts"), ({projectReplanSettlementContract}) => projectReplanSettlementContract)],
     ["work_item.replan_semantics.project", lazyHandler(() => import("./work_items/replan_semantics.ts"), ({projectReplanSemantics}) => projectReplanSemantics)],
     ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
-    ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context_snapshot.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
+    ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.frontier", lazyHandler(() => import("./capabilities/explore_research.ts"), ({projectResearchFrontier}) => projectResearchFrontier)],

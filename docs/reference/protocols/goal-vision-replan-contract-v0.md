@@ -848,6 +848,14 @@ source references with the typed observation.
 
 ## Write / Correction Mechanism
 
+For optional history drill-down, `history --goal-id ... --agent-id ... --limit N`
+filters the complete available compact index by Agent before applying `N`.
+Its run lists and latest status refer to that same scoped source; newer Peer
+records cannot hide the requested lane. Goal quota accounting remains Goal-wide.
+This query limit is independent of status/quota's bounded replan decision
+lookback. The generated omitted-evidence read action must recover older distinct
+observations without a context-access receipt or state mutation.
+
 After a material milestone, `vision_outcome_checkpoint_required` remains a
 completion guard. When the checkpoint is satisfied and current, the path outcome
 is `continue`, `no_change`, or `replan`, evidence refs are present, and no
