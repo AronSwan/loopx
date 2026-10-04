@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from .inbox import _write
 from ..coordination.local_authority import local_authority_is_promoted
-from ..effect_runtime import EffectRuntimeRemoteError
+from ..coordination.coordination_state_contract_generated import LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA
+from ..effect_runtime import CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS, EffectRuntimeRemoteError, effect_runtime_result
 from ..work_items.task_lease import inspect_task_lease, release_task_lease
 
 _AUTHORITY_ERRORS = (ValueError, OSError, RuntimeError, EffectRuntimeRemoteError)
@@ -26,9 +27,9 @@ LEASE_OBLIGATION_UNPROVEN = "obligation_unproven"
 def obligation(service, row):
     """The execution identity canonical authority must be asked about, or None.
 
-    `None` only when canonical authority proves that no delegation lease can
-    exist: the Goal's local authority is not promoted, which is also when
-    `_acquire_delegation_lease` acquires none. Otherwise the canonical lease
+    `None` only when the Goal is unpromoted and the canonical reader proves
+    its store absent. A missing cutover marker alone is not that proof: it
+    may have been lost after acquisition. Otherwise the canonical lease
     decides, whatever the operation recorded: a native claim commits before
     its annotation is saved, and an empty, malformed or stale `required: false`
     annotation is no more proof than a missing one. A recorded epoch still
@@ -40,6 +41,18 @@ def obligation(service, row):
     if not local_authority_is_promoted(runtime_root=service.root, goal_id=service.goal_id):
         if required:
             raise ValueError("canonical authority disappeared under a required delegation lease")
+        # Use the existing provider-first reader, not a second Python test of
+        # provider paths or the operation's optional lease annotation. A loaded
+        # snapshot (even with this Todo missing) cannot qualify as never promoted.
+        snapshot = effect_runtime_result("coordination.local_authority.todo_read", {
+            "schema_version": LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA,
+            "runtime_root": str(service.root), "goal_id": service.goal_id,
+            "todo_id": row["identity"]["binding"]["todo_id"],
+        }, timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS)
+        if (snapshot.get("status") != "missing" or snapshot.get("provider_revision") is not None
+                or snapshot.get("decision_read_from_provider") is not True
+                or snapshot.get("legacy_fallback_used") is not False):
+            raise ValueError("canonical authority absence unproven; reconcile the original authority route")
         return None
     acquired = recorded.get("lease") if required and isinstance(recorded.get("lease"), dict) else {}
     return {"idempotency_key": service._turn_instance_id(row),

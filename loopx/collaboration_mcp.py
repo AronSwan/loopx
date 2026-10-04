@@ -1201,7 +1201,7 @@ class Delegations:
                 # its lease resolved, against canonical authority by the
                 # execution's own identity, and only the resolved fact can make
                 # the receipt terminal. Under the same lock as the record, every
-                # later read retries a release that has not been proven.
+                # later explicit stop retries a release that has not been proven.
                 facts["lease"] = delegation_stop_lease.settle(self, path, row, binding, stop)
                 decision = effect_runtime_result("collaboration.delegation.stop", {**inputs, **facts})
             if decision["phase"] != stop["phase"] or decision.get("reason") != stop.get("reason"):
