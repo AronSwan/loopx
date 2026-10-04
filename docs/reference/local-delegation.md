@@ -432,6 +432,9 @@ transport reads that from the one record the operation names: in hard-lease
 mode the leased CLI's supervisor records its own group beside it and the
 actual nested Host writes it, and neither exit proves the other. Each record
 says which group it supervises and whether it belongs to a leased execution.
+A new operation gets an explicit non-execution record before it can launch;
+replaying an existing operation never recreates lost proof. Missing primary
+evidence is unproven, even when both records are absent.
 Either surviving leased record requires the other: a missing outer record is
 not proof that its CLI exited, even when the nested Host never started.
 The private CLI forwards the record address and supervision scope to
@@ -493,9 +496,11 @@ before completion starts; a lock-acquisition timeout requires retrying `stop`.
 才会处理硬任务租约。Host transport 从 operation 指定的唯一记录读回这一事实：
 硬租约模式下，外层 CLI 的 supervisor 把自己的进程组记录在旁边，内层真实 Host
 写入该记录，外层退出不能证明内层退出，反之亦然。每份记录都写明自己监管哪个进程组、
-是否属于租约监督的执行。任一侧的记录保留时，另一侧缺失都不能证明退出；即使内层
+是否属于租约监督的执行。新操作在启动前先登记明确的未执行证明；重放已有操作
+不能重新创建丢失的证明。即使两份记录都缺失，也只能判定为未证明。
+任一侧的记录保留时，另一侧缺失都不能证明退出；即使内层
 Host 尚未启动，也不能据此判定外层 CLI 已退出。
-私有 CLI 只把记录地址交给 Turn transport，由它在启动用户 Host 前消费，用户 Host
+私有 CLI 只把记录地址和监督范围交给 Turn transport，由它在启动用户 Host 前消费，用户 Host
 不继承该标记。未写明监管对象的记录（例如只覆盖外层 CLI 的旧硬租约记录）无法证明
 排空，停止保持 `acknowledged`；应核对原执行，不能删除证据或复用其 key。
 没有持有者时由请求方自行确认。另一台机器上的
