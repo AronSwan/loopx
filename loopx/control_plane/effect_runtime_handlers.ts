@@ -34,6 +34,7 @@ import {
   requireInteger,
 } from "./runtime_decode.ts";
 
+
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
@@ -704,15 +705,19 @@ export function createEffectRuntimeHandlers(
         settlementResultInput(params.result, "result"),
       ),
     ],
+
     ["turn.settlement.reduce", lazyHandler(() => import("./turn_driver/settlement.ts"), ({reduceTurnSettlementTransaction}) => reduceTurnSettlementTransaction)],
     ["turn.host_todo_completion.evaluate", lazyHandler(() => import("./turn_driver/host_todo_completion.ts"), ({evaluateHostTodoCompletion}) => evaluateHostTodoCompletion)],
     ["work_item.replan_settlement.project", lazyHandler(() => import("./work_items/replan_settlement.ts"), ({projectReplanSettlementContract}) => projectReplanSettlementContract)],
     ["work_item.replan_semantics.project", lazyHandler(() => import("./work_items/replan_semantics.ts"), ({projectReplanSemantics}) => projectReplanSemantics)],
+    ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
+    ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.frontier", lazyHandler(() => import("./capabilities/explore_research.ts"), ({projectResearchFrontier}) => projectResearchFrontier)],
   ["work_item.replan_history.project", lazyHandler(() => import("./work_items/replan_history.ts"), ({projectReplanHistory}) => projectReplanHistory)],
   ["work_item.replan_history.project_snapshot", lazyHandler(() => import("./work_items/replan_history_snapshot.ts"), ({projectReplanHistorySnapshot}) => projectReplanHistorySnapshot)],
+
     [
       "work_item.replan_settlement.reentry",
       lazyHandler(() => import("./work_items/replan_settlement.ts"), ({projectTodoLifecycleSettlementReentry}) => projectTodoLifecycleSettlementReentry),
