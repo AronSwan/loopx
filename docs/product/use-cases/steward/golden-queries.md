@@ -76,6 +76,16 @@ an ordinary public issue and a qualified receiver already doing unrelated review
 Delivery and read must not pass the test. Require an independent assessment,
 reuse an explicitly linked existing task when needed, inspect current facts,
 post the authorized checked reply and return its link to the original request.
+A configured, sender-bound source delivers to all registered active local
+Agents by default, across Goals and later registrations, without recipient
+enrollment. Exercise direct delivery and a receiver's subsequent peer handoff
+through the same current source rule. Revoke one Agent and one Goal: the next
+attempt must be denied, and restoring the Goal must preserve the Agent exception.
+Exercise both revocation orders, including an Agent revoked while its Goal is disabled.
+An explicit selected scope retains enrollment; an unknown sender, stopped Goal
+or remote binding never gains authority from the local default. Delivery remains
+separate from evidence access, task acceptance and execution.
+
 A short answer requires no invented Todo. A deferral names its actual condition
 and continuation; a monitor responsibility or worker activity is not a task result.
 
@@ -373,6 +383,37 @@ be read by exact Todo identity. Missing/revoked sources stay unavailable and an
 external export never gains owner-only continuation text. Recovering those facts
 is a prerequisite, not a passing prioritization or adoption result. Include the
 same cases for ordinary Goal conversations; do not build a manager-only rule.
+
+### Worker notifications / 负责人主动找你
+
+GQ09/GQ10 variant: **“有需要我决定的，就来这里说。”** / **“Ask me here when
+you need a decision.”** Prepare a synthetic public report worker with one
+concrete publication decision, its draft, existing authority and original
+conversation. Do not launch a real publication or create another notification
+system. The reliable source-to-steward handoff belongs to the P0 GQ09 path;
+portfolio-wide prioritization and semantic batching retain GQ10's P1 scope.
+
+Trace the actual worker source, steward intake, useful App presentation, owner
+decision, worker adoption and requested original-route result. A worker's
+successful group send or mention alone passes none of the receiving steps.
+History catch-up preserves sender kind/identity, message identity and time as
+context; it cannot relabel a Bot as the owner or promote old messages into new
+instructions. An authorized new owner request may ask about that context.
+
+Inject a missing live provider event while group history remains readable. The
+existing native attention/intake path must retain the current request and expose
+transport recovery, without asking the user to find the worker, impersonating
+the owner or claiming that an Agent is absent. Separately test missing/revoked
+source access, self-Bot echoes, duplicate delivery after restart and an ambiguous
+sender. Mark unavailable steps untested/failed, never passed through a read receipt.
+
+Resolve the decision in the worker's canonical source before presentation and
+confirm no new approval prompt, duplicate task or publication is produced.
+Then introduce a genuinely changed request: preserve its current object, evidence
+and consequence, present it once and verify adoption of the owner's reply.
+Qualify the installed App first; an authorized Lark audience and a connected
+remote Goal each need their own real delivery/recovery evidence. This variant is
+an evaluation target, not a claim that proactive notifications currently work.
 
 ## GQ06 material-to-work pilot / 从材料到实际改进
 

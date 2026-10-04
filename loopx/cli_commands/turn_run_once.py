@@ -278,7 +278,10 @@ def execute_turn_run_once(
                 state_file=None,
                 classification=str(result["classification"]),
                 recommended_action=str(result["recommended_action"]),
-                next_action=str(result["next_action"]),
+                # A host's next_action is follow-up guidance, not refresh-state's
+                # explicit within-task step edit (which requires a runnable Todo).
+                # Keep both host texts in the durable host_result, including for
+                # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,
@@ -801,16 +804,19 @@ def execute_turn_run_once(
             def resolve_built_in_session_binding(
                 turn_envelope: Mapping[str, Any],
             ) -> dict[str, str] | None:
+                session_scope = str((payload.get("session", {}).get("context_policy") or {}).get("binding_scope") or "todo")
                 return (
                     codex_cli_session_binding(
                         runtime_root,
                         turn_envelope,
                         goal_admission=goal_admission,
+                        session_scope=session_scope,
                     )
                     if goal_admission is not None
                     else codex_cli_session_binding(
                         runtime_root,
                         turn_envelope,
+                        session_scope=session_scope,
                     )
                 )
 

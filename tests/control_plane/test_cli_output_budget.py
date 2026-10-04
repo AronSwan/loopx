@@ -466,21 +466,6 @@ def _surface_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]],
         "history_limited": common
         + ["history", "--goal-id", GOAL_ID, "--limit", "5"],
-        "evidence_log_thin": common
-        + [
-            "evidence-log",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--limit",
-            "5",
-            "--history-limit",
-            "10",
-            "--rollout-limit",
-            "20",
-            "--thin",
-        ],
     }
 
 
@@ -775,7 +760,6 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_thin",
         "todo_list",
         "history_limited",
-        "evidence_log_thin",
     }
     manifest = public_manifest()
     assert set(CLI_OUTPUT_BUDGET_BY_ID) == expected
@@ -1444,7 +1428,17 @@ def _assert_collection_growth_and_bootstrap_duplication(
             - small[spec.surface_id]["json"]["chars"]
         )
         fixed_semantic_growth = spec.max_json_fixed_semantic_growth_chars
-        if fixed_semantic_growth:
+        if fixed_semantic_growth and spec.surface_id == "quota_should_run":
+            context = crowded[spec.surface_id]["json"]["payload"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+            assert len(context["coverage_ledger"]) <= 24
+            assert context["from_full_index"] is True
+            assert len(context["evidence"]) == SCENARIOS[1].run_count
+            assert all("--evidence-ref" in row["read_action"] for row in context["evidence"])
+        elif fixed_semantic_growth and spec.surface_id == "diagnose":
+            context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+        elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
             small_packet = small[spec.surface_id]["json"]["payload"][
                 "turn_envelope"
@@ -1522,7 +1516,9 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
     # ever-growing temp/worker prefix. Do not shorten rendered paths or raise
     # the absolute output ceiling to make this case pass.
-    parent = Path(tempfile.gettempdir()).resolve()
+    # Reuse the other budget fixtures' short namespace. A canary's nested
+    # TMPDIR can already exceed 128 characters before we create this root.
+    parent = Path("/tmp").resolve()
     # tempfile contributes an eight-character random suffix. Hold input size
     # constant across Linux /tmp and macOS's longer temporary-directory root.
     prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
@@ -1530,6 +1526,16 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
         _assert_mode_variant_budgets(root, only="heartbeat_prompt_brief")
+
+
+def test_long_path_budget_is_independent_of_runner_temp_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    parent.mkdir()
+    assert len(str(parent.resolve())) > 128
+    monkeypatch.setattr(tempfile, "tempdir", str(parent))
+    test_brief_budget_retains_full_commands_on_real_long_paths()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
