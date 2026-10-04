@@ -30,11 +30,49 @@ the TypeScript owner decides context identity and scope. Native Codex resume ret
 the original upstream thread and workspace. HTTP/protocol fixtures qualify that
 continuity and denial behavior; they do not establish real model adoption.
 
-The initial grant is workspace reading for the local owner. Lark audience grants,
-ordinary private-message selection, durable inbound admission independent of
-terminal delivery, and installed/mobile acceptance remain open work in this RFC.
-The App scope does not qualify those journeys or authorize edits; a revoked grant
-keeps the history readable and blocks new messages until the host grants it again.
+The App grant is workspace reading for the local owner. The App scope alone does
+not qualify Lark private-message admission, installed or mobile journeys, or
+authorize edits. A revoked grant keeps the history readable and blocks new
+messages until the host grants it again. The independent Lark checkpoint below
+qualifies its source implementation separately.
+
+The source implementation also has an explicit owner-only Lark private-message
+binding. Settings → Lark selects an independently verified non-default App,
+a current host workspace and executor. Core owns the App-scoped owner/source
+identity, Session context and revocation; the provider stores no separate
+conversation authority. One machine/App lease covers both profile aliases and
+existing group listeners. Replies recheck the original source under that App;
+they do not require group-member scopes for private messages.
+
+Text admission persists the canonical Core Turn without waiting for its terminal
+answer. The existing bounded Session queue keeps follow-ups in FIFO order; another
+App can continue independently. Explicit `/status`, `/stop` and `/new` use the
+shared request owner, and a replay retains the original Session/Turn target.
+A lost admission correlation cannot move a request to a newer Session. Admission
+feedback and final delivery use separate durable provider intents; an ambiguous
+write is read back without blind resend. Unsupported media receives an explicit
+notice. This grant remains workspace reading, without a Goal, portfolio or peer
+execution authority.
+
+The packaged settings journey, source revocation/recovery, duplicate events,
+native queue/stop and two-App isolation have synthetic-provider regression and
+browser coverage. A native Codex source canary separately qualifies distinct
+upstream threads with independently observed real App identities. Neither is a
+live Lark/model/mobile result. Installed service qualification, phone journeys,
+registered Agent selection, real incremental/media/permission interactions and
+a separately granted long-running steward remain open acceptance. Runtime and
+permission-boundary changes require maintainer review before promotion.
+
+The private setup UI composes within Settings → Lark; the App workspace scope
+remains the sole ordinary local conversation entry. Legacy group profiles without
+a stored App identity retain their original profile-hash consumer lease. Requests
+without private bindings do not add provider authentication; configured aliases
+reuse one request-scoped verified identity observation. Lark HTTP composition
+resides in the extension, while the typed binding owner remains provider-neutral.
+
+Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
+[narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
+[revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
 
 ## Decision: make the App the place where work conversations continue
 
