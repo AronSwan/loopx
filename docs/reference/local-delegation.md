@@ -451,7 +451,7 @@ released by the stopped worker (the lane is read, never taken), the native
 host the Turn launched has exited together with every process in its group,
 and the hard task lease that execution may hold is resolved: released, or
 proven not owed. Canonical authority decides, for the operation's own
-execution identity (owner, execution key, any recorded epoch and the current
+execution identity (owner, execution key, any valid recorded epoch and the current
 version). The operation's `task_lease` annotation is only a hint: a missing,
 empty, stale `required: false` or malformed annotation never proves that
 nothing was owed, and a lease another execution holds is never released. The
@@ -512,7 +512,7 @@ worker 不会被发信号，它在下一个检查点或下一次写记录时发�
 worker 释放（只读 lane，从不获取）、该 Turn 启动的原生 host 及其进程组内所有进程
 都已退出，且该执行可能持有的硬任务租约已经处理（已释放，或被证明无需释放）时，
 `phase` 才是 `settled`。是否需要释放由 canonical 权威按该 operation 自己的执行身份
-（owner、执行 key、已记录的 epoch 与当前版本）判定；operation 的 `task_lease`
+（owner、执行 key、已记录的有效 epoch 与当前版本）判定；operation 的 `task_lease`
 注解只是线索，缺失、为空、过期的 `required: false` 或畸形注解都不能证明无需释放，
 其他执行持有的租约也绝不会被释放。切换标记缺失时，还必须由既有 provider-first
 读取证明 canonical store 不存在；已有或不可读的 store 使义务保持未证明，直到原

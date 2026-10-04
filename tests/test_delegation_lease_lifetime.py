@@ -359,7 +359,8 @@ def settled_stop(runner, operation_id):
 
 # The operation's annotation is a hint; canonical authority decides what is owed.
 STALE_ANNOTATIONS = {"empty": {}, "stale_not_required": {"required": False, "handoff_mode": "legacy"},
-                     "malformed": {"required": "yes", "lease": [1]}}
+                     "malformed": {"required": "yes", "lease": [1]},
+                     "invalid_epoch": {"required": True, "lease": {"lease_epoch": "unavailable"}}}
 
 
 @pytest.mark.parametrize("window", ["annotated", "renewed", "unannotated", *STALE_ANNOTATIONS])

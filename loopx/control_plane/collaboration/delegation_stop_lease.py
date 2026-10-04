@@ -32,7 +32,7 @@ def obligation(service, row):
     may have been lost after acquisition. Otherwise the canonical lease
     decides, whatever the operation recorded: a native claim commits before
     its annotation is saved, and an empty, malformed or stale `required: false`
-    annotation is no more proof than a missing one. A recorded epoch still
+    annotation is no more proof than a missing one. A valid recorded epoch still
     fences the release against another generation under the same key.
     """
 
@@ -55,8 +55,11 @@ def obligation(service, row):
             raise ValueError("canonical authority absence unproven; reconcile the original authority route")
         return None
     acquired = recorded.get("lease") if required and isinstance(recorded.get("lease"), dict) else {}
+    epoch = acquired.get("lease_epoch")
+    # Only a valid generation can fence another generation. Malformed optional
+    # evidence is no stronger than its absence; canonical identity still decides.
     return {"idempotency_key": service._turn_instance_id(row),
-            "lease_epoch": acquired.get("lease_epoch")}
+            "lease_epoch": epoch if type(epoch) is int and epoch > 0 else None}
 
 
 def release(service, row, binding):
