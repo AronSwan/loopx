@@ -419,6 +419,19 @@ or passing accelerated volume tests is not ten-day continuity evidence.
 Local promotion waits for both volume and elapsed-time qualification; it does
 not wait for a PostgreSQL service and never expires receipts at day ten.
 
+Bounded caller recovery now has [claim argument guidance](../../reference/source-cli-entrypoint.md#claim-argument-recovery--claim-参数恢复):
+one rejected invocation exposes missing/unsupported flags and preserves the
+original argv bindings, without inferring executors or changing source/lease
+admission. This stays in the existing CLI grammar/formatting adapter; TypeScript
+retains claim authority. Real Legacy/File/SQLite retry and negative cases qualify
+that boundary. Larger errors versus avoided help, actual model token/retry costs,
+source-mode repair and short normal/full replan context remain separate evidence
+questions; this does not close long-goal or provider-performance acceptance.
+Material-closeout guidance now enters the existing settlement step before writing;
+the shared [authoring example](../../reference/protocols/goal-vision-replan-contract-v0.md)
+carries a complete evidence-linked continuation. Real CLI write/read negatives
+qualify that guidance seam; avoided model retries and sustained cost remain open.
+
 ### Delivery semantics: correctness before migration
 
 The replan obligation outcome policy now lives in
@@ -1230,6 +1243,15 @@ Goal prose, acceptance and vision basis. A display limit must never become a
 settlement limit. Retain the current complete read until that parity and stale-
 head recovery are qualified on legacy, File and SQLite backends.
 
+**Checkpoint repair authoring.** The existing TS vision owner must project only
+repair choices the validator accepts: without a persisted vision, a missing
+checkpoint requires a vision patch; unchanged reasoning is available only with
+that baseline. The authoring contract shares the validator's `todo_delta`
+limits: retain the first eight entries, with at most 80 characters per retained
+entry. Isolated real CLI recovery must preserve the original settlement identity
+and replay fences. This closes a recovery-guidance correctness gap; it does not
+qualify lower context, IO or latency costs.
+
 **Recovery boundary (2026-09-22).** The
 [authority archive command](../../reference/authority-archive.md) places retained
 history validation, delta reconstruction and resumable restore in the existing
@@ -1366,6 +1388,15 @@ server.
 If an authority daemon owns a registry/workspace, a CLI process must connect
 to it instead of opening a second direct writer. Runtime discovery and startup
 are automatic; users do not configure ports or supervise processes.
+
+For the managed loopback runtime, a visible locator is discovery evidence;
+request dispatch and successful replies wait until locator publication and its
+awaited lock cleanup finish. Otherwise an immediate exit after the first reply
+can leave an incomplete cleanup claim and prevent the next retry-safe write
+from restarting within the existing lock budget. The real-Node publication
+regression covers first ping and typed write, then abrupt exit and receipt
+replay. This repair preserves lock reclaim ages, startup deadlines and retry
+classification; broader process/storage recovery remains separately qualified.
 
 ### 2.3 TypeScript owns migrated effects
 
