@@ -30,8 +30,9 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     "DONT_NOTIFY repair internally."
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
-    "Exact monitor-poll settlement->no refresh/spend; else "
-    "no-change=surface_only/no spend; writeback material=outcome+vision. "
+    "Monitor-poll=no refresh/spend; unchanged observation=no spend. "
+    "Admitted work: settlement_plan even if artifacts unchanged. "
+    "Writeback=outcome+vision. "
     "Only after committed writeback: same-turn checkpoint-context for missing vision, add evidenced "
     "vision; stale->reread; unchanged->truthful --vision-unchanged-reason."
 )

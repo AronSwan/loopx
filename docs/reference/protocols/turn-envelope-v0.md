@@ -74,7 +74,11 @@ blocker/evidence IDs, and the existing continuation checks. These authoring hint
 neither judge evidence nor relax validation, completion, lease, or spend rules;
 an invalid `outcome_gap` plus `advanced` still fails before writeback. The same
 plan reaches full CLI output and the opt-in envelope. This changes agent-facing
-guidance in both views; it adds no capability, automatic classification, or
+guidance in both views. Full, compact, brief and thin heartbeat prompts scope
+no-spend guidance to observation and direct admitted work to its settlement plan;
+an unchanged artifact alone does not imply no progress. The shared heartbeat
+renderer supplies this wording, while the TypeScript settlement owner retains
+classification semantics. This adds no capability, automatic classification, or
 frontend/Lark operation. Model error-rate reduction remains unqualified.
 
 中文：短包现在完整保留已有结算计划及执行命令，签名 v5 覆盖结算身份、步骤顺序、

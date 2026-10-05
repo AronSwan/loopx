@@ -114,6 +114,14 @@ def test_real_cli_envelope_settles_original_turn_once(tmp_path):
     guidance = plan["ordered_steps"][1]["precondition"]
     assert "evidence-backed route elimination" in guidance
     assert "unsuccessful attempt alone is not progress" in guidance
+    observation_only = writeback.replace("<validated_progress>", "validated_exclusion").replace(
+        "<scale>", "single_surface").replace("<outcome>", "surface_only")
+    rc, rejected_observation = _run_generated_cli(
+        observation_only + " --progress-result-class unchanged"
+        " --no-global-sync --suppress-external-sinks", registry_path=registry,
+    )
+    assert rc != 0, rejected_observation
+    assert _spend_run_count(runtime) == 0
     invalid = writeback.replace("<validated_progress>", "validated_exclusion").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_gap")
     rc, rejected = _run_generated_cli(
