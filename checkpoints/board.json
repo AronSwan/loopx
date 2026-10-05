@@ -1,19 +1,23 @@
 {
  "board": "EVENTS.jsonl@ZCodeProject",
  "algo_version": 3,
+ "baseline": {
+  "path": "C:/Users/Administrator/监考库/监考包/基线清单.txt",
+  "sha256": "0cfd378054e6cf243dd494abb2771304973dddb0b21c490535129fdabcdd3efb"
+ },
  "ruleset": {
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.5-草案.md",
-  "sha256_lf": "f6dea6dc11d6cf3f906e4536c1b308d212ed4790e08c82dcfcdb828b528004ad"
+  "sha256_lf": "ef86e4bac58f09472c4199bf2a3cca55dacbadcfd5922d67373a070652184136"
  },
- "taken_at": "2026-10-05T21:02:59.132+08:00",
- "lines": 338,
- "file_sha256": "741a0c498a315420e2306ac285765edf2cf1180d5a30f4750d8778eb3e18232d",
- "prefix_sha256": "741a0c498a315420e2306ac285765edf2cf1180d5a30f4750d8778eb3e18232d",
+ "taken_at": "2026-10-05T21:12:25.516+08:00",
+ "lines": 340,
+ "file_sha256": "c5ebc544387b790628a1826ef7cc5bffedce44315e4d56c33405ef12809700f7",
+ "prefix_sha256": "c5ebc544387b790628a1826ef7cc5bffedce44315e4d56c33405ef12809700f7",
  "head_event": {
   "actor": "协调者",
-  "ts": "2026-10-05T20:55:47.036+08:00",
-  "prev_chain": "e085ad8bc396e0eb100da11461d478b5a6448069c6310946cb83ca03d958bab4",
-  "head_sha256": "8e53fea2ae5c355c47a0394435a4f74741e039f73ebd79b4a5e0740ea78d6dcb"
+  "ts": "2026-10-05T21:12:25.139+08:00",
+  "prev_chain": "39da0bbcc7ca9e094f2088be6ef5a5377011a6c08e02a86bd4e30ef487ababda",
+  "head_sha256": "87bedc091eb79e53c8ceea21c25922c2e1444041bec11e412da8cb1382b83da3"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
