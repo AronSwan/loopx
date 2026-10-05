@@ -199,7 +199,8 @@ def test_retiring_registered_agent_removes_only_its_direction(tmp_path):
     assert resolve_configuration(after, agent_id="a")["review_order"] == "forward"
 
 
-def test_two_owner_accounts_change_queue_membership_not_self_review():
+def test_two_owner_accounts_change_queue_membership_not_self_review(monkeypatch):
+    monkeypatch.setattr("loopx.pr_review._now_iso", lambda: "2026-10-05T05:40:00Z")
     rows = _queue()
     rows[2]["author"] = {"login": "Maintainer"}
     def packet(order, owners=()):
@@ -277,6 +278,18 @@ def test_public_cli_owner_save_restart_cross_goal_and_clear(tmp_path, capsys, mo
             assert all(row["owner_authored"] for row in packet["pull_requests"])
         else:
             assert "owner_logins" not in packet["scheduling_policy"]
+    # New PRs after activation use the same scoped account rule; title text
+    # cannot move an unrelated author into the owner group.
+    future = [deepcopy(_queue()[2]) for _ in range(2)]
+    for number, author, pr in [(7, "new-community", future[0]), (8, "other", future[1])]:
+        pr.update(number=number, author={"login": author}, headRefOid=f"{number:040x}",
+                  createdAt="2026-09-04T00:00:00Z", updatedAt="2026-09-04T00:00:00Z", title="other reviewer")
+    fixture.write_text(json.dumps({"repository": "owner/repo", "reviewer_login": "reviewer", "pull_requests": [*_queue(), *future]}))
+    for agent, expected in [("a", 7), ("b", 8)]:
+        assert main([*common, "pr-review", "--fixture", str(fixture), "--goal-id", "first", "--agent-id", agent]) == 0
+        packet = json.loads(capsys.readouterr().out)
+        assert _sequence(packet)[0] == expected
+        assert next(row for row in packet["pull_requests"] if row["number"] == 7)["owner_authored"] is False
     assert main([*common, "configure-goal", "--goal-id", "first", "--clear-pr-review-owner-logins", "--execute"]) == 0
     capsys.readouterr()
     saved = json.loads(registry.read_text())["goals"][0]["control_plane"]["pull_request_review"]
