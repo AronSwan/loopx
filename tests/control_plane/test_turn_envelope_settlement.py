@@ -112,8 +112,8 @@ def test_real_cli_envelope_settles_original_turn_once(tmp_path):
     # A validated exclusion advances research without claiming the objective is met.
     # The same negative result is not a blocker merely because a candidate failed.
     guidance = plan["ordered_steps"][1]["precondition"]
-    assert "evidence-backed route elimination" in guidance
-    assert "unsuccessful attempt alone is not progress" in guidance
+    assert "Route elimination needs evidence" in guidance
+    assert "failure alone is not progress" in guidance
     observation_only = writeback.replace("<validated_progress>", "validated_exclusion").replace(
         "<scale>", "single_surface").replace("<outcome>", "surface_only")
     rc, rejected_observation = _run_generated_cli(

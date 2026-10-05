@@ -90,7 +90,7 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
         assert "under DONT_NOTIFY repair internally" in body
         # A bare "DONT_NOTIFY=quiet" no-op mapping must never appear in the prompt.
         assert "DONT_NOTIFY=quiet." not in body
-        assert "Only after committed writeback: same-turn checkpoint-context" in body
+        assert "After committed writeback: same-turn checkpoint-context" in body
         assert "Missing vision: same-turn checkpoint-context" not in body
 
 
@@ -103,11 +103,11 @@ def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
             goal_id="fixture-goal", agent_id="worker-a", **{mode: True},
         )
         body = payload["task_body"]
-        assert "Monitor-poll=no refresh/spend; unchanged observation=no spend." in body
+        assert "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work." in body
         assert "Admitted work: settlement_plan" in body
         assert "settlement_plan even if artifacts unchanged" in body
         assert "no-change=surface_only/no spend" not in body
-        assert "Only after committed writeback: same-turn checkpoint-context" in body
+        assert "After committed writeback: same-turn checkpoint-context" in body
 
 
 def test_generic_task_bodies_follow_user_language_without_forcing_chinese() -> None:
