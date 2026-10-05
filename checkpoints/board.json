@@ -3,21 +3,21 @@
  "algo_version": 3,
  "baseline": {
   "path": "C:/Users/Administrator/监考库/监考包/基线清单.txt",
-  "sha256": "c469fd8bf9b4c102fb87671bd5a8b0b16191ae2f5a880718d053d0bf34eda8bf"
+  "sha256": "b652a3a78997dad5d70c99c271a142b077dc357f3eacce88264b1010ba1e14fc"
  },
  "ruleset": {
   "path": "C:/Users/Administrator/监考库/监考包/出题与阅卷守则v2.5-草案.md",
-  "sha256_lf": "58f0484a4e96460011d5711549b7f70ad6d3d29b7e6e718285033cd49d51c90a"
+  "sha256_lf": "c5fc961b39e70caa88025158aa3d28a783cf1a06d0dc86e5094c4cc71d4125b5"
  },
- "taken_at": "2026-10-06T02:25:37.851+08:00",
- "lines": 379,
- "file_sha256": "8dbba7daef4642e6191d7f87bd3662fa8c45bdfed9396a7b02b53d89520e4790",
- "prefix_sha256": "8dbba7daef4642e6191d7f87bd3662fa8c45bdfed9396a7b02b53d89520e4790",
+ "taken_at": "2026-10-06T04:03:26.546+08:00",
+ "lines": 383,
+ "file_sha256": "86edd7f70e0c3fea9ab8d673bc377d420e2b3632cd39b9d224286481fe349fc9",
+ "prefix_sha256": "86edd7f70e0c3fea9ab8d673bc377d420e2b3632cd39b9d224286481fe349fc9",
  "head_event": {
   "actor": "协调者",
-  "ts": "2026-10-06T02:25:37.404+08:00",
-  "prev_chain": "971a129e2f0aa8e33c7c63c08d01f6eaa7228cf8d3f3cced93be76fcae784a49",
-  "head_sha256": "305b10e7136049a54737d3bb125c6d620a12e4517b5b0cff4f266809015ca817"
+  "ts": "2026-10-06T04:03:26.222+08:00",
+  "prev_chain": "7e52db8e2c7e2eb168641a84387a73837de09377c553f4e1549fc6b531897770",
+  "head_sha256": "c9cab31f589600e452e0427f53c8287dcaa7ab02cf6d64dd3fdd4b321ca1909f"
  },
  "note": "时戳锚v2: ①本锚仅证push时刻的内容存在性,不证taken_at真伪(本机自报);②证人与运营主体同体,抗本地篡改不抗运营者作恶;③对齐检查唯一正确姿势=前N行字节切片sha256==prefix_sha256(或全板==file_sha256),严禁用head==prev_chain比对(截断板恰好满足该式=反向掩护删除);④增量窗口(上次锚后新增行)不属本锚覆盖"
 }
